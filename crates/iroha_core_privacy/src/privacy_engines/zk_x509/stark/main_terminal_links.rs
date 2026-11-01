@@ -619,7 +619,7 @@ mod tests {
             alphas[index] = E::ONE;
             let inverse = z.sub(E::from_base(link.point)).inv().unwrap();
             let expected = slope(link.left)
-                .sub(link.right.map_or(E::ZERO, &slope))
+                .sub(link.right.map_or(E::ZERO, slope))
                 .mul(vanishing)
                 .mul(inverse);
             assert_eq!(

@@ -1450,14 +1450,9 @@ pub(crate) fn seed_moderation_policy_asset_reference_for_test(
 /// Challenge records retain the policy revision that admitted them, so this
 /// deliberately scans the durable records instead of consulting the current
 /// moderation policy. Every candidate is re-read through the authoritative
-/// validator; malformed, mis-keyed, or internally inconsistent state fails
-/// closed rather than undercounting custody liabilities.
-pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
-    world: &impl WorldReadOnly,
-    custody_asset: &AssetId,
-) -> Result<Quantity, InstructionExecutionError> {
-    unsettled_moderation_bond_liability_with_owner(world, custody_asset, None)
-}
+/// validator (under `owner` when a transaction holds the World); malformed,
+/// mis-keyed, or internally inconsistent state fails closed rather than
+/// undercounting custody liabilities.
 fn unsettled_moderation_bond_liability_with_owner(
     world: &impl WorldReadOnly,
     custody_asset: &AssetId,

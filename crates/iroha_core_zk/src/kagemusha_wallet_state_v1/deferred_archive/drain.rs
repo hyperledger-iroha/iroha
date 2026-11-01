@@ -118,7 +118,8 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         observe: impl FnOnce() -> Result<clock::WallObservation, clock::ClockUnavailable>,
     ) -> Result<DeferredArchiveDrainV1, Error> {
         turn.validate_for(&self.scheduler)?;
-        let _turn = turn;
+        // This call consumes the turn: the first local, it is released after every other one.
+        let held_turn = turn;
         match self.maintenance_view()? {
             MaintenanceViewV1::BeforeBootstrap => return Ok(DeferredArchiveDrainV1::NoWork),
             MaintenanceViewV1::SelectedPending => {
@@ -164,7 +165,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         };
         let age_due = clock::age(fresh.first_unix_ms, observe()) == clock::Age::Due;
         let permit = match self.scheduler.reserve_archive(
-            &_turn,
+            &held_turn,
             target,
             fresh.count,
             age_due,

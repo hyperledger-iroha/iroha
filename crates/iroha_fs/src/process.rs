@@ -59,7 +59,7 @@ impl ProcessCommand {
         })
     }
 
-    #[cfg(unix)]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     pub(crate) fn from_retained_descriptor(inner: NativeCommand) -> Self {
         Self {
             inner,
@@ -108,6 +108,14 @@ impl ProcessCommand {
     /// # Errors
     /// Refuses invalid environment names, changed input custody, unsupported native
     /// descriptor execution, and descriptor or native command errors.
+    #[cfg_attr(
+        all(unix, not(any(target_os = "linux", target_os = "android"))),
+        expect(
+            clippy::unused_self,
+            reason = "one builder signature on every platform; this Unix host refuses \
+                      before touching the command"
+        )
+    )]
     pub fn env_retained_build_input(
         &mut self,
         key: impl AsRef<OsStr>,

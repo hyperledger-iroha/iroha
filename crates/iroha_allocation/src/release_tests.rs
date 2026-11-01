@@ -168,7 +168,7 @@ fn panicking_first_waker_still_notifies_the_remaining_original_cohort() {
         let completed_wakes = Arc::new(WakeCount::default());
         assert!(poll(&mut first, &completed_wakes).is_ready());
         assert!(poll(&mut survivor, &survivor_wakes).is_ready());
-        assert!(source.state.lock().unwrap().waiters.count == 0);
+        assert_eq!(source.state.lock().unwrap().waiters.count, 0);
         drop(source.guard(()));
         assert_eq!(survivor_wakes.0.load(Ordering::SeqCst), 1);
     }
@@ -195,7 +195,7 @@ fn cancellation_and_waker_replacement_do_not_steal_another_wait() {
     assert_eq!(old.0.load(Ordering::SeqCst), 0);
     assert_eq!(new.0.load(Ordering::SeqCst), 1);
     assert!(poll(&mut retained, &new).is_ready());
-    assert!(source.state.lock().unwrap().waiters.count == 0);
+    assert_eq!(source.state.lock().unwrap().waiters.count, 0);
     let mut canceled = source.observe().wait_for_release(&mut registration_2);
     assert!(poll(&mut canceled, &old).is_pending());
     drop(canceled);
@@ -208,6 +208,10 @@ struct ObserveOnDrop {
     drops: Arc<AtomicUsize>,
 }
 
+#[expect(
+    clippy::manual_noop_waker,
+    reason = "the waker exists to observe its own drop, which `Waker::noop` cannot"
+)]
 impl Wake for ObserveOnDrop {
     fn wake(self: Arc<Self>) {}
 }

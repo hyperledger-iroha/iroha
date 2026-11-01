@@ -1,51 +1,24 @@
 //! Core-owned confidential-spool adapter for the replacement MKHE RNS source.
 //!
-//! Keeping this adapter in `iroha_core` preserves dependency direction: the
+//! Keeping this adapter in `iroha_core_zk` preserves dependency direction: the
 //! proof crate defines a backend-neutral move-only interface, while Core owns
 //! both the proof crate and `iroha_crypto`'s already-locked XChaCha20-Poly1305
 //! spool implementation.  No pathname, key, raw snapshot, or detached digest
 //! constructor crosses the boundary.
 
-#[cfg(test)]
-use std::path::PathBuf;
+use std::path::Path;
 
-#[cfg(test)]
-use iroha_crypto::confidential_spool::ConfidentialSpoolLayoutV1;
 use iroha_crypto::confidential_spool::{
-    ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolSnapshotV1,
-    ConfidentialSpoolWriterV1,
+    ConfidentialSpoolChunkV1, ConfidentialSpoolErrorV1, ConfidentialSpoolLayoutV1,
+    ConfidentialSpoolSnapshotV1, ConfidentialSpoolWriterV1,
 };
-#[cfg(test)]
-use iroha_zkp_halo2::vega::ZkAmsMkheRnsNativeSourceProviderV1;
 use iroha_zkp_halo2::vega::{
     ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
     ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
-    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
-    ZkAmsMkheRnsNativeSourceWriterV1,
+    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceReservationV1,
+    ZkAmsMkheRnsNativeSourceResourcesV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSourceWorkspaceV1, ZkAmsMkheRnsNativeSourceWriterV1,
 };
-
-#[cfg(test)]
-/// Core-owned factory for unlinked authenticated RNS-native source arenas.
-///
-/// This owner deliberately implements neither `Clone` nor `Debug`: even a
-/// temporary directory path is operational information, not proof metadata.
-pub struct CoreZkAmsMkheRnsNativeSourceProviderV1 {
-    directory: PathBuf,
-}
-
-#[cfg(test)]
-impl CoreZkAmsMkheRnsNativeSourceProviderV1 {
-    /// Bind the provider to a caller-selected private spool directory.
-    ///
-    /// Directory and Unix descriptor checks occur atomically when
-    /// [`ZkAmsMkheRnsNativeSourceProviderV1::create`] is invoked.
-    #[must_use]
-    pub fn new(directory: impl Into<PathBuf>) -> Self {
-        Self {
-            directory: directory.into(),
-        }
-    }
-}
 
 /// Core-owned zeroizing secret record.
 ///
@@ -54,24 +27,23 @@ impl CoreZkAmsMkheRnsNativeSourceProviderV1 {
 pub struct CoreZkAmsMkheRnsNativeSecretChunkV1 {
     arena: ZkAmsMkheRnsNativeSourceArenaV1,
     inner: Option<ConfidentialSpoolChunkV1>,
+    // Field order destroys the secret leaf before releasing its workspace.
+    workspace: ZkAmsMkheRnsNativeSourceWorkspaceV1,
 }
 
 impl CoreZkAmsMkheRnsNativeSecretChunkV1 {
     fn new(
         arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        admission: &ZkAmsMkheRnsNativeSourceReservationV1,
     ) -> Result<Self, ZkAmsMkheRnsNativeSourceErrorV1> {
+        let workspace = admission.reserve_workspace_v1(chunk_named_bytes_v1(arena)?, 0)?;
         let inner = ConfidentialSpoolChunkV1::new_zeroed_v1(arena.plaintext_bytes())
             .map_err(map_spool_error_v1)?;
         Ok(Self {
             arena,
             inner: Some(inner),
+            workspace,
         })
-    }
-
-    fn into_inner(mut self) -> Result<ConfidentialSpoolChunkV1, ZkAmsMkheRnsNativeSourceErrorV1> {
-        self.inner
-            .take()
-            .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)
     }
 }
 
@@ -100,7 +72,20 @@ impl Drop for CoreZkAmsMkheRnsNativeSecretChunkV1 {
         if let Some(inner) = self.inner.as_mut() {
             inner.as_mut_slice_v1().fill(0);
         }
+        #[cfg(test)]
+        CHUNK_CLEAR_EVENTS_V1.with(|events| {
+            events.borrow_mut().push(
+                self.inner
+                    .as_ref()
+                    .map(|inner| inner.as_slice_v1().iter().all(|byte| *byte == 0)),
+            );
+        });
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static CHUNK_CLEAR_EVENTS_V1: std::cell::RefCell<Vec<Option<bool>>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// Core-owned pair of strict sequential confidential-spool writers.
@@ -108,6 +93,12 @@ pub struct CoreZkAmsMkheRnsNativeSourceWriterV1 {
     layout: ZkAmsMkheRnsNativeSourceLayoutV1,
     main: Option<ConfidentialSpoolWriterV1>,
     nonce: Option<ConfidentialSpoolWriterV1>,
+    // Both leaves are destroyed before their original resource reservation.
+    admission: ZkAmsMkheRnsNativeSourceReservationV1,
+    #[cfg(test)]
+    injected_write_error: Option<ConfidentialSpoolErrorV1>,
+    #[cfg(test)]
+    panic_on_next_write: bool,
 }
 
 /// Core-owned pair of immutable authenticated confidential-spool snapshots.
@@ -117,6 +108,8 @@ pub struct CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
     nonce: Option<ConfidentialSpoolSnapshotV1>,
     main_snapshot_digest: [u8; 32],
     nonce_snapshot_digest: [u8; 32],
+    // Immutable leaves precede the reservation in field destruction order.
+    admission: ZkAmsMkheRnsNativeSourceReservationV1,
     #[cfg(test)]
     injected_read_error: Option<ConfidentialSpoolErrorV1>,
     #[cfg(test)]
@@ -127,6 +120,11 @@ impl CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
     fn poison_pair_v1(&mut self) {
         drop(self.main.take());
         drop(self.nonce.take());
+        // The trait's structural receipt constructor rejects zero identities.
+        // A destroyed pair cannot issue another live-snapshot receipt; already
+        // copied public receipts remain explicitly non-authorizing.
+        self.main_snapshot_digest = [0; 32];
+        self.nonce_snapshot_digest = [0; 32];
     }
 }
 
@@ -181,26 +179,85 @@ impl Drop for CoreZkAmsMkheRnsNativePairReadGuardV1<'_> {
     }
 }
 
-#[cfg(test)]
-impl ZkAmsMkheRnsNativeSourceProviderV1 for CoreZkAmsMkheRnsNativeSourceProviderV1 {
-    type Writer = CoreZkAmsMkheRnsNativeSourceWriterV1;
-
-    fn create(
-        &self,
+impl CoreZkAmsMkheRnsNativeSourceWriterV1 {
+    /// Begin the canonical authenticated source arenas with one consumed session.
+    ///
+    /// Files and write/seal I/O are preadmitted before either file is created.
+    /// Original workspace and storage identity remains with the writer, snapshot
+    /// and every returned chunk. This constructs genuine local encrypted storage;
+    /// it does not authenticate source/key/Phase23 correspondence or make a proof
+    /// available. A freshly started resource session cannot account for earlier
+    /// allocations. TODO: carry the same session through future source/qPCS joins.
+    ///
+    /// # Errors
+    /// Rejects invalid layouts, original cumulative resource ceilings, unsafe
+    /// directories, unavailable entropy/platforms or crypto-spool failures.
+    pub fn begin(
+        directory: impl AsRef<Path>,
         layout: ZkAmsMkheRnsNativeSourceLayoutV1,
-    ) -> Result<Self::Writer, ZkAmsMkheRnsNativeSourceErrorV1> {
+        resources: ZkAmsMkheRnsNativeSourceResourcesV1,
+    ) -> Result<Self, ZkAmsMkheRnsNativeSourceErrorV1> {
         layout.validate()?;
         let main_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
         let nonce_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
-        let main = ConfidentialSpoolWriterV1::create_in_v1(&self.directory, main_layout)
+        let retained = source_named_bytes_v1(&main_layout, &nonce_layout)?;
+        let scratch = u64::try_from(
+            main_layout
+                .named_operation_workspace_bytes_v1()
+                .max(nonce_layout.named_operation_workspace_bytes_v1()),
+        )
+        .map_err(|_| ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)?;
+        let mut admission = resources.admit_source_v1(layout, retained, scratch)?;
+        let main = ConfidentialSpoolWriterV1::create_in_v1(directory.as_ref(), main_layout)
             .map_err(map_spool_error_v1)?;
-        let nonce = ConfidentialSpoolWriterV1::create_in_v1(&self.directory, nonce_layout)
+        let nonce = ConfidentialSpoolWriterV1::create_in_v1(directory.as_ref(), nonce_layout)
             .map_err(map_spool_error_v1)?;
-        Ok(CoreZkAmsMkheRnsNativeSourceWriterV1 {
+        admission.release_construction_scratch_v1();
+        Ok(Self {
             layout,
             main: Some(main),
             nonce: Some(nonce),
+            admission,
+            #[cfg(test)]
+            injected_write_error: None,
+            #[cfg(test)]
+            panic_on_next_write: false,
         })
+    }
+
+    fn poison_pair_v1(&mut self) {
+        drop(self.main.take());
+        drop(self.nonce.take());
+    }
+}
+
+/// Drop both writer siblings on an operational failure or unwind.
+struct CoreZkAmsMkheRnsNativePairWriteGuardV1<'a> {
+    writer: &'a mut CoreZkAmsMkheRnsNativeSourceWriterV1,
+    armed: bool,
+}
+
+impl CoreZkAmsMkheRnsNativePairWriteGuardV1<'_> {
+    fn write_selected_v1(
+        &mut self,
+        arena: ZkAmsMkheRnsNativeSourceArenaV1,
+        slot: u64,
+        inner: ConfidentialSpoolChunkV1,
+    ) -> Result<(), ConfidentialSpoolErrorV1> {
+        match arena {
+            ZkAmsMkheRnsNativeSourceArenaV1::Main => self.writer.main.as_mut(),
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => self.writer.nonce.as_mut(),
+        }
+        .ok_or(ConfidentialSpoolErrorV1::Poisoned)?
+        .write_slot_v1(slot, inner)
+    }
+}
+
+impl Drop for CoreZkAmsMkheRnsNativePairWriteGuardV1<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.writer.poison_pair_v1();
+        }
     }
 }
 
@@ -215,56 +272,107 @@ impl ZkAmsMkheRnsNativeSourceWriterV1 for CoreZkAmsMkheRnsNativeSourceWriterV1 {
         if self.main.is_none() || self.nonce.is_none() {
             return Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned);
         }
-        CoreZkAmsMkheRnsNativeSecretChunkV1::new(arena)
+        CoreZkAmsMkheRnsNativeSecretChunkV1::new(arena, &self.admission)
     }
 
     fn write_slot(
         &mut self,
         arena: ZkAmsMkheRnsNativeSourceArenaV1,
         slot: u64,
-        chunk: Self::Chunk,
+        mut chunk: Self::Chunk,
     ) -> Result<(), ZkAmsMkheRnsNativeSourceErrorV1> {
-        if chunk.arena() != arena || chunk.as_slice().len() as u64 != arena.plaintext_bytes() {
+        if self.main.is_none() || self.nonce.is_none() {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned);
+        }
+        if chunk.arena() != arena
+            || chunk.as_slice().len() as u64 != arena.plaintext_bytes()
+            || !self.admission.owns_workspace_v1(&chunk.workspace)
+        {
             return Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite);
         }
-        let inner = chunk.into_inner()?;
-        match arena {
-            ZkAmsMkheRnsNativeSourceArenaV1::Main => self
-                .main
-                .as_mut()
-                .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)?
-                .write_slot_v1(slot, inner)
-                .map_err(map_spool_error_v1),
-            ZkAmsMkheRnsNativeSourceArenaV1::Nonce => self
-                .nonce
-                .as_mut()
-                .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)?
-                .write_slot_v1(slot, inner)
-                .map_err(map_spool_error_v1),
+        let _operation = self
+            .admission
+            .reserve_workspace_v1(0, operation_scratch_v1(&self.layout, arena)?)?;
+        #[cfg(test)]
+        let injected = self.injected_write_error.take();
+        #[cfg(test)]
+        let panic_on_next_write = core::mem::take(&mut self.panic_on_next_write);
+        self.admission.charge_write_v1(arena, slot)?;
+        let mut guard = CoreZkAmsMkheRnsNativePairWriteGuardV1 {
+            writer: self,
+            armed: true,
+        };
+        // Keep `chunk` and its reservation alive until the leaf has consumed and
+        // destroyed the transferred allocation, including during unwinding. Every
+        // fallible step after debit is inside the pair's fail-stop guard.
+        let inner = chunk
+            .inner
+            .take()
+            .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)?;
+        #[cfg(test)]
+        assert!(
+            !panic_on_next_write,
+            "injected Core RNS-native pair write unwind"
+        );
+        #[cfg(test)]
+        let result = if let Some(error) = injected {
+            drop(inner);
+            Err(error)
+        } else {
+            guard.write_selected_v1(arena, slot, inner)
+        };
+        #[cfg(not(test))]
+        let result = guard.write_selected_v1(arena, slot, inner);
+        if result.is_ok() {
+            guard.armed = false;
         }
+        drop(guard);
+        // Explicitly drop only after the leaf returned. No owner is detached
+        // from the reservation while it can still contain secret plaintext.
+        drop(chunk);
+        result.map_err(map_spool_error_v1)
     }
 
     fn seal(mut self) -> Result<Self::Snapshot, ZkAmsMkheRnsNativeSourceErrorV1> {
+        if self.main.is_none() || self.nonce.is_none() {
+            return Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned);
+        }
+        let main_layout = spool_layout_v1(&self.layout, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
+        let nonce_layout = spool_layout_v1(&self.layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
+        let scratch = u64::try_from(
+            main_layout
+                .named_operation_workspace_bytes_v1()
+                .max(nonce_layout.named_operation_workspace_bytes_v1()),
+        )
+        .map_err(|_| ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)?;
+        let operation = self.admission.reserve_workspace_v1(0, scratch)?;
+        self.admission
+            .charge_seal_v1(ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
         let main = self
             .main
             .take()
             .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)?
             .seal_v1()
             .map_err(map_spool_error_v1)?;
+        self.admission
+            .charge_seal_v1(ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
         let nonce = self
             .nonce
             .take()
             .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)?
             .seal_v1()
             .map_err(map_spool_error_v1)?;
+        self.admission.require_sealed_v1()?;
         let main_snapshot_digest = *main.snapshot_digest_v1();
         let nonce_snapshot_digest = *nonce.snapshot_digest_v1();
+        drop(operation);
         Ok(CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
             layout: self.layout,
             main: Some(main),
             nonce: Some(nonce),
             main_snapshot_digest,
             nonce_snapshot_digest,
+            admission: self.admission,
             #[cfg(test)]
             injected_read_error: None,
             #[cfg(test)]
@@ -298,11 +406,18 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
         if slot >= arena.slot_count() {
             return Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite);
         }
+        let mut workspace = self.admission.reserve_workspace_v1(
+            chunk_named_bytes_v1(arena)?,
+            operation_scratch_v1(&self.layout, arena)?,
+        )?;
         let expected_context = self.layout.arena_context_digest(arena);
         #[cfg(test)]
         let injected_read_error = self.injected_read_error.take();
         #[cfg(test)]
         let panic_on_next_read = core::mem::take(&mut self.panic_on_next_read);
+        // All capacity/context preflights precede debit. The pair guard is armed
+        // immediately after successful debit, before any leaf processing.
+        self.admission.charge_read_v1(arena, slot)?;
         let mut guard = CoreZkAmsMkheRnsNativePairReadGuardV1::new(self);
         #[cfg(test)]
         assert!(
@@ -331,9 +446,11 @@ impl ZkAmsMkheRnsNativeSourceSnapshotV1 for CoreZkAmsMkheRnsNativeSourceSnapshot
             }
         };
         drop(guard);
+        workspace.release_scratch_v1();
         Ok(CoreZkAmsMkheRnsNativeSecretChunkV1 {
             arena,
             inner: Some(inner),
+            workspace,
         })
     }
 }
@@ -369,7 +486,6 @@ fn read_error_poisons_v1(error: ConfidentialSpoolErrorV1) -> bool {
     }
 }
 
-#[cfg(test)]
 fn spool_layout_v1(
     layout: &ZkAmsMkheRnsNativeSourceLayoutV1,
     arena: ZkAmsMkheRnsNativeSourceArenaV1,
@@ -380,6 +496,46 @@ fn spool_layout_v1(
         layout.arena_context_digest(arena),
     )
     .map_err(map_spool_error_v1)
+}
+
+// This is named payload accounting, not allocator, dependency scratch or RSS.
+// The crypto retained helper conservatively counts handles already embedded in
+// the Core owner, so this sum can overcount but cannot omit either key payload.
+fn source_named_bytes_v1(
+    main: &ConfidentialSpoolLayoutV1,
+    nonce: &ConfidentialSpoolLayoutV1,
+) -> Result<u64, ZkAmsMkheRnsNativeSourceErrorV1> {
+    let owner = size_of::<CoreZkAmsMkheRnsNativeSourceWriterV1>()
+        .max(size_of::<CoreZkAmsMkheRnsNativeSourceSnapshotV1>());
+    let bytes = owner
+        .checked_add(main.named_retained_bytes_v1())
+        .and_then(|bytes| bytes.checked_add(nonce.named_retained_bytes_v1()))
+        .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)?;
+    u64::try_from(bytes).map_err(|_| ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)
+}
+
+fn chunk_named_bytes_v1(
+    arena: ZkAmsMkheRnsNativeSourceArenaV1,
+) -> Result<u64, ZkAmsMkheRnsNativeSourceErrorV1> {
+    arena
+        .plaintext_bytes()
+        .checked_add(size_of::<CoreZkAmsMkheRnsNativeSecretChunkV1>() as u64)
+        .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)
+}
+
+fn operation_scratch_v1(
+    layout: &ZkAmsMkheRnsNativeSourceLayoutV1,
+    arena: ZkAmsMkheRnsNativeSourceArenaV1,
+) -> Result<u64, ZkAmsMkheRnsNativeSourceErrorV1> {
+    let layout = spool_layout_v1(layout, arena)?;
+    let whole = u64::try_from(layout.named_operation_workspace_bytes_v1())
+        .map_err(|_| ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)?;
+    // The returned/consumed chunk and its complete Core owner are independently
+    // retained; all other leaf operation payloads remain temporary scratch.
+    whole
+        .checked_sub(arena.plaintext_bytes())
+        .and_then(|bytes| bytes.checked_sub(size_of::<ConfidentialSpoolChunkV1>() as u64))
+        .ok_or(ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)
 }
 
 fn map_spool_error_v1(error: ConfidentialSpoolErrorV1) -> ZkAmsMkheRnsNativeSourceErrorV1 {
@@ -468,6 +624,28 @@ mod tests {
     fn reduced_snapshot_v1(wrong_main_context: bool) -> CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
         let directory = tempfile::tempdir().expect("reduced conformance directory");
         let layout = source_layout();
+        let main_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Main).unwrap();
+        let nonce_layout =
+            spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce).unwrap();
+        let mut admission = ZkAmsMkheRnsNativeSourceResourcesV1::new_v1()
+            .admit_source_v1(
+                layout,
+                source_named_bytes_v1(&main_layout, &nonce_layout).unwrap(),
+                main_layout.named_operation_workspace_bytes_v1() as u64,
+            )
+            .unwrap();
+        // This reduced storage fixture conservatively precharges the complete
+        // canonical schedule before any leaf creation/write/seal. It is only a
+        // small authenticated-read fixture, never a canonical source producer.
+        for arena in [
+            ZkAmsMkheRnsNativeSourceArenaV1::Main,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+        ] {
+            for slot in 0..arena.slot_count() {
+                admission.charge_write_v1(arena, slot).unwrap();
+            }
+            admission.charge_seal_v1(arena).unwrap();
+        }
         let mut main_context = layout.arena_context_digest(ZkAmsMkheRnsNativeSourceArenaV1::Main);
         if wrong_main_context {
             main_context[0] ^= 1;
@@ -486,12 +664,14 @@ mod tests {
         );
         let main_snapshot_digest = *main.snapshot_digest_v1();
         let nonce_snapshot_digest = *nonce.snapshot_digest_v1();
+        admission.release_construction_scratch_v1();
         CoreZkAmsMkheRnsNativeSourceSnapshotV1 {
             layout,
             main: Some(main),
             nonce: Some(nonce),
             main_snapshot_digest,
             nonce_snapshot_digest,
+            admission,
             injected_read_error: None,
             panic_on_next_read: false,
         }
@@ -604,6 +784,7 @@ mod tests {
                     | ZkAmsMkheRnsNativeSourceErrorV1::Storage)
             ));
             assert!(snapshot.main.is_none() && snapshot.nonce.is_none());
+            assert!(snapshot.structural_receipt().is_err());
             for arena in [
                 ZkAmsMkheRnsNativeSourceArenaV1::Main,
                 ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
@@ -626,6 +807,7 @@ mod tests {
         }));
         assert!(unwind.is_err());
         assert!(snapshot.main.is_none() && snapshot.nonce.is_none());
+        assert!(snapshot.structural_receipt().is_err());
         for arena in [
             ZkAmsMkheRnsNativeSourceArenaV1::Main,
             ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
@@ -639,10 +821,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn provider_uses_exact_arenas_and_rejects_cross_arena_chunks() {
+    fn consuming_begin_uses_exact_arenas_and_rejects_cross_arena_chunks() {
         let directory = tempfile::tempdir().expect("private temporary directory");
-        let provider = CoreZkAmsMkheRnsNativeSourceProviderV1::new(directory.path());
-        let mut writer = provider.create(source_layout()).expect("source writer");
+        let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
+            directory.path(),
+            source_layout(),
+            ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
+        )
+        .expect("source writer");
 
         let mut main = writer
             .allocate_chunk(ZkAmsMkheRnsNativeSourceArenaV1::Main)
@@ -673,10 +859,14 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn provider_preserves_exact_next_slot_and_path_free_errors() {
+    fn consuming_begin_preserves_exact_next_slot_and_path_free_errors() {
         let directory = tempfile::tempdir().expect("private temporary directory");
-        let provider = CoreZkAmsMkheRnsNativeSourceProviderV1::new(directory.path());
-        let mut writer = provider.create(source_layout()).expect("source writer");
+        let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
+            directory.path(),
+            source_layout(),
+            ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
+        )
+        .expect("source writer");
         let chunk = writer
             .allocate_chunk(ZkAmsMkheRnsNativeSourceArenaV1::Main)
             .expect("main chunk");
@@ -689,5 +879,193 @@ mod tests {
                 .to_string()
                 .contains(directory.path().to_string_lossy().as_ref())
         );
+        assert!(writer.main.is_some() && writer.nonce.is_some());
+        let valid = writer
+            .allocate_chunk(ZkAmsMkheRnsNativeSourceArenaV1::Main)
+            .unwrap();
+        writer
+            .write_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0, valid)
+            .unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn foreign_same_arena_chunk_is_rejected_before_debit_and_cleared() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
+            directory.path(),
+            source_layout(),
+            ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
+        )
+        .unwrap();
+        let other = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
+            directory.path(),
+            source_layout(),
+            ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
+        )
+        .unwrap();
+        let arena = ZkAmsMkheRnsNativeSourceArenaV1::Main;
+        let mut foreign = other.allocate_chunk(arena).unwrap();
+        foreign.as_mut_slice().fill(0xD1);
+        CHUNK_CLEAR_EVENTS_V1.with(|events| events.borrow_mut().clear());
+        assert_eq!(
+            writer.write_slot(arena, 0, foreign),
+            Err(ZkAmsMkheRnsNativeSourceErrorV1::UnexpectedWrite)
+        );
+        CHUNK_CLEAR_EVENTS_V1.with(|events| assert_eq!(*events.borrow(), vec![Some(true)]));
+        assert!(writer.main.is_some() && writer.nonce.is_some());
+        // If the foreign write advanced/debited the schedule this exact slot fails.
+        let own = writer.allocate_chunk(arena).unwrap();
+        writer.write_slot(arena, 0, own).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operational_write_error_and_unwind_destroy_both_writer_arenas() {
+        for unwind in [false, true] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
+                directory.path(),
+                source_layout(),
+                ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
+            )
+            .unwrap();
+            let arena = ZkAmsMkheRnsNativeSourceArenaV1::Main;
+            let mut chunk = writer.allocate_chunk(arena).unwrap();
+            chunk.as_mut_slice().fill(0xAB);
+            CHUNK_CLEAR_EVENTS_V1.with(|events| events.borrow_mut().clear());
+            if unwind {
+                writer.panic_on_next_write = true;
+                assert!(
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        let _ = writer.write_slot(arena, 0, chunk);
+                    }))
+                    .is_err()
+                );
+            } else {
+                writer.injected_write_error = Some(ConfidentialSpoolErrorV1::FileOperation {
+                    operation: "write",
+                    kind: std::io::ErrorKind::Other,
+                });
+                assert_eq!(
+                    writer.write_slot(arena, 0, chunk),
+                    Err(ZkAmsMkheRnsNativeSourceErrorV1::Storage)
+                );
+            }
+            assert!(writer.main.is_none() && writer.nonce.is_none());
+            assert!(matches!(
+                writer.allocate_chunk(arena),
+                Err(ZkAmsMkheRnsNativeSourceErrorV1::Poisoned)
+            ));
+            // None denotes transfer into the actual crypto leaf; the wrapper
+            // still dropped exactly once after that allocation was destroyed.
+            CHUNK_CLEAR_EVENTS_V1.with(|events| assert_eq!(*events.borrow(), vec![None]));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn read_workspace_refusal_preserves_both_authenticated_snapshots() {
+        let mut snapshot = reduced_snapshot_v1(false);
+        let main =
+            spool_layout_v1(&snapshot.layout, ZkAmsMkheRnsNativeSourceArenaV1::Main).unwrap();
+        let nonce =
+            spool_layout_v1(&snapshot.layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce).unwrap();
+        let retained = source_named_bytes_v1(&main, &nonce).unwrap();
+        let held = snapshot
+            .admission
+            .reserve_workspace_v1(512 * 1024 * 1024 - retained, 0)
+            .unwrap();
+        let receipt = snapshot.structural_receipt().unwrap();
+        assert!(matches!(
+            snapshot.read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0),
+            Err(ZkAmsMkheRnsNativeSourceErrorV1::ResourceCeilingExceeded)
+        ));
+        assert!(snapshot.main.is_some() && snapshot.nonce.is_some());
+        assert_eq!(snapshot.structural_receipt().unwrap(), receipt);
+        drop(held);
+        assert!(
+            snapshot
+                .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 0)
+                .is_ok()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn held_read_chunk_outlives_snapshot_and_clears_on_drop() {
+        let mut snapshot = reduced_snapshot_v1(false);
+        let chunk = snapshot
+            .read_slot(ZkAmsMkheRnsNativeSourceArenaV1::Main, 1)
+            .unwrap();
+        assert!(snapshot.admission.owns_workspace_v1(&chunk.workspace));
+        drop(snapshot);
+        assert!(chunk.as_slice().iter().all(|byte| *byte == 0xA1));
+        CHUNK_CLEAR_EVENTS_V1.with(|events| events.borrow_mut().clear());
+        drop(chunk);
+        CHUNK_CLEAR_EVENTS_V1.with(|events| assert_eq!(*events.borrow(), vec![Some(true)]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn named_workspace_accounting_includes_secret_payload_and_operation_owners() {
+        let layout = source_layout();
+        let main = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Main).unwrap();
+        let nonce = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce).unwrap();
+        assert!(
+            source_named_bytes_v1(&main, &nonce).unwrap()
+                >= size_of::<CoreZkAmsMkheRnsNativeSourceSnapshotV1>() as u64
+        );
+        for arena in [
+            ZkAmsMkheRnsNativeSourceArenaV1::Main,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+        ] {
+            let leaf = spool_layout_v1(&layout, arena).unwrap();
+            let whole = chunk_named_bytes_v1(arena).unwrap()
+                + operation_scratch_v1(&layout, arena).unwrap();
+            assert!(whole >= leaf.named_operation_workspace_bytes_v1() as u64);
+            assert_eq!(
+                chunk_named_bytes_v1(arena).unwrap(),
+                arena.plaintext_bytes() + size_of::<CoreZkAmsMkheRnsNativeSecretChunkV1>() as u64
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[ignore = "writes and authenticates the canonical 316,239,888-byte source pair"]
+    fn canonical_source_round_trip_uses_real_consuming_begin_and_seal() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
+            directory.path(),
+            source_layout(),
+            ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
+        )
+        .unwrap();
+        for arena in [
+            ZkAmsMkheRnsNativeSourceArenaV1::Main,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+        ] {
+            for slot in 0..arena.slot_count() {
+                let mut chunk = writer.allocate_chunk(arena).unwrap();
+                chunk.as_mut_slice().fill((slot % 251) as u8);
+                writer.write_slot(arena, slot, chunk).unwrap();
+            }
+        }
+        let mut snapshot = writer.seal().unwrap();
+        for arena in [
+            ZkAmsMkheRnsNativeSourceArenaV1::Main,
+            ZkAmsMkheRnsNativeSourceArenaV1::Nonce,
+        ] {
+            for slot in [arena.slot_count() - 1, 0, arena.slot_count() / 2, 0] {
+                let chunk = snapshot.read_slot(arena, slot).unwrap();
+                assert!(
+                    chunk
+                        .as_slice()
+                        .iter()
+                        .all(|byte| *byte == (slot % 251) as u8)
+                );
+            }
+        }
     }
 }

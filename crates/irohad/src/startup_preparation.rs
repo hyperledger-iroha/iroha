@@ -44,14 +44,14 @@ pub struct PreparedStartup {
     // stacks. Preparation still creates it once; activation or joined cleanup consumes it.
     pub(super) native: Box<PreparedNative>,
     pub(super) lifetime: StartupLifetime,
-    pub(super) listeners: Option<iroha_deploy::managed::RuntimeListeners>,
+    pub(super) listeners: Option<iroha_managed_ipc::RuntimeListeners>,
 }
 
 /// Refuse a build whose linked BLS pairing context cannot verify consensus aggregates.
 ///
 /// Dynamic QC/TC verification uses bounded stack pairing storage; on such a build every
 /// valid certificate would fail as a bad signature, so the node must not start.
-pub(super) fn refuse_unsupported_consensus_pairing<E: std::fmt::Display>(
+pub fn refuse_unsupported_consensus_pairing<E: std::fmt::Display>(
     check: Result<(), E>,
 ) -> ReportResult<(), StartError> {
     check.map_err(|error| Report::new(StartError::ConsensusPairing).attach(error.to_string()))
@@ -240,8 +240,8 @@ impl PreparedStartup {
                     report.attach("lane manifest registry is not ready before snapshot restoration")
                 })?
         };
-        // Blocks at or below an upgrade checkpoint are the predecessor release's history; this
-        // release restores the World there instead of re-executing them.
+        // Blocks at or below an upgrade checkpoint are the predecessor release's history, which
+        // this release never re-executes: it restores a snapshot of its own above them.
         let upgrade_checkpoint = config
             .snapshot
             .upgrade_checkpoint
@@ -251,7 +251,7 @@ impl PreparedStartup {
                 iroha_core::state::upgrade_checkpoint::UpgradeCheckpointV1::from_config(&checkpoint)
             });
         if let Some(checkpoint) = &upgrade_checkpoint {
-            kura.set_upgrade_checkpoint(checkpoint.clone())
+            kura.set_upgrade_checkpoint(checkpoint)
                 .map_err(|error| Report::new(StartError::InitKura).attach(error))?;
         }
         let mut loaded_state_from_snapshot = false;
@@ -305,7 +305,7 @@ impl PreparedStartup {
                     .as_ref()
                     .map_or(0, |checkpoint| checkpoint.height);
                 return Err(Report::new(error).change_context(StartError::InitKura).attach(format!(
-                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs the checkpoint snapshot or a later snapshot of this release"
+                    "blocks up to the upgrade checkpoint at height {height} are the previous release's history and are never re-executed; restore needs a snapshot of this release above the checkpoint"
                 )));
             }
             Err(error) if snapshot_failure_allows_empty_state_fallback(&error, emergency_fast) => {

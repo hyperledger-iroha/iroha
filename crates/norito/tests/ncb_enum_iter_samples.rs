@@ -205,8 +205,8 @@ fn offsets_long_repeats_zero_delta_codes() {
     // - Codes: long run of 300, then long run of 301
     // - Names sprinkled at regular intervals with flag=true
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 100u64;
     for i in 0..30u64 {
+        let id = 100 + i;
         let flag = i % 3 != 1; // true for 2 out of 3 rows
         if i % 7 == 0 || i % 7 == 3 {
             // Place repeating names at regular positions
@@ -217,7 +217,6 @@ fn offsets_long_repeats_zero_delta_codes() {
         } else {
             rows.push((id, EnumBorrow::Code(301), flag));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
@@ -265,8 +264,8 @@ fn dict_long_repeats_zero_delta_codes() {
     use ncb::EnumBorrow;
     // Similar to previous test but with dict ON; repeated names and long code streaks.
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 1u64;
     for i in 0..28u64 {
+        let id = 1 + i;
         let flag = i % 4 != 2; // true for 3 out of 4 rows
         if i % 6 == 0 || i % 6 == 4 {
             let name = if i % 12 < 6 { "aa" } else { "cc" };
@@ -276,7 +275,6 @@ fn dict_long_repeats_zero_delta_codes() {
         } else {
             rows.push((id, EnumBorrow::Code(51), flag));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");
@@ -313,8 +311,8 @@ fn dict_long_repeats_zero_delta_codes() {
 fn offsets_long_repeats_fixture() {
     use ncb::EnumBorrow;
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 100u64;
     for i in 0..30u64 {
+        let id = 100 + i;
         let flag = i % 3 != 1;
         if i % 7 == 0 || i % 7 == 3 {
             let name = if i % 14 < 7 { "aa" } else { "bb" };
@@ -324,7 +322,6 @@ fn offsets_long_repeats_fixture() {
         } else {
             rows.push((id, EnumBorrow::Code(301), flag));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     // Compare to hex fixture
@@ -347,8 +344,8 @@ fn offsets_long_repeats_fixture() {
 fn dict_long_repeats_fixture() {
     use ncb::EnumBorrow;
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 1u64;
     for i in 0..28u64 {
+        let id = 1 + i;
         let flag = i % 4 != 2;
         if i % 6 == 0 || i % 6 == 4 {
             let name = if i % 12 < 6 { "aa" } else { "cc" };
@@ -358,7 +355,6 @@ fn dict_long_repeats_fixture() {
         } else {
             rows.push((id, EnumBorrow::Code(51), flag));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     use std::path::Path;
@@ -551,14 +547,13 @@ fn offsets_alternating_pattern_regex_like() {
     use ncb::EnumBorrow;
     // Build a pure alternating pattern: [Name("aa"), Code(300)] * 8 with all flags true.
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 10u64;
     for i in 0..16u64 {
+        let id = 10 + i;
         if i % 2 == 0 {
             rows.push((id, EnumBorrow::Name("aa"), true));
         } else {
             rows.push((id, EnumBorrow::Code(300), true));
         }
-        id += 1;
     }
     // Turn on id+code deltas (names are offsets-based; no dict)
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
@@ -571,14 +566,13 @@ fn dict_alternating_pattern_regex_like() {
     use ncb::EnumBorrow;
     // Alternating with dict ON: [Name("zz"), Code(77)] * 5 over id-delta, code-delta, dict.
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 1u64;
     for i in 0..10u64 {
+        let id = 1 + i;
         if i % 2 == 0 {
             rows.push((id, EnumBorrow::Name("zz"), true));
         } else {
             rows.push((id, EnumBorrow::Code(77), true));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let view = ncb::view_ncb_u64_enum_bool(&bytes).expect("view");

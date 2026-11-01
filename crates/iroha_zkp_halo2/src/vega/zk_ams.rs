@@ -266,7 +266,8 @@ pub use mkhe::{
     ZkAmsMkheReadinessV1, ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1,
     ZkAmsMkheRnsNativeSecretChunkV1, ZkAmsMkheRnsNativeSourceArenaV1,
     ZkAmsMkheRnsNativeSourceErrorV1, ZkAmsMkheRnsNativeSourceLayoutV1,
-    ZkAmsMkheRnsNativeSourceProviderV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSourceReservationV1, ZkAmsMkheRnsNativeSourceResourcesV1,
+    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWorkspaceV1,
     ZkAmsMkheRnsNativeSourceWriterV1, zk_ams_mkhe_manifest_digest_v1,
     zk_ams_mkhe_readiness_digest_v1, zk_ams_mkhe_readiness_v1, zk_ams_mkhe_rns_native_profile_v1,
     zk_ams_mkhe_rns_native_topology_v1,
@@ -1256,11 +1257,13 @@ fn enforce_successor_epoch(
     )
 }
 fn push_digest_words(values: &mut Vec<Scalar>, bytes: [u8; 32]) {
-    values.extend(bytes.chunks_exact(4).map(|word| {
-        Scalar::from_u64(u64::from(u32::from_be_bytes(
-            word.try_into().expect("exact four-byte word"),
-        )))
-    }));
+    values.extend(
+        bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|word| Scalar::from_u64(u64::from(u32::from_be_bytes(*word)))),
+    );
 }
 fn map_composition_error(error: MaskedRelaxedErrorV1) -> ZkAmsAdmissionRelationErrorV1 {
     match error {

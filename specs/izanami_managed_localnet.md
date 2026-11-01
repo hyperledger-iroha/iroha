@@ -297,7 +297,7 @@ struct ValidatorSlot {
   stored or signalled.
 - Transitions never block the accept loop. Admission is synchronous; the grace period,
   wipe and rejoin proof run as loop steps or in a dedicated background slot (like
-  `refresh`), so status requests keep their 2 s budget (`transport.rs:12`).
+  `refresh`), so status requests keep their 2 s budget (`crates/iroha_managed_ipc/src/transport.rs:11`).
 
 ### 6.2 Exit handling
 

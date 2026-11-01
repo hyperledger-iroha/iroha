@@ -52,6 +52,7 @@ const STOP_OBSERVATION_MAXIMUM: Duration = WORKER_STARTUP_MAXIMUM
     .saturating_add(OWNED_PEER_STOP_GRACE)
     .saturating_add(STOP_REPLY_ALLOWANCE);
 
+use iroha_managed_ipc::{ControlAction, ControlRequest};
 use norito::json::{JsonDeserialize, JsonSerialize};
 
 pub use bootstrap_failure::ManagedBootstrapFailure;
@@ -67,7 +68,6 @@ pub use deployment_report::{
     ManagedDeploymentExecution, ManagedDeploymentReport, ManagedDeploymentTarget,
     ManagedParentObservation, ManagedParentReport,
 };
-pub use listeners::{RuntimeListeners, adopt_runtime_listeners};
 pub use native_operation::ManagedTransactionFinality;
 pub use provider_advert::{ManagedProviderAdvertisement, ManagedProviderAdvertisementReport};
 pub use provider_capacity::{ManagedProviderCapacity, ManagedProviderCapacityProgress};
@@ -188,6 +188,16 @@ pub enum Error {
         /// Closed classification containing no request, response or custody text.
         failure: ManagedAttachmentFailure,
     },
+}
+
+impl From<iroha_managed_ipc::Error> for Error {
+    fn from(error: iroha_managed_ipc::Error) -> Self {
+        match error {
+            iroha_managed_ipc::Error::Io(error) => Self::Io(error),
+            iroha_managed_ipc::Error::Invalid(message) => Self::Invalid(message),
+            iroha_managed_ipc::Error::NativeDeadline => Self::NativeDeadline,
+        }
+    }
 }
 
 fn checkpoint_read_followup(source: &crate::bootstrap::CheckpointReadError) -> &'static str {
@@ -482,36 +492,6 @@ enum RootKind {
 #[norito(deny_unknown_fields)]
 struct WorkerRecord {
     token: String,
-}
-
-#[derive(JsonSerialize, JsonDeserialize)]
-#[norito(deny_unknown_fields)]
-struct ControlRequest {
-    token: String,
-    action: ControlAction,
-}
-
-/// Closed worker control actions. An unknown kind fails decoding and receives no reply.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
-#[norito(
-    tag = "kind",
-    content = "value",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-enum ControlAction {
-    /// Adopt bound sockets through the separate managed startup endpoint.
-    ListenerAdoption,
-    /// Report the live worker status.
-    Status,
-    /// Stop every owned validator and end the worker.
-    Down,
-    /// Close a startup whose foreground deadline expired, retaining its last safe phase.
-    StartupExpired,
-    /// Start parent attachment work for a ready private root.
-    AttachmentStart,
-    /// Report parent attachment progress together with the local status.
-    AttachmentStatus,
 }
 
 const MANIFEST: &str = "localnet.json";

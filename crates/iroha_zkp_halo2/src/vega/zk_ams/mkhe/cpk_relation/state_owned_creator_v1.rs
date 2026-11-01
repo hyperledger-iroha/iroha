@@ -207,14 +207,19 @@ where
         .map_err(map_transport_v1)?;
     let mut buffer = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
     for responses in proof.body.responses.chunks(buffer.len() / 8) {
-        for (output, response) in buffer.chunks_exact_mut(8).zip(responses) {
+        for (output, response) in buffer.as_chunks_mut::<8>().0.iter_mut().zip(responses) {
             output.copy_from_slice(&response.to_be_bytes());
         }
         transaction
             .write_exact(&buffer[..responses.len() * 8])
             .map_err(map_transport_v1)?;
     }
-    for (output, response) in buffer.chunks_exact_mut(32).zip(&proof.body.blind_responses) {
+    for (output, response) in buffer
+        .as_chunks_mut::<32>()
+        .0
+        .iter_mut()
+        .zip(&proof.body.blind_responses)
+    {
         output.copy_from_slice(&response.to_le_bytes());
     }
     transaction

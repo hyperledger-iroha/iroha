@@ -649,9 +649,10 @@ mod tests {
 
     #[test]
     fn retained_recipe_refuses_generated_mutations_before_peer_allocation() {
+        type RecipeMutation = Box<dyn Fn(&mut NetworkBuilder)>;
         let (_generated, originals, owners) = retained_fixture();
         let input = RetainedNetworkGenesis::new(originals, owners).unwrap();
-        let mutations: Vec<Box<dyn Fn(&mut NetworkBuilder)>> = vec![
+        let mutations: Vec<RecipeMutation> = vec![
             Box::new(|recipe| recipe.n_peers = 7),
             Box::new(|recipe| {
                 recipe.genesis_isi.push(vec![

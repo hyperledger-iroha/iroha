@@ -311,7 +311,7 @@ impl<'a> Planned<'a> {
     pub fn new(profile: &'a BgvProfile) -> Result<Self, BgvError> {
         Ok(Self {
             profile,
-            encoding: SlotEncoding::new(profile)?,
+            encoding: SlotEncoding::new(profile, profile.master_plaintext())?,
         })
     }
 }
@@ -328,11 +328,12 @@ impl Backend for Planned<'_> {
     }
 
     fn input(&mut self) -> Result<CiphertextShape, BgvError> {
-        self.profile.plan_fresh()
+        self.profile.plan_fresh(self.profile.master_plaintext())
     }
 
     fn constant(&mut self, _value: u64, level: usize) -> Result<CiphertextShape, BgvError> {
-        self.profile.plan_trivial(level)
+        self.profile
+            .plan_trivial(self.profile.master_plaintext(), level)
     }
 
     fn add(
@@ -360,8 +361,10 @@ impl Backend for Planned<'_> {
         value: &CiphertextShape,
         _scalar: u64,
     ) -> Result<CiphertextShape, BgvError> {
-        self.profile
-            .plan_add_plain(value, Plaintext::constant_bound(self.profile))
+        self.profile.plan_add_plain(
+            value,
+            Plaintext::constant_bound(self.profile, self.profile.master_plaintext()),
+        )
     }
 
     fn sub_scalar(
@@ -369,8 +372,10 @@ impl Backend for Planned<'_> {
         value: &CiphertextShape,
         _scalar: u64,
     ) -> Result<CiphertextShape, BgvError> {
-        self.profile
-            .plan_add_plain(value, Plaintext::constant_bound(self.profile))
+        self.profile.plan_add_plain(
+            value,
+            Plaintext::constant_bound(self.profile, self.profile.master_plaintext()),
+        )
     }
 
     fn mul_scalar(
@@ -378,8 +383,10 @@ impl Backend for Planned<'_> {
         value: &CiphertextShape,
         _scalar: u64,
     ) -> Result<CiphertextShape, BgvError> {
-        self.profile
-            .plan_mul_plain(value, Plaintext::constant_bound(self.profile))
+        self.profile.plan_mul_plain(
+            value,
+            Plaintext::constant_bound(self.profile, self.profile.master_plaintext()),
+        )
     }
 
     fn mul_slot_mask(
@@ -438,14 +445,18 @@ impl<'a> Encrypted<'a> {
     ) -> Result<Self, BgvError> {
         Ok(Self {
             profile,
-            encoding: SlotEncoding::new(profile)?,
+            encoding: SlotEncoding::new(profile, profile.master_plaintext())?,
             keys,
             input,
         })
     }
 
     fn scalar(&self, value: u64) -> Result<Plaintext, BgvError> {
-        Plaintext::constant(self.profile, value % self.profile.plaintext_modulus())
+        Plaintext::constant(
+            self.profile,
+            self.profile.master_plaintext(),
+            value % self.profile.master_plaintext_modulus(),
+        )
     }
 }
 
@@ -605,7 +616,7 @@ impl<'model, B: Backend> Machine<'model, B> {
         let mut machine = Self {
             backend,
             model: CostModel::new(profile),
-            broadcast: SlotEncoding::new(profile)?.broadcast_elements(),
+            broadcast: SlotEncoding::new(profile, profile.master_plaintext())?.broadcast_elements(),
             input,
             registers: vec![zero; REGISTERS],
             lanes,
@@ -994,7 +1005,7 @@ pub fn flooded_bound(
     log2_releases: u32,
     kappa: u32,
 ) -> Natural {
-    let t = profile.plaintext_modulus();
+    let t = profile.master_plaintext_modulus();
     let error = bound.div_ceil_u64(t).unwrap_or_default();
     let mut flood = error.mul_u64(u64::try_from(profile.degree()).unwrap_or(u64::MAX));
     for _ in 0..log2_releases + kappa {

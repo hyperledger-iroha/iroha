@@ -58,6 +58,13 @@ use iroha_data_model::{
 use iroha_model_base::metadata::Metadata;
 use iroha_primitives::{json::Json, numeric::Quantity};
 
+/// Fixed transaction creation time (2024-08-30T06:40:00Z) shared by every fixture.
+#[expect(
+    clippy::duration_suboptimal_units,
+    reason = "Unix timestamps stay in whole milliseconds"
+)]
+const CREATION_TIME: Duration = Duration::from_millis(1_725_000_000_000);
+
 /// The metadata that the governed `require_sequence` and `require_height_ttl` admission flags
 /// make mandatory, at its largest encoding: `tx_sequence` and `expires_at_height` at `u64::MAX`.
 fn flag_required_metadata() -> Metadata {
@@ -221,7 +228,7 @@ fn signed_with_required_context(
     )
     .expect("signature policy");
     let (mut builder, _) = transport_builder(envelope, AccountId::new_multisig(policy));
-    builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
+    builder.set_creation_time(CREATION_TIME);
     builder.set_nonce(NonZeroU32::MAX);
     builder.set_ttl(admissible_ttl());
     let signed = builder
@@ -246,7 +253,7 @@ fn signed_by_single_key(
         algorithm,
     );
     let (mut builder, _) = transport_builder(envelope, AccountId::new(key.public_key().clone()));
-    builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
+    builder.set_creation_time(CREATION_TIME);
     builder.set_nonce(NonZeroU32::MAX);
     builder.set_ttl(admissible_ttl());
     let signed = builder
@@ -399,16 +406,16 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
                 PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
             );
             let (mut builder, action_bytes) = transport_builder(&envelope, authority.clone());
-            if !x509 {
+            if x509 {
+                assert!(action_bytes <= TAIRA_PRIVACY_MAX_ACTION_BYTES_V1 as usize);
+            } else {
                 assert_eq!(
                     action_bytes - envelope_bytes,
                     4,
                     "one canonical compact V1 field length"
                 );
-            } else {
-                assert!(action_bytes <= TAIRA_PRIVACY_MAX_ACTION_BYTES_V1 as usize);
             }
-            builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
+            builder.set_creation_time(CREATION_TIME);
             builder.set_nonce(NonZeroU32::MAX);
             builder.set_ttl(admissible_ttl());
             let signed = builder
@@ -566,7 +573,7 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
     )
     .with_instructions([instruction])
     .with_metadata(flag_required_metadata());
-    builder.set_creation_time(Duration::from_millis(1_725_000_000_000));
+    builder.set_creation_time(CREATION_TIME);
     builder.set_nonce(NonZeroU32::MAX);
     builder.set_ttl(admissible_ttl());
     let signed = builder

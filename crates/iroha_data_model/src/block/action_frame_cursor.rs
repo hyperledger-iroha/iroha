@@ -317,7 +317,7 @@ pub(super) fn retry_policy(
     Ok(result)
 }
 
-/// True means Schedule, false means PreCommit. No storage kind is supplied by the caller.
+/// True means Schedule, false means `PreCommit`. No storage kind is supplied by the caller.
 pub(super) fn time_filter(mut value: Cursor<'_>, budget: &mut Budget) -> Result<bool, ScanError> {
     let mut execution = value.field(budget)?;
     let scheduled = match execution.u32(budget)? {

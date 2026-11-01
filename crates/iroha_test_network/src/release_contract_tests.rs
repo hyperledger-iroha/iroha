@@ -8,6 +8,7 @@ use super::*;
 use std::sync::OnceLock;
 use std::{collections::BTreeMap, fs, path::Path};
 
+use crate::native_program_fixture::command_admitted;
 use iroha_fs::{OwnerDirectory, PublishMode};
 use iroha_release_bundle::{
     bundle::NATIVE_TARGET,
@@ -60,7 +61,7 @@ impl Fixture {
     }
 
     fn with_spelling(lock: &[u8], spelling: impl FnOnce(&Path) -> PathBuf) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let root = crate::native_program_fixture::temporary_root();
         let base = spelling(root.path());
         let repo = base.join("source");
         let artifact = base.join("artifacts");
@@ -511,6 +512,7 @@ fn every_mutable_publication_parent_requires_exact_private_policy() {
     }
 }
 
+#[cfg(any(windows, target_os = "linux", target_os = "android"))]
 #[test]
 fn cached_selection_and_unlaunched_command_retain_complete_contract() {
     let fixture = Fixture::new();
@@ -574,9 +576,9 @@ fn cached_selection_rechecks_independent_lock() {
     let contract = fixture.open().unwrap();
     let selected = contract.select(BinaryKind::Iroha, None).unwrap();
     drop(contract);
-    assert!(selected.command().is_ok());
+    assert!(command_admitted(&selected));
     fs::write(fixture.repo.join("Cargo.lock"), b"version = 3\n").unwrap();
-    assert!(selected.command().is_err());
+    assert!(!command_admitted(&selected));
 }
 
 #[test]
@@ -585,7 +587,7 @@ fn cached_selection_rechecks_private_ancestry() {
     let contract = fixture.open().unwrap();
     let selected = contract.select(BinaryKind::Iroha, None).unwrap();
     drop(contract);
-    assert!(selected.command().is_ok());
+    assert!(command_admitted(&selected));
     add_foreign_directory_read(&fixture.artifact);
-    assert!(selected.command().is_err());
+    assert!(!command_admitted(&selected));
 }

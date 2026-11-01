@@ -35,8 +35,10 @@ fn literal_account() -> ivm::mock_wsv::AccountId {
 #[test]
 fn kotodama_revoke_role_denies_mint() {
     let caller: ivm::mock_wsv::AccountId = literal_account();
-    // VM + host with bootstrap permissions
+    // VM + host with bootstrap permissions. Permissions apply only to a linked
+    // account, so link the caller before it registers the owning domain.
     let mut wsv = MockWorldStateView::new();
+    wsv.add_account_unchecked(caller.clone());
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(
         &caller,
@@ -73,13 +75,9 @@ fn kotodama_delete_role_prevents_grant() {
     let caller: ivm::mock_wsv::AccountId = caller_account();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
+    // The bootstrap program registers the domain that owns the asset definition.
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
-    assert!(wsv.register_domain(
-        &caller,
-        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
-    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -114,13 +112,9 @@ fn kotodama_delete_role_denied_while_assigned_then_succeeds_after_revoke() {
     let caller: ivm::mock_wsv::AccountId = caller_account();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
+    // The bootstrap program registers the domain that owns the asset definition.
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
-    assert!(wsv.register_domain(
-        &caller,
-        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
-    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);
@@ -159,13 +153,9 @@ fn kotodama_combined_revoke_then_delete_blocks_grant_and_mint() {
     let caller: ivm::mock_wsv::AccountId = caller_account();
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
+    // The bootstrap program registers the domain that owns the asset definition.
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(&caller, PermissionToken::RegisterAccount);
-    wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
-    assert!(wsv.register_domain(
-        &caller,
-        iroha_model_base::domain::DomainId::try_new("default", "universal").unwrap()
-    ));
     wsv.grant_permission(&caller, PermissionToken::ManageRoles);
     let host = WsvHost::new_with_subject(wsv, caller.clone());
     let mut vm = IVM::new(u64::MAX);

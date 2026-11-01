@@ -33,6 +33,8 @@
 //!   products and the exact CRT convolution.
 //! - [`polynomial`]: coefficient-wise arithmetic and the schoolbook negacyclic
 //!   products that serve as fallback and reference.
+//! - [`prime_power`]: bounded public prime-power lifting polynomials and upper-digit
+//!   programs; arithmetic preparation only, without ciphertext refresh.
 //! - [`rns`]: modulus-chain validation, residue decomposition, exact CRT
 //!   reconstruction and basis extension.
 //! - [`rounding`]: centered lifting, nearest division, scale-and-round and
@@ -96,6 +98,7 @@ pub mod natural;
 pub mod ntt;
 pub mod ntt_plan;
 pub mod polynomial;
+pub mod prime_power;
 pub mod rns;
 pub mod rns_chain;
 pub mod rounding;

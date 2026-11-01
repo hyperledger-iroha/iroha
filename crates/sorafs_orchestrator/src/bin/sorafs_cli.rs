@@ -5285,7 +5285,7 @@ fn moderation_try_acquire_permit(
     limit: usize,
 ) -> Option<ModerationActivePermit> {
     active
-        .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+        .try_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
             (current < limit).then_some(current + 1)
         })
         .ok()?;
@@ -11678,8 +11678,9 @@ mod manifest_tests {
     #[test]
     fn moderation_bounded_reader_rejects_symlink_input() {
         let temp = TempDir::new().expect("tempdir");
-        let target = temp.path().join("target");
-        let linked = temp.path().join("linked");
+        let root = canonical_temp_path(&temp);
+        let target = root.join("target");
+        let linked = root.join("linked");
         fs::write(&target, b"manifest").expect("write target");
         std::os::unix::fs::symlink(&target, &linked).expect("create symlink");
         assert_eq!(
@@ -21421,10 +21422,10 @@ fn parse_hex_vec(input: &str) -> Result<Vec<u8>, String> {
         return Err("hex string must contain an even number of characters".into());
     }
     let mut out = Vec::with_capacity(input.len() / 2);
-    let mut iter = input.as_bytes().chunks_exact(2);
-    for pair in &mut iter {
-        let hi = hex_value(pair[0])?;
-        let lo = hex_value(pair[1])?;
+    let (pairs, _) = input.as_bytes().as_chunks::<2>();
+    for &[hi, lo] in pairs {
+        let hi = hex_value(hi)?;
+        let lo = hex_value(lo)?;
         out.push((hi << 4) | lo);
     }
     Ok(out)

@@ -370,7 +370,20 @@ pub(super) const fn scalar_scratch_payload_bytes_v1() -> usize {
 
 /// Complete resident scratch for the selected bounded inverse-window route.
 pub(super) const fn scratch_payload_bytes_v1() -> usize {
-    inverse_window::scratch_payload_bytes_v1()
+    let bounded = inverse_window::scratch_payload_bytes_v1();
+    let full = matrix::scratch_payload_bytes_v1();
+    if bounded > full { bounded } else { full }
+}
+
+/// Parallel bounded native passes into the caller's already admitted final matrix.
+pub(super) fn fill_matrix_v1(
+    material: &ZkX509Rfc5280StarkBaseMaterialV1,
+    der: &ZkX509DerStarkChallengesV1,
+    challenges: &ZkX509Rfc5280StarkChallengesV1,
+    outputs: &mut [&mut [F]],
+    centers: &ZkX509ShaUnionCentersV1,
+) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+    matrix::fill_matrix_v1(material, der, challenges, outputs, centers)
 }
 
 /// Fill the admitted public column span with bounded inverse windows where needed.
@@ -899,8 +912,12 @@ mod tests {
             + core::mem::size_of::<ColumnStateV1>()
             + core::mem::size_of::<F>();
         assert_eq!(
-            scratch_payload_bytes_v1(),
+            inverse_window::scratch_payload_bytes_v1(),
             scalar_scratch_payload_bytes_v1() + window_owners
+        );
+        assert_eq!(
+            scratch_payload_bytes_v1(),
+            matrix::scratch_payload_bytes_v1()
         );
         assert_eq!(
             super::super::zk_x509_rfc_aux_replay_scratch_bytes_v1(),
@@ -1344,3 +1361,6 @@ mod inverse_window;
 #[cfg(test)]
 #[path = "rfc5280_inverse_window_tests.rs"]
 pub(super) mod inverse_window_tests;
+
+#[path = "rfc5280_aux_matrix.rs"]
+mod matrix;

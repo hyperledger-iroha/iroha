@@ -541,7 +541,9 @@ mod tests {
             let next = layers
                 .last()
                 .expect("dense reference layer")
-                .chunks_exact(2)
+                .as_chunks::<2>()
+                .0
+                .iter()
                 .map(|pair| super::merkle_parent_v3(pair[0], pair[1]))
                 .collect();
             layers.push(next);

@@ -223,10 +223,10 @@ mod sorafs_pop_registry_admission {
     fn apply(
         transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
     ) {
         assert!(initial_native_instruction_is_explicitly_admitted(
-            &instruction
+            instruction
         ));
         Executor::Initial
             .execute_instruction(transaction, authority, instruction)
@@ -245,11 +245,11 @@ mod sorafs_pop_registry_admission {
     fn reject_unchanged(
         transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         marker: &str,
     ) {
         assert!(initial_native_instruction_is_explicitly_admitted(
-            &instruction
+            instruction
         ));
         let before = stored(transaction);
         let error = Executor::Initial
@@ -286,7 +286,7 @@ mod sorafs_pop_registry_admission {
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                policy_instruction.clone(),
+                &policy_instruction.clone(),
                 management.name(),
             );
             let malformed = Permission::new(management.name().to_owned(), Json::new(false));
@@ -294,18 +294,18 @@ mod sorafs_pop_registry_admission {
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                policy_instruction.clone(),
+                &policy_instruction.clone(),
                 management.name(),
             );
             grant(&mut transaction, &ALICE_ID, vec![management], through_role);
-            apply(&mut transaction, &ALICE_ID, policy_instruction);
+            apply(&mut transaction, &ALICE_ID, &policy_instruction);
 
             let batch_instruction: InstructionBox =
                 CommitSorafsPopCredentialBatch::new(encode(&batch(&ALICE_KEYPAIR))).into();
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                batch_instruction.clone(),
+                &batch_instruction.clone(),
                 operation.name(),
             );
             let malformed = Permission::new(operation.name().to_owned(), Json::new(false));
@@ -318,7 +318,7 @@ mod sorafs_pop_registry_admission {
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                batch_instruction.clone(),
+                &batch_instruction.clone(),
                 operation.name(),
             );
             grant(
@@ -327,18 +327,18 @@ mod sorafs_pop_registry_admission {
                 vec![operation.clone()],
                 through_role,
             );
-            apply(&mut transaction, &ALICE_ID, batch_instruction);
+            apply(&mut transaction, &ALICE_ID, &batch_instruction);
 
             let revocation = publication(&ALICE_KEYPAIR, 2, vec![entry()]);
             grant(&mut transaction, &ALICE_ID, vec![malformed], through_role);
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                revocation.clone(),
+                &revocation.clone(),
                 operation.name(),
             );
             grant(&mut transaction, &ALICE_ID, vec![operation], through_role);
-            apply(&mut transaction, &ALICE_ID, revocation);
+            apply(&mut transaction, &ALICE_ID, &revocation);
             let status = FindSorafsPopRegistryStatus.execute(&transaction).unwrap();
             assert_eq!(status.credential_commitment_count, 1);
             assert_eq!(status.revoked_credential_count, 1);
@@ -379,13 +379,13 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            SetSorafsPopIssuerPolicy::new(missing_issuer).into(),
+            &SetSorafsPopIssuerPolicy::new(missing_issuer).into(),
             "issuer policy account is not registered",
         );
         apply(
             &mut transaction,
             &ALICE_ID,
-            SetSorafsPopIssuerPolicy::new(policy()).into(),
+            &SetSorafsPopIssuerPolicy::new(policy()).into(),
         );
         let canonical = batch(&ALICE_KEYPAIR);
         let alternate = {
@@ -396,13 +396,13 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            CommitSorafsPopCredentialBatch::new(alternate).into(),
+            &CommitSorafsPopCredentialBatch::new(alternate).into(),
             "is not exact canonical Norito",
         );
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            CommitSorafsPopCredentialBatch::new(encode(&canonical)).into(),
+            &CommitSorafsPopCredentialBatch::new(encode(&canonical)).into(),
             "authority does not match the active PoP issuer account",
         );
         let mut wrong_policy = canonical.clone();
@@ -410,13 +410,13 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            CommitSorafsPopCredentialBatch::new(encode(&wrong_policy)).into(),
+            &CommitSorafsPopCredentialBatch::new(encode(&wrong_policy)).into(),
             "issuer-policy digest does not match",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            CommitSorafsPopCredentialBatch::new(encode(&batch(&BOB_KEYPAIR))).into(),
+            &CommitSorafsPopCredentialBatch::new(encode(&batch(&BOB_KEYPAIR))).into(),
             "publisher key does not match",
         );
         let mut bad_signature = canonical.clone();
@@ -426,24 +426,24 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            CommitSorafsPopCredentialBatch::new(encode(&bad_signature)).into(),
+            &CommitSorafsPopCredentialBatch::new(encode(&bad_signature)).into(),
             "invalid signed PoP commitment root",
         );
         apply(
             &mut transaction,
             &ALICE_ID,
-            CommitSorafsPopCredentialBatch::new(encode(&canonical)).into(),
+            &CommitSorafsPopCredentialBatch::new(encode(&canonical)).into(),
         );
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            publication(&ALICE_KEYPAIR, 2, vec![entry()]),
+            &publication(&ALICE_KEYPAIR, 2, vec![entry()]),
             "authority does not match the active PoP issuer account",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            publication(&BOB_KEYPAIR, 2, vec![entry()]),
+            &publication(&BOB_KEYPAIR, 2, vec![entry()]),
             "publisher key does not match",
         );
         let mut paused = policy();
@@ -453,18 +453,18 @@ mod sorafs_pop_registry_admission {
         apply(
             &mut transaction,
             &ALICE_ID,
-            SetSorafsPopIssuerPolicy::new(paused).into(),
+            &SetSorafsPopIssuerPolicy::new(paused).into(),
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            CommitSorafsPopCredentialBatch::new(encode(&canonical)).into(),
+            &CommitSorafsPopCredentialBatch::new(encode(&canonical)).into(),
             "paused by governance",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            publication(&ALICE_KEYPAIR, 2, vec![entry()]),
+            &publication(&ALICE_KEYPAIR, 2, vec![entry()]),
             "paused by governance",
         );
     }
@@ -495,15 +495,15 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            SetSorafsPopIssuerPolicy::new(invalid_first).into(),
+            &SetSorafsPopIssuerPolicy::new(invalid_first).into(),
             "first PoP issuer policy must be revision one",
         );
         let policy_instruction: InstructionBox = SetSorafsPopIssuerPolicy::new(policy()).into();
-        apply(&mut transaction, &ALICE_ID, policy_instruction.clone());
+        apply(&mut transaction, &ALICE_ID, &policy_instruction.clone());
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            policy_instruction,
+            &policy_instruction,
             "must exactly follow active revision",
         );
         let mut wrong_predecessor = policy();
@@ -512,16 +512,16 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            SetSorafsPopIssuerPolicy::new(wrong_predecessor).into(),
+            &SetSorafsPopIssuerPolicy::new(wrong_predecessor).into(),
             "predecessor does not match",
         );
         let batch_instruction: InstructionBox =
             CommitSorafsPopCredentialBatch::new(encode(&batch(&ALICE_KEYPAIR))).into();
-        apply(&mut transaction, &ALICE_ID, batch_instruction.clone());
+        apply(&mut transaction, &ALICE_ID, &batch_instruction.clone());
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            batch_instruction,
+            &batch_instruction,
             "rolls back or skips the active root/list version",
         );
         let mut unknown = entry();
@@ -529,27 +529,27 @@ mod sorafs_pop_registry_admission {
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            publication(&ALICE_KEYPAIR, 2, vec![unknown]),
+            &publication(&ALICE_KEYPAIR, 2, vec![unknown]),
             "nonce is not bound to an authoritative credential commitment",
         );
         let revocation = publication(&ALICE_KEYPAIR, 2, vec![entry()]);
-        apply(&mut transaction, &ALICE_ID, revocation.clone());
+        apply(&mut transaction, &ALICE_ID, &revocation.clone());
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            revocation,
+            &revocation,
             "must exactly follow active version",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            publication(&ALICE_KEYPAIR, 3, Vec::new()),
+            &publication(&ALICE_KEYPAIR, 3, Vec::new()),
             "rolls back or mutates an existing revocation",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            publication(&ALICE_KEYPAIR, 3, vec![entry()]),
+            &publication(&ALICE_KEYPAIR, 3, vec![entry()]),
             "must add at least one new nonce",
         );
         let status = FindSorafsPopRegistryStatus.execute(&transaction).unwrap();

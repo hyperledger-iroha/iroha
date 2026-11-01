@@ -102,11 +102,13 @@ fn actual_permuted_transfer() {
     drop((first, second, third));
     let output = command.output().unwrap();
     assert!(output.status.success(), "{output:?}");
+    // The child reports its physical working directory (`getcwd`), so compare against the
+    // canonical root: Darwin's temporary directory is reached through the `/var` symlink.
     assert_eq!(
         String::from_utf8(output.stdout).unwrap(),
         format!(
             "cwd={}\n198=7365636f6e640a\n201=7468697264\n202=666972737400\n",
-            root.path().display()
+            fs::canonicalize(root.path()).unwrap().display()
         )
     );
 }

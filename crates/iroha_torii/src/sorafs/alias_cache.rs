@@ -204,20 +204,16 @@ pub(crate) fn evaluate_cache_decision(
                     push_reason(&mut decision, reason, CacheDecisionOutcome::Refuse);
                 }
             }
-            Some(effective) => {
-                if now_secs < effective {
-                    push_reason_with_deadline(
-                        &mut decision,
-                        "GovernanceGrace",
-                        CacheDecisionOutcome::Hold,
-                        Some(effective),
-                    );
-                    push_reason(&mut decision, reason, CacheDecisionOutcome::Hold);
-                } else {
-                    push_reason(&mut decision, reason, CacheDecisionOutcome::Refuse);
-                }
+            Some(effective) if now_secs < effective => {
+                push_reason_with_deadline(
+                    &mut decision,
+                    "GovernanceGrace",
+                    CacheDecisionOutcome::Hold,
+                    Some(effective),
+                );
+                push_reason(&mut decision, reason, CacheDecisionOutcome::Hold);
             }
-            None => {
+            Some(_) | None => {
                 push_reason(&mut decision, reason, CacheDecisionOutcome::Refuse);
             }
         }

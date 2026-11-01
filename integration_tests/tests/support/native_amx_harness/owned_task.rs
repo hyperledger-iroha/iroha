@@ -7,10 +7,10 @@ use eyre::{Result, ensure, eyre};
 use std::time::Instant;
 
 /// Poll the owned SDK operation on a fresh default worker stack, retaining the
-/// original phase deadline and cancellation ownership. JoinSet aborts its child
+/// original phase deadline and cancellation ownership. `JoinSet` aborts its child
 /// on timeout, unwinding, or cancellation of this enclosing future; a detached
-/// JoinHandle would let a payment continue after its ceremony owner disappeared.
-pub(crate) async fn owned_payment_until<T, F>(deadline: Instant, payment: F) -> Result<T>
+/// `JoinHandle` would let a payment continue after its ceremony owner disappeared.
+pub async fn owned_payment_until<T, F>(deadline: Instant, payment: F) -> Result<T>
 where
     T: Send + 'static,
     F: std::future::Future<Output = Result<T>> + Send + 'static,
@@ -28,12 +28,11 @@ where
         );
         payment.await
     });
-    let joined = match tokio::time::timeout_at(deadline, tasks.join_next()).await {
-        Ok(joined) => joined,
-        Err(_) => {
-            tasks.abort_all();
-            return Err(eyre!("original payment deadline exhausted"));
-        }
+    let joined = if let Ok(joined) = tokio::time::timeout_at(deadline, tasks.join_next()).await {
+        joined
+    } else {
+        tasks.abort_all();
+        return Err(eyre!("original payment deadline exhausted"));
     };
     let completed = joined
         .ok_or_else(|| eyre!("owned payment task disappeared"))?

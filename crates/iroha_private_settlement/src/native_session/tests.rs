@@ -432,7 +432,9 @@ fn typed_verified_success_and_pending_local_cleanup_never_become_generic_failure
     let fixture = crate::wallet_store::test_fixture::complete();
     let hash = fixture.receipt.transaction_hash();
     let success = NativePrivateSettlementOutcome::Verified {
-        outcome: VerifiedPrivateSettlementOutcome::Settled(fixture.receipt.clone()),
+        outcome: Box::new(VerifiedPrivateSettlementOutcome::Settled(
+            fixture.receipt.clone(),
+        )),
         progress: None,
     };
     let NativePrivateSettlementOutcome::Verified { outcome, progress } = success else {
@@ -469,7 +471,7 @@ fn typed_verified_abort_and_pending_local_release_preserve_original_authority() 
     );
     let hash = abort.transaction_hash();
     let value = NativePrivateSettlementOutcome::Verified {
-        outcome: VerifiedPrivateSettlementOutcome::Aborted(abort.clone()),
+        outcome: Box::new(VerifiedPrivateSettlementOutcome::Aborted(abort.clone())),
         progress: None,
     };
     let NativePrivateSettlementOutcome::Verified { outcome, progress } = value else {

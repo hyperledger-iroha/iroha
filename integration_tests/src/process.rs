@@ -51,7 +51,7 @@ pub const PROCESS_TIMEOUT_ENV: &str = "IROHA_TEST_PROCESS_TIMEOUT_MS";
 /// Environment override for nested build subprocess timeouts.
 pub const BUILD_TIMEOUT_ENV: &str = "IROHA_TEST_BUILD_TIMEOUT_MS";
 const PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(60);
-const BUILD_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20 * 60);
+const BUILD_TIMEOUT_DEFAULT: Duration = Duration::from_mins(20);
 const PROCESS_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const PROCESS_CLEANUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// Default timeout for ordinary test subprocesses.

@@ -6,6 +6,7 @@
 
 mod common;
 
+use std::fmt::Write as _;
 use std::panic::{UnwindSafe, catch_unwind};
 
 use common::Fixture;
@@ -77,8 +78,10 @@ impl Campaign {
             .digest
             .finalize()
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            });
         println!(
             "backend seed={SEED:#x} cases={} true_outcomes={} false_outcomes={} sha3_256={digest}",
             self.cases,

@@ -99,8 +99,14 @@ fn state_publication_lock_refusals_reach_scheduler_with_original_execution_and_r
                 let PublicationError::Deferred(ref source) = failure else {
                     panic!("publication erased original physical owner: {failure:?}");
                 };
-                assert!(matches!(source, PublicationDeferral::BlockHashesBusy(_)) == hash_writer);
-                assert!(matches!(source, PublicationDeferral::PublicationBusy(_)) == !hash_writer);
+                assert_eq!(
+                    matches!(source, PublicationDeferral::BlockHashesBusy(_)),
+                    hash_writer
+                );
+                assert_eq!(
+                    matches!(source, PublicationDeferral::PublicationBusy(_)),
+                    !hash_writer
+                );
                 assert!(source.execution().is_none());
                 assert!(
                     source.allocation_refusal().is_none(),

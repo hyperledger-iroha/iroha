@@ -428,7 +428,7 @@ fn resolve_network_torii_url(configured: Option<&str>) -> Result<url::Url> {
 }
 
 /// Compose genesis from the bundle helpers: default bootstrap state, the funded operator,
-/// their block parameters and fee policy, the validator roster with its PoPs, and the
+/// their block parameters and fee policy, the validator roster with its `PoPs`, and the
 /// consensus-specific validator bootstrap.
 fn compose_network_genesis(
     validators: &[NetworkValidator],

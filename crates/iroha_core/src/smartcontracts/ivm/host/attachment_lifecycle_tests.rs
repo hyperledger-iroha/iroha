@@ -75,7 +75,7 @@ fn attachment_host_source(
                 attachments: vec![PlannedAttachmentV1 {
                     kind: AttachmentKindV1::Proof,
                     role: AttachmentRoleV1::ActionProof,
-                    bytes: vec![0x80 + index as u8; 48],
+                    bytes: vec![0x80 + u8::try_from(index).unwrap(); 48],
                 }],
             });
         }
@@ -98,8 +98,8 @@ fn consume_attachment_host_fixture<QS: Default + QueryStateAccess>(
             role: declaration.role,
             public_inputs_digest: declaration.public_inputs_digest,
         };
-        for (slot, reference) in declaration.attachments.iter().enumerate() {
-            let handle = frame.open(request, slot as u32, reference.kind, reference.role)?;
+        for (slot, reference) in (0_u32..).zip(&declaration.attachments) {
+            let handle = frame.open(request, slot, reference.kind, reference.role)?;
             let original = frame.consume(request, handle, reference.kind, reference.role)?;
             assert!(!original.is_empty());
         }
@@ -352,7 +352,7 @@ fn attachment_host_wrong_root_or_caller_subject_cannot_consume() {
         .unwrap();
         assert!(matches!(
             consume_attachment_host_fixture(&mut host, declaration),
-            Err(CustodyError::WrongInvocation(_)) | Err(CustodyError::WrongAuthority(_))
+            Err(CustodyError::WrongInvocation(_) | CustodyError::WrongAuthority(_))
         ));
         drop(host);
         assert_eq!(owner.finish(), Err(CustodyError::FailedAttempt));
@@ -621,9 +621,7 @@ fn attachment_host_consumption_is_once_and_unfinished_or_unwound_hosts_poison() 
                     .unwrap(),
             )
             .unwrap();
-            if unwind {
-                panic!("injected host unwinding before finish");
-            }
+            assert!(!unwind, "injected host unwinding before finish")
             // Ordinary unfinished-host destruction has the same poisoning owner.
         }));
         assert_eq!(result.is_err(), unwind);

@@ -292,7 +292,7 @@ fn rewrite_the_generated_sources() {
         if fs::read_to_string(&path).ok().as_ref() != Some(&source) {
             fs::write(&path, &source).expect("write the generated source");
         }
-        assert!(fs::read_to_string(&path).expect("read back") == source);
+        assert_eq!(fs::read_to_string(&path).expect("read back"), source);
     }
 }
 

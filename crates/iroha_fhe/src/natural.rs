@@ -73,6 +73,11 @@ impl Natural {
         &self.words
     }
 
+    /// Visible allocation capacity, for typed public metadata accounting.
+    pub(crate) fn allocated_words(&self) -> usize {
+        self.words.capacity()
+    }
+
     /// Whether the value is zero.
     #[must_use]
     pub fn is_zero(&self) -> bool {

@@ -362,7 +362,7 @@ fn a_nested_envelope_is_refused_where_it_executes() {
     tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     assert_eq!(
-        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, opaque(UNKNOWN)),
+        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, &opaque(UNKNOWN)),
         Err(failed(inactive(UNKNOWN)))
     );
     assert_eq!(
@@ -375,14 +375,14 @@ fn a_nested_envelope_is_refused_where_it_executes() {
     );
     *tx.world.runtime_selection.get_mut() = without_log(baseline());
     assert_eq!(
-        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, log()),
+        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, &log()),
         Err(failed(inactive(log_wire_id())))
     );
     // Once an interface answers its wire ID, an envelope this release still keeps opaque (a frame
     // the interface's decoder does not accept canonically) is refused with `malformed_payload`.
     *tx.world.runtime_selection.get_mut() = with_binding(baseline(), UNKNOWN);
     assert_eq!(
-        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, opaque(UNKNOWN)),
+        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, &opaque(UNKNOWN)),
         Err(failed(malformed(UNKNOWN)))
     );
     assert_eq!(
@@ -443,7 +443,7 @@ fn a_restriction_holds_on_paths_outside_the_native_dispatch_table() {
     tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
     *tx.world.runtime_selection.get_mut() = restricted;
     assert_eq!(
-        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, transfer),
+        Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, &transfer),
         Err(failed(rejection)),
         "the linked-FI path runs only after resolution"
     );

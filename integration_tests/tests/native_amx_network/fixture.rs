@@ -3,7 +3,7 @@
 use super::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_data_model::{
-    block::consensus::{RootFeePolicy, SumeragiGenesisContextParameters},
+    block::consensus::SumeragiGenesisContextParameters,
     isi::{Grant, Mint, Register},
     parameter::Parameter,
     sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},
@@ -13,8 +13,8 @@ use iroha_genesis::GenesisBuilder;
 use std::{borrow::Cow, io::Write as _, path::Path, sync::LazyLock};
 use toml::{Table, Value};
 
-pub(crate) const CADENCE_MS: u64 = 1_000;
-pub(crate) const PRINCIPAL: u32 = 1_000;
+pub const CADENCE_MS: u64 = 1_000;
+pub const PRINCIPAL: u32 = 1_000;
 // Match the private-root authoring owner: the canonical SNS dataspace selector
 // supplies the stable catalog manifest_hash, independently of signed child genesis.
 // This is not an inline lane-governance or public Space Directory manifest digest.
@@ -27,7 +27,7 @@ static DATASPACE_MANIFEST_HASHES: LazyLock<[[u8; 32]; 2]> = LazyLock::new(|| {
         selector.name_hash()
     })
 });
-pub(crate) static DATASPACES: LazyLock<[DataSpaceId; 2]> =
+pub static DATASPACES: LazyLock<[DataSpaceId; 2]> =
     LazyLock::new(|| DATASPACE_MANIFEST_HASHES.map(|hash| DataSpaceId::from_hash(&hash)));
 
 fn private_root_catalog(bank: usize) -> Table {
@@ -172,34 +172,34 @@ fn private_root_catalog_is_restricted_full_replica_in_exact_signed_dataspace() {
     }
 }
 
-pub(crate) fn key(seed: u8) -> KeyPair {
+pub fn key(seed: u8) -> KeyPair {
     KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519)
 }
-pub(crate) fn account(key: &KeyPair) -> AccountId {
+pub fn account(key: &KeyPair) -> AccountId {
     AccountId::new(key.public_key().clone())
 }
-pub(crate) fn genesis_key(index: usize) -> KeyPair {
-    key(0x70 + index as u8)
+pub fn genesis_key(index: usize) -> KeyPair {
+    key(0x70 + u8::try_from(index).expect("fixture root index fits one byte"))
 }
-pub(crate) fn payer(index: usize) -> KeyPair {
-    key(0x81 + index as u8)
+pub fn payer(index: usize) -> KeyPair {
+    key(0x81 + u8::try_from(index).expect("fixture bank index fits one byte"))
 }
-pub(crate) fn relay(index: usize) -> KeyPair {
-    key(0x91 + index as u8)
+pub fn relay(index: usize) -> KeyPair {
+    key(0x91 + u8::try_from(index).expect("fixture root index fits one byte"))
 }
-pub(crate) fn fee_asset() -> AssetDefinitionId {
+pub fn fee_asset() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(
         &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
     )
     .unwrap()
 }
-pub(crate) fn currency(index: usize) -> AssetDefinitionId {
+pub fn currency(index: usize) -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
         DomainId::try_new("money", BANK_ALIASES[index]).unwrap(),
         ["usd", "eur"][index].parse().unwrap(),
     )
 }
-pub(crate) fn fee_intent() -> FeePaymentIntent {
+pub fn fee_intent() -> FeePaymentIntent {
     // All three signed genesis policies select Nexus-only charging. Global
     // commits no accepted PipelineGas asset; banks include gas in Nexus.
     FeePaymentIntent::authority(
@@ -212,21 +212,21 @@ pub(crate) fn fee_intent() -> FeePaymentIntent {
     )
 }
 
-pub(crate) fn service_read_role() -> iroha_data_model::role::RoleId {
+pub fn service_read_role() -> iroha_data_model::role::RoleId {
     "native_amx_service_read".parse().expect("authored role ID")
 }
-pub(crate) fn service_admin_role() -> iroha_data_model::role::RoleId {
+pub fn service_admin_role() -> iroha_data_model::role::RoleId {
     "native_amx_service_admin"
         .parse()
         .expect("authored role ID")
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum BankFeeProfile {
+pub enum BankFeeProfile {
     Metered,
     UnfundedRelay,
 }
-pub(crate) struct Root {
+pub struct Root {
     pub network: Network,
     pub scope: SumeragiRootScope,
     pub pins: SignedGenesisPinsV1,
@@ -238,12 +238,12 @@ pub(crate) struct Root {
     clients: std::collections::BTreeMap<AccountId, iroha::blocking::Client>,
 }
 impl Root {
-    pub fn new(index: usize, parent: Option<(&Root, Vec<u8>, Vec<u8>)>) -> Result<Self> {
+    pub fn new(index: usize, parent: Option<(&Root, &[u8], &[u8])>) -> Result<Self> {
         Self::new_with_fee_profile(index, parent, BankFeeProfile::Metered)
     }
     pub fn new_with_fee_profile(
         index: usize,
-        parent: Option<(&Root, Vec<u8>, Vec<u8>)>,
+        parent: Option<(&Root, &[u8], &[u8])>,
         fees: BankFeeProfile,
     ) -> Result<Self> {
         let chain = ChainId::try_from(format!("native-amx-independent-root-{index}"))?;
@@ -294,7 +294,7 @@ impl Root {
             instructions.push(
                 Mint::asset_quantity(
                     1_000_000_u32,
-                    AssetId::with_scope(fee_asset(), owner, balance_scope.clone()),
+                    AssetId::with_scope(fee_asset(), owner, balance_scope),
                 )
                 .into(),
             );
@@ -335,11 +335,7 @@ impl Root {
                 instructions.push(
                     Mint::asset_quantity(
                         1_000_000_u32,
-                        AssetId::with_scope(
-                            fee_asset(),
-                            account(&bank_payer),
-                            balance_scope.clone(),
-                        ),
+                        AssetId::with_scope(fee_asset(), account(&bank_payer), balance_scope),
                     )
                     .into(),
                 );
@@ -360,13 +356,13 @@ impl Root {
                 )
                 .into(),
             );
-            let (global, executed_genesis, successor) = parent.as_ref().unwrap();
+            let (global, executed_genesis, successor) = parent.unwrap();
             instructions.push(
                 RegisterAmxParticipantV1 {
                     dataspace: DATASPACES[bank],
                     global_chain_id: global.network.chain_id().clone(),
-                    global_genesis: executed_genesis.clone(),
-                    global_successor: successor.clone(),
+                    global_genesis: executed_genesis.to_vec(),
+                    global_successor: successor.to_vec(),
                 }
                 .into(),
             );
@@ -379,7 +375,8 @@ impl Root {
                 fee_asset_id: fee_asset(),
                 fee_sink_account_id: account(&genesis_key(index)),
                 sponsor_vault_custody_account_id: account(&genesis_key(index)),
-                successful_claim_fee_exempt_authorities: Default::default(),
+                successful_claim_fee_exempt_authorities:
+                    iroha_data_model::block::consensus::RootFeeExemptions::default(),
                 base_fee: Quantity::one(),
                 per_byte_fee: Quantity::zero(),
                 per_instruction_fee: if bank.is_some() {
@@ -446,7 +443,7 @@ impl Root {
             .with_base_seed(format!("native-amx-independent-processes-{index}"))
             .with_genesis_keypair(selected_key.clone())
             .with_block_cadence(Duration::from_millis(CADENCE_MS))
-            .with_peer_startup_timeout(Duration::from_secs(20 * 60))
+            .with_peer_startup_timeout(Duration::from_mins(20))
             .with_genesis_block(move |_, entries| {
                 let builder = GenesisBuilder::new_without_executor(
                     selected_chain.clone(),
@@ -462,7 +459,7 @@ impl Root {
                 .expect("explicit fixture staking policy")
                 .with_block_cadence_ms(NonZeroU64::new(CADENCE_MS).unwrap())
                 .set_topology(entries)
-                .with_sumeragi_context_parameters(context.clone());
+                .with_sumeragi_context_parameters(context);
                 let builder = parameters
                     .clone()
                     .into_iter()
@@ -664,7 +661,7 @@ impl Root {
             peer.start_checked(
                 self.network
                     .config_layers_for_peer(peer)
-                    .chain(with_relay.then(|| Cow::Borrowed(&self.relay_layer))),
+                    .chain(with_relay.then_some(Cow::Borrowed(&self.relay_layer))),
                 None,
             )
             .await
@@ -738,7 +735,7 @@ fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn route_with_ttl(root: &Root, directory: &Path, ttl_ms: i64) -> Result<Table> {
+pub fn route_with_ttl(root: &Root, directory: &Path, ttl_ms: i64) -> Result<Table> {
     let signer = relay(root.index);
     let key_path = directory.join(format!("relay-{}.key", root.index));
     write_private(
@@ -793,7 +790,7 @@ pub(crate) fn route_with_ttl(root: &Root, directory: &Path, ttl_ms: i64) -> Resu
     Ok(route)
 }
 
-pub(crate) fn service(directory: &Path, index: usize, routes: Vec<Table>) -> Table {
+pub fn service(directory: &Path, index: usize, routes: Vec<Table>) -> Table {
     Table::new()
         .write(
             ["amx_relay", "journal_dir"],
@@ -812,7 +809,7 @@ pub(crate) fn service(directory: &Path, index: usize, routes: Vec<Table>) -> Tab
 }
 
 // Listener admission is runtime-only, independent of account and consensus keys.
-pub(crate) fn listener_credential() -> Result<iroha::secrecy::SecretString> {
+pub fn listener_credential() -> Result<iroha::secrecy::SecretString> {
     Ok(iroha::secrecy::SecretString::new(hex::encode(
         Sha256::digest(
             KeyPair::try_random_with_algorithm(Algorithm::Ed25519)?

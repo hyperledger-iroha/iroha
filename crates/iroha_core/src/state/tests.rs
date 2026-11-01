@@ -931,7 +931,7 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     let_row! { error = catch_unwind(AssertUnwindSafe(|| { let _block = state.block(header); })) .expect_err("missed protocol schedule must abort block construction") };
     let_row! { panic_text = error .downcast_ref::<String>() .map(String::as_str) .or_else(|| error.downcast_ref::<&str>().copied()) .unwrap_or("") };
     assert!(
-        panic_text.contains("persisted privacy protocol policy table is invalid at block height 400")
+        panic_text.contains("privacy protocol policy schedule is invalid")
             && panic_text.contains("effective height 399 is not after committed height 399"),
         "{panic_text}"
     );
@@ -1401,11 +1401,11 @@ state_test! { sync insert_domain_for_testing_moves_owner_membership_row
             .cloned()
             .collect::<BTreeSet<_>>()
     };
-    assert_eq!(owned(&world, &*ALICE_ID), BTreeSet::from([domain_id.clone()]));
+    assert_eq!(owned(&world, &ALICE_ID), BTreeSet::from([domain_id.clone()]));
     let_row! { previous = world .insert_domain_for_testing( domain_id.clone(), Domain::new(domain_id.clone()).build(&BOB_ID), ) .expect("existing fixture domain is replaced") };
     assert_eq!(previous.owned_by(), &*ALICE_ID);
-    assert!(owned(&world, &*ALICE_ID).is_empty());
-    assert_eq!(owned(&world, &*BOB_ID), BTreeSet::from([domain_id]));
+    assert!(owned(&world, &ALICE_ID).is_empty());
+    assert_eq!(owned(&world, &BOB_ID), BTreeSet::from([domain_id]));
 }
 state_test! { sync trigger_batch_gas_budget_is_shared_across_items
     assert_eq!(

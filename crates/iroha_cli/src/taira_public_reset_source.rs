@@ -130,7 +130,7 @@ fn read_blob_digest(reader: &mut impl Read, object: &str, expected_size: u64) ->
     reader
         .read_exact(&mut terminator)
         .wrap_err("missing Git blob terminator")?;
-    if terminator != [b'\n'] {
+    if terminator != *b"\n" {
         return Err(eyre!("Git blob response has an invalid terminator"));
     }
     Ok(hex::encode(digest.finalize()))

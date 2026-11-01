@@ -83,10 +83,10 @@ pub(super) fn read_original(
     #[cfg(unix)]
     {
         use std::os::unix::fs::{MetadataExt as _, OpenOptionsExt as _};
-        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits() as i32);
+        options.custom_flags(rustix::fs::OFlags::NOFOLLOW.bits().cast_signed());
         ensure!(
             before.uid() == rustix::process::geteuid().as_raw()
-                && before.mode() & 0o077 == 0
+                && before.mode().trailing_zeros() >= 6
                 && before.nlink() == 1,
             "private single-link original required"
         );
@@ -223,7 +223,7 @@ fn native(network: &Network) -> Result<SumeragiFinalityVerifier> {
         .collect();
     Ok(SumeragiFinalityVerifier::new(
         genesis.block(),
-        &network.chain_id().to_string(),
+        network.chain_id().as_ref(),
         roster,
     )?)
 }
@@ -249,13 +249,13 @@ fn prefix(network: &Network, through: u64) -> Result<Vec<SumeragiFinalityProof>>
                 NonZeroU64::new(height).unwrap(),
                 verifier.root_scope(),
             )?;
-            let verified = verifier.verify(&proof)?;
+            let verified_block = verifier.verify(&proof)?;
             ensure!(
                 proof.height() == height && proof.committee.len() == 4,
                 "exact ordered four-seat history"
             );
             if height > 1 {
-                let cert = verified
+                let cert = verified_block
                     .block()
                     .commit_certificate()
                     .ok_or_else(|| eyre!("missing certificate"))?;
@@ -376,7 +376,7 @@ fn submit(
 // This path never quotes, rebuilds or signs. The caller has retained its exact original.
 fn submit_retained(network: &Network, seed: u8, transaction: &SignedTransaction) -> Result<u64> {
     let client = running_peer(network)?.client_for(&account(seed), key(seed).private_key().clone());
-    let hash = client.submit_transaction_and_wait(&transaction)?;
+    let hash = client.submit_transaction_and_wait(transaction)?;
     ensure!(
         hash == transaction.hash(),
         "submission returned foreign hash"
@@ -393,7 +393,7 @@ fn submit_retained(network: &Network, seed: u8, transaction: &SignedTransaction)
             .any(|entry| entry.hash().as_ref() == hash.as_ref())
         {
             ensure!(found.is_none(), "transaction appears twice");
-            inclusion(&block, network, &transaction)?;
+            inclusion(&block, network, transaction)?;
             found = Some(block.height());
         }
     }
@@ -548,7 +548,7 @@ fn execute_four_validator_monetary_continuation() -> Result<()> {
     );
     ensure!(root.is_absolute(), "absolute output required");
     private_directory(&root)?;
-    let deadline = Instant::now() + Duration::from_secs(7 * 24 * 60 * 60);
+    let deadline = Instant::now() + Duration::from_hours(7 * 24);
     // One fresh runtime-only owner signs this occurrence's genesis and remains
     // available for its ordinary DKG/asset-policy transactions. The Network owns
     // the four actual validator keys; public setup originals never recreate them.

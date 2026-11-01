@@ -172,7 +172,7 @@ fn assert_valid<F: PastaField, const L: usize>(values: [F; L], k: u32) {
 fn every_upstream_hash_vector_matches_both_field_circuits() {
     fn check<F: PastaField>(bytes: &[u8]) {
         assert_eq!(bytes.len(), 11 * 96);
-        for case in bytes.chunks_exact(96) {
+        for case in bytes.as_chunks::<96>().0 {
             let values = std::array::from_fn(|i| {
                 Option::from(F::from_repr(case[i * 32..(i + 1) * 32].try_into().unwrap())).unwrap()
             });

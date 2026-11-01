@@ -22,6 +22,8 @@ pub mod domain;
 pub mod escrow;
 /// Generic game custody and proof settlement transitions.
 pub mod game;
+/// Native bounded independent-root game-unit transport.
+pub mod game_partition;
 /// Authorization, signature and error-mapping helpers shared by ISI modules.
 pub(crate) mod helpers;
 pub mod identifier;
@@ -401,6 +403,12 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::BindRetailIdentityV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::retail_daily_limit::RetailMonetaryMovementV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     // Native AMX two-phase commit retains exact signed-root transitions and monetary custody.
+    dispatch_instruction::<iroha_data_model::isi::game_partition::InstallGamePartitionV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::RegisterGamePartitionPeerV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::SeedGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::AdvanceGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::ExportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::game_partition::ImportGameUnitV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::sumeragi_amx::RegisterAmxDataspaceV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::RegisterPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::private_dataspace::AnchorPrivateDataspace> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -759,6 +767,7 @@ define_instruction_handlers! {
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance
     >,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
+    dispatch_instruction::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSccpRouteGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeValidationFeePolicy>,

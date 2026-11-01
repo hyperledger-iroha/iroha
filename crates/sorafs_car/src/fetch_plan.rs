@@ -335,7 +335,7 @@ fn decode_digest_hex(hex: &str) -> Result<[u8; 32], ()> {
         return Err(());
     }
     let mut bytes = [0u8; 32];
-    for (idx, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (idx, chunk) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let hi = decode_hex_nibble(chunk[0])?;
         let lo = decode_hex_nibble(chunk[1])?;
         bytes[idx] = (hi << 4) | lo;

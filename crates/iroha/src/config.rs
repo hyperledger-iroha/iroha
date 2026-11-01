@@ -1141,7 +1141,7 @@ mod tests {
         assert_eq!(actual.chain, expected.chain);
         assert_eq!(actual.torii_api_url, expected.torii_api_url);
         assert_eq!(actual.http_transport_policy, expected.http_transport_policy);
-        assert!(actual.key_pair == expected.key_pair);
+        assert_eq!(actual.key_pair, expected.key_pair);
         assert_eq!(
             files.reads.borrow().as_slice(),
             &[

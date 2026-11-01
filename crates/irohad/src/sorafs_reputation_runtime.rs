@@ -1376,7 +1376,7 @@ mod tests {
             if self.drift_armed.load(Ordering::SeqCst)
                 && self
                     .remaining_good_revalidations
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                         remaining.checked_sub(1)
                     })
                     .is_err()
@@ -1790,7 +1790,7 @@ mod tests {
             if self.drift_armed.load(Ordering::SeqCst)
                 && self
                     .remaining_good_qualifications
-                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                    .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                         remaining.checked_sub(1)
                     })
                     .is_err()

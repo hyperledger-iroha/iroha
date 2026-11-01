@@ -47,14 +47,14 @@ fn build_fixture() -> FetchFixture {
     );
     let writer = CarWriter::new(&plan, &payload).expect("writer");
     let car_stats = writer.write_to(std::io::sink()).expect("write car bytes");
-    let governance = GovernanceProofs {
-        council_signatures: vec![CouncilSignature {
-            signer: [0x42; 32],
-            signature: vec![0x24; 64],
-        }],
-    };
-    let (manifest, manifest_bytes, manifest_digest) =
-        build_manifest(&payload, &plan, &chunker_handle, &car_stats, governance);
+    let (unsigned, _, _) = build_manifest(
+        &payload,
+        &plan,
+        &chunker_handle,
+        &car_stats,
+        GovernanceProofs::default(),
+    );
+    let (manifest, manifest_bytes, manifest_digest) = council_signed(unsigned);
     FetchFixture {
         payload,
         plan,
@@ -64,6 +64,26 @@ fn build_fixture() -> FetchFixture {
         manifest_digest,
         car_stats,
     }
+}
+/// Add one genuine council signature: Ed25519 over the BLAKE3 digest of the unsigned encoding,
+/// which manifest validation verifies.
+fn council_signed(
+    mut manifest: sorafs_manifest::ManifestV1,
+) -> (sorafs_manifest::ManifestV1, Vec<u8>, blake3::Hash) {
+    let council = ed25519_dalek::SigningKey::from_bytes(&[0x42; 32]);
+    let digest = blake3::hash(&manifest.encode().expect("encode unsigned manifest"));
+    manifest
+        .governance
+        .council_signatures
+        .push(CouncilSignature {
+            signer: council.verifying_key().to_bytes(),
+            signature: ed25519_dalek::Signer::sign(&council, digest.as_bytes())
+                .to_bytes()
+                .to_vec(),
+        });
+    let manifest_bytes = manifest.encode().expect("encode manifest");
+    let manifest_digest = manifest.digest().expect("manifest digest");
+    (manifest, manifest_bytes, manifest_digest)
 }
 fn build_manifest(
     payload: &[u8],

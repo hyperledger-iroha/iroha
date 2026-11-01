@@ -1,10 +1,12 @@
 //! Accelerated kernels, their dispatch and the scalar references they must equal.
 //!
 //! Exact modular arithmetic has one right answer, so an accelerated kernel is a
-//! different schedule for the same words, not a different result. Each
-//! dispatching function below returns exactly what its `_scalar` reference
-//! returns for every input: ineligible inputs (wrong length, unreduced
-//! operands, unsupported modulus, no CPU support) take the scalar path.
+//! different schedule for the same words, not a different result. General
+//! dispatching functions return exactly what their `_scalar` references return
+//! for every input: ineligible inputs (wrong length, unreduced operands,
+//! unsupported modulus, no CPU support) take the scalar path. The separate
+//! crate-private canonical-input scalar entry trusts its owner-established
+//! residue invariant and uses fixed-modulus arithmetic without an operand scan.
 //!
 //! The `simd` feature compiles the NEON kernel on `AArch64` and the AVX2 kernel
 //! on x86-64 (selected at run time by CPU detection). Without the feature, or
@@ -300,6 +302,36 @@ pub fn mul_scalar_mod(values: &mut [u64], scalar: u64, modulus: u64) {
     }
 }
 
+/// Multiply canonical private residues by one canonical **public** scalar.
+///
+/// The caller owns the canonical-residue invariant. Dispatch inspects only the
+/// public modulus, length, feature and CPU. A multiple-of-eight prefix avoids
+/// the existing SIMD kernels' variable-time remainder tails; every remaining
+/// word uses the canonical fixed-modulus kernel. No operand scan, zero shortcut
+/// or private-value division is performed by this entry point.
+pub(crate) fn mul_scalar_mod_with(
+    values: &mut [u64],
+    scalar: u64,
+    fixed: crate::constant_time::FixedModulus,
+) {
+    #[cfg(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64")))]
+    let accelerated = {
+        let prefix = values.len() / 8 * 8;
+        product_kernel_constants(prefix, fixed.modulus).map_or(0, |constants| {
+            if simd::try_mul_scalar_mod(&mut values[..prefix], scalar, constants) {
+                prefix
+            } else {
+                0
+            }
+        })
+    };
+    #[cfg(not(all(feature = "simd", any(target_arch = "aarch64", target_arch = "x86_64"))))]
+    let accelerated = 0;
+    for value in &mut values[accelerated..] {
+        *value = fixed.multiply(*value, scalar);
+    }
+}
+
 /// Canonical butterfly on one pair with twiddle one: `(a, b) -> (a + b, a - b)`.
 #[cfg(any(
     test,
@@ -307,7 +339,7 @@ pub fn mul_scalar_mod(values: &mut [u64], scalar: u64, modulus: u64) {
 ))]
 fn first_stage(values: &mut [u64], modulus: u64) {
     use crate::constant_time::{add_mod_canonical_u64, sub_mod_canonical_u64};
-    for pair in values.chunks_exact_mut(2) {
+    for pair in values.as_chunks_mut::<2>().0 {
         let (left, right) = (pair[0], pair[1]);
         pair[0] = add_mod_canonical_u64(left, right, modulus);
         pair[1] = sub_mod_canonical_u64(left, right, modulus);
@@ -625,9 +657,13 @@ mod tests {
     /// Qualification must execute the actual x86-64 kernels, never the lane model or fallback.
     #[test]
     #[ignore = "requires an x86-64 AVX2 runner; run explicitly for hardware qualification"]
+    #[expect(
+        clippy::assertions_on_constants,
+        reason = "This ignored qualification test must refuse runtime invocation on a non-x86-64 host without breaking ordinary cross-platform compilation."
+    )]
     fn required_avx2_execution() {
         assert!(
-            cfg!(target_arch = "x86_64"),
+            std::hint::black_box(cfg!(target_arch = "x86_64")),
             "AVX2 qualification requires native x86-64 instructions, not the lane model"
         );
         assert_eq!(
@@ -674,5 +710,51 @@ mod tests {
         let mut values = [5_u64, 3];
         mul_scalar_mod(&mut values, 9, 0);
         assert_eq!(values, [0, 0]);
+    }
+
+    #[test]
+    fn canonical_public_scalar_dispatch_matches_fixed_and_integer_for_every_tail() {
+        use crate::constant_time::FixedModulus;
+        for modulus in [3_u64, 257, 65_537, 4_294_967_291, (1_u64 << 61) - 1] {
+            let fixed = FixedModulus::derive(modulus).expect("odd fixed modulus");
+            for len in 0..=40 {
+                for scalar in [0, 1, modulus / 2, modulus - 1] {
+                    let input: Vec<_> = (0..len)
+                        .map(|i| match i % 4 {
+                            0 => 0,
+                            1 => modulus - 1,
+                            _ => {
+                                (u64::try_from(i).expect("nonnegative bounded fixture index")
+                                    * 104_729
+                                    + 31)
+                                    % modulus
+                            }
+                        })
+                        .collect();
+                    let expected: Vec<_> = input
+                        .iter()
+                        .map(|&v| {
+                            u64::try_from(
+                                (u128::from(v) * u128::from(scalar)) % u128::from(modulus),
+                            )
+                            .expect("residue below u64 modulus")
+                        })
+                        .collect();
+                    let mut actual = input.clone();
+                    mul_scalar_mod_with(&mut actual, scalar, fixed);
+                    assert_eq!(
+                        actual, expected,
+                        "modulus={modulus}, len={len}, scalar={scalar}"
+                    );
+                    assert_eq!(
+                        actual,
+                        input
+                            .iter()
+                            .map(|&v| fixed.multiply(v, scalar))
+                            .collect::<Vec<_>>()
+                    );
+                }
+            }
+        }
     }
 }

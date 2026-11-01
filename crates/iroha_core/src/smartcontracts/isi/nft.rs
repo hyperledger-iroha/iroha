@@ -291,8 +291,7 @@ pub mod isi {
                 let nft = state_transaction.world.nft_mut(&object)?;
                 if nft.owned_by != source {
                     return Err(Error::InvariantViolation(
-                        format!("Can't transfer NFT {object} since {source} doesn't own it",)
-                            .into(),
+                        format!("Can't transfer NFT {object} since {source} doesn't own it").into(),
                     ));
                 }
                 nft.owned_by = destination.clone();
@@ -753,7 +752,7 @@ pub mod query {
             let nft_ids =
                 crate::state::range_bounds::index_members(world.nfts_by_owner(), &account_id)
                     .cloned();
-            let nfts = world
+            Ok(world
                 .nft_entries_by_ids_iter(nft_ids)
                 .filter_map(move |entry| {
                     let details = entry.value().clone().into_inner();
@@ -763,9 +762,7 @@ pub mod query {
                         owned_by: details.owned_by,
                     };
                     filter.applies(&nft).then_some(nft)
-                })
-                .collect::<Vec<_>>();
-            Ok(nfts.into_iter())
+                }))
         }
     }
     #[cfg(test)]

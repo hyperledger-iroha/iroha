@@ -29,7 +29,7 @@ fn parse_wallet_runtime_trust(
         return Err("expected one nonzero lowercase 32-byte Ed25519 public key");
     }
     let mut key = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         key[index] =
             u8::from_str_radix(std::str::from_utf8(pair).expect("validated ASCII hex"), 16)
                 .expect("validated lowercase hex");

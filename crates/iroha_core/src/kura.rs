@@ -150,7 +150,7 @@ const INDEXED_SIDECAR_BASE_HEADER_SIZE_U64: u64 = INDEXED_SIDECAR_BASE_HEADER_SI
 const INDEXED_SIDECAR_BASE_CHECK_MASK: u64 = 0x6B75_7261_2D69_6478;
 /// Keep a single sparse append bounded even when its height came from untrusted metadata.
 const MAX_INDEXED_SIDECAR_GAP_ENTRIES: u64 = 4_096;
-const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_secs(60 * 60);
+const DISK_USAGE_TOTAL_REFRESH_INTERVAL: Duration = Duration::from_hours(1);
 const BLOCK_NOTIFY_CHANNEL_CAPACITY: usize = 1;
 const SIZE_OF_BLOCK_HASH: u64 = Hash::LENGTH as u64;
 pub(crate) const STRICT_INIT_MAX_BLOCK_BYTES: u64 = MAX_EXECUTED_BLOCK_WIRE_BYTES;
@@ -417,8 +417,8 @@ pub struct Kura {
     _store_root_lock_file: Option<std::fs::File>,
     /// Retains the temporary storage directory used by isolated Kura instances.
     temp_store_dir: Option<tempfile::TempDir>,
-    /// Last block of this chain that the previous node release executed, when this release took
-    /// over the running network there (`state::upgrade_checkpoint`).
+    /// Last block of this chain that its predecessor release executed, when the chain adopted the
+    /// live-upgrade foundation there (`state::upgrade_checkpoint`).
     upgrade_checkpoint: std::sync::OnceLock<crate::state::upgrade_checkpoint::UpgradeCheckpointV1>,
 }
 #[derive(Debug)]
@@ -2201,7 +2201,7 @@ impl Kura {
     fn add_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(delta))
             });
         self.add_total_disk_usage_bytes_locked(delta);
@@ -2216,7 +2216,7 @@ impl Kura {
     fn sub_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(delta))
             });
         self.sub_total_disk_usage_bytes_locked(delta);
@@ -2229,11 +2229,11 @@ impl Kura {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
-        let _ =
-            self.disk_usage_total
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_add(delta))
-                });
+        let _ = self
+            .disk_usage_total
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(delta))
+            });
     }
     fn sub_total_disk_usage_bytes(&self, delta: u64) {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
@@ -2243,11 +2243,11 @@ impl Kura {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
-        let _ =
-            self.disk_usage_total
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_sub(delta))
-                });
+        let _ = self
+            .disk_usage_total
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(delta))
+            });
     }
     #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn invalidate_pending_budget_cache(&self) {
@@ -3603,7 +3603,7 @@ impl Kura {
                     kind,
                     "failed to create progress append-intent build"
                 );
-                storage.retain_failure(Error::IO(error, (&build_path).to_path_buf()));
+                storage.retain_failure(Error::IO(error, build_path.clone()));
                 return None;
             }
         };
@@ -3618,7 +3618,7 @@ impl Kura {
                 kind,
                 "failed to persist progress append-intent build"
             );
-            storage.retain_failure(Error::IO(error, (&build_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, build_path.clone()));
             drop(build);
             let _ = storage.retire(namespace, &build_path);
             let _ = Self::sync_bound_progress_intent_directories(namespace);
@@ -3653,7 +3653,7 @@ impl Kura {
                 kind,
                 "failed to sync progress append-intent publication"
             );
-            storage.retain_failure(Error::IO(error, (&intent_path).to_path_buf()));
+            storage.retain_failure(Error::IO(error, intent_path.clone()));
             return None;
         }
         Some(build)
@@ -6794,22 +6794,31 @@ impl Kura {
     pub const fn emergency_fast_startup_enabled(&self) -> bool {
         self.auxiliary_history_deferred
     }
-    /// Record the upgrade checkpoint of this chain before any State is restored from it.
+    /// Record the upgrade checkpoint of this chain before any State is restored.
     ///
     /// # Errors
-    /// A different checkpoint was already recorded.
+    /// The block stored at the checkpoint height has another hash, or a different checkpoint was
+    /// already recorded.
     pub fn set_upgrade_checkpoint(
         &self,
-        checkpoint: crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
+        checkpoint: &crate::state::upgrade_checkpoint::UpgradeCheckpointV1,
     ) -> Result<(), &'static str> {
-        let recorded = self.upgrade_checkpoint.get_or_init(|| checkpoint.clone());
-        if *recorded == checkpoint {
+        let stored = usize::try_from(checkpoint.height)
+            .ok()
+            .and_then(NonZeroUsize::new)
+            .and_then(|height| self.get_block_hash(height));
+        if stored.is_some_and(|stored| stored != checkpoint.block_hash) {
+            return Err("the block stored at the upgrade checkpoint height has another hash");
+        }
+        let recorded = self.upgrade_checkpoint.get_or_init(|| *checkpoint);
+        if recorded == checkpoint {
             Ok(())
         } else {
             Err("Kura already records a different upgrade checkpoint")
         }
     }
-    /// The upgrade checkpoint of this chain, when this release took it over from a predecessor.
+    /// The upgrade checkpoint of this chain, when it adopted the foundation from a predecessor
+    /// release: blocks at or below it are never re-executed.
     pub fn upgrade_checkpoint(
         &self,
     ) -> Option<&crate::state::upgrade_checkpoint::UpgradeCheckpointV1> {
@@ -7235,8 +7244,7 @@ impl Kura {
     fn now_unix_secs() -> u64 {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|dur| dur.as_secs())
-            .unwrap_or(0)
+            .map_or(0, |dur| dur.as_secs())
     }
     /// Return the path to the block storage directory, if configured.
     /// For in-memory test Kura, returns `None`.
@@ -7776,7 +7784,7 @@ impl BlockStore {
         #[cfg(test)]
         if self
             .fail_eviction_stage_syncs_remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

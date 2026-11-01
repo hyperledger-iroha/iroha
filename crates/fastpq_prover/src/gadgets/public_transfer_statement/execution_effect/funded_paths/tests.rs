@@ -60,7 +60,7 @@ fn audit(paths: &FundedPaths) -> Vec<(u32, u32)> {
     if paths.live == 0 {
         assert_eq!(height, 0);
     } else {
-        assert!(u32::from(height) <= 2 * (usize::BITS - paths.live.leading_zeros()));
+        assert!(u32::from(height) <= 2 * paths.live.bit_width());
     }
     rows
 }

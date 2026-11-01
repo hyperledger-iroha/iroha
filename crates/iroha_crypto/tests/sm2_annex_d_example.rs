@@ -160,7 +160,7 @@ fn compute_za(id: &[u8], pub_x: &BigUint, pub_y: &BigUint) -> [u8; 32] {
 #[cfg(feature = "sm")]
 fn verify_annex(distid: &[u8], message: &[u8], public_key_sec1: &[u8], sig_rs: &[u8]) -> bool {
     assert!(public_key_sec1.len() == 65 && public_key_sec1[0] == 0x04);
-    assert!(sig_rs.len() == 64);
+    assert_eq!(sig_rs.len(), 64);
     let pub_key_x = be(&public_key_sec1[1..33]);
     let pub_key_y = be(&public_key_sec1[33..65]);
     let public_point = Point {

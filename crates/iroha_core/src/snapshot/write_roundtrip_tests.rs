@@ -929,7 +929,7 @@ async fn signed_native_snapshot_caches_and_tampered_accounts_require_original_re
                 StateTelemetry::new(<_>::default(), true),
                 &snapshot_read_budget_for_testing(),
             );
-            match (height, std::ptr::eq(serialized, &captured.json)) {
+            match (height, std::ptr::eq(serialized, &raw const captured.json)) {
                 // A genesis-only result is authenticated only by original execution.
                 (1, true) => assert!(matches!(
                     result,

@@ -3790,7 +3790,7 @@ fn apply_loop_phi(
     phi: &HashMap<String, Temp>,
 ) {
     let mut entries = phi.iter().collect::<Vec<_>>();
-    entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+    entries.sort_by_key(|(left, _)| *left);
     for (name, temp) in entries {
         let value = if let Some((ty, words)) = ctx.product_loop_phis.get(temp).cloned() {
             rebuild_runtime_value(ctx, &ty, &words)
@@ -3804,7 +3804,7 @@ fn copy_env_to_loop_phi(ctx: &mut LowerCtx, env: &HashMap<String, Temp>) {
     if let Some(phi) = ctx.current_loop_phi() {
         let mut copies: Vec<(Temp, Temp)> = Vec::new();
         let mut entries = phi.iter().collect::<Vec<_>>();
-        entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+        entries.sort_by_key(|(left, _)| *left);
         for (name, dest) in entries {
             if let Some(src) = env.get(name)
                 && dest != src

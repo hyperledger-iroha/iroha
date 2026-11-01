@@ -324,7 +324,9 @@ pub fn validate_race_input_v1(
     validate_race_manifest_v1(manifest)?;
     if input.len() != 12
         || input
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .any(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]) & !RACE_CONTROL_MASK_V1 != 0)
     {
         return Err(ExecutionProofErrorV1::Replay);

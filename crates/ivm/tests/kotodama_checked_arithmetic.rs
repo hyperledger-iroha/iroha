@@ -140,8 +140,10 @@ fn contains_extended_syscall(program: &[u8], syscall: u32) -> bool {
     let metadata = ProgramMetadata::parse(program).expect("parse numeric differential artifact");
     let expected = encoding::wide::encode_syscallx(syscall);
     program[metadata.code_offset..]
-        .chunks_exact(4)
-        .any(|word| u32::from_le_bytes(word.try_into().expect("four-byte instruction")) == expected)
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .any(|word| u32::from_le_bytes(*word) == expected)
 }
 fn decode_numeric_return(vm: &IVM, kind: NumericReturnKind) -> NumericValue {
     match kind {
@@ -1275,8 +1277,10 @@ fn borrowed_numeric_operands_keep_values_faults_and_real_typed_call_tables() {
     );
     assert!(
         !program[parsed.code_offset..]
-            .chunks_exact(4)
-            .any(|word| u32::from_le_bytes(word.try_into().unwrap()) == publish)
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|word| u32::from_le_bytes(*word) == publish)
     );
     for (left, right, expected) in [
         ("3", "7", "40"),

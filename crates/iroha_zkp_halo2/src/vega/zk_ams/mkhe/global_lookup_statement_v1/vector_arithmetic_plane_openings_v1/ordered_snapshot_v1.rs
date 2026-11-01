@@ -39,9 +39,8 @@ use super::{
     SNAPSHOT_SLOT_TAG_BYTES_V1, SNAPSHOT_SLOTS_PER_PLANE_V1, VALUE_SLOTS_PER_PLANE_V1,
 };
 
-#[cfg(test)]
 #[path = "ordered_snapshot_v1/resource_budget_v1.rs"]
-mod resource_budget_v1;
+pub(in crate::vega::zk_ams::mkhe) mod resource_budget_v1;
 #[cfg(test)]
 pub(in crate::vega::zk_ams::mkhe) use resource_budget_v1::OrderedStorageSessionBudgetV1;
 #[cfg(test)]
@@ -336,14 +335,10 @@ fn validate_slot_v1(global_slot: u64, bytes: &[u8]) -> Result<(), OrderedSnapsho
         return Err(OrderedSnapshotErrorV1::Shape);
     }
     if global_slot % SNAPSHOT_SLOTS_PER_PLANE_V1 < VALUE_SLOTS_PER_PLANE_V1 {
-        for encoded in bytes.chunks_exact(32) {
+        for encoded in bytes.as_chunks::<32>().0 {
             let scalar = ZeroizingT256ScalarCopyV1::new(
-                Scalar::from_be_bytes_exact_ref(
-                    encoded
-                        .try_into()
-                        .map_err(|_| OrderedSnapshotErrorV1::Shape)?,
-                )
-                .map_err(|_| OrderedSnapshotErrorV1::Semantics)?,
+                Scalar::from_be_bytes_exact_ref(encoded)
+                    .map_err(|_| OrderedSnapshotErrorV1::Semantics)?,
             );
             drop(scalar);
         }

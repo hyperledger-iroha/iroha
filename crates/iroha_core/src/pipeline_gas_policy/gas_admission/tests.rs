@@ -82,15 +82,17 @@ fn admitted_gas_protocol_defaults_charge_only_original_technical_text() {
 
 #[test]
 fn admitted_gas_complete_projection_matches_ordinary_and_preserves_source() {
-    let mut expected = Gas::default();
-    expected.accepted_assets = vec![asset(1), asset(2)];
-    expected.units_per_gas = vec![GasRate {
-        asset: asset(2),
-        units_per_gas: 0,
-        twap_local_per_xor: "12.125".parse().unwrap(),
-        liquidity: GasLiquidity::Tier3,
-        volatility: GasVolatility::Dislocated,
-    }];
+    let expected = Gas {
+        accepted_assets: vec![asset(1), asset(2)],
+        units_per_gas: vec![GasRate {
+            asset: asset(2),
+            units_per_gas: 0,
+            twap_local_per_xor: "12.125".parse().unwrap(),
+            liquidity: GasLiquidity::Tier3,
+            volatility: GasVolatility::Dislocated,
+        }],
+        ..Gas::default()
+    };
     let mut source = Parameters::default();
     for value in super::super::parameters_for_testing(expected.clone()) {
         source.set_parameter(value);
@@ -422,6 +424,10 @@ fn gas_actual_allocator_refusal_covers_raw_final_and_ledger_arrays() {
 #[test]
 #[allow(unsafe_code)]
 fn gas_move_keeps_original_allocation_pointers_and_refunds_after_owner_drop() {
+    struct Closed {
+        value: Gas,
+        custody: GasCustody,
+    }
     let p = rate_parameters(&[record(&asset(14), Some("12.5"))]);
     let pool = AllocationBudget::new(1 << 20);
     let owner = AdmittedGas::try_from_parameters(&p, &pool).unwrap();
@@ -431,10 +437,6 @@ fn gas_move_keeps_original_allocation_pointers_and_refunds_after_owner_drop() {
         owner.get().units_per_gas[0].asset.as_ptr(),
     );
     let retained = pool.reserved_bytes();
-    struct Closed {
-        value: Gas,
-        custody: GasCustody,
-    }
     let mut moved = None;
     let requests = allocations_during(|| {
         // SAFETY: immediately pair exact original value and custody; no mutator escapes.

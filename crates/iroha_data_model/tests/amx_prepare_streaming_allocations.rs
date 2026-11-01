@@ -600,7 +600,10 @@ fn transaction_id_streaming_matches_canonical_frames_without_heap_allocations() 
                 assert_eq!(actual.unwrap(), expected);
                 assert_eq!(graph_pointers(&transaction), pointers);
             }
-            assert!(norito::encode_canonical(&transaction).unwrap() == original_frame);
+            assert_eq!(
+                norito::encode_canonical(&transaction).unwrap(),
+                original_frame
+            );
         }
     }
 }
@@ -630,7 +633,10 @@ fn begin_matches_borrows_original_graph_without_heap_allocations() {
             assert_eq!(begin.expires_at_ms, transaction.expires_at_ms);
             assert_eq!(graph_pointers(&transaction), pointers);
             assert_eq!(begin.participants.as_ptr(), participants);
-            assert!(norito::encode_canonical(&transaction).unwrap() == original_frame);
+            assert_eq!(
+                norito::encode_canonical(&transaction).unwrap(),
+                original_frame
+            );
         }
     }
 }
@@ -715,7 +721,10 @@ fn malformed_transactions_and_substituted_begins_refuse_without_heap_allocations
     }
     assert_eq!(graph_pointers(&transaction), pointers);
     assert_eq!(begin.participants.as_ptr(), participants);
-    assert!(norito::encode_canonical(&transaction).unwrap() == original_frame);
+    assert_eq!(
+        norito::encode_canonical(&transaction).unwrap(),
+        original_frame
+    );
 }
 
 fn transaction_with_count(count: usize) -> AmxTransactionV1 {
@@ -855,7 +864,7 @@ fn native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations
                 assert_eq!(monetary_account_pointers(&leg.destination), destination);
                 assert_eq!(std::ptr::from_ref(leg.amount.mantissa()), amount);
             }
-            assert!(norito::encode_canonical(&leg).unwrap() == frame);
+            assert_eq!(norito::encode_canonical(&leg).unwrap(), frame);
             // Every substitution and its independent oracle are prepared before observation.
             let mut substitutions = [
                 leg.clone(),
@@ -892,7 +901,7 @@ fn native_transfer_effects_stream_exact_monetary_fields_without_heap_allocations
                     measured_fresh_thread(|| native_transfer_effects_hash(black_box(&changed)));
                 assert_eq!(actual.unwrap(), changed_hash);
                 assert_eq!(requests, [0; 3]);
-                assert!(norito::encode_canonical(&changed).unwrap() == changed_frame);
+                assert_eq!(norito::encode_canonical(&changed).unwrap(), changed_frame);
             }
         }
     }

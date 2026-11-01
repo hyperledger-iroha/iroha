@@ -62,7 +62,7 @@ fn absolute_difference(left: U256, right: U256) -> U256 {
 }
 fn rational_q256(numerator: u64, denominator: u64) -> U512 {
     rational_to_q256_round_v1(
-        U512::from_u64(numerator).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
+        U512::from_u64(numerator).shl_vartime(Q256_FRACTION_SHIFT_V1),
         U512::from_u64(denominator),
     )
 }
@@ -185,7 +185,7 @@ fn closed_profiles_pin_width_shape_truncation_and_rejection_kind() {
         );
         assert_eq!(m.to_be_bytes(), expected_m.to_be_bytes());
         assert!(m > q256_one_v1());
-        assert!(m < U512::from_u64(3).shl_vartime((Q256_FRACTION_BITS_V1) as u32));
+        assert!(m < U512::from_u64(3).shl_vartime(Q256_FRACTION_SHIFT_V1));
     }
 }
 #[test]
@@ -262,15 +262,15 @@ fn q256_decay_matches_independent_high_precision_vectors() {
             "9b4597e37cb04ff3d675a35530cdd767e347bf8ad0e80abbce4ae95861014318",
         ),
         (
-            U512::from_u64(1).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
+            U512::from_u64(1).shl_vartime(Q256_FRACTION_SHIFT_V1),
             "5e2d58d8b3bcdf1abadec7829054f90dda9805aab56c77333024b9d0a507daee",
         ),
         (
-            U512::from_u64(10).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
+            U512::from_u64(10).shl_vartime(Q256_FRACTION_SHIFT_V1),
             "0002f9af36ac8f93538b648eaa1310e5f2bdf1d29cb282668b9a7147cc4dc89b",
         ),
         (
-            U512::from_u64(178).shl_vartime((Q256_FRACTION_BITS_V1) as u32),
+            U512::from_u64(178).shl_vartime(Q256_FRACTION_SHIFT_V1),
             "0000000000000000000000000000000000000000000000000000000000000001",
         ),
     ];
@@ -286,7 +286,7 @@ fn q256_decay_matches_independent_high_precision_vectors() {
     }
     assert_eq!(decay_q256_v1(U512::ZERO), q256_one_v1());
     assert_eq!(
-        decay_q256_v1(U512::from_u64(179).shl_vartime((Q256_FRACTION_BITS_V1) as u32)),
+        decay_q256_v1(U512::from_u64(179).shl_vartime(Q256_FRACTION_SHIFT_V1)),
         U512::ZERO
     );
 }
@@ -294,7 +294,7 @@ fn q256_decay_matches_independent_high_precision_vectors() {
 fn q256_decay_is_monotone_through_the_full_cutoff() {
     let mut previous = decay_q256_v1(U512::ZERO);
     for eighths in 1..=(179 * 8) {
-        let input = U512::from_u64(eighths).shl_vartime((Q256_FRACTION_BITS_V1 - 3) as u32);
+        let input = U512::from_u64(eighths).shl_vartime(Q256_FRACTION_SHIFT_V1 - 3);
         let current = decay_q256_v1(input);
         assert!(current <= previous, "decay increased at eighth {eighths}");
         if eighths <= 160 * 8 {

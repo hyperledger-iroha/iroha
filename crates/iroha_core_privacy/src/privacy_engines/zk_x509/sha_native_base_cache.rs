@@ -30,6 +30,10 @@ const fn word_index_v1(column: usize) -> Option<usize> {
 }
 
 impl PackedRowV1 {
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the first pass proves every word column fits u32 before any field is written"
+    )]
     fn pack_v1(&mut self, row: &Row) -> Result<(), Error> {
         // Reject the entire original row before copying any field. In particular
         // a noncanonical Goldilocks representative cannot be truncated into u32.
@@ -51,11 +55,10 @@ impl PackedRowV1 {
     }
 
     fn field_v1(&self, column: usize) -> F {
-        if let Some(index) = word_index_v1(column) {
-            F(u64::from(self.words[index]))
-        } else {
-            F((self.bits[column / 64] >> (column % 64)) & 1)
-        }
+        word_index_v1(column).map_or_else(
+            || F((self.bits[column / 64] >> (column % 64)) & 1),
+            |index| F(u64::from(self.words[index])),
+        )
     }
 }
 

@@ -85,7 +85,7 @@ impl SubmitPrivacyZkX509CertificateV1 {
             .expect("fixed request ceiling fits usize")
     }
 
-    /// Canonical InstructionBox bound from the registered wire tuple and request-frame ceiling.
+    /// Canonical `InstructionBox` bound from the registered wire tuple and request-frame ceiling.
     #[must_use]
     pub fn canonical_instruction_box_frame_byte_limit_v1() -> usize {
         let _canonical =
@@ -181,7 +181,7 @@ impl SubmitPrivacyZkX509CertificateV1 {
         Ok(())
     }
 
-    /// Derive the native statement from the original signed ActionStatement domain.
+    /// Derive the native statement from the original signed `ActionStatement` domain.
     ///
     /// The action digest binds the normalized ordered intent, attachment action ordinal,
     /// operation, role, actual declared authority/invocation and independent inputs. It
@@ -214,7 +214,7 @@ impl SubmitPrivacyZkX509CertificateV1 {
     ///
     /// Returns the canonical statement digest and exact request-frame plus proof-byte charge.
     /// No synthetic envelope or proof allocation is constructed. The runtime still owns
-    /// canonical native profile selection, the original ActionStatement derivation, trusted State,
+    /// canonical native profile selection, the original `ActionStatement` derivation, trusted State,
     /// authority, current privacy ordinal, native verification and atomic effect application.
     ///
     /// # Errors

@@ -850,6 +850,10 @@ fn admitted_prefix_rebuilds_funded_configuration_for_same_epoch_parameter_change
 // A permitted lag-two update raises the block cap that signed availability consumes, and
 // the activation height carries a genuine payload above the original cap: stale native
 // configuration rejects it even though every individual transaction remains includable.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "const evaluation cannot call `TryFrom`; the assertion bounds the value to u32"
+)]
 const ORIGINAL_MAX_TRANSACTION_BYTES: u32 = {
     let carrier = iroha_data_model::privacy::PrivateSettlementValidityLimitsV1::protocol_default()
         .max_carrier_bytes;

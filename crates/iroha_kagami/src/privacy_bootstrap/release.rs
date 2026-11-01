@@ -46,7 +46,7 @@ const POLICY_ID_DOMAIN_V1: &[u8] = b"iroha.taira.privacy.bootle-lantern.policy.v
 const BROKER_EXPORT_SCHEMA_V1: &str = "iroha.taira.privacy.bootle-lantern-broker-public.v1";
 const ROLLOUT_PLAN_PATH_V1: &str = "configs/soranexus/taira/privacy_rollout_plan_v1.json";
 const ROLLOUT_PLAN_SHA256_V1: &str =
-    "9997dfeb6c511130341a586a1065edd429b62f62acad8f995483d2458083230d";
+    "dec0491205a08d29ceecb704e2521f783b4385bc3e575699064f552293d6b7ce";
 const CANONICAL_ROLLOUT_PLAN_V1: &[u8] =
     include_bytes!("../../../../configs/soranexus/taira/privacy_rollout_plan_v1.json");
 const CANONICAL_CARGO_LOCK_V1: &[u8] = include_bytes!("../../../../Cargo.lock");
@@ -2826,35 +2826,33 @@ mod tests {
     }
     #[test]
     fn decoded_privacy_bootstrap_in_genesis_template_is_rejected() {
-        for instruction in [InstructionBox::from(policy_registration_fixture_v1())] {
-            let mut genesis: JsonValue =
-                norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
-            let mut one = String::new();
-            iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
-            let mut decoded: JsonValue =
-                norito::json::from_str(&one).expect("parse decoded issuer-policy JSON");
-            let injected = decoded
-                .as_array_mut()
-                .expect("instruction array")
-                .pop()
-                .expect("one issuer policy");
-            genesis
-                .get_mut("transactions")
-                .and_then(JsonValue::as_array_mut)
-                .and_then(|transactions| transactions.last_mut())
-                .and_then(|transaction| transaction.get_mut("instructions"))
-                .and_then(JsonValue::as_array_mut)
-                .expect("final instructions")
-                .push(injected);
-            let tampered =
-                json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
-            assert!(
-                render_release_genesis_v1(&tampered, None)
-                    .expect_err("reject pre-existing decoded privacy instruction")
-                    .to_string()
-                    .contains("already contains a privacy bootstrap instruction")
-            );
-        }
+        let instruction = InstructionBox::from(policy_registration_fixture_v1());
+        let mut genesis: JsonValue =
+            norito::json::from_slice(GENESIS_TEMPLATE_V1).expect("parse genesis template");
+        let mut one = String::new();
+        iroha_genesis::genesis_instructions_json::serialize(&[instruction], &mut one);
+        let mut decoded: JsonValue =
+            norito::json::from_str(&one).expect("parse decoded issuer-policy JSON");
+        let injected = decoded
+            .as_array_mut()
+            .expect("instruction array")
+            .pop()
+            .expect("one issuer policy");
+        genesis
+            .get_mut("transactions")
+            .and_then(JsonValue::as_array_mut)
+            .and_then(|transactions| transactions.last_mut())
+            .and_then(|transaction| transaction.get_mut("instructions"))
+            .and_then(JsonValue::as_array_mut)
+            .expect("final instructions")
+            .push(injected);
+        let tampered = json_pretty_bytes_v1(&genesis, "tampered genesis").expect("render tamper");
+        assert!(
+            render_release_genesis_v1(&tampered, None)
+                .expect_err("reject pre-existing decoded privacy instruction")
+                .to_string()
+                .contains("already contains a privacy bootstrap instruction")
+        );
     }
     #[test]
     fn wrong_and_scoped_governance_grants_are_rejected_before_composition() {

@@ -18,7 +18,7 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-pub(crate) mod canonical_inputs {
+pub mod canonical_inputs {
     include!("canonical_inputs.rs");
 }
 use canonical_inputs::RawFileIdentity;
@@ -53,7 +53,7 @@ fn check_maximum(maximum: usize) -> Result<()> {
     Ok(())
 }
 
-pub(crate) struct JournalOutput {
+pub struct JournalOutput {
     directory: OwnerDirectory,
     file: RetainedFile,
     maximum: u64,
@@ -94,7 +94,7 @@ impl JournalOutput {
     }
 }
 
-pub(crate) struct TraceOutput {
+pub struct TraceOutput {
     directory: OwnerDirectory,
     file: PendingPrivateFile,
     stage: OsString,
@@ -157,7 +157,7 @@ impl CompletedFile {
                 let mut file = file.borrow_mut();
                 file.seek(SeekFrom::Start(0))?;
                 let mut hasher = Sha256::new();
-                let mut buffer = [0u8; 64 * 1024];
+                let mut buffer = vec![0u8; 64 * 1024];
                 let mut remaining = length;
                 while remaining > 0 {
                     let count = usize::try_from(remaining.min(buffer.len() as u64))?;
@@ -175,7 +175,7 @@ impl CompletedFile {
     }
 }
 
-pub(crate) struct RetainedLoadFile {
+pub struct RetainedLoadFile {
     directory: OwnerDirectory,
     namespace: ReaderDirectory,
     file: CompletedFile,

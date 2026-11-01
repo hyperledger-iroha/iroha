@@ -4134,10 +4134,10 @@ fn retained_current_manifest_payload_decodes_and_reencodes_exactly() {
 fn fixed_manifest_source_fields_match_the_complete_current_payload() {
     fn append_len(out: &mut Vec<u8>, mut value: usize) {
         while value >= 0x80 {
-            out.push((value as u8 & 0x7f) | 0x80);
+            out.push(u8::try_from(value & 0x7f).unwrap() | 0x80);
             value >>= 7;
         }
-        out.push(value as u8);
+        out.push(u8::try_from(value).unwrap());
     }
     fn field<T: norito::NoritoSerialize>(out: &mut Vec<u8>, value: &T) {
         let frame = archive::encode(value).unwrap();

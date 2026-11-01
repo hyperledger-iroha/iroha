@@ -14,10 +14,57 @@ use super::*;
 /// reserve, not an estimate or a portable bound on the process allocator or RSS.
 pub(super) const MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1: usize = 1 << 30;
 
+/// Explicit portion of the existing runtime reserve for every possible stripe
+/// task's reusable residue allocation, independent of the host worker count.
+pub(super) const MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1: usize = 128
+    * (ZK_X509_RFC5280_LOCAL_CONSTRAINT_COUNT_V1 * core::mem::size_of::<F>()
+        + core::mem::size_of::<Vec<F>>());
+/// Complete provider-vector slots, including their enum padding, the temporary
+/// construction array, one variant under construction, and the vector header.
+pub(super) const MAIN_COMPOSITION_PROVIDER_STORAGE_BYTES_V1: usize =
+    (2 * FULL_PROFILE_TRACE_GROUPS_V1 + 1)
+        * core::mem::size_of::<MainProverConstraintProviderV1<'static, 'static>>()
+        + core::mem::size_of::<Vec<MainProverConstraintProviderV1<'static, 'static>>>();
+
+/// One boxed public table, provider storage/construction, and the maximum 128
+/// private row folds, explicitly carved from the unchanged runtime reserve.
+pub(super) const MAIN_COMPOSITION_SHA_FOLD_BYTES_V1: usize =
+    super::super::super::sha_word_stark::wide_fold::ShaWordFoldPowersV1::HEAP_PAYLOAD_BYTES_V1
+        + super::super::super::sha_word_stark::wide_fold::ShaWordFoldPowersV1::CONSTRUCTION_SCRATCH_BYTES_V1
+        + MAIN_COMPOSITION_PROVIDER_STORAGE_BYTES_V1
+        + core::mem::size_of::<Option<MainLog19CompositionRegistrationV1<'static, 'static, 'static>>>()
+        + 128
+    * core::mem::size_of::<
+        super::super::super::sha_word_stark::wide_fold::ShaWordWideFoldV1<'static>,
+    >();
+/// Transient selected-query owner headers; its field payload remains entirely
+/// inside replay_batch, including while the next native source is replayed.
+pub(super) const MAIN_QUERY_REUSE_METADATA_BYTES_V1: usize =
+    main_transform::selected_scratch_metadata_v1();
+/// At most 128 stripe tasks each own one exact two-sum arithmetic fold.
+/// This transient private stack storage stays inside the original runtime reserve.
+pub(super) const MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1: usize =
+    128 * crate::privacy_engines::transparent_stark::GOLDILOCKS_PRODUCT_DIFFERENCE_SCRATCH_BYTES_V1;
+
+/// Retained completed-output control/Arc headers, column descriptors and input views.
+/// Their pages replace existing initial output payload; carve metadata from the
+/// same unchanged runtime reserve even during source callbacks and CPU fallback.
+pub(super) const MAIN_READONLY_OUTPUT_METADATA_BYTES_V1: usize =
+    aggregate::initial_evaluated_column::metadata_payload_v1();
+const _: () = assert!(
+    MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+        + MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+        + MAIN_QUERY_REUSE_METADATA_BYTES_V1
+        + MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
+        + MAIN_READONLY_OUTPUT_METADATA_BYTES_V1
+        <= MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+);
+
 // Independent current-profile payload pin: masks, cuts, maximum registration,
 // replay batch, CA coefficients/metadata, and two complete cache batches.
 #[cfg(test)]
 pub(super) const CURRENT_FULL_PROFILE_PEAK_V1: usize = 3_872_458_392
+    + MAIN_FIXED_OWNER_METADATA_BYTES_V1
     + core::mem::size_of::<super::super::super::accumulator_stark::stages::CaAwaitingMainAuxiliaryV1>(
     );
 
@@ -143,9 +190,11 @@ impl MainSmallSourceShapeV1 {
 pub(super) struct MainProverBufferPlanV1 {
     pub(super) masks: usize,
     pub(super) retained_cuts: usize,
+    pub(super) retained_oracle_cuts: usize,
     pub(super) selected_replay: usize,
     pub(super) joined_streams: usize,
     pub(super) replay_batch: usize,
+    pub(super) initial_commit_batch: usize,
     pub(super) composition: usize,
     pub(super) quotient_stage: usize,
     pub(super) quotient_cache_reserve: usize,
@@ -174,7 +223,7 @@ fn sum(values: &[usize]) -> Result<usize, ZkX509StarkErrorV1> {
 // The SHA and P-256 matrix producers own separate public fixed rows. Charge
 // both current/next scratch rows at their maximum width, independently of the
 // selected producer or transform backend.
-/// Maximum row owned by either batched public fixed-matrix producer.
+/// Maximum row owned by any batched public fixed-matrix producer.
 pub(super) const MAIN_FIXED_REPLAY_ROW_WIDTH_V1: usize =
     if ZK_X509_SHA_BATCH_FIXED_WIDTH_V1 > P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1 {
         ZK_X509_SHA_BATCH_FIXED_WIDTH_V1
@@ -192,6 +241,10 @@ type MainFixedReplayScratchV1 = (
 fn fixed_replay_scratch_charges_both_rows_of_the_widest_matrix_producer() {
     assert_eq!(ZK_X509_SHA_BATCH_FIXED_WIDTH_V1, 137);
     assert_eq!(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1, 134);
+    assert!(P256_WINDOW_AGGREGATE_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    assert!(P256_BINDING_SINK_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    assert!(P256_VALUE_EXECUTION_AGGREGATE_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
+    assert!(P256_VALUE_BUS_STARK_FIXED_WIDTH_V1 <= MAIN_FIXED_REPLAY_ROW_WIDTH_V1);
     assert_eq!(
         MAIN_FIXED_REPLAY_ROW_WIDTH_V1,
         ZK_X509_SHA_BATCH_FIXED_WIDTH_V1.max(P256_ARITHMETIC_AGGREGATE_FIXED_WIDTH_V1)
@@ -250,6 +303,7 @@ impl MainRegistrationQuotientPayloadV1 {
                 core::mem::size_of::<&mut [F]>(),
             ])?,
             core::mem::size_of::<MainFixedReplayScratchV1>(),
+            MAIN_FIXED_OWNER_METADATA_BYTES_V1,
             main_quotient_denominators::MainQuotientDenominatorsV1::payload_bound_v1(
                 segment.trace_log2,
                 stripe,
@@ -388,7 +442,14 @@ impl MainProverBufferPlanV1 {
         // Sources construct serially. The eight-way parallel interpolation
         // starts only after all native columns have clearing owners.
         let scratch = small_scratch
-            .max(super::super::super::rfc5280_stark::zk_x509_rfc_aux_replay_scratch_bytes_v1())
+            .max(
+                super::super::super::rfc5280_stark::zk_x509_rfc_aux_replay_scratch_bytes_v1()
+                    .checked_add(
+                        super::main_retained_rfc::MainRetainedRfcV1::native_preparation_scratch_v1(
+                        ),
+                    )
+                    .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?,
+            )
             .max(P256MainBaseSourceV1::replay_scratch_forecast_v1()?)
             .max(
                 ZkX509ShaBatchFixedProviderV1::replay_scratch_forecast_v1(shape)
@@ -467,7 +528,17 @@ impl MainProverBufferPlanV1 {
         let required = sum(&[
             retained,
             source_scratch,
-            MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+            MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1,
+            MAIN_COMPOSITION_SHA_FOLD_BYTES_V1,
+            MAIN_QUERY_REUSE_METADATA_BYTES_V1,
+            MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1,
+            MAIN_READONLY_OUTPUT_METADATA_BYTES_V1,
+            MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+                - MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+                - MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+                - MAIN_QUERY_REUSE_METADATA_BYTES_V1
+                - MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
+                - MAIN_READONLY_OUTPUT_METADATA_BYTES_V1,
             // A fixed public maximum pair is charged before native sources
             // and in every later phase, even when the current public domain
             // uses no table. No private capacity can select table/fallback.
@@ -547,17 +618,18 @@ impl MainProverBufferPlanV1 {
             .max()
             .ok_or(ZkX509StarkErrorV1::ProfileMismatch)?;
         let masks = product(&[total_width, MASK_DEGREE + 1, field])?;
-        let joined_streams = product(&[
-            rows,
-            core::mem::size_of::<
-                crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
-            >(),
-        ])?;
+        let joined_streams =
+            aggregate::streaming_row_state_payload_v1(rows).map_err(map_aggregate_error_v1)?;
         let retained_cuts = product(&[
             2,
             aggregate::retained_commitment::RetainedMerkleCutV1::payload_bound_v1(rows)
                 .map_err(map_aggregate_error_v1)?,
         ])?;
+        let retained_oracle_cuts = aggregate::retained_scalar_commitment::oracle_payload_bound_v1(
+            AGGREGATE_PARAMETERS_V1,
+            &shared,
+        )
+        .map_err(map_aggregate_error_v1)?;
         let selected_replay = aggregate::retained_commitment::selected_payload_bound_v1(
             rows,
             total_width,
@@ -567,6 +639,8 @@ impl MainProverBufferPlanV1 {
         // Eight original coefficient owners and eight common-domain FFT outputs;
         // two native columns cover source/interpolation or mask-replacement
         // overlap. The latter is smaller than two maximum native columns.
+        // Query evaluation retains these same eight common-domain allocations
+        // through the next source callback; it never retains a second matrix.
         let replay_batch = sum(&[
             product(&[
                 aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1,
@@ -575,6 +649,14 @@ impl MainProverBufferPlanV1 {
             ])?,
             product(&[aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, rows, field])?,
             product(&[2, maximum_native, field])?,
+        ])?;
+        // Only initial hashing retains one additional completed eight-column
+        // matrix while the next original source batch is built and transformed.
+        // Its exact owner/packing metadata is included; query/native caps stay eight.
+        let initial_commit_batch = sum(&[
+            replay_batch,
+            aggregate::joined_trace::initial_coalescing_extra_payload_v1(rows)
+                .map_err(map_aggregate_error_v1)?,
         ])?;
         // Keep the former coefficient replay allowance unchanged. Native DEEP
         // charges its Lagrange weights, mask powers, bounded native batch and
@@ -655,9 +737,11 @@ impl MainProverBufferPlanV1 {
         let mut plan = Self {
             masks,
             retained_cuts,
+            retained_oracle_cuts,
             selected_replay,
             joined_streams,
             replay_batch,
+            initial_commit_batch,
             composition,
             quotient_stage,
             quotient_cache_reserve,
@@ -675,7 +759,7 @@ impl MainProverBufferPlanV1 {
                 plan.masks,
                 plan.retained_cuts,
                 plan.joined_streams,
-                plan.replay_batch,
+                plan.initial_commit_batch,
             ])?,
             sum(&[
                 plan.masks,
@@ -687,6 +771,7 @@ impl MainProverBufferPlanV1 {
             sum(&[
                 plan.masks,
                 plan.retained_cuts,
+                plan.retained_oracle_cuts,
                 plan.selected_replay,
                 plan.replay_batch,
                 plan.composition,
@@ -734,4 +819,81 @@ impl MainProverBufferPlanV1 {
             .ok_or(ZkX509StarkErrorV1::ProofTooLarge)?;
         Ok(plan)
     }
+}
+
+#[cfg(test)]
+#[path = "main_initial_coalescing_resource_tests.rs"]
+mod initial_coalescing_resource_tests;
+
+#[cfg(test)]
+#[test]
+fn arithmetic_convolution_full_profile_geometry_and_private_scratch_are_charged() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let arithmetic = layout
+        .registered_segments
+        .iter()
+        .filter(|registration| registration.segment.adapter == SegmentAdapterIdV1::P256Arithmetic)
+        .collect::<Vec<_>>();
+    assert_eq!(arithmetic.len(), 5);
+    let mut rows = 0;
+    for registration in arithmetic {
+        let plan = registered_retained_prover_plan_v1(registration.segment, layout.common_lde_log2)
+            .unwrap();
+        assert_eq!(registration.segment.trace_log2, 19);
+        assert_eq!(registration.segment.constraint_degree, 4);
+        assert_eq!(plan.quotient_coset_log2, 21);
+        rows += plan.quotient_coset_rows;
+    }
+    assert_eq!(rows, 10_485_760);
+    assert_eq!(rows * 2 * 16 * 16, 5_368_709_120);
+    assert_eq!(MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1, 128 * 48);
+    assert_eq!(SECURITY_LANES, 1);
+    // Production uses public 4096-row tasks inside one native-log19 stripe.
+    assert_eq!((1_usize << 19).div_ceil(1 << 12), 128);
+    assert_eq!(MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1, 1 << 30);
+    let explicit = MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+        + MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+        + MAIN_QUERY_REUSE_METADATA_BYTES_V1
+        + MAIN_ARITHMETIC_CONVOLUTION_SCRATCH_BYTES_V1
+        + MAIN_READONLY_OUTPUT_METADATA_BYTES_V1;
+    assert!(explicit < MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1);
+    let plan = MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    assert_eq!(plan.maximum_live_buffers, CURRENT_FULL_PROFILE_PEAK_V1);
+    let charged = plan.check_before_sources_v1(288_345_698).unwrap();
+    assert!(
+        charged
+            <= usize::try_from(super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+                .unwrap()
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn arithmetic_convolution_reserve_carve_preserves_exact_admission_boundary() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let plan = MainProverBufferPlanV1::new_v1(&layout).unwrap();
+    // The new explicit scratch replaces an equal part of runtime headroom.
+    // This independently expresses the original, unsplit admission formula.
+    let unchanged_reserved = MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+        + main_bounded_transform::SHARED_POWERS_ALLOWANCE_V1
+        + main_transform::PUBLIC_COSET_POWERS_ALLOWANCE_V1;
+    for source_scratch in [0, MAIN_SOURCE_SCRATCH_ALLOWANCE_BYTES_V1] {
+        let source_limit =
+            plan.remaining_source_and_runtime_envelope - unchanged_reserved - source_scratch;
+        for source in [0, 1, source_limit / 2, source_limit] {
+            assert_eq!(
+                plan.check_source_payloads_v1(&[source], source_scratch)
+                    .unwrap(),
+                plan.maximum_live_buffers + source + source_scratch + unchanged_reserved,
+            );
+        }
+        assert!(matches!(
+            plan.check_source_payloads_v1(&[source_limit + 1], source_scratch),
+            Err(ZkX509StarkErrorV1::ProofTooLarge)
+        ));
+    }
+    assert!(matches!(
+        plan.check_source_payloads_v1(&[usize::MAX, 1], 0),
+        Err(ZkX509StarkErrorV1::ProfileMismatch)
+    ));
 }

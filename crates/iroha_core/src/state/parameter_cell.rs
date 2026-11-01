@@ -13,7 +13,7 @@ use crate::pipeline_gas_policy::{
 
 /// Original parameter Cell control or complete graph restore refusal.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum ParameterCellRestoreError {
+pub enum ParameterCellRestoreError {
     /// Original seven physical Cell/control backings refused before parsing.
     #[error(transparent)]
     Initialization(#[from] CellInitializationError),

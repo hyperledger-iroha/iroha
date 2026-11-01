@@ -5470,7 +5470,7 @@ fn required_rollback_targets(
             )),
         })
         .collect::<Result<Vec<_>>>()?;
-    ranked.sort_by(|left, right| right.0.cmp(&left.0));
+    ranked.sort_by_key(|(rank, _)| std::cmp::Reverse(*rank));
     Ok(ranked.into_iter().map(|(_, slug)| slug).collect())
 }
 
@@ -5653,18 +5653,16 @@ fn reconcile_host_receipt_staging(
     let Some(bytes) = read_regular_at(&parent, &staging_name, MAX_HOST_REQUEST_BYTES)? else {
         return Ok(());
     };
-    let complete = json::from_slice::<HostReceiptV1>(&bytes)
-        .ok()
-        .is_some_and(|receipt| {
-            receipt.schema == HOST_RECEIPT_SCHEMA_V1
-                && receipt.action == action.label()
-                && receipt.host_slug == admitted.target.slug()
-                && receipt.request_sha256 == admitted.request_sha256
-                && receipt.inventory_sha256 == admitted.inventory_sha256
-                && receipt.authorization_sha256 == admitted.authorization_sha256
-                && receipt.authorization_nonce == admitted.inventory.authorization_nonce
-                && receipt.status == "ok"
-        });
+    let complete = json::from_slice::<HostReceiptV1>(&bytes).is_ok_and(|receipt| {
+        receipt.schema == HOST_RECEIPT_SCHEMA_V1
+            && receipt.action == action.label()
+            && receipt.host_slug == admitted.target.slug()
+            && receipt.request_sha256 == admitted.request_sha256
+            && receipt.inventory_sha256 == admitted.inventory_sha256
+            && receipt.authorization_sha256 == admitted.authorization_sha256
+            && receipt.authorization_nonce == admitted.inventory.authorization_nonce
+            && receipt.status == "ok"
+    });
     if complete {
         sync_regular_at(&parent, &staging_name)?;
         match rustix::fs::renameat_with(

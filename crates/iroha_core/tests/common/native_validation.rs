@@ -37,6 +37,10 @@ pub fn proposal(chain: &CertifiedTestChain, txs: Vec<SignedTransaction>) -> Sign
     .expect("native resultless proposal assembly")
 }
 
+#[expect(
+    clippy::default_trait_access,
+    reason = "iroha_core exposes the successor preparation type without a public path"
+)]
 pub fn validate(
     chain: &CertifiedTestChain,
     proposal: SignedBlock,

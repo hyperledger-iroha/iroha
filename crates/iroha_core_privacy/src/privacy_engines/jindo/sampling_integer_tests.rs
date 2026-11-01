@@ -108,10 +108,7 @@ fn fractional_decay_initializes_once_on_a_bounded_native_stack_with_exact_values
             let table = OnceLock::new();
             let values = table.get_or_init(build_fraction_decay_table_q256_v1);
             assert_eq!(values.len(), FRACTION_TABLE_LEN_V1);
-            assert_eq!(
-                values[0],
-                U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32)
-            );
+            assert_eq!(values[0], U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1));
             assert!(values.windows(2).all(|pair| pair[0] > pair[1]));
             assert!(core::ptr::eq(
                 values,
@@ -119,7 +116,7 @@ fn fractional_decay_initializes_once_on_a_bounded_native_stack_with_exact_values
             ));
             assert_eq!(values.as_ref(), fraction_decay_table_q256_v1());
             let mut digest = Sha3_256::new();
-            for value in values.iter() {
+            for value in values {
                 digest.update(value.to_be_bytes());
             }
             <[u8; 32]>::from(digest.finalize())

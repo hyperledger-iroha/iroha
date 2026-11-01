@@ -359,9 +359,9 @@ public enum ToriiParliamentAPIV1 {
         .init(noritoIndex: 7, jsonTag: "AdvanceBodyPhase", jsonPayloadRequired: true, eventKindIndex: 7),
         .init(noritoIndex: 8, jsonTag: "RecordAttemptAbsence", jsonPayloadRequired: true, eventKindIndex: 8),
         .init(noritoIndex: 9, jsonTag: "EndorsePublicFinding", jsonPayloadRequired: true, eventKindIndex: 9),
-        .init(noritoIndex: 10, jsonTag: "RecordInvitationResponse", jsonPayloadRequired: true, eventKindIndex: 13),
-        .init(noritoIndex: 11, jsonTag: "FailPublicFindingNoResult", jsonPayloadRequired: true, eventKindIndex: 14),
-        .init(noritoIndex: 12, jsonTag: "RegisterInitialSortition", jsonPayloadRequired: false, eventKindIndex: 15),
+        .init(noritoIndex: 17, jsonTag: "RecordInvitationResponse", jsonPayloadRequired: true, eventKindIndex: 20),
+        .init(noritoIndex: 20, jsonTag: "FailPublicFindingNoResult", jsonPayloadRequired: true, eventKindIndex: 23),
+        .init(noritoIndex: 21, jsonTag: "RegisterInitialSortition", jsonPayloadRequired: false, eventKindIndex: 24),
     ]
 
     public static let automaticExecutionOutcomes: [ToriiParliamentAutomaticOutcomeLayoutV1] = [
@@ -370,30 +370,30 @@ public enum ToriiParliamentAPIV1 {
             jsonTag: "Enacted",
             jsonPayloadRequired: false,
             eventKind: "MarkEnacted",
-            eventKindIndex: 10
+            eventKindIndex: 17
         ),
         .init(
             noritoIndex: 1,
             jsonTag: "Superseded",
             jsonPayloadRequired: true,
             eventKind: "MarkSuperseded",
-            eventKindIndex: 11
+            eventKindIndex: 18
         ),
         .init(
             noritoIndex: 2,
             jsonTag: "ExecutionFailed",
             jsonPayloadRequired: true,
             eventKind: "MarkExecutionFailed",
-            eventKindIndex: 12
+            eventKindIndex: 19
         ),
     ]
 
     public static let noResultKinds: [ToriiParliamentNoResultKindLayoutV1] = [
         .init(noritoIndex: 0, jsonTag: "PublicFindingQuorumUnreachable"),
         .init(noritoIndex: 1, jsonTag: "PublicFindingDeadlineExpired"),
-        .init(noritoIndex: 2, jsonTag: "SortitionRetriesExhausted"),
-        .init(noritoIndex: 3, jsonTag: "ConfirmationJuryCapacityUnavailable"),
-        .init(noritoIndex: 4, jsonTag: "RandomnessRedrawBudgetExhausted"),
+        .init(noritoIndex: 7, jsonTag: "SortitionRetriesExhausted"),
+        .init(noritoIndex: 8, jsonTag: "ConfirmationJuryCapacityUnavailable"),
+        .init(noritoIndex: 9, jsonTag: "RandomnessRedrawBudgetExhausted"),
     ]
 
     public static let bodyStateFields = [

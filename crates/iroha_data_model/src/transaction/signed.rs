@@ -3049,6 +3049,15 @@ mod implementation_cause_tests {
 
     #[test]
     fn real_single_sealed_and_multisig_verification_preserve_missing_mldsa_backend() {
+        fn signature<T: Encode>(
+            key: Option<&iroha_crypto::KeyPair>,
+            payload: &T,
+        ) -> SignatureOf<T> {
+            key.map_or_else(
+                || SignatureOf::from_signature(Signature::try_from_bytes(&[0x51; 3309]).unwrap()),
+                |key| SignatureOf::try_new(key.private_key(), payload).unwrap(),
+            )
+        }
         use crate::account::{MultisigMember, MultisigPolicy};
         let availability =
             Algorithm::MlDsa.require_implementation(CryptoOperation::VerifySignature);
@@ -3059,15 +3068,6 @@ mod implementation_cause_tests {
             || PublicKey::from_bytes(Algorithm::MlDsa, &[0x51; 1952]).unwrap(),
             |key| key.public_key().clone(),
         );
-        fn signature<T: Encode>(
-            key: Option<&iroha_crypto::KeyPair>,
-            payload: &T,
-        ) -> SignatureOf<T> {
-            key.map_or_else(
-                || SignatureOf::from_signature(Signature::try_from_bytes(&[0x51; 3309]).unwrap()),
-                |key| SignatureOf::try_new(key.private_key(), payload).unwrap(),
-            )
-        }
         let expected = availability.map_err(TransactionSignatureError::UnsupportedImplementation);
         let payload = TransactionBuilder::new(
             test_network_id(0xB4),

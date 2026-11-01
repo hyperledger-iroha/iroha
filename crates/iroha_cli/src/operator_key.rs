@@ -384,9 +384,7 @@ mod tests {
         write_private_key(&path, encoded.as_bytes());
         for mode in [0o400, 0o640, 0o1600] {
             fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap();
-            let error = load_operator_key_pair(&path)
-                .err()
-                .expect("exact mode required");
+            let error = load_operator_key_pair(&path).expect_err("exact mode required");
             assert!(format!("{error:#}").contains("exact mode 0600"));
             assert_eq!(
                 fs::metadata(&path).unwrap().permissions().mode() & 0o7777,
@@ -410,17 +408,15 @@ mod tests {
         }
         for body in [
             Vec::new(),
-            vec![b'A'; MAX_PRIVATE_KEY_FILE_BYTES as usize + 1],
-            vec![b'A'; MAX_PRIVATE_KEY_FILE_BYTES as usize],
+            vec![b'A'; usize::try_from(MAX_PRIVATE_KEY_FILE_BYTES).unwrap() + 1],
+            vec![b'A'; usize::try_from(MAX_PRIVATE_KEY_FILE_BYTES).unwrap()],
             format!(" {encoded}").into_bytes(),
             format!("{encoded}\r\n").into_bytes(),
             format!("{encoded}\n\n").into_bytes(),
             vec![0xff],
         ] {
             write_private_key(&path, &body);
-            let error = load_operator_key_pair(&path)
-                .err()
-                .expect("invalid file must refuse");
+            let error = load_operator_key_pair(&path).expect_err("invalid file must refuse");
             assert!(!format!("{error:#}").contains(&encoded));
             assert!(
                 fs::read(&path).unwrap() == body,

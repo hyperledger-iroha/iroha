@@ -358,8 +358,8 @@ fn actual_joined_two_tile_commitment_preserves_roots_cuts_and_seven_node_census(
                 let mut calls = 0;
                 for (label, expected_calls) in [
                     ("RowCommitmentStreamSetup", 1),
-                    ("RowCommitmentColumnAdmission", 2),
-                    ("RowCommitmentRowAbsorption", 2),
+                    ("RowCommitmentColumnAdmission", 1),
+                    ("RowCommitmentRowAbsorption", 1),
                     ("RowCommitmentFinishPreparation", 1),
                     ("RowCommitmentLeafFinalization", 2),
                     ("RowCommitmentMerkleReduction", 2),
@@ -373,7 +373,7 @@ fn actual_joined_two_tile_commitment_preserves_roots_cuts_and_seven_node_census(
                     children_wall += node.wall_inclusive_ns;
                     calls += node.calls;
                 }
-                assert_eq!(calls, 11);
+                assert_eq!(calls, 9);
                 let parent = record
                     .phase_tree
                     .nodes
@@ -390,10 +390,14 @@ fn actual_joined_two_tile_commitment_preserves_roots_cuts_and_seven_node_census(
 
 fn row_owner(rows: usize, observation: ContextV1) -> StreamingRowCommitmentV1 {
     let owner = StreamingRowCommitmentV1::new(context(), b"leaf", NODE, 0, rows, 2, &[]).unwrap();
-    let pointer = owner.digest_streams.as_ptr();
+    let backing = |streams: &RowStreamsV1| match streams {
+        RowStreamsV1::Scalar(values) => values.as_ptr().cast::<()>(),
+        RowStreamsV1::InitialPairs(values) => values.as_ptr().cast::<()>(),
+    };
+    let pointer = backing(&owner.digest_streams);
     let capacity = owner.digest_streams.capacity();
     let owner = owner.with_observation_v1(observation);
-    assert_eq!(owner.digest_streams.as_ptr(), pointer);
+    assert_eq!(backing(&owner.digest_streams), pointer);
     assert_eq!(owner.digest_streams.capacity(), capacity);
     owner
 }
@@ -442,7 +446,7 @@ fn partial_hash_failure_preserves_poison_and_original_field_owner_clearing() {
             .unwrap()
             .install(|| {
                 let mut baseline = row_owner(2048, ContextV1::default());
-                baseline.digest_streams[1025].update(&[0; 8]).unwrap();
+                baseline.digest_streams.corrupt_remaining_v1(1025, 8);
                 let original = baseline
                     .absorb_columns_v1(&[vec![F(3); 2048], vec![F(5); 2048]])
                     .err()
@@ -450,7 +454,7 @@ fn partial_hash_failure_preserves_poison_and_original_field_owner_clearing() {
                 let (session, sink) = begin_observation(workers as u32);
                 let parent = session.enter("base");
                 let mut owner = row_owner(2048, ContextV1::from_parent(Some(parent.parent())));
-                owner.digest_streams[1025].update(&[0; 8]).unwrap();
+                owner.digest_streams.corrupt_remaining_v1(1025, 8);
                 let (error, erased) = field_column_erasure::observe_v1(|| {
                     let columns = [
                         ZeroizingFieldColumnV1(vec![F(3); 2048]),
@@ -748,15 +752,12 @@ fn original_source_and_evaluator_errors_leave_no_commitment_and_clear_columns() 
         parent.complete();
         let record = finish_observation(session, &sink);
         assert_eq!(phase(&record, "RowCommitmentStreamSetup").completed, 1);
-        if fail_source {
-            assert_eq!(phase(&record, "RowCommitmentColumnAdmission").completed, 1);
-            assert_eq!(phase(&record, "RowCommitmentRowAbsorption").completed, 1);
-        } else {
-            assert_absent(
-                &record,
-                &["RowCommitmentColumnAdmission", "RowCommitmentRowAbsorption"],
-            );
-        }
+        // The coalescer retains the first eight outputs until the next batch or
+        // group boundary. A source refusal prevents any row-stream absorption.
+        assert_absent(
+            &record,
+            &["RowCommitmentColumnAdmission", "RowCommitmentRowAbsorption"],
+        );
         assert_absent(
             &record,
             &[

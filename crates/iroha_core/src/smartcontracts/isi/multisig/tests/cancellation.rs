@@ -70,7 +70,7 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         .execute_instruction(
             &mut state_transaction,
             &signer1_id,
-            InstructionBox::from(target_proposal),
+            &InstructionBox::from(target_proposal),
         )
         .expect("create target proposal");
     let cancel = MultisigCancel::new(
@@ -82,7 +82,7 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         .execute_instruction(
             &mut state_transaction,
             &signer1_id,
-            InstructionBox::from(cancel.clone()),
+            &InstructionBox::from(cancel.clone()),
         )
         .expect_err("direct cancel by signer must be rejected");
     match direct_err {
@@ -115,14 +115,14 @@ fn multisig_cancel_requires_quorum_and_prunes_target_proposal() {
         .execute_instruction(
             &mut state_transaction,
             &signer1_id,
-            InstructionBox::from(cancel_proposal),
+            &InstructionBox::from(cancel_proposal),
         )
         .expect("create cancel proposal");
     Executor::Initial
         .execute_instruction(
             &mut state_transaction,
             &signer2_id,
-            InstructionBox::from(MultisigApprove::new(
+            &InstructionBox::from(MultisigApprove::new(
                 multisig_id.clone(),
                 test_id(&network_id, &multisig_id.clone(), &cancel_hash),
                 cancel_hash,

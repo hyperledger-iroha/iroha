@@ -899,7 +899,7 @@ fn validate_checkpoint_temp(
     file: &File,
     expected_len: usize,
 ) -> Result<(), CheckpointStoreError> {
-    let opened = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+    let opened = native_metadata(file).map_err(|_| CheckpointStoreError::Io)?;
     let linked = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     let expected_len = u64::try_from(expected_len).unwrap_or(u64::MAX);
     validate_regular_file_metadata(&opened, expected_len, false)?;
@@ -918,7 +918,7 @@ fn validate_persisted_checkpoint(
     file: &File,
     expected_len: usize,
 ) -> Result<(), CheckpointStoreError> {
-    let opened = native_metadata(&file).map_err(|_| CheckpointStoreError::Io)?;
+    let opened = native_metadata(file).map_err(|_| CheckpointStoreError::Io)?;
     let linked = named_metadata(path).map_err(|_| CheckpointStoreError::Io)?;
     let expected_len = u64::try_from(expected_len).unwrap_or(u64::MAX);
     validate_regular_file_metadata(&opened, expected_len, false)?;
@@ -1387,7 +1387,7 @@ mod tests {
         for handle in [&reopened, &cloned] {
             assert!(same_file_identity(
                 &native_metadata(&first._file).unwrap(),
-                &native_metadata(&handle).unwrap(),
+                &native_metadata(handle).unwrap(),
             ));
         }
         std::thread::scope(|scope| {

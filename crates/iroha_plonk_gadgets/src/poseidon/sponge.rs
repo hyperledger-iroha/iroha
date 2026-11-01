@@ -269,16 +269,15 @@ impl<F: PoseidonField> SpongeChip<F> {
         initial: [F; WIDTH],
         elements: &[AbsorbInput<'_, F>],
     ) -> Result<Word<F>, Error> {
-        let chunks = elements.chunks_exact(2);
-        let tail = match chunks.remainder() {
+        let (chunks, remainder) = elements.as_chunks::<2>();
+        let tail = match remainder {
             [last] => [*last, AbsorbInput::Constant(F::ONE)],
             _ => [
                 AbsorbInput::Constant(F::ONE),
                 AbsorbInput::Constant(F::ZERO),
             ],
         };
-        let mut blocks: Vec<[AbsorbInput<'_, F>; 2]> =
-            chunks.map(|chunk| [chunk[0], chunk[1]]).collect();
+        let mut blocks: Vec<[AbsorbInput<'_, F>; 2]> = chunks.to_vec();
         blocks.push(tail);
         let mut state = self.lane.start(region, initial)?;
         let last = blocks.len() - 1;

@@ -121,7 +121,9 @@ fn last_fri_root_and_selected_fibers_match_materialized_canonical_tree() {
     let mut depth = 1;
     while level.len() > 1 {
         level = level
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .enumerate()
             .map(|(index, pair)| parent(depth, index, pair[0], pair[1]).unwrap())
             .collect();

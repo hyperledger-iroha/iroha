@@ -425,7 +425,7 @@ pub fn poly_sub_kfg_scaled_depth1(
             target_right[i] = mp_set(xg.cast_signed(), modulus);
         }
     } else {
-        assert!(FGlen == 2);
+        assert_eq!(FGlen, 2);
         let p0 = PRIMES[0].p;
         let p0_0i = PRIMES[0].p0i;
         let z0 = mp_half(PRIMES[0].R2, p0);

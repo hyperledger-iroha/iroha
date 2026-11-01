@@ -1331,12 +1331,12 @@ impl ToriiMesh {
             .nodes
             .get_mut(origin)
             .ok_or_else(|| format!("node {origin} not registered"))?;
-        match node.ingest(advert, now) {
-            Ok(result) => match result.outcome {
+        {
+            let result = node.ingest(advert, now)?;
+            match result.outcome {
                 AdvertIngest::Stored { .. } | AdvertIngest::Replaced { .. } => {}
                 AdvertIngest::Duplicate { .. } => return Ok(()),
-            },
-            Err(err) => return Err(err),
+            }
         }
         let mut queue = VecDeque::new();
         queue.push_back((origin, advert.clone()));
@@ -1623,8 +1623,8 @@ struct ToriiHarness {
 }
 // Query fixtures retain their actual original genesis or live certified chain.
 enum PinReadbackHistory {
-    Prepared(PreparedTestChainConfig),
-    Running(CertifiedTestChain),
+    Prepared(Box<PreparedTestChainConfig>),
+    Running(Box<CertifiedTestChain>),
 }
 impl ToriiHarness {
     async fn shutdown(self) {
@@ -1758,7 +1758,7 @@ fn enable_storage_with_discovery_native_signers(cfg: &mut actual_cfg::Root) {
 // Deterministic fixture keys authorize one empty catalog; this is not deployment
 // qualification or a provider that claims production identity on a mock transport.
 fn discovery_gateway_compliance_fixture(
-    directory: PathBuf,
+    directory: &std::path::Path,
 ) -> (
     actual_cfg::SorafsGatewayCompliance,
     Arc<dyn iroha_torii::sorafs::gateway::GatewayComplianceFeedTransport>,
@@ -1772,11 +1772,11 @@ fn discovery_gateway_compliance_fixture(
         GatewayComplianceSubjectKindV1, GatewayComplianceTrustPolicyV1,
         GatewayComplianceTrustedSignerV1,
     };
-    fs::create_dir_all(&directory).expect("create isolated compliance directory");
+    fs::create_dir_all(directory).expect("create isolated compliance directory");
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&directory, fs::Permissions::from_mode(0o700))
+        fs::set_permissions(directory, fs::Permissions::from_mode(0o700))
             .expect("owner-only compliance directory");
     }
     let directory = directory
@@ -1845,7 +1845,7 @@ fn discovery_gateway_compliance_fixture(
         total_timeout: Duration::from_secs(10),
         max_clock_skew: Duration::from_secs(300),
         max_feed_age: Duration::from_secs(3_600),
-        max_catalog_validity: Duration::from_secs(86_400),
+        max_catalog_validity: Duration::from_hours(24),
         max_history_entries: 16,
     };
     let signer =
@@ -2024,7 +2024,7 @@ fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
     use iroha_torii::sorafs::gateway::GatewayComplianceCheckpointV1;
     let directory = tempdir().expect("compliance fixture temp dir");
     let (config, _transport) = discovery_gateway_compliance_fixture(
-        directory.path().canonicalize().unwrap().join("compliance"),
+        &directory.path().canonicalize().unwrap().join("compliance"),
     );
     assert!(
         config
@@ -2064,26 +2064,27 @@ fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
 }
 
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
-    build_torii_harness_with_history(cfg, None)
+    let harness = build_certified_torii_harness(cfg);
+    // Listener authority comes from the applied signed genesis.
+    commit_pin_readback_fixture(&harness);
+    harness
 }
 
 fn build_certified_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let mut config = TestChainConfig::new(World::default(), 1_000);
     config.chain_id = cfg.common.chain.clone();
     let original = CertifiedTestChain::prepare(config).expect("original discovery genesis");
-    build_torii_harness_with_history(cfg, Some(original))
+    build_torii_harness_with_history(cfg, original)
 }
 
 fn build_torii_harness_with_history(
     cfg: &actual_cfg::Root,
-    original: Option<PreparedTestChainConfig>,
+    original: PreparedTestChainConfig,
 ) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
-    if let Some(original) = &original {
-        cfg.genesis.expected_hash = original.genesis.expected_hash();
-        cfg.genesis.public_key = original.genesis.public_key().clone();
-    }
+    cfg.genesis.expected_hash = original.genesis.expected_hash();
+    cfg.genesis.public_key = original.genesis.public_key().clone();
     isolate_discovery_persistence(&mut cfg.torii, &torii_data_dir);
     let native_signers = cfg.torii.sorafs_storage.enabled.then(|| {
         let proof = Arc::new(DiscoveryNativeTransactionSigner::for_role(
@@ -2124,7 +2125,7 @@ fn build_torii_harness_with_history(
             "discovery fixture owns its governed compliance policy"
         );
         let (compliance, transport) = discovery_gateway_compliance_fixture(
-            cfg.torii.sorafs_storage.data_dir.join("gateway-compliance"),
+            &cfg.torii.sorafs_storage.data_dir.join("gateway-compliance"),
         );
         cfg.torii.sorafs_gateway.compliance = Some(compliance);
         transport
@@ -2132,23 +2133,11 @@ fn build_torii_harness_with_history(
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let chain_id = cfg.common.chain.clone();
     let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let (state, kura, native_history) = if let Some(original) = original {
-        (
-            Arc::clone(&original.state),
-            Arc::clone(&original.kura),
-            Some(Mutex::new(Some(PinReadbackHistory::Prepared(original)))),
-        )
-    } else {
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            network_id,
-        ));
-        (state, kura, None)
-    };
+    let state = Arc::clone(&original.state);
+    let kura = Arc::clone(&original.kura);
+    let native_history = Some(Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(
+        original,
+    )))));
     let query = state.query_handle.clone();
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -2689,7 +2678,7 @@ async fn sorafs_routes_disabled_when_cache_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_discovery_without_local_trust_starts_with_no_admitted_providers() {
@@ -2721,7 +2710,7 @@ async fn sorafs_discovery_without_local_trust_starts_with_no_admitted_providers(
             .len(),
         0
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_routes_enabled_with_native_admission() {
@@ -2760,7 +2749,7 @@ async fn sorafs_routes_enabled_with_native_admission() {
             .expect("providers array")
             .is_empty()
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_capacity_route_disabled_when_storage_off() {
@@ -2778,7 +2767,7 @@ async fn sorafs_capacity_route_disabled_when_storage_off() {
         .await
         .expect("router responds");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off() {
@@ -2827,7 +2816,7 @@ async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off()
         Some("submitted")
     );
     assert_eq!(
-        value.as_object().map(|object| object.len()),
+        value.as_object().map(std::collections::BTreeMap::len),
         Some(3),
         "admission response must not claim a fee, custody result, or finalized pin status"
     );
@@ -2845,7 +2834,7 @@ async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off()
             .any(|transaction| transaction.hash() == submitted_hash),
         "the dedicated route must queue the original caller-signed transaction unchanged"
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[test]
 #[should_panic(
@@ -2905,7 +2894,7 @@ async fn sorafs_capacity_route_enabled_when_storage_on() {
             .expect("fee_ledger array")
             .is_empty()
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires_authentication() {
@@ -2961,7 +2950,7 @@ async fn retired_storage_ingest_and_fetch_are_not_mounted_and_inventory_requires
         .await
         .expect("unsigned malformed storage fetch response");
     assert_eq!(fetch_response.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 fn pin_register_json_body(transaction: &SignedTransaction) -> Vec<u8> {
     // The model serializer owns the inner payload. Torii's versioned ingress
@@ -3084,7 +3073,7 @@ async fn pin_register_json_fixture_roundtrips_through_the_public_http_route() {
             fixture.transaction.encode_versioned()
         );
     }
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 
 fn pin_register_http_request(body: Vec<u8>, content_type: &'static str) -> Request<Body> {
@@ -3147,7 +3136,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
         Some("submitted")
     );
     assert_eq!(
-        value.as_object().map(|object| object.len()),
+        value.as_object().map(std::collections::BTreeMap::len),
         Some(3),
         "admission response must not claim a fee, custody result, or finalized pin status"
     );
@@ -3165,7 +3154,7 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
             .any(|transaction| transaction.hash() == submitted_hash),
         "the dedicated route must queue the original caller-signed transaction unchanged"
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
@@ -3196,7 +3185,7 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
         "pin register Norito transaction failed: {status} body={}",
         String::from_utf8_lossy(&body)
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_validates_signed_manifest_bytes() {
@@ -3225,7 +3214,7 @@ async fn sorafs_pin_register_validates_signed_manifest_bytes() {
         "sorafs_pin_manifest_payload_invalid",
         "chunker descriptor mismatch",
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
@@ -3253,7 +3242,7 @@ async fn sorafs_pin_register_rejects_secret_bearing_legacy_body() {
         StatusCode::BAD_REQUEST,
         "the removed secret-bearing DTO must fail closed"
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
@@ -3352,7 +3341,7 @@ async fn sorafs_pin_register_rejects_wrong_shape_network_and_signature() {
         "shape, network and signature adversaries must never enter the queue"
     );
     drop(state_view);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
@@ -3376,7 +3365,7 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
         .await
         .expect("router responds");
     assert_eq!(invalid_norito.status(), StatusCode::BAD_REQUEST);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 // World-only query setup is captured by an actual original native publication.
 // Successors contain the test chain's signed clock work; no empty block is fabricated.
@@ -3388,8 +3377,10 @@ fn commit_pin_readback_fixture(harness: &ToriiHarness) {
         .lock()
         .expect("native query history lock");
     let chain = match owner.take().expect("original native history") {
-        PinReadbackHistory::Prepared(original) => CertifiedTestChain::from_prepared(original)
-            .expect("actual genesis executes and publishes"),
+        PinReadbackHistory::Prepared(original) => Box::new(
+            CertifiedTestChain::from_prepared(*original)
+                .expect("actual genesis executes and publishes"),
+        ),
         PinReadbackHistory::Running(mut chain) => {
             let next_time = u64::try_from(
                 chain
@@ -3734,7 +3725,7 @@ async fn sorafs_pin_manifest_rejects_noncanonical_digest_and_cursor() {
             "query={query}"
         );
     }
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor() {
@@ -3774,7 +3765,7 @@ async fn sorafs_pin_manifest_distinguishes_missing_record_and_unavailable_anchor
         pin_readback_status(&harness, &anchored_missing).await,
         StatusCode::CONFLICT
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -3908,7 +3899,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection
         pin_readback_status(&harness, &stale).await,
         StatusCode::CONFLICT
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -3975,7 +3966,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_refreshing_alias() {
         .expect("proof age");
     assert!(age >= positive_ttl.saturating_sub(refresh_window));
     assert!(age <= refresh_age.saturating_add(5));
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4037,7 +4028,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_stale_alias() {
             .iter()
             .any(|reason| reason.as_str() == Some("ExpiredTTL"))
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4094,7 +4085,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_expired_alias() {
             .iter()
             .any(|reason| reason.as_str() == Some("HardExpired"))
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4166,7 +4157,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_with_revoked_alias_project
             .get(&Name::from_str(GOVERNANCE_REFS_KEY).unwrap())
             .is_some()
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -4266,7 +4257,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
             .and_then(json::Value::as_str),
         Some(expected_successor_iso.as_str())
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[tokio::test]
 async fn sorafs_alias_listing_reports_governance_revocation() {
@@ -4351,10 +4342,9 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
             .and_then(json::Value::as_u64),
         Some(effective_at)
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 include!("sorafs_discovery/storage_path_fixture.rs");
 include!("sorafs_discovery/fixture_key_mismatch_test.rs");
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

@@ -55,6 +55,10 @@ struct Android {
 }
 #[derive(JsonDeserialize)]
 #[norito(deny_unknown_fields)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "Field names are the provisioning request's canonical JSON keys."
+)]
 struct Request {
     schema: String,
     issuer_request: Original,
@@ -162,7 +166,7 @@ fn platform(
                 .map(|b| Sha256::digest(&b).into())
         })
         .collect::<Result<Vec<[u8; 32]>>>()?;
-    signers.sort();
+    signers.sort_unstable();
     let app = KagemushaWalletAppPolicyV1 {
         version: 1,
         scheme_id: scheme,

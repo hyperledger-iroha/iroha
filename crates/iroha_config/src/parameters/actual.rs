@@ -1898,7 +1898,7 @@ impl SoranetPow {
             outbound_mint_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             inbound_verify_capacity: Self::DEFAULT_PUZZLE_WORK_CAPACITY_PER_DIRECTION,
             revocation_store_capacity: 8_192,
-            revocation_max_ttl: Duration::from_secs(900),
+            revocation_max_ttl: Duration::from_mins(15),
             revocation_store_path: Cow::Borrowed("./storage/soranet/ticket_revocations.norito"),
             puzzle: SoranetPuzzle::default_const(),
         }
@@ -3023,7 +3023,7 @@ impl_default!(NexusStaking => {
 impl NexusStaking {
     /// Resolve the validator activation policy for a lane using its configured visibility.
     #[must_use]
-    pub fn validator_mode(&self, lane: LaneId, catalog: &LaneCatalog) -> LaneValidatorMode {
+    pub fn validator_mode(self, lane: LaneId, catalog: &LaneCatalog) -> LaneValidatorMode {
         let visibility = catalog
             .lanes()
             .iter()
@@ -3620,8 +3620,11 @@ struct NexusConsensusAxtV1 {
 /// settings. Current private-payment validity comes from committed policy, and local sidecar
 /// capacity cannot change this signed contract. Other historical configurations cannot be
 /// reconstructed by substituting today's defaults for their authenticated original values.
+///
+/// The borrowed Nexus authority encoder serializes this same value, so both encodings of the
+/// consensus preimage stay byte-identical.
 #[derive(Encode)]
-struct NexusConsensusAtomicPrivateSettlementV1 {
+pub struct NexusConsensusAtomicPrivateSettlementV1 {
     proof_profile_version: u16,
     max_participants: u16,
     max_expiry_blocks: u64,
@@ -3640,7 +3643,8 @@ struct NexusConsensusAtomicPrivateSettlementV1 {
 }
 impl NexusConsensusAtomicPrivateSettlementV1 {
     /// Exact signed V1 baseline, independent of mutable defaults and operational configuration.
-    fn frozen_v1() -> Self {
+    #[must_use]
+    pub fn frozen_v1() -> Self {
         Self {
             proof_profile_version: 1,
             max_participants: 255,

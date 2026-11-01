@@ -333,8 +333,8 @@ fn encode_owned_rows_staged(
             &mut row,
             backend,
         );
-        for (symbol, pair) in output.iter_mut().zip(row.chunks_exact(2)) {
-            *symbol = u16::from_le_bytes([pair[0], pair[1]]);
+        for (symbol, pair) in output.iter_mut().zip(row.as_chunks::<2>().0) {
+            *symbol = u16::from_le_bytes(*pair);
         }
     }
 }
@@ -463,7 +463,9 @@ mod tests {
             .map(|row| {
                 let seed = 0xC0DE ^ ((k * 10_000 + m * 100 + row) as u64) ^ (symbols as u64) << 32;
                 reference::bytes(seed, 2 * symbols)
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
                     .collect()
             })

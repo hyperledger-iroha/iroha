@@ -461,7 +461,7 @@ fn open_preflight_child(_: &Journal, _: bool) -> Result<Journal> {
 pub(super) fn validate_preflight_cache(parent: &Journal) -> Result<()> {
     parent.revalidate()?;
     let expected = PreflightBinding::expected(parent)?;
-    validate_preflight_expected(parent, expected)
+    validate_preflight_expected(parent, &expected)
 }
 
 #[cfg(windows)]
@@ -471,7 +471,7 @@ pub(super) fn validate_preflight_identity(
 ) -> Result<()> {
     validate_preflight_expected(
         parent,
-        PreflightBinding {
+        &PreflightBinding {
             purpose: "iroha.dataspace-preflight-finality.v1".into(),
             definition_sha256: identity.0,
             network_id: identity.1,
@@ -480,7 +480,7 @@ pub(super) fn validate_preflight_identity(
     )
 }
 
-fn validate_preflight_expected(parent: &Journal, expected: PreflightBinding) -> Result<()> {
+fn validate_preflight_expected(parent: &Journal, expected: &PreflightBinding) -> Result<()> {
     #[cfg(windows)]
     {
         let directory = parent.directory.open_child(PREFLIGHT_DIRECTORY)?;
@@ -492,7 +492,7 @@ fn validate_preflight_expected(parent: &Journal, expected: PreflightBinding) -> 
         }
     }
     let child = open_preflight_child(parent, false)?;
-    validate_preflight_contents(&child, &expected)?;
+    validate_preflight_contents(&child, expected)?;
     parent.revalidate()
 }
 

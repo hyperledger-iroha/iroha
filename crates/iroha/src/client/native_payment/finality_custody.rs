@@ -302,7 +302,7 @@ impl FileNativePaymentFinality {
     }
 
     pub(super) fn bind(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         workflow: WorkflowId,
         request: Digest32,
         verifier: &SumeragiFinalityVerifier,
@@ -312,7 +312,7 @@ impl FileNativePaymentFinality {
         }
         let initial_epoch = norito::encode_canonical(verifier.initial_epoch())?;
         Ok(BoundNativePaymentFinality {
-            owner: self.clone(),
+            owner: self,
             binding: Binding {
                 workflow: *workflow.as_bytes(),
                 request,

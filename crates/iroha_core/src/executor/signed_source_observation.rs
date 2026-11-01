@@ -33,7 +33,7 @@ thread_local! {
 
 /// Expect one exact signed owner at the real executor boundary on this test thread.
 /// This observes input addresses and never replaces validation or execution.
-pub(crate) struct Probe;
+pub struct Probe;
 
 impl Probe {
     /// Start a scoped observation of the original accepted or reveal-inner owner.
@@ -52,6 +52,10 @@ impl Probe {
     }
 
     /// Prove the actual executor observed this source exactly once.
+    #[expect(
+        clippy::unused_self,
+        reason = "the receiver proves the guard that owns this thread-local observation is still alive"
+    )]
     pub(crate) fn assert_observed_once(&self) {
         OBSERVATION.with_borrow(|slot| {
             assert_eq!(slot.as_ref().expect("active observation").calls, 1);

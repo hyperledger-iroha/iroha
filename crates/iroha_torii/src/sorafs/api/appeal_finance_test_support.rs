@@ -803,7 +803,7 @@ fn configure_appeal_finance_settlement_submitter(
         ],
         runtime_signers: Some(Arc::new(runtime_signers)),
         forwarder,
-        worker_scan_interval: Duration::from_millis(30_000),
+        worker_scan_interval: Duration::from_secs(30),
     });
 }
 fn appeal_finance_deposit_status_record(

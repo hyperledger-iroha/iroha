@@ -847,14 +847,6 @@ fn exact_process_roster<'a>(
     Ok(ordered)
 }
 
-async fn advance_exact_rotation_phase(
-    network: &Network,
-    voters: &[PeerId],
-    height: u64,
-    deadline: Instant,
-) -> Result<()> {
-    advance_exact_rotation_phase_with_workload(network, voters, height, deadline, None).await
-}
 async fn advance_exact_rotation_phase_with_workload(
     network: &Network,
     voters: &[PeerId],
@@ -1558,8 +1550,8 @@ fn prove_exact_target_readiness(
         "native private share is not three exact components"
     );
     let mut components = Zeroizing::new([[0_u8; 32]; 3]);
-    for (component, bytes) in components.iter_mut().zip(share.chunks_exact(32)) {
-        component.copy_from_slice(bytes);
+    for (component, bytes) in components.iter_mut().zip(share.as_chunks::<32>().0) {
+        *component = *bytes;
     }
     let custody = RuntimeGlobalThresholdBeaconShareCustodyV1::new();
     custody.import_components(validated.clone(), output.signer_index, components)?;
@@ -2510,9 +2502,7 @@ async fn run_custody_or_activation_scenario(
             == 2,
         "4→7→4 did not complete the second authenticated signing generation"
     );
-    lifecycle
-        .complete_withdrawal(network, &second.target, &return_target)
-        .await?;
+    Box::pin(lifecycle.complete_withdrawal(network, &second.target, &return_target)).await?;
     Ok(())
 }
 
@@ -2843,7 +2833,7 @@ async fn run_overfull_qualification(scenario: QualificationScenario) -> Result<(
     })
     .await;
     let closure = shutdown_all_cleanly(&network).await;
-    network.shutdown_and_release().await;
+    Box::pin(network.shutdown_and_release()).await;
     match (result, closure) {
         (Ok(()), closure) => closure,
         (Err(error), Ok(())) => Err(error),
@@ -3391,8 +3381,14 @@ fn committee_history_observation_keeps_original_read_deadline_before_query() -> 
 }
 
 #[path = "support/native_amx_harness.rs"]
+#[expect(
+    dead_code,
+    reason = "The AMX harness is shared with `core_api`, whose paid-exchange tests use the exchange-walk helpers."
+)]
 mod amx_harness;
 #[path = "native_amx_network/rotation.rs"]
 mod amx_rotation;
 #[path = "support/rotation_payments.rs"]
 mod rotation_payments;
+#[path = "support/status_poll.rs"]
+mod status_poll;

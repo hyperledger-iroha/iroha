@@ -1820,7 +1820,7 @@ fn lifecycle_network_root_effects_do_not_need_a_callback_invoke() {
         output.execution.completions.push(completion(&trigger()));
         let mut first = lifecycle_insert();
         first.trigger_id = "network-root-before".parse().unwrap();
-        first.origin = origin.clone();
+        first.origin = origin;
         let mut last = first.clone();
         last.trigger_id = "network-root-after".parse().unwrap();
         output.trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
@@ -2171,6 +2171,16 @@ fn lifecycle_action_frame_limits_precede_payload_validation_and_span_rows() {
 
 #[test]
 fn lifecycle_action_frame_semantics_and_validator_refusals_cannot_be_bypassed() {
+    struct Refuse;
+    impl TriggerLifecycleActionValidatorV1 for Refuse {
+        fn validate_canonical_action(
+            &mut self,
+            _: &[u8],
+            _: &[u8],
+        ) -> Result<TriggerLifecycleActionSemanticsV1, String> {
+            Err("actual bounded scanner refusal".into())
+        }
+    }
     for wrong_kind in [true, false] {
         let mut effect = lifecycle_insert();
         let TriggerLifecycleChangeV1::Insert { after } = &mut effect.change else {
@@ -2195,16 +2205,6 @@ fn lifecycle_action_frame_semantics_and_validator_refusals_cannot_be_bypassed() 
             .validate_structure(TriggerLifecycleOwnerV1::Network, 8, &[], false)
             .unwrap();
         assert!(lifecycle_fixture_validate_frames(&trace).is_err());
-    }
-    struct Refuse;
-    impl TriggerLifecycleActionValidatorV1 for Refuse {
-        fn validate_canonical_action(
-            &mut self,
-            _: &[u8],
-            _: &[u8],
-        ) -> Result<TriggerLifecycleActionSemanticsV1, String> {
-            Err("actual bounded scanner refusal".into())
-        }
     }
     let complete = vec![lifecycle_network(), lifecycle_pipeline(), lifecycle_time()];
     assert_eq!(
@@ -2232,7 +2232,7 @@ fn lifecycle_retry_json_requires_both_exact_fields_and_rejects_unknowns() {
         r#"{"attempt":1,"next_time_ms":null}"#,
         r#"{"attempt":-1,"next_time_ms":120}"#,
         r#"{"attempt":1,"next_time_ms":-1}"#,
-        r#"[1,120]"#,
+        r"[1,120]",
     ] {
         assert!(
             norito::json::from_str::<TriggerLifecycleRetryStateV1>(json).is_err(),

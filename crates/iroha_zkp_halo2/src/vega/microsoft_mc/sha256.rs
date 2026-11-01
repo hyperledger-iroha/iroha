@@ -121,14 +121,10 @@ impl Sha256 {
             self.pending = [0; 64];
             self.pending_len = 0;
         }
-        let mut blocks = input.chunks_exact(64);
-        for block in &mut blocks {
-            compress(
-                &mut self.state,
-                block.try_into().expect("exact SHA-256 block"),
-            );
+        let (blocks, remainder) = input.as_chunks::<64>();
+        for block in blocks {
+            compress(&mut self.state, block);
         }
-        let remainder = blocks.remainder();
         self.pending[..remainder.len()].copy_from_slice(remainder);
         self.pending_len = remainder.len();
         Ok(())
@@ -148,7 +144,7 @@ impl Sha256 {
         self.pending[56..].copy_from_slice(&bit_len.to_be_bytes());
         compress(&mut self.state, &self.pending);
         let mut output = [0_u8; 32];
-        for (destination, word) in output.chunks_exact_mut(4).zip(self.state) {
+        for (destination, word) in output.as_chunks_mut::<4>().0.iter_mut().zip(self.state) {
             destination.copy_from_slice(&word.to_be_bytes());
         }
         output
@@ -163,8 +159,8 @@ pub(super) fn sha256(input: &[u8]) -> Result<[u8; 32], Sha256Error> {
 }
 pub(super) fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
     let mut schedule = [0_u32; 64];
-    for (word, bytes) in schedule.iter_mut().zip(block.chunks_exact(4)) {
-        *word = u32::from_be_bytes(bytes.try_into().expect("four-byte SHA-256 word"));
+    for (word, bytes) in schedule.iter_mut().zip(block.as_chunks::<4>().0) {
+        *word = u32::from_be_bytes(*bytes);
     }
     for index in 16..64 {
         let s0 = schedule[index - 15].rotate_right(7)

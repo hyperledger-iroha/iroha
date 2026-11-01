@@ -1,5 +1,6 @@
 //! Integration tests for Torii subscription endpoints.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{
     body::Body,
     extract::connect_info::ConnectInfo,
@@ -10,7 +11,6 @@ use http::StatusCode;
 use http_body_util::BodyExt as _;
 use iroha_core::{
     kiso::KisoHandle,
-    kura::Kura,
     query::store::LiveQueryStore,
     queue::Queue,
     smartcontracts::{Execute, triggers::set::SetReadOnly},
@@ -38,7 +38,6 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_model_base::peer::PeerId;
 use iroha_primitives::{
     json::Json as IrohaJson,
     numeric::{NumericSpec, Quantity},
@@ -48,15 +47,14 @@ use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_o
 use mv::storage::StorageReadOnly;
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr as _, sync::Arc};
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 struct SubscriptionHarness {
-    app: iroha_torii::TestApiRouterRuntime,
+    app: fixtures::CommittedToriiRouterRuntime,
     state: Arc<State>,
     queue: Arc<Queue>,
     charge_asset_id: AssetDefinitionId,
     subscription_id: NftId,
     billing_trigger_id: TriggerId,
+    _data_dir: iroha_torii::test_utils::TestDataDirGuard,
 }
 impl SubscriptionHarness {
     async fn shutdown(self) {
@@ -135,11 +133,8 @@ fn build_existing_billing_trigger(
     )
 }
 fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness {
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let charge_asset_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
@@ -194,15 +189,16 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
     )
     .build(&ALICE_ID);
     let nft = Nft::new(subscription_id.clone(), metadata).build(&BOB_ID);
-    let mut world = World::with_assets(
+    let world = World::with_assets(
         [domain],
         [provider_account, subscriber_account],
         [plan_definition, charge_asset_definition],
         [],
         [nft],
     );
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, world, Vec::new());
+    let state = native_chain.state().clone();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
     {
         let expected_height = u64::try_from(state.view().height())
             .unwrap_or(0)
@@ -240,7 +236,7 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
         queue.clone(),
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
+        native_chain.kura().clone(),
         state.clone(),
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
@@ -255,14 +251,18 @@ fn build_subscription_harness(status: SubscriptionStatus) -> SubscriptionHarness
     )
     .expect("valid Torii subscription fixture");
     SubscriptionHarness {
-        app: torii
-            .api_router_for_tests()
-            .expect("test Torii router initializes"),
+        app: fixtures::CommittedToriiRouterRuntime::new(
+            torii
+                .api_router_for_tests()
+                .expect("test Torii router initializes"),
+            native_chain,
+        ),
         state,
         queue,
         charge_asset_id,
         subscription_id,
         billing_trigger_id,
+        _data_dir: data_dir,
     }
 }
 async fn call_app(app: &axum::Router, mut request: Request<Body>) -> Response {
@@ -535,5 +535,4 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
     harness.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

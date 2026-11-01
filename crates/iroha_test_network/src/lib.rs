@@ -3549,7 +3549,7 @@ impl Network {
             // Only validators carry a PoP into the consensus roster. Observers
             // remain BLS-authenticated trusted peers but deliberately have no
             // `trusted_peers_pop` entry.
-            for peer in self.peers.iter().chain(extra.into_iter()) {
+            for peer in self.peers.iter().chain(extra) {
                 let (Some(bls_pk), Some(pop_bytes)) = (peer.bls_public_key(), peer.bls_pop())
                 else {
                     continue;
@@ -3865,7 +3865,7 @@ impl Network {
                 }
             }
         }
-        if Self::status_results_satisfy_predicate(status_results.into_iter(), &f) {
+        if Self::status_results_satisfy_predicate(status_results, &f) {
             return Ok(self);
         }
         let snapshot_on_failure = || self.startup_snapshot();
@@ -11239,7 +11239,7 @@ mod tests {
         assert!(!format!("{identity:?}").contains(token));
         assert!(peer.client_config.set(identity).is_ok());
         let readiness = peer.client();
-        let explicit = peer.client_for(&*ALICE_ID, ALICE_KEYPAIR.private_key().clone());
+        let explicit = peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone());
         for client in [readiness, explicit] {
             assert_eq!(
                 client
@@ -12421,9 +12421,11 @@ mod tests {
     #[test]
     fn genesis_consensus_metadata_matches_shared_runtime_derivation_for_npos() {
         init_instruction_registry();
-        let mut npos = SumeragiNposParameters::default();
-        npos.max_validators = 4;
-        npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+        let npos = SumeragiNposParameters {
+            max_validators: 4,
+            epoch_length_blocks: std::num::NonZeroU64::new(3_600).unwrap(),
+            ..Default::default()
+        };
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(4)
@@ -14355,8 +14357,10 @@ mod tests {
     }
     #[test]
     fn npos_genesis_snapshot_parser_rejects_invalid_payload() {
-        let mut invalid = SumeragiNposParameters::default();
-        invalid.epoch_seed = [0; 32];
+        let invalid = SumeragiNposParameters {
+            epoch_seed: [0; 32],
+            ..Default::default()
+        };
         let genesis = vec![vec![InstructionBox::from(SetParameter::new(
             Parameter::Custom(invalid.into_custom_parameter()),
         ))]];
@@ -15762,7 +15766,8 @@ mod tests {
         for (peer, expected) in network.peers().iter().zip(modes) {
             assert_eq!(peer.parliament_beacon_signer_mode, Some(expected));
             let child_args = |peer: &NetworkPeer| {
-                let mut command = ResolvedProgram::development("iroha3d".into())
+                // Commands select one absolute executable; this one is never launched.
+                let mut command = ResolvedProgram::development(env::temp_dir().join("iroha3d"))
                     .command()
                     .unwrap();
                 peer.append_parliament_beacon_signer_mode_arg(&mut command);

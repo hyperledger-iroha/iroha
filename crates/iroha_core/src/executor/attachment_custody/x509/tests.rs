@@ -10,7 +10,7 @@ use iroha_data_model::{
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 
-pub(crate) fn request(network: NetworkId, wallet: AccountId) -> SubmitPrivacyZkX509CertificateV1 {
+pub fn request(network: NetworkId, wallet: AccountId) -> SubmitPrivacyZkX509CertificateV1 {
     let bundle = iroha_data_model::privacy::privacy_exact12_fixture_bundle_v1().unwrap();
     let row = bundle
         .rows
@@ -35,7 +35,7 @@ pub(crate) fn request(network: NetworkId, wallet: AccountId) -> SubmitPrivacyZkX
     )
 }
 
-pub(crate) fn planned(
+pub fn planned(
     request: &SubmitPrivacyZkX509CertificateV1,
     invocation: ActionInvocationBindingV1,
     authority: ActionAuthorityBindingV1,
@@ -153,7 +153,7 @@ fn substituted_source_scope_authority_and_inputs_poison_the_original_attempt() {
             request.proof_ref.slot_index = 1;
         }
         let result = custody.direct(
-            if case == 0 { 0 } else { 1 },
+            u32::from(case != 0),
             if case == 1 { &BOB_ID } else { &ALICE_ID },
             |frame| {
                 frame.with_x509_action(
@@ -187,9 +187,7 @@ fn capacity_native_failure_unwind_and_repeat_never_restore_consumption() {
                     10_485_760,
                     &budget,
                     |_, _| {
-                        if case == 2 {
-                            panic!("injected consumer unwind");
-                        }
+                        assert!(case != 2, "injected consumer unwind");
                         if case == 1 {
                             return Err(X509Error::ProofShape);
                         }

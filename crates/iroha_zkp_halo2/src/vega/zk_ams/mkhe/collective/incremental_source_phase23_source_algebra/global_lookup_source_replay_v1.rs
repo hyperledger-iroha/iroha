@@ -1002,8 +1002,10 @@ fn validate_canonical_source_block_v1(bytes: &[u8]) -> Result<(), ZkAmsMkheError
             .len()
             .is_multiple_of(VEGA_T256_SCALAR_MODULUS_BE_V1.len())
         || bytes
-            .chunks_exact(VEGA_T256_SCALAR_MODULUS_BE_V1.len())
-            .any(|encoded| encoded >= VEGA_T256_SCALAR_MODULUS_BE_V1.as_slice())
+            .as_chunks::<{ VEGA_T256_SCALAR_MODULUS_BE_V1.len() }>()
+            .0
+            .iter()
+            .any(|encoded| *encoded >= VEGA_T256_SCALAR_MODULUS_BE_V1)
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
@@ -1020,7 +1022,7 @@ fn narrow_signed_source_block_v1(
     {
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
-    for (encoded, compact) in source.chunks_exact(8).zip(output) {
+    for (encoded, compact) in source.as_chunks::<8>().0.iter().zip(output) {
         let low = encoded[7];
         let sign_extension = if low & 0x80 == 0 { 0x00 } else { 0xff };
         if encoded[..7].iter().any(|byte| *byte != sign_extension) {

@@ -325,8 +325,8 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                 scheduler.done(0, ExecDone::Executed(Err(error)));
                 assert_eq!(scheduler.outstanding(), 1);
                 assert!(scheduler.take_events().is_empty());
-                let scheduled = scheduler.next(0);
-                if let Some(retry) = scheduled {
+                let next_retry = scheduler.next(0);
+                if let Some(retry) = next_retry {
                     assert!(
                         release_ready,
                         "RetryGate cannot dispatch before its original capacity observation"

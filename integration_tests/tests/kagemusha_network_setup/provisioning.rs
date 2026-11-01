@@ -219,7 +219,7 @@ pub(super) fn require_genesis_owner(expected: &PublicKey, owner: &KeyPair) -> Re
 /// Provision an already started exact-H1 network and retain its native private seat owners.
 /// No unrelated transaction may be submitted until this function returns at H5.
 #[cfg(unix)]
-pub(crate) fn provision(
+pub fn provision(
     network: &Network,
     runtime: &Runtime,
     root: &Path,
@@ -268,7 +268,7 @@ pub(crate) fn provision(
                     publish(&output, &format!("phase-h{height}-public.norito"), &public)?;
                     publish(&output, &format!("phase-h{height}-audit.json"), &norito::json::to_vec(&audit)?)?;
                     let transaction = committee_status::submit_until(&clients[0], deadline, |bounded| {
-                        Ok(bounded.submit(Log::new(Level::INFO, norito::json::to_json(&audit)?), FeePaymentIntent::authority(Vec::new(), None))?)
+                        bounded.submit(Log::new(Level::INFO, norito::json::to_json(&audit)?), FeePaymentIntent::authority(Vec::new(), None))
                     })?;
                     wait_exact(&clients, height, deadline)?;
                     let journal = prefix(&clients[0], height, deadline)?;
@@ -304,7 +304,7 @@ pub(crate) fn provision(
         &read_output(&dkg.public_bundle_path, 16 << 20)?,
     )?;
     let transaction = committee_status::submit_until(&clients[0], deadline, |bounded| {
-        Ok(bounded.submit_all(install, FeePaymentIntent::authority(Vec::new(), None))?)
+        bounded.submit_all(install, FeePaymentIntent::authority(Vec::new(), None))
     })?;
     wait_exact(&clients, INSTALL_HEIGHT, deadline)?;
     let journal = prefix(&clients[0], INSTALL_HEIGHT, deadline)?;
@@ -342,7 +342,11 @@ pub(crate) fn provision(
         "installed-h5.norito",
         &norito::encode_canonical(&journal)?,
     )?;
-    let expected: BTreeSet<_> = network.validators().iter().map(|peer| peer.id()).collect();
+    let expected: BTreeSet<_> = network
+        .validators()
+        .iter()
+        .map(iroha_test_network::NetworkPeer::id)
+        .collect();
     ensure!(
         dkg.seats.len() == 4
             && dkg
@@ -362,7 +366,7 @@ pub(crate) fn provision(
             let provider: NativeProviderManifest = norito::json::from_slice(&provider_bytes)?;
             let digest = global_beacon_partial_signer_public_inventory_digest_v1(network.network_id(), &[(dkg.public_session.record(), seat.signer_index)])?;
             require_provider(&provider, &seat.validator, seat.signer_index, &seat.provider_handle, seat.provider_revision, digest)?;
-            let catalog = IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(None, &network.chain_id().to_string(), network.network_id(),
+            let catalog = IrohaRuntimeProviderBindingsV1::with_prepared_beacon_inventory_v1(None, network.chain_id().as_ref(), network.network_id(),
                 &provider.handle, provider.revision, digest, iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES.get())?
                 .export_canonical_v1()?;
             let credential = read_output(&seat.credential_path, 16 << 20)?;

@@ -545,7 +545,7 @@ mod tests {
 
     #[test]
     fn completed_original_payload_survives_unrelated_queue_admissions_without_recapture() {
-        let (_, time) = iroha_primitives::time::TimeSource::new_mock(Duration::from_millis(30_000));
+        let (_, time) = iroha_primitives::time::TimeSource::new_mock(Duration::from_secs(30));
         super::super::publication_tests::with_worker_clock(
             time.clone(),
             move |chain, worker, _blocks, _events| {
@@ -604,7 +604,7 @@ mod tests {
                 );
                 assert_eq!(original.network_entrypoints().next().unwrap().hash(), input);
 
-                clock.set(Duration::from_millis(20_000));
+                clock.set(Duration::from_secs(20));
                 let retained = worker.build(2, 0, 1 << 20, 100).unwrap().unwrap();
                 assert_eq!(
                     retained.payload.as_slice().as_ptr(),
@@ -615,7 +615,7 @@ mod tests {
                 let proposal = payload::decode(fresh.payload.as_slice()).unwrap();
                 assert_eq!(
                     proposal.header().creation_time(),
-                    Duration::from_millis(20_000),
+                    Duration::from_secs(20),
                     "fresh view must refresh certified time without another signed transaction"
                 );
                 assert_eq!(proposal.network_entrypoints().count(), 1);
@@ -990,9 +990,6 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_refuses_substituted_original_parent_and_resumes_same_paid_wire() {
-        // Keep constructor-retired State generations outside this operation's
-        // original-pool refusal and synchronous refund observations.
-        let _state_retirement = crossbeam_epoch::pin();
         struct OriginalJournal {
             path: std::path::PathBuf,
             saved: std::path::PathBuf,
@@ -1003,6 +1000,9 @@ mod tests {
                 std::fs::rename(&self.saved, &self.path).unwrap();
             }
         }
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (queue, _clock, _time) = attach_queue(chain, worker);
             let budget = worker.state.ivm_execution_budget();
@@ -1039,13 +1039,13 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_preserves_actual_reader_release_and_native_capacity_refusal() {
-        // Keep constructor-retired State generations outside this operation's
-        // original-pool refusal and synchronous refund observations.
-        let _state_retirement = crossbeam_epoch::pin();
         use std::{
             future::Future,
             task::{Context, Poll, Waker},
         };
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (queue, _clock, _time) = attach_queue(chain, worker);
             let state = worker.state;
@@ -1249,15 +1249,15 @@ mod tests {
 
     #[test]
     fn retained_partial_payload_idle_expiry_wakes_original_commit_with_live_execution() {
-        // Keep constructor-retired State generations outside this operation's
-        // original-pool refusal and synchronous refund observations.
-        let _state_retirement = crossbeam_epoch::pin();
         use crate::sumeragi::driver::{
             exec::{ExecDone, ExecOp, ExecSched, ExecutionRegistrations},
             persist::Backoff,
         };
         use iroha_allocation::{AllocationBudget, AllocationRefusal};
         use std::task::{Context, Poll, Waker};
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
 
         super::super::publication_tests::with_worker(|chain, worker, _blocks, events| {
             let _fixture_epoch = crossbeam_epoch::pin();
@@ -2160,9 +2160,6 @@ mod tests {
 
     #[test]
     fn completed_original_payload_refund_callback_follows_the_original_build_source_and_fences() {
-        // Keep constructor-retired State generations outside this operation's
-        // original-pool refusal and synchronous refund observations.
-        let _state_retirement = crossbeam_epoch::pin();
         use std::{
             future::Future,
             sync::{
@@ -2171,7 +2168,6 @@ mod tests {
             },
             task::{Context, Poll, Wake, Waker},
         };
-
         struct OriginalPoolProbe {
             state: Arc<State>,
             queue: Arc<Queue>,
@@ -2192,6 +2188,9 @@ mod tests {
                 }
             }
         }
+        // Keep constructor-retired State generations outside this operation's
+        // original-pool refusal and synchronous refund observations.
+        let _state_retirement = crossbeam_epoch::pin();
 
         super::super::publication_tests::with_worker(|chain, worker, _blocks, _events| {
             let (queue, _clock, time) = attach_queue(chain, worker);

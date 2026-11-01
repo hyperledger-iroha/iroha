@@ -364,8 +364,10 @@ impl MessageEncoding {
     fn public(&self) -> Vec<Vec<Fp>> {
         vec![
             self.bytes
-                .chunks_exact(16)
-                .map(|half| Fp::from_u128(u128::from_le_bytes(half.try_into().unwrap())))
+                .as_chunks::<16>()
+                .0
+                .iter()
+                .map(|half| Fp::from_u128(u128::from_le_bytes(*half)))
                 .collect(),
         ]
     }

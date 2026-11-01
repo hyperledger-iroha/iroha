@@ -1,7 +1,5 @@
 //! Governed compliance-feed transport boundary tests.
 
-use std::io::Write as _;
-
 use super::*;
 
 #[test]

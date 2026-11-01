@@ -24,7 +24,7 @@ fn bounded_leaf_batches_match_canonical_hashes_for_every_oracle_and_worker_count
                     for count in [1, leaves.min(CAPACITY)] {
                         let indices = (0..count).rev().collect::<Vec<_>>();
                         let mut payload = SecretPolynomial::<u8>::zeroed(count * width).unwrap();
-                        for (i, word) in payload.chunks_exact_mut(8).enumerate() {
+                        for (i, word) in payload.as_chunks_mut::<8>().0.iter_mut().enumerate() {
                             word.copy_from_slice(&(i as u64).to_le_bytes());
                         }
                         let mut outputs = SecretPolynomial::<[u8; 32]>::zeroed(count).unwrap();
@@ -159,7 +159,7 @@ fn actual_metal_leaf_batches_match_canonical_sha3_for_every_oracle() {
         for count in [1, 63, 64, 257, CAPACITY].map(|n| n.min(leaves)) {
             let indices = (0..count).rev().collect::<Vec<_>>();
             let mut bytes = SecretPolynomial::<u8>::zeroed(count * width).unwrap();
-            for (i, chunk) in bytes.chunks_exact_mut(8).enumerate() {
+            for (i, chunk) in bytes.as_chunks_mut::<8>().0.iter_mut().enumerate() {
                 chunk.copy_from_slice(&(i as u64).to_le_bytes());
             }
             let mut actual = SecretPolynomial::<[u8; 32]>::zeroed(count).unwrap();

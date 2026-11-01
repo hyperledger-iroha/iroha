@@ -1,4 +1,4 @@
-//! Genuine four-validator NPoS alias bootstrap and retained-Kura replay.
+//! Genuine four-validator `NPoS` alias bootstrap and retained-Kura replay.
 //!
 //! This isolated network uses the native SNS policy, signed planner and paid
 //! leases. Ordinary transaction fees are zero from genesis to isolate lease
@@ -111,7 +111,7 @@ const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(300);
 const SUBMISSION_TASK_TIMEOUT: Duration = Duration::from_secs(360);
 const NETWORK_TIMEOUT: Duration = Duration::from_secs(360);
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
-const ADVANCE_TIMEOUT: Duration = Duration::from_secs(900);
+const ADVANCE_TIMEOUT: Duration = Duration::from_mins(15);
 const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const TRANSACTION_TTL: Duration = Duration::from_secs(600);
 const MAX_RETAINED_HEIGHT: u64 = 128;
@@ -265,8 +265,8 @@ fn custom_genesis_post_topology(
     vec![bootstrap, default_lane_validators]
 }
 
-fn bounded_client(client: Client) -> Client {
-    integration_tests::sync::rebind_blocking_client(&client, |client| {
+fn bounded_client(client: &Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(client, |client| {
         client.transaction_status_timeout = SUBMISSION_TIMEOUT;
         client.transaction_ttl = Some(TRANSACTION_TTL);
         client.torii_request_timeout = Duration::from_secs(20);
@@ -2099,17 +2099,19 @@ async fn stop_all(peers: &[NetworkPeer]) -> Result<()> {
 async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion() -> Result<()> {
     required_prebuilt_binaries()?;
     init_instruction_registry();
-    let mut npos = SumeragiNposParameters::default();
-    npos.xor_asset_definition_id = stake_asset_definition_id();
-    npos.max_validators = u32::try_from(VALIDATOR_COUNT)?;
-    // Keep the genuine next-election boundary inside this bounded integration
-    // history; validator promotion still waits for the signed epoch boundary.
-    // These are fixture horizons, not public-Taira operating recommendations.
-    npos.epoch_length_blocks =
-        NonZeroU64::new(FIXTURE_EPOCH_LENGTH_BLOCKS).expect("non-zero fixture epoch");
-    npos.finality_margin_blocks = 2;
-    npos.evidence_horizon_blocks = 16;
-    npos.slashing_delay_blocks = 8;
+    let npos = SumeragiNposParameters {
+        xor_asset_definition_id: stake_asset_definition_id(),
+        max_validators: u32::try_from(VALIDATOR_COUNT)?,
+        // Keep the genuine next-election boundary inside this bounded integration
+        // history; validator promotion still waits for the signed epoch boundary.
+        // These are fixture horizons, not public-Taira operating recommendations.
+        epoch_length_blocks: NonZeroU64::new(FIXTURE_EPOCH_LENGTH_BLOCKS)
+            .expect("non-zero fixture epoch"),
+        finality_margin_blocks: 2,
+        evidence_horizon_blocks: 16,
+        slashing_delay_blocks: 8,
+        ..Default::default()
+    };
     npos.validate()
         .map_err(|error| eyre!("invalid four-validator NPoS fixture parameters: {error}"))?;
     let builder = NetworkBuilder::new()
@@ -2224,14 +2226,14 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
     let clients = network
         .peers()
         .iter()
-        .map(|peer| bounded_client(peer.client()))
+        .map(|peer| bounded_client(&peer.client()))
         .collect::<Vec<_>>();
     let validator_clients = network
         .peers()
         .iter()
         .zip(&validator_keypairs)
         .map(|(peer, keypair)| {
-            bounded_client(peer.client_for(
+            bounded_client(&peer.client_for(
                 &AccountId::new(keypair.public_key().clone()),
                 keypair.private_key().clone(),
             ))
@@ -2239,7 +2241,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         .collect::<Vec<_>>();
     let authority = &clients[0];
     let payer =
-        bounded_client(network.peers()[0].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone()));
+        bounded_client(&network.peers()[0].client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone()));
     let grant = AliasDataspaceBootstrapGrantV1::try_new("bpng", BOB_ID.clone())?;
     ensure!(
         grant.dataspace.dataspace_id.as_u64() == BPNG_ID,

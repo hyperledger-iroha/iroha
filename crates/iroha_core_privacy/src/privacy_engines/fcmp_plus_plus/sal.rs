@@ -18,7 +18,7 @@ use curve25519_dalek::{
     traits::{Identity as _, IsIdentity as _},
 };
 use p256::elliptic_curve::subtle::{Choice, ConstantTimeLess as _};
-use rand_core::{TryCryptoRng, TryRng};
+use rand_core::TryCryptoRng;
 use std::sync::OnceLock;
 use zeroize::Zeroize;
 const SAL_POINT_COUNT_V1: usize = 6;
@@ -258,7 +258,7 @@ fn secret_scalar_from_bytes_v1(
     let scalar = SalSecretCopyValueV1::take(&mut scalar);
     Ok(scalar)
 }
-fn random_scalar(rng: &mut (impl TryRng + TryCryptoRng)) -> Result<Scalar, FcmpNativeErrorV1> {
+fn random_scalar(rng: &mut impl TryCryptoRng) -> Result<Scalar, FcmpNativeErrorV1> {
     // A zero alpha or beta is algebraically valid but makes the corresponding
     // response `e*x` or `e*r_i`, directly revealing the witness. Require every
     // SAL nonce/blinder to be non-zero and bound retries so a faulty
@@ -491,7 +491,7 @@ fn validate_sal_witness_relation_v1(
 /// # Errors
 /// Rejects a mismatched witness relation, unhealthy randomness, proof construction failures, or a failed prover self-check.
 pub fn prove_fcmp_sal_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut impl TryCryptoRng,
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
     witness: &FcmpSalWitnessV1,
@@ -505,7 +505,7 @@ pub fn prove_fcmp_sal_v1(
     Ok(proof)
 }
 pub(super) fn prove_fcmp_sal_with_checked_rng_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut impl TryCryptoRng,
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
     witness: &FcmpSalWitnessV1,
@@ -527,7 +527,7 @@ fn retry_sal_prover_v1<T>(
     Err(FcmpNativeErrorV1::SalProverRestartExhausted)
 }
 fn prove_fcmp_sal_once_v1(
-    rng: &mut (impl TryRng + TryCryptoRng),
+    rng: &mut impl TryCryptoRng,
     context_hash: [u8; 32],
     public: &FcmpProofInputPublicV1,
     witness: &FcmpSalWitnessV1,

@@ -93,7 +93,7 @@ fn framed_sponge_matches_independent_poseidon_primitive() {
                 frame.push(Scalar::ZERO);
             }
             let mut state = [Scalar::ZERO, Scalar::ZERO, Scalar::from(domain)];
-            for pair in frame.chunks_exact(2) {
+            for pair in frame.as_chunks::<2>().0 {
                 state[0] += pair[0];
                 state[1] += pair[1];
                 crate::tests::reference_permute(&mut state);

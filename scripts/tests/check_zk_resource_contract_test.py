@@ -1986,18 +1986,24 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     assert len(catalogs["execution_policy_digest_v1"]["fields"]) == 15
     assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 45
     assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 4
-    # The execution-policy digest binds 157 fields: fraud is one exact typed policy,
+    # The execution-policy digest binds 152 fields: fraud is one exact typed policy,
     # and ten committee sizes come from a loop. Ordinary signing admission now has
     # the separate committed CryptoAdmissionPolicyV1 owner, so the four retired
-    # node-local crypto fields are absent from this digest.
+    # node-local crypto fields are absent from this digest, and the runtime-upgrade
+    # provenance policy left with the manifest records it admitted.
     execution_source = (ROOT / catalogs["execution_policy_digest_v1"]["path"]).read_text(encoding="utf-8")
     execution_fields = CHECKER["catalog_fields"](execution_source, catalogs["execution_policy_digest_v1"], "t")
-    assert len(execution_fields) == 157
+    assert len(execution_fields) == 152
     assert {
         "crypto.default_hash",
         "crypto.allowed_signing",
         "crypto.sm2_distid_default",
         "crypto.allowed_curve_ids",
+        "governance.runtime_upgrade_provenance.mode",
+        "governance.runtime_upgrade_provenance.require_sbom",
+        "governance.runtime_upgrade_provenance.require_slsa",
+        "governance.runtime_upgrade_provenance.signature_threshold",
+        "governance.runtime_upgrade_provenance.trusted_signers",
     }.isdisjoint(execution_fields)
     assert "governance.fma_committee_size" in execution_fields
     # The Nexus digest is not a catalog of identities only: it is the third catalog.
@@ -2363,6 +2369,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
         "catalogs: `execution_output_policy_v1` is checked against the source",
         "catalogs: `fastpq_source_policy_v1` is checked against the source",
         "catalogs: `fraud_admission_policy_v1` is checked against the source",
+        "catalogs: `private_settlement_validity_v1` is checked against the source",
     ]
     assert [(catalog["id"], field) for catalog, field in unlisted] == [
         ("zk_consensus_policy_hash", "pipa_r.max_proof_bytes"),
@@ -2466,10 +2473,10 @@ def test_catalog_lifetime_preimage_detects_added_and_removed_bound_fields(tmp_pa
     ]
 
 
-def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
-    """The borrowed Nexus preimage includes validity bounds and excludes local capacity."""
-    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
-    observed = CHECKER["catalog_fields"]((ROOT / catalog["path"]).read_text(), catalog, "t")
+def _assert_nexus_resource_catalog_retains_frozen_slots(contract: dict, source: str) -> None:
+    """Separate immutable signed slots from dynamic bounds and local custody limits."""
+    catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    observed = CHECKER["catalog_fields"](source, catalog, "t")
     expected = {
         "uploaded_models.max_plaintext_bytes_per_model",
         "uploaded_models.max_chunk_count_per_model",
@@ -2478,16 +2485,108 @@ def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() ->
     }
     assert set(catalog["fields"]) == expected
     assert expected.issubset(observed)
-    assert not any(field.startswith("atomic_private_settlement.") for field in observed)
+    # These original signed V1 slots remain in source order. The independent Rust
+    # literal golden pins their types, values, bytes and position in the preimage.
+    frozen = [
+        "atomic_private_settlement." + name
+        for name in (
+            "proof_profile_version", "max_participants", "max_expiry_blocks",
+            "audit_timeout_blocks", "prepare_timeout_blocks", "commit_timeout_blocks",
+            "capsule_padding_classes_bytes", "max_proof_bytes", "max_capsule_bytes",
+            "max_carrier_bytes", "sidecar_retention_blocks", "sidecar_max_records",
+            "sidecar_max_total_bytes", "default_min_auditor_approvals",
+            "permitted_policy_versions",
+        )
+    ]
+    assert [field for field in observed if field.startswith("atomic_private_settlement.")] == frozen
+    exclusions = [
+        item for item in catalog["excluded"]
+        if any(field.startswith("atomic_private_settlement.") for field in item["fields"])
+    ]
+    assert len(exclusions) == 1
+    assert exclusions[0]["fields"] == frozen
+    reason = exclusions[0]["reason"]
+    assert "NexusConsensusAtomicPrivateSettlementV1::frozen_v1" in reason
+    assert "not runtime admission settings or local capacity ceilings" in reason
+    assert "frozen_private_settlement_v1_matches_original_commitment_bytes_and_position" in reason
+    body = CHECKER["_function_body"](source, catalog["function"], "t", catalog["path"])
+    assert re.search(
+        r"atomic_private_settlement\s*:\s*NexusConsensusAtomicPrivateSettlementV1::frozen_v1\(\)",
+        body,
+    )
     for name in ("sidecar_max_records", "sidecar_max_total_bytes"):
-        assert "atomic_private_settlement." + name not in observed
-        item = bound(CONTRACT, "storage.config_private_settlement_" + name)
+        item = bound(contract, "storage.config_private_settlement_" + name)
         assert item["class"] == "local_defer" and item["source"] == "node_local"
         assert "catalog" not in item and "defect" not in item and "unenforced" not in item
     assert "fees" in observed
     assert {field for field in observed if field.startswith("staking.")} == {
         "staking.public_validator_mode", "staking.restricted_validator_mode", "staking.max_validators"
     }
+
+
+def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
+    """The preimage retains frozen signed slots without committing local capacity."""
+    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    _assert_nexus_resource_catalog_retains_frozen_slots(
+        CONTRACT, (ROOT / catalog["path"]).read_text()
+    )
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_slot", "extra_slot", "reordered_slots", "missing_exclusion",
+    "extra_exclusion", "reclassified_slot", "unreasoned_exclusion",
+    "reclassified_capacity", "catalogued_capacity", "dynamic_capacity_leak",
+])
+def test_nexus_frozen_catalog_refuses_slot_and_capacity_drift(mutation: str) -> None:
+    """Small source/catalog mutations cannot erase slots or recouple local capacity."""
+    contract = copy.deepcopy(CONTRACT)
+    catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    source = (ROOT / catalog["path"]).read_text()
+    _assert_nexus_resource_catalog_retains_frozen_slots(contract, source)
+    exclusion = next(
+        item for item in catalog["excluded"]
+        if "atomic_private_settlement.proof_profile_version" in item["fields"]
+    )
+    if mutation in {"missing_slot", "extra_slot", "reordered_slots"}:
+        start = source.index("struct NexusConsensusAtomicPrivateSettlementV1 {")
+        end = source.index("\n}", start)
+        original = source[start:end]
+        if mutation == "missing_slot":
+            changed = original.replace("    sidecar_max_records: u32,\n", "")
+        elif mutation == "extra_slot":
+            changed = original + "\n    unreviewed_slot: u32,"
+        else:
+            changed = original.replace(
+                "    proof_profile_version: u16,\n    max_participants: u16,",
+                "    max_participants: u16,\n    proof_profile_version: u16,",
+            )
+        assert changed != original
+        source = source[:start] + changed + source[end:]
+    elif mutation == "missing_exclusion":
+        exclusion["fields"].pop()
+    elif mutation == "extra_exclusion":
+        exclusion["fields"].append("atomic_private_settlement.unreviewed_slot")
+    elif mutation == "reclassified_slot":
+        catalog["fields"]["atomic_private_settlement.max_participants"] = (
+            "transaction.private_settlement_max_participants"
+        )
+    elif mutation == "unreasoned_exclusion":
+        exclusion["reason"] = ""
+    elif mutation == "reclassified_capacity":
+        bound(contract, "storage.config_private_settlement_sidecar_max_records")["class"] = "consensus"
+    elif mutation == "catalogued_capacity":
+        bound(contract, "storage.config_private_settlement_sidecar_max_total_bytes")["catalog"] = {
+            "id": catalog["id"], "field": "atomic_private_settlement.sidecar_max_total_bytes"
+        }
+    else:
+        original = "atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1::frozen_v1(),"
+        assert original in source
+        source = source.replace(original, """atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
+            sidecar_max_records: nexus.atomic_private_settlement.sidecar_max_records.get(),
+            ..NexusConsensusAtomicPrivateSettlementV1::frozen_v1()
+        },""", 1)
+    with pytest.raises(AssertionError):
+        _assert_nexus_resource_catalog_retains_frozen_slots(contract, source)
 
 
 def test_derived_bounds_are_recomputed_and_join_the_relations() -> None:
@@ -4730,10 +4829,12 @@ def test_every_term_of_the_path_crates_is_pinned_with_the_limits_it_is_part_of()
     assert len(excluded_terms) >= 40, len(excluded_terms)
     # Terms are followed into the other crates of the workspace.
     assert outside >= 30, outside
-    assert terms["crates/iroha_primitives/src/json.rs"]["MAX_JSON_BYTES"] == [
-        "crates/iroha_core/src/compliance/mod.rs: LANE_COMPLIANCE_POLICY_MAX_FIELD_BYTES",
-        "crates/iroha_data_model/src/nexus/runtime_catalog.rs: MAX_NEXUS_RUNTIME_CATALOG_BYTES",
+    assert terms["crates/sorafs_manifest/src/pop_credentials.rs"]["POP_MEMBERSHIP_PROOF_MAX_BYTES_V1"] == [
+        "crates/iroha_core/src/smartcontracts/isi/sorafs_moderation.rs: PROOF_LIMITS",
+        "crates/iroha_torii/src/sorafs/pop_api.rs: POP_PROOF_REQUEST_MAX_BYTES_V1",
     ]
+    # A constant the compared code names directly is imported and listed, not a term.
+    assert "MAX_JSON_BYTES" in imported["crates/iroha_primitives/src/json.rs"]
     assert bound(CONTRACT, "transaction.json_document_max_bytes")["owner"]["symbol"] == "MAX_JSON_BYTES"
     # This imported term has a dedicated fixed-geometry classification. Pin its
     # exact owner, expressions, consumer and reason instead of relabelling it.
@@ -4757,9 +4858,22 @@ def test_every_term_of_the_path_crates_is_pinned_with_the_limits_it_is_part_of()
         "generic frame-sizing ceiling transport.max_committee_size; neither is a "
         "local tuning knob."
     )
+    # The fixed BLS key width in the query committee's allocation geometry is pinned the same way.
+    bls_term = ("crates/iroha_crypto/src/signature/bls/consensus.rs", "PUBLIC_KEY_LEN")
+    bls_holder, bls_reason = holders[bls_term]
+    assert bls_holder["symbols"] == ["PUBLIC_KEY_LEN"]
+    assert bls_holder["exprs"] == {"PUBLIC_KEY_LEN": "48"}
+    assert bls_holder["term_of"] == {
+        "PUBLIC_KEY_LEN": ["crates/iroha_core/src/sumeragi/crypto.rs: maximum_query_committee_allocation_bytes"]
+    }
+    assert excluded_terms[bls_term] == bls_holder["term_of"]["PUBLIC_KEY_LEN"]
+    assert bls_reason.startswith(
+        "Closed native BLS authority allocation geometry, not a new request or protocol ceiling."
+    )
+    assert "The 48-byte constant is the fixed canonical BLS-normal compressed public-key width" in bls_reason
     # Every other term retains the general term classification.
     for key in excluded_terms:
-        if key != geometry_term:
+        if key not in (geometry_term, bls_term):
             assert holders[key][1].startswith("Terms of excluded limits"), key
     # The cases a reviewer would try: a term of a product limit, of a limit function, of a
     # limit of another crate and of another term.

@@ -22,6 +22,7 @@ fn expected_counts(rows: usize, prefix: usize) -> Counts {
 fn cpu_evaluator(common: u8) -> Result<MainTraceCosetEvaluatorV1, AggregateStarkErrorV1> {
     Ok(MainTraceCosetEvaluatorV1 {
         coset_powers: None,
+        selected_scratch: selected_coset::SelectedScratchV1::default(),
         evaluation_rows: 1usize
             .checked_shl(u32::from(common))
             .ok_or(AggregateStarkErrorV1::InvalidLayout)?,

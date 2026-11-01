@@ -322,6 +322,21 @@ fn reason(status: u16) -> &'static str {
 fn rewrite_json_rpc_ids(request: &[u8], response: &[u8]) -> Vec<u8> {
     let request = norito::json::parse_value(std::str::from_utf8(request).expect("utf8"))
         .expect("JSON-RPC request");
+    // A single `rpc_result` answer gets the request id spliced into its fixed prefix. Its
+    // result is never re-encoded, so serving a many-mebibyte result costs the client's
+    // request deadline nothing beyond the bytes themselves.
+    if let (Value::Object(call), Some(result)) = (
+        &request,
+        response.strip_prefix(br#"{"jsonrpc":"2.0","id":0,"#.as_slice()),
+    ) {
+        let id = norito::json::to_vec(call.get("id").expect("request id")).expect("encode id");
+        let mut answer = Vec::with_capacity(response.len() + id.len());
+        answer.extend_from_slice(br#"{"jsonrpc":"2.0","id":"#);
+        answer.extend_from_slice(&id);
+        answer.push(b',');
+        answer.extend_from_slice(result);
+        return answer;
+    }
     let mut response = norito::json::parse_value(std::str::from_utf8(response).expect("utf8"))
         .expect("JSON-RPC response");
     match (&request, &mut response) {

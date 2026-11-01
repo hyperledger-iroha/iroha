@@ -75,7 +75,7 @@ fn framed_xof_binds_secret_policy_and_associated_data_without_split_aliases() {
     let mut reader = Zeroizing::new(independent.finalize_xof());
     let mut bytes = Zeroizing::new([0; 1024]);
     reader.fill(bytes.as_mut());
-    for (lane, &expected) in bytes.chunks_exact(32).zip(first.iter()) {
+    for (lane, &expected) in bytes.as_chunks::<32>().0.iter().zip(first.iter()) {
         assert_eq!(u64::from(independent_bit_remainder(lane)), expected);
     }
     // Captured from a normal native run, then checked with independent integer

@@ -40,7 +40,7 @@ impl Fixture {
         config.chain_id = "fc56984b-2be7-431d-840e-21514d1883f0".into();
         config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
         let npos = SumeragiNposParameters::default();
-        // Preserve the original staking policy authored by TestChainConfig.
+        // Keep the constructor's authored staking policy; NPoS genesis requires it.
         config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 npos.epoch_length_blocks,

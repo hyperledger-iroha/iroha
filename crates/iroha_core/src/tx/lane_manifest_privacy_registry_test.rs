@@ -277,12 +277,7 @@ fn stateful_privacy_refusal_retains_original_cause_and_forbids_settlement() {
         .unwrap();
     let mut registration =
         iroha_allocation::release::ReleaseRegistration::from_reservation(&mut prepaid).unwrap();
-    struct Noop;
-    impl std::task::Wake for Noop {
-        fn wake(self: Arc<Self>) {}
-    }
-    let waker = std::task::Waker::from(Arc::new(Noop));
-    let mut context = std::task::Context::from_waker(&waker);
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
     assert!(registration.poll_wait(release, &mut context).is_pending());
     assert!(
         overlay.is_execution_deferred(),

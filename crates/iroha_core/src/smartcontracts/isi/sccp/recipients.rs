@@ -55,7 +55,6 @@ pub enum SccpRecipientClassV1 {
 /// # Errors
 /// Returns a missing original policy owner as a State prerequisite failure, or journals
 /// the original local decoder/backend refusal without authorizing a permanent bounce.
-#[must_use]
 pub fn classify_recipient(
     state_transaction: &StateTransaction<'_, '_>,
     bytes: &[u8],
@@ -117,7 +116,6 @@ fn classify_recipient_attempt(
 ///
 /// # Errors
 /// Returns a missing original policy owner; it is not a permanent recipient bounce.
-#[must_use]
 pub fn classify_account(
     state_transaction: &StateTransaction<'_, '_>,
     account: AccountId,

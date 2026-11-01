@@ -545,7 +545,7 @@ fn selected_horner_validates_before_writes_and_clears_populated_output() {
 
 #[test]
 fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
-    assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 2176);
+    const { assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 2176) };
     for native in [5, 8] {
         let maximum = (1usize << native) + MASK_DEGREE + 1;
         for coefficients in [1, maximum - 1, maximum] {
@@ -567,7 +567,7 @@ fn selected_horner_policy_is_bounded_by_measured_public_geometry() {
 
 #[test]
 fn selected_pruned_fft_policy_keeps_only_measured_eight_column_query_geometry() {
-    assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 272);
+    const { assert!(QUERY_COUNT * (1 << aggregate::retained_commitment::CUT_LEVEL_V1) <= 272) };
     for native in [15, 16, 18, 19] {
         let maximum = (1usize << native) + MASK_DEGREE + 1;
         for coefficients in [1, maximum - 1, maximum] {
@@ -786,7 +786,7 @@ fn selected_low_degree_horner_pruned_and_metal_cost_keep_all_query_rows() {
                     let values = (0..1usize << native)
                         .map(|row| F((17 * row + 13 * column + 1) as u64))
                         .collect::<Vec<_>>();
-                    let mask = (0..MASK_DEGREE + 1)
+                    let mask = (0..=MASK_DEGREE)
                         .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                         .collect::<Vec<_>>();
                     Column::from_vec_v1(
@@ -898,7 +898,7 @@ fn selected_current_cut_cpu_and_metal_cost_keep_every_registered_domain() {
                     let values = (0..1usize << native)
                         .map(|row| F((17 * row + 13 * column + 1) as u64))
                         .collect::<Vec<_>>();
-                    let mask = (0..MASK_DEGREE + 1)
+                    let mask = (0..=MASK_DEGREE)
                         .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                         .collect::<Vec<_>>();
                     Column::from_vec_v1(

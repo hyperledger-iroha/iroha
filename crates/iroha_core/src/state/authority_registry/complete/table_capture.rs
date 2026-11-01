@@ -243,6 +243,11 @@ capture_world_table_once!(
     "world.game_sessions"
 );
 capture_world_table_once!(
+    capture_game_partitions_once,
+    game_partitions,
+    "world.game_partitions"
+);
+capture_world_table_once!(
     capture_nft_sale_offers_once,
     nft_sale_offers,
     "world.nft_sale_offers"
@@ -854,6 +859,7 @@ const TABLE_MATERIALIZERS: &[TableMaterializer] = &[
     capture_execution_proof_profiles_once::MATERIALIZER,
     capture_execution_proof_verifications_once::MATERIALIZER,
     capture_game_sessions_once::MATERIALIZER,
+    capture_game_partitions_once::MATERIALIZER,
     capture_nft_sale_offers_once::MATERIALIZER,
     capture_nft_custody_records_once::MATERIALIZER,
     capture_vpn_leases_once::MATERIALIZER,
@@ -1307,6 +1313,7 @@ mod tests {
             "world.execution_proof_profiles",
             "world.execution_proof_verifications",
             "world.game_sessions",
+            "world.game_partitions",
             "world.nft_sale_offers",
             "world.nft_custody_records",
             "world.vpn_leases",

@@ -235,7 +235,7 @@ fn initial_executor_candidate_bonds_after_key_lead_without_joining_current_topol
     let peer = candidate.registration.peer_id.clone();
     let prior_topology = stx.commit_topology.get().clone();
     crate::executor::Executor::Initial
-        .execute_instruction(&mut stx, &validator, candidate.into())
+        .execute_instruction(&mut stx, &validator, &candidate.into())
         .expect("ordinary stake owner can register a candidate without peer administration");
     let record = stx
         .world
@@ -320,7 +320,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
         let lane = LaneId::new(42);
         let candidate = signed_candidate(&stx, &validator, &peer_key, 1_000, lane);
         crate::executor::Executor::Initial
-            .execute_instruction(&mut stx, &validator, candidate.into())
+            .execute_instruction(&mut stx, &validator, &candidate.into())
             .expect("first transaction instruction bonds the candidate");
         assert!(
             stx.world.peers.iter().any(|id| id == &peer),
@@ -342,7 +342,7 @@ fn failed_candidate_transaction_rolls_back_peer_key_and_stake() {
             metadata: Metadata::default(),
         };
         let error = crate::executor::Executor::Initial
-            .execute_instruction(&mut stx, &validator, unauthorized_bond.into())
+            .execute_instruction(&mut stx, &validator, &unauthorized_bond.into())
             .expect_err("a later unauthorized bond rejects the whole transaction");
         assert!(matches!(
             error,

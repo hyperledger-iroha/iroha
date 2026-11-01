@@ -382,7 +382,7 @@ fn decode_points_v1(bytes: &[u8]) -> Result<Vec<Point>, RnsNativeTerminalCrossBa
     points
         .try_reserve_exact(BRIDGE_ROWS_V2)
         .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::Allocation)?;
-    for encoded in bytes.chunks_exact(BRIDGE_POINT_BYTES_V2) {
+    for encoded in bytes.as_chunks::<BRIDGE_POINT_BYTES_V2>().0 {
         points.push(
             Point::from_non_identity_wire_bytes_exact(encoded)
                 .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::InvalidPoint)?,
@@ -413,7 +413,9 @@ fn native_bridge_root_after_kernel_v1(
     }
     let mut identities = [0_u8; 12 * 32];
     for (entry, identity) in identities
-        .chunks_exact_mut(32)
+        .as_chunks_mut::<32>()
+        .0
+        .iter_mut()
         .zip(context_identities_v1(transcript))
     {
         entry.copy_from_slice(&identity);
@@ -422,7 +424,9 @@ fn native_bridge_root_after_kernel_v1(
     let mut openings = [0_u8;
         super::rns_native_profile::ZK_AMS_MKHE_RNS_NATIVE_OPENING_COUNT_V1 as usize * OPENING_BYTES];
     for (ordinal, (entry, opening)) in openings
-        .chunks_exact_mut(OPENING_BYTES)
+        .as_chunks_mut::<OPENING_BYTES>()
+        .0
+        .iter_mut()
         .zip(transcript.opening_commitments())
         .enumerate()
     {
@@ -562,7 +566,12 @@ fn point_set_digest_v1(
             .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding)?
             .to_be_bytes(),
     );
-    for (ordinal, point) in bytes.chunks_exact(BRIDGE_POINT_BYTES_V2).enumerate() {
+    for (ordinal, point) in bytes
+        .as_chunks::<BRIDGE_POINT_BYTES_V2>()
+        .0
+        .iter()
+        .enumerate()
+    {
         hash.update(
             &u16::try_from(ordinal)
                 .map_err(|_| RnsNativeTerminalCrossBasisErrorV1::InvalidEncoding)?

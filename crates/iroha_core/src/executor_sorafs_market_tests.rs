@@ -106,7 +106,7 @@ mod sorafs_market_admission {
     fn reject_unchanged(
         transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         marker: &str,
     ) {
         let snapshot = |transaction: &StateTransaction<'_, '_>| {
@@ -186,34 +186,34 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            activation.clone(),
+            &activation.clone(),
             "CanSetSorafsPricing",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, activation)
+            .execute_instruction(&mut transaction, &ALICE_ID, &activation)
             .expect("governance activates native orderbook policy");
         let matching: InstructionBox = MatchSorafsOrderbook::new(digest, 0, 1).into();
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            matching.clone(),
+            &matching.clone(),
             "governed authority",
         );
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            matching,
+            &matching,
             "exhaustive match scan",
         );
         let maintenance: InstructionBox = MaintainSorafsOrderbook::new(digest, 0, 1).into();
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            maintenance.clone(),
+            &maintenance.clone(),
             "governed authority",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, maintenance)
+            .execute_instruction(&mut transaction, &ALICE_ID, &maintenance)
             .expect("governed matcher performs native maintenance");
 
         let owner = ALICE_ID.to_string().into_bytes();
@@ -238,7 +238,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            SubmitSorafsOrderbookOrder::new(
+            &SubmitSorafsOrderbookOrder::new(
                 norito::to_bytes(&order).expect("signed order"),
                 digest,
             )
@@ -258,7 +258,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            CancelSorafsOrderbookOrder::new(
+            &CancelSorafsOrderbookOrder::new(
                 norito::to_bytes(&cancel).expect("signed cancellation"),
                 digest,
             )
@@ -287,7 +287,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            RecordSorafsOrderbookSettlementReceipt::new(
+            &RecordSorafsOrderbookSettlementReceipt::new(
                 norito::to_bytes(&receipt).expect("signed receipt"),
                 digest,
             )
@@ -298,7 +298,7 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            RecordSorafsOrderbookSettlementReceipt::new(
+            &RecordSorafsOrderbookSettlementReceipt::new(
                 norito::to_bytes(&receipt).expect("forged receipt"),
                 digest,
             )
@@ -319,11 +319,11 @@ mod sorafs_market_admission {
         reject_unchanged(
             &mut transaction,
             &BOB_ID,
-            activation.clone(),
+            &activation.clone(),
             "CanSetSorafsReservePolicy",
         );
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, activation)
+            .execute_instruction(&mut transaction, &ALICE_ID, &activation)
             .expect("governance activates native reserve policy");
         let registration: InstructionBox = RegisterSorafsReserveAccount::new(
             ReserveProviderTermsV1 {
@@ -347,12 +347,12 @@ mod sorafs_market_admission {
             reject_unchanged(
                 &mut transaction,
                 &BOB_ID,
-                instruction,
+                &instruction,
                 "governed operations account",
             );
         }
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, registration)
+            .execute_instruction(&mut transaction, &ALICE_ID, &registration)
             .expect("operations account registers the provider reserve partition");
         let movement: InstructionBox = RequestSorafsReserveMovement::new(
             [0xD1; 32],
@@ -384,7 +384,7 @@ mod sorafs_market_admission {
             reject_unchanged(
                 &mut transaction,
                 &ALICE_ID,
-                instruction,
+                &instruction,
                 "not the provider account",
             );
         }
@@ -408,27 +408,27 @@ mod sorafs_market_admission {
             reject_unchanged(
                 &mut transaction,
                 &BOB_ID,
-                instruction,
+                &instruction,
                 "governed decision account",
             );
         }
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, movement.clone())
+            .execute_instruction(&mut transaction, &BOB_ID, &movement)
             .expect("provider submits native reserve request");
-        reject_unchanged(&mut transaction, &BOB_ID, movement, "already recorded");
+        reject_unchanged(&mut transaction, &BOB_ID, &movement, "already recorded");
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, movement_decision)
+            .execute_instruction(&mut transaction, &ALICE_ID, &movement_decision)
             .expect("governed decision resolves the request");
         Executor::Initial
-            .execute_instruction(&mut transaction, &BOB_ID, appeal(3))
+            .execute_instruction(&mut transaction, &BOB_ID, &appeal(3))
             .expect("provider submits native reserve appeal");
         Executor::Initial
-            .execute_instruction(&mut transaction, &ALICE_ID, appeal_decision.clone())
+            .execute_instruction(&mut transaction, &ALICE_ID, &appeal_decision)
             .expect("governed decision resolves the appeal");
         reject_unchanged(
             &mut transaction,
             &ALICE_ID,
-            appeal_decision,
+            &appeal_decision,
             "already decided",
         );
         transaction.apply();

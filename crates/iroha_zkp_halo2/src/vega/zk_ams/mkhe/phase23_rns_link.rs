@@ -2849,7 +2849,7 @@ mod tests {
         let second = derive_release_evaluation_points_v1(&prechallenge).unwrap();
         assert_eq!(first, second);
         assert_eq!(first.points.len(), release_profile_v1().moduli.len() * 5);
-        for limb in first.points.chunks_exact(5) {
+        for limb in first.points.as_chunks::<5>().0 {
             assert_eq!(limb.len(), 5);
             for (index, point) in limb.iter().enumerate() {
                 assert!(point.value > 0 && point.value < point.modulus);

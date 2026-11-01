@@ -389,7 +389,6 @@ mod governed_sidecar_store_config_tests {
             sidecar_max_records: NonZeroU32::new(17).expect("non-zero record bound"),
             sidecar_max_total_bytes: NonZeroU64::new(23 * 1024 * 1024)
                 .expect("non-zero byte bound"),
-            ..Default::default()
         };
 
         let store = governed_sidecar_store_config_v1(&config).expect("bounded store config");
@@ -2144,7 +2143,8 @@ pub async fn handler_bundle_submit(
         ExactPrivateSettlementCarrierV1::Finalize(_)
         | ExactPrivateSettlementCarrierV1::Abort(_) => (
             iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1,
-            iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1 as u16,
+            u16::try_from(iroha_data_model::nexus::ATOMIC_PRIVATE_SETTLEMENT_MAX_LEGS_V1)
+                .map_err(|_| invalid())?,
         ),
     };
     let carrier_within_bound =

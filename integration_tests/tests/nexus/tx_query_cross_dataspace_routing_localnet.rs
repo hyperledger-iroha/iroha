@@ -191,7 +191,12 @@ fn localnet_builder() -> NetworkBuilder {
             lane_ds2.insert("metadata".into(), TomlValue::Table(Table::new()));
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
-            ds_nexus.insert("id".into(), TomlValue::Integer(NEXUS_ID_U64 as i64));
+            ds_nexus.insert(
+                "id".into(),
+                TomlValue::Integer(
+                    i64::try_from(NEXUS_ID_U64).expect("dataspace id fits TOML integer"),
+                ),
+            );
             ds_nexus.insert(
                 "description".into(),
                 TomlValue::String("main nexus dataspace".to_owned()),
@@ -199,7 +204,12 @@ fn localnet_builder() -> NetworkBuilder {
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
             let mut ds1 = Table::new();
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
-            ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
+            ds1.insert(
+                "id".into(),
+                TomlValue::Integer(
+                    i64::try_from(DS1_ID_U64).expect("dataspace id fits TOML integer"),
+                ),
+            );
             ds1.insert(
                 "manifest_hash".into(),
                 TomlValue::String(DS1_MANIFEST_HASH.to_owned()),
@@ -211,7 +221,12 @@ fn localnet_builder() -> NetworkBuilder {
             ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
-            ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
+            ds2.insert(
+                "id".into(),
+                TomlValue::Integer(
+                    i64::try_from(DS2_ID_U64).expect("dataspace id fits TOML integer"),
+                ),
+            );
             ds2.insert(
                 "manifest_hash".into(),
                 TomlValue::String(DS2_MANIFEST_HASH.to_owned()),
@@ -288,7 +303,7 @@ fn localnet_builder() -> NetworkBuilder {
                 )
                 .write(
                     ["nexus", "staking", "max_validators"],
-                    VALIDATORS_PER_LANE as i64,
+                    i64::try_from(VALIDATORS_PER_LANE).expect("validator count fits TOML integer"),
                 );
         })
 }
@@ -507,7 +522,7 @@ fn wait_for_active_lane_validators(
             .map_err(|err| eyre!(err))?;
         let (total, active) = lane_validator_snapshot(&snapshot, context)?;
         last_total = total;
-        last_active = active.clone();
+        last_active.clone_from(&active);
         if total == expected_active.len() && active == *expected_active {
             return Ok(());
         }
@@ -655,7 +670,7 @@ async fn torii_json_get(
     {
         let mut segments = url
             .path_segments_mut()
-            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+            .map_err(|()| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
         segments.pop_if_empty();
         for segment in path_segments {
             segments.push(segment);
@@ -704,7 +719,7 @@ async fn torii_json_get_as_account(
     {
         let mut segments = url
             .path_segments_mut()
-            .map_err(|_| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
+            .map_err(|()| eyre!("torii URL `{torii_url_literal}` cannot accept path segments"))?;
         segments.pop_if_empty();
         for segment in path_segments {
             segments.push(segment);
@@ -1023,7 +1038,7 @@ async fn wait_for_manifest_api_absence(
         .await
         {
             Ok(response) => {
-                last_body = response.body_text.clone();
+                last_body.clone_from(&response.body_text);
                 match response.status {
                     HttpStatusCode::OK => {
                         expect_proxy_route_headers(
@@ -1592,7 +1607,7 @@ mod tests {
     fn decode_manifest_hash_fixture(raw: &str) -> [u8; 32] {
         assert_eq!(raw.len(), 64);
         let mut hash = [0_u8; 32];
-        for (idx, chunk) in raw.as_bytes().chunks_exact(2).enumerate() {
+        for (idx, chunk) in raw.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let pair = std::str::from_utf8(chunk).expect("hex pair");
             hash[idx] = u8::from_str_radix(pair, 16).expect("manifest hash hex");
         }
@@ -2291,7 +2306,7 @@ mod tests {
     #[test]
     fn account_assets_response_contains_requires_exact_asset_literal() {
         let asset_definition_id = ds2_asset_definition_id();
-        let asset_literal = format!("{}#dataspace:{}", asset_definition_id, DS2_ID_U64);
+        let asset_literal = format!("{asset_definition_id}#dataspace:{DS2_ID_U64}");
         let body = norito::json!({
             "items": [
                 { "asset": asset_literal },

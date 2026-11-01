@@ -294,7 +294,7 @@ fn unregister_domain_checks_original_pending_and_sibling_currencies_before_any_m
                     .world
                     .domain_asset_definitions
                     .get(&(domain.clone(), definition.clone()))
-                    .cloned();
+                    .copied();
                 let balance_before = tx.world.assets.get(&asset).cloned();
                 let total_before = tx.world.asset_total_amount(&definition).unwrap();
                 let permissions_before = tx.world.account_permissions.get(&ALICE_ID).cloned();

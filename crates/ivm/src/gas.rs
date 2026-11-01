@@ -888,14 +888,10 @@ fn canonical_gas_parameters() -> Vec<GasParameter> {
     parameters.extend(
         hash_parameter_names
             .into_iter()
-            .zip(zk_schedule_hash.chunks_exact(8))
+            .zip(zk_schedule_hash.as_chunks::<8>().0)
             .map(|(name, chunk)| GasParameter {
                 name,
-                value: u64::from_le_bytes(
-                    chunk
-                        .try_into()
-                        .expect("32-byte hash consists of four complete u64 words"),
-                ),
+                value: u64::from_le_bytes(*chunk),
             }),
     );
     parameters

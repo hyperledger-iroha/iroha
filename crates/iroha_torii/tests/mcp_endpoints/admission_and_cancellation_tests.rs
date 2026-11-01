@@ -28,7 +28,7 @@ fn authenticated_mcp_request_bytes(body: impl Into<Body>, token: &str) -> Reques
         .body(body.into())
         .expect("valid authenticated MCP request")
 }
-fn cancellation_notification(request_id: Value, nonce: &str) -> Value {
+fn cancellation_notification(request_id: &Value, nonce: &str) -> Value {
     norito::json!({
         "jsonrpc": "2.0",
         "method": "notifications/cancelled",
@@ -106,7 +106,7 @@ async fn assert_invalid_fallback_consumes_control(
     let denied_after_invalid = call_app(
         &app,
         authenticated_mcp_request(
-            &cancellation_notification(Value::String("after-invalid".to_owned()), &nonce),
+            &cancellation_notification(&Value::String("after-invalid".to_owned()), &nonce),
             token,
         ),
     )
@@ -134,7 +134,7 @@ async fn assert_initial_ordinary_debit_is_not_refunded(
         &app.clone(),
         authenticated_mcp_request(
             &cancellation_notification(
-                Value::String("after-rejected-request".to_owned()),
+                &Value::String("after-rejected-request".to_owned()),
                 &first_nonce,
             ),
             token,
@@ -156,7 +156,7 @@ async fn assert_initial_ordinary_debit_is_not_refunded(
         &app,
         authenticated_mcp_request(
             &cancellation_notification(
-                Value::String("after-control-spent".to_owned()),
+                &Value::String("after-control-spent".to_owned()),
                 &second_nonce,
             ),
             token,
@@ -210,7 +210,7 @@ async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
     let cancellation = call_app(
         &cancellation_app,
         authenticated_mcp_request(
-            &cancellation_notification(Value::String("cancel-me".to_owned()), &cancellation_nonce),
+            &cancellation_notification(&Value::String("cancel-me".to_owned()), &cancellation_nonce),
             "cancellation-client-00000000000000000000000000000000",
         ),
     )
@@ -245,7 +245,7 @@ async fn mcp_jsonrpc_authenticated_cancellation_stops_exact_live_call() {
             &app,
             authenticated_mcp_request(
                 &cancellation_notification(
-                    Value::String("fresh-request".to_owned()),
+                    &Value::String("fresh-request".to_owned()),
                     &replacement_nonce,
                 ),
                 "cancellation-client-00000000000000000000000000000000",
@@ -337,29 +337,29 @@ async fn mcp_rate_limited_cancellation_fallback_rejects_inexact_bodies() {
         ),
         (
             "padded-nonce",
-            cancellation_notification(Value::String("target".to_owned()), &padded_nonce),
+            cancellation_notification(&Value::String("target".to_owned()), &padded_nonce),
         ),
         (
             "wrong-length-nonce",
-            cancellation_notification(Value::String("target".to_owned()), &short_nonce),
+            cancellation_notification(&Value::String("target".to_owned()), &short_nonce),
         ),
     ];
     for (index, (label, payload)) in invalid_payloads.into_iter().enumerate() {
         let token = format!("inexact-body-{index}-00000000000000000000000000000000");
-        assert_invalid_fallback_consumes_control(
+        Box::pin(assert_invalid_fallback_consumes_control(
             label,
             &token,
             authenticated_mcp_request(&payload, &token),
-        )
+        ))
         .await;
     }
 
     let malformed_token = "inexact-body-malformed-json-00000000000000000000000000000000";
-    assert_invalid_fallback_consumes_control(
+    Box::pin(assert_invalid_fallback_consumes_control(
         "malformed-json",
         malformed_token,
-        authenticated_mcp_request_bytes("{".as_bytes().to_vec(), malformed_token),
-    )
+        authenticated_mcp_request_bytes(b"{".to_vec(), malformed_token),
+    ))
     .await;
 }
 #[tokio::test]
@@ -378,7 +378,7 @@ async fn mcp_rate_limited_cancellation_fallback_rejects_inexact_transport() {
     {
         let token = format!("inexact-transport-{label}-00000000000000000000000000000000");
         let mut request = authenticated_mcp_request(
-            &cancellation_notification(Value::String("target".to_owned()), &nonce),
+            &cancellation_notification(&Value::String("target".to_owned()), &nonce),
             &token,
         );
         match case {
@@ -407,7 +407,10 @@ async fn mcp_rate_limited_cancellation_fallback_rejects_inexact_transport() {
             }
             _ => unreachable!(),
         }
-        assert_invalid_fallback_consumes_control(label, &token, request).await;
+        Box::pin(assert_invalid_fallback_consumes_control(
+            label, &token, request,
+        ))
+        .await;
     }
 }
 #[tokio::test]
@@ -415,18 +418,18 @@ async fn mcp_authenticated_rejections_do_not_refund_the_initial_ordinary_debit()
     let _data_dir = test_utils::TestDataDirGuard::new();
 
     let malformed_token = "malformed-spends-initial-00000000000000000000000000000000";
-    assert_initial_ordinary_debit_is_not_refunded(
+    Box::pin(assert_initial_ordinary_debit_is_not_refunded(
         authenticated_rate_limited_mcp_config([malformed_token.to_owned()], 1),
         malformed_token,
-        authenticated_mcp_request_bytes("{".as_bytes().to_vec(), malformed_token),
+        authenticated_mcp_request_bytes(b"{".to_vec(), malformed_token),
         StatusCode::BAD_REQUEST,
-    )
+    ))
     .await;
 
     let oversized_token = "oversized-spends-initial-00000000000000000000000000000000";
     let mut oversized_cfg = authenticated_rate_limited_mcp_config([oversized_token.to_owned()], 1);
     oversized_cfg.torii.mcp.max_request_bytes = 512;
-    assert_initial_ordinary_debit_is_not_refunded(
+    Box::pin(assert_initial_ordinary_debit_is_not_refunded(
         oversized_cfg,
         oversized_token,
         authenticated_mcp_request(
@@ -438,7 +441,7 @@ async fn mcp_authenticated_rejections_do_not_refund_the_initial_ordinary_debit()
             oversized_token,
         ),
         StatusCode::PAYLOAD_TOO_LARGE,
-    )
+    ))
     .await;
 
     let rejected_token = "protocol-rejection-spends-initial-00000000000000000000000000000000";
@@ -454,12 +457,12 @@ async fn mcp_authenticated_rejections_do_not_refund_the_initial_ordinary_debit()
         "mcp-protocol-version",
         "2024-11-05".parse().expect("header"),
     );
-    assert_initial_ordinary_debit_is_not_refunded(
+    Box::pin(assert_initial_ordinary_debit_is_not_refunded(
         authenticated_rate_limited_mcp_config([rejected_token.to_owned()], 1),
         rejected_token,
         rejected_request,
         StatusCode::BAD_REQUEST,
-    )
+    ))
     .await;
 }
 #[tokio::test]
@@ -486,7 +489,7 @@ async fn mcp_cancellation_control_buckets_are_isolated_by_authenticated_token() 
         let response = call_app(
             &app.clone(),
             authenticated_mcp_request(
-                &cancellation_notification(Value::String(format!("{token}-first")), &nonce),
+                &cancellation_notification(&Value::String(format!("{token}-first")), &nonce),
                 token,
             ),
         )
@@ -503,7 +506,7 @@ async fn mcp_cancellation_control_buckets_are_isolated_by_authenticated_token() 
             call_app(
                 &app,
                 authenticated_mcp_request(
-                    &cancellation_notification(Value::String(format!("{token}-second")), &nonce),
+                    &cancellation_notification(&Value::String(format!("{token}-second")), &nonce),
                     token,
                 ),
             )
@@ -519,7 +522,7 @@ async fn mcp_cancellation_fallback_requires_one_exact_configured_token() {
     let token = "configured-cancellation-principal";
     let app = build_router(authenticated_rate_limited_mcp_config([token.to_owned()], 1));
     let nonce = B64.encode([0x66; 32]);
-    let payload = cancellation_notification(Value::String("auth-gated".to_owned()), &nonce);
+    let payload = cancellation_notification(&Value::String("auth-gated".to_owned()), &nonce);
 
     let mut missing = authenticated_mcp_request(&payload, token);
     missing.headers_mut().remove("x-api-token");
@@ -583,7 +586,7 @@ async fn mcp_anonymous_rate_limit_has_no_cancellation_control_fallback() {
         call_app(
             &app.clone(),
             authenticated_mcp_request(
-                &cancellation_notification(Value::String("anonymous".to_owned()), &nonce),
+                &cancellation_notification(&Value::String("anonymous".to_owned()), &nonce),
                 "caller-supplied-but-disabled",
             ),
         )
@@ -692,7 +695,7 @@ async fn mcp_batch_additional_debit_denial_preserves_cancellation_control_bucket
         &app.clone(),
         authenticated_mcp_request(
             &cancellation_notification(
-                Value::String("control-survives-additional-denial".to_owned()),
+                &Value::String("control-survives-additional-denial".to_owned()),
                 &first_nonce,
             ),
             token,
@@ -708,7 +711,7 @@ async fn mcp_batch_additional_debit_denial_preserves_cancellation_control_bucket
             &app,
             authenticated_mcp_request(
                 &cancellation_notification(
-                    Value::String("control-now-spent".to_owned()),
+                    &Value::String("control-now-spent".to_owned()),
                     &second_nonce,
                 ),
                 token,

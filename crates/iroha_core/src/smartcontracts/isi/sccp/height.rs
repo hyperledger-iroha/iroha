@@ -435,11 +435,11 @@ mod tests {
 
     #[test]
     fn height_capture_preserves_original_graph_without_admission_at_full_pool() {
+        use crate::sumeragi::schedule::ScheduleError;
+        use iroha_allocation::AllocationRefusal;
         // Keep retired fixture State generations from reopening this original pool.
         // Only the tested admission and synchronous owner refunds may change capacity.
         let _constructor_retirement = crossbeam_epoch::pin();
-        use crate::sumeragi::schedule::ScheduleError;
-        use iroha_allocation::AllocationRefusal;
         let state = blank_state();
         let budget = state.ivm_execution_budget();
         // The empty parent's admitted SCCP fields and this schedule use the same

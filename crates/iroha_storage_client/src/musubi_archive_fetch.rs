@@ -391,9 +391,7 @@ impl PreparedMusubiArchiveFetchConfigV1 {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let mut providers = BTreeMap::new();
-        for (prepared, operator_key_pair) in
-            self.providers.iter().zip(operator_key_pairs.into_iter())
-        {
+        for (prepared, operator_key_pair) in self.providers.iter().zip(operator_key_pairs) {
             let http = pinned_http_client(&prepared.base_url, self.request_timeout)?;
             providers.insert(
                 prepared.provider,

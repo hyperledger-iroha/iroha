@@ -1862,7 +1862,7 @@ fn payload_builder_canonicality_adds_no_output_allocation_after_actual_decode() 
     // Warm the same actual decoder/encoder paths before measuring allocator calls. Retaining
     // both returned graphs outside each observation excludes destructor work from the counts.
     TransactionPayload::decode_from_slice(&bytes).expect("warm payload decoder");
-    TransactionBuilder::decode_payload(&bytes).expect("warm complete builder decoder");
+    let _ = TransactionBuilder::decode_payload(&bytes).expect("warm complete builder decoder");
     let (parsed, parse_requests) = measured(|| TransactionPayload::decode_from_slice(&bytes));
     let (checked, checked_requests) = measured(|| TransactionBuilder::decode_payload(&bytes));
     let (parsed, used) = parsed.expect("actual payload decoder");

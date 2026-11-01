@@ -282,13 +282,6 @@ where
     value.encode_to(writer);
 }
 #[inline]
-fn u64_from_le_bytes(bytes: &[u8]) -> u64 {
-    debug_assert!(bytes.len() >= 8);
-    u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ])
-}
-#[inline]
 fn partial_u64_from_le_bytes(bytes: [u8; 8], len: usize) -> u64 {
     debug_assert!(len <= bytes.len());
     let word = u64::from_le_bytes(bytes);
@@ -327,11 +320,10 @@ impl<'a> PoseidonWordPacker<'a> {
                 self.pending_len = 0;
             }
         }
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.words.push(u64_from_le_bytes(chunk));
+        let (chunks, remainder) = bytes.as_chunks::<8>();
+        for chunk in chunks {
+            self.words.push(u64::from_le_bytes(*chunk));
         }
-        let remainder = chunks.remainder();
         if !remainder.is_empty() {
             self.pending_bytes[..remainder.len()].copy_from_slice(remainder);
             self.pending_len = remainder.len();

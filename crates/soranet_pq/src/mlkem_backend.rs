@@ -1,7 +1,7 @@
-//! FIPS 203 byte operations using the maintained RustCrypto ML-KEM implementation.
+//! FIPS 203 byte operations using the maintained `RustCrypto` ML-KEM implementation.
 //!
 //! The protocol stores the full FIPS 203 decapsulation key, so its expanded
-//! encoding remains intentional even though RustCrypto recommends seed storage.
+//! encoding remains intentional even though `RustCrypto` recommends seed storage.
 #![allow(deprecated)]
 
 use super::{MlKemError, MlKemSuite};

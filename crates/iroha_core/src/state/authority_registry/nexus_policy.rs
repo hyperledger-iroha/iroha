@@ -219,6 +219,8 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
         let nexus = self.nexus;
         let runtime = self.runtime;
         let autoscale = &nexus.autoscale;
+        let atomic_private_settlement =
+            iroha_config::parameters::actual::NexusConsensusAtomicPrivateSettlementV1::frozen_v1();
         let preimage = record!(
             1_u8,
             Raw(&self.configured_lane_catalog_hash),
@@ -263,6 +265,7 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 nexus.axt.proof_cache_ttl_slots.get(),
                 nexus.axt.replay_retention_slots.get()
             ),
+            norito::core::PayloadRef(&atomic_private_settlement),
             record!(
                 Ref(&nexus.governance.default_module),
                 Seq(nexus

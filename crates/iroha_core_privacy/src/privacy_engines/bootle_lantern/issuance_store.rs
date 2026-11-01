@@ -1646,7 +1646,7 @@ fn parse_record_file_name_v1(name: &str) -> Result<[u8; 32], BootleLanternIssuan
         return Err(BootleLanternIssuanceStoreErrorV1::Corrupt);
     }
     let mut id = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         id[index] = (hex_nibble_v1(pair[0])? << 4) | hex_nibble_v1(pair[1])?;
     }
     if record_file_name_v1(id) != name {

@@ -441,10 +441,3 @@ pub(super) fn deployment_genesis_fixture()
 pub(super) fn deployment_validated_genesis_fixture() -> iroha_genesis::ValidatedGenesisBundle {
     crate::deployment_genesis_fixture::deployment_validated_genesis_fixture()
 }
-
-/// Native signed genesis with explicitly registered and activated validator accounts.
-#[cfg(test)]
-pub(super) fn deployment_lane_genesis_fixture()
--> (iroha_data_model::block::SignedBlock, iroha_crypto::KeyPair) {
-    crate::deployment_genesis_fixture::deployment_lane_genesis_fixture()
-}

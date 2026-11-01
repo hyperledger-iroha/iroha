@@ -235,6 +235,8 @@ fn rejected_proof_reopens_the_exact_original_pending_envelope() {
     let base =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sccp-continuation");
     std::fs::create_dir_all(&base).unwrap();
+    // Private-directory custody admits only normal path components.
+    let base = base.canonicalize().unwrap();
     let dir = tempfile::Builder::new()
         .prefix("rejected-ton-proof-")
         .tempdir_in(base)

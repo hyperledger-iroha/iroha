@@ -1,5 +1,6 @@
 //! Telemetry integration tests covering Kaigi relay endpoints.
 #![cfg(feature = "telemetry")]
+use crate::fixtures;
 use axum::{
     body::Body,
     http::{HeaderValue, Request, StatusCode, header::CONTENT_TYPE},
@@ -29,8 +30,6 @@ use iroha_model_base::name::Name;
 use iroha_primitives::{json::Json, time::TimeSource};
 use std::{collections::BTreeSet, str::FromStr, sync::Arc};
 use tower::ServiceExt;
-#[path = "fixtures.rs"]
-mod fixtures;
 const NORITO_MIME_TYPE: &str = "application/x-norito";
 const JSON_CONTENT_TYPE: &str = "application/json; charset=utf-8";
 fn relay_hpke_key() -> Vec<u8> {
@@ -179,7 +178,7 @@ fn build_app_with_stream_signer() -> (
         &cfg.common.key_pair,
         Vec::new(),
         None,
-        TimeSource::new_system(),
+        &TimeSource::new_system(),
     );
     let state = native_chain.state().clone();
     let kura = native_chain.kura().clone();
@@ -866,5 +865,4 @@ async fn kaigi_call_participation_reports_only_the_signed_account() {
     app.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

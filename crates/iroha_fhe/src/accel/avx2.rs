@@ -139,7 +139,7 @@ fn cyclic_ntt(values: &mut [u64], root: u64, constants: Montgomery32) {
     // The stage of length four has two butterflies per chunk: too short for four lanes.
     if len >= 4 {
         let quarter_turn = crate::modular::mod_pow_u64(root, (len / 4) as u64, modulus);
-        for chunk in values.chunks_exact_mut(4) {
+        for chunk in values.as_chunks_mut::<4>().0 {
             for (index, factor) in [(0_usize, 1_u64), (1, quarter_turn)] {
                 let (left, right) = (chunk[index], chunk[index + 2]);
                 // Single-word arithmetic: values and twiddles are below 2^32.

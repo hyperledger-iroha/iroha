@@ -1112,7 +1112,9 @@ pub(super) fn quota_tree_levels_v1(leaves: Vec<[u8; 32]>, node_domain: u64) -> V
     let mut level = leaves;
     while level.len() > 1 {
         let next = level
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| poseidon_items_v1(node_domain, &[pair[0], pair[1]]))
             .collect();
         levels.push(level);

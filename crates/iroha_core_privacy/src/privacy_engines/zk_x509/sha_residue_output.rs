@@ -18,7 +18,7 @@ pub(super) trait ShaResidueSinkV1<A: PolynomialAirFieldV1> {
     }
 }
 
-impl<A: PolynomialAirFieldV1> ShaResidueSinkV1<A> for Vec<A> {
+impl<T: PolynomialAirFieldV1> ShaResidueSinkV1<T> for Vec<T> {
     fn len(&self) -> usize {
         Vec::len(self)
     }
@@ -27,7 +27,7 @@ impl<A: PolynomialAirFieldV1> ShaResidueSinkV1<A> for Vec<A> {
         Vec::reserve_exact(self, additional);
     }
 
-    fn push(&mut self, value: A) {
+    fn push(&mut self, value: T) {
         Vec::push(self, value);
     }
 }

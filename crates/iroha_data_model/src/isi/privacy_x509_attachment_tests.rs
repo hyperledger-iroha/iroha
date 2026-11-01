@@ -315,7 +315,7 @@ fn x509_borrowed_profile_preserves_limits_and_exact_request_charge() {
             )
             .is_err()
     );
-    let mut profile = sample.profile.clone();
+    let mut profile = sample.profile;
     profile.verifier_digest = PrivacyVerifierDigestV1::new([99; 32]);
     assert!(
         request

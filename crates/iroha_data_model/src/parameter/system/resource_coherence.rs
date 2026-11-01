@@ -216,6 +216,10 @@ pub enum SuccessorResourceCoherenceError {
 /// # Errors
 /// Rejects invalid privacy policy/schedule, height overflow, and the first
 /// incoherent boundary, preserving its exact height and typed numeric error.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each successor input is an independently authenticated consensus value"
+)]
 pub fn validate_successor_resource_limits(
     committed_height: u64,
     max_transaction_bytes: NonZeroU64,
@@ -909,7 +913,9 @@ mod tests {
 
     #[test]
     fn pending_privacy_limit_increase_requires_capacity_at_its_effective_height() {
-        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as u32;
+        let floor =
+            u32::try_from(crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1)
+                .unwrap();
         let current = privacy_limits(floor + 512, floor + 512, floor + 512 * 1024);
         let next_limits = privacy_limits(floor + 1024, floor + 1024, floor + 1024 * 1024);
         let policy = PrivacyConsensusPolicyV1 {
@@ -964,7 +970,9 @@ mod tests {
 
     #[test]
     fn later_privacy_increase_checks_the_exact_future_boundary_and_second_successor_cap() {
-        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as u32;
+        let floor =
+            u32::try_from(crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1)
+                .unwrap();
         let reserve = BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES;
         let current = privacy_limits(floor + 512, floor + 512, floor + 512 * 1024);
         let next_limits = privacy_limits(floor + 1024, floor + 1024, floor + 1024 * 1024);
@@ -1050,7 +1058,9 @@ mod tests {
 
     #[test]
     fn later_privacy_increase_checks_signed_action_context_and_transaction_budget() {
-        let floor = crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as u32;
+        let floor =
+            u32::try_from(crate::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1)
+                .unwrap();
         let current = privacy_limits(floor + 512, floor + 512, floor + 1024 * 1024);
         let future = privacy_limits(floor + 1024, floor + 1024, floor + 1024 * 1024);
         let cap = block(floor + 2 * 1024 * 1024);

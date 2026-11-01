@@ -402,9 +402,9 @@ fn evaluate_horner_interleaved<F: Field>(coeffs: &[F], x: F) -> F {
     }
     let x4 = x.square().square();
     let mut lanes = [F::ZERO; 4];
-    let mut groups = coeffs.chunks_exact(4);
-    lanes[..groups.remainder().len()].copy_from_slice(groups.remainder());
-    for group in groups.by_ref().rev() {
+    let (groups, remainder) = coeffs.as_chunks::<4>();
+    lanes[..remainder.len()].copy_from_slice(remainder);
+    for group in groups.iter().rev() {
         for (value, coeff) in lanes.iter_mut().zip(group) {
             *value = *value * x4 + coeff;
         }

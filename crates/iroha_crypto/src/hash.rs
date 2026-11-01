@@ -297,7 +297,7 @@ impl Hash {
         const HEX: &[u8; 16] = b"0123456789ABCDEF";
         let mut bytes = [0_u8; 74];
         bytes[..5].copy_from_slice(b"hash:");
-        for (byte, encoded) in self.0.iter().zip(bytes[5..69].chunks_exact_mut(2)) {
+        for (byte, encoded) in self.0.iter().zip(bytes[5..69].as_chunks_mut::<2>().0) {
             encoded[0] = HEX[usize::from(byte >> 4)];
             encoded[1] = HEX[usize::from(byte & 15)];
         }

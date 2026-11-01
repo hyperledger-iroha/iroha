@@ -534,7 +534,7 @@ impl PrivacyCapabilitySnapshotV1 {
             protocols: self
                 .protocols
                 .iter()
-                .map(|row| PrivacyExact12CapabilityRowV1::from_committed_snapshot_row(row))
+                .map(PrivacyExact12CapabilityRowV1::from_committed_snapshot_row)
                 .collect(),
             manifest_digest: PrivacyExact12CapabilityManifestDigestV1::new([0; 32]),
         };
@@ -714,6 +714,14 @@ pub enum PrivacyExact12CapabilityManifestValidationErrorV1 {
         actual: PrivacyExact12CapabilityManifestDigestV1,
     },
 }
+
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
+mod conformance_fixture;
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
+pub use conformance_fixture::{
+    PrivacyExact12CapabilityManifestFixtureErrorV1, PrivacyExact12CapabilityManifestFixtureV1,
+    privacy_exact12_capability_manifest_fixture_v1,
+};
 
 #[cfg(test)]
 mod captured_capability_manifest_schema_tests;

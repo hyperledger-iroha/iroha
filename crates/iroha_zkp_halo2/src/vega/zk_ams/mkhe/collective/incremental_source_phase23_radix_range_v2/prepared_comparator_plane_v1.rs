@@ -412,13 +412,10 @@ impl PreparedRadixValuesV1 {
             .ok_or(ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         let mut chunk = ConfidentialSpoolChunkV1::new_zeroed_v1(VALUE_CHUNK_BYTES_V1)
             .map_err(map_spool_error_v2)?;
-        for (scalar, slot) in scalars
+        for (scalar, destination) in scalars
             .iter()
-            .zip(chunk.as_mut_slice_v1().chunks_exact_mut(SCALAR_BYTES_V1))
+            .zip(chunk.as_mut_slice_v1().as_chunks_mut::<SCALAR_BYTES_V1>().0)
         {
-            let destination: &mut [u8; SCALAR_BYTES_V1] = slot
-                .try_into()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
             scalar.write_le_bytes_ref(destination);
             destination.reverse();
         }

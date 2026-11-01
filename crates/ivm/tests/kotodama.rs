@@ -1378,8 +1378,10 @@ fn branch_lowering_uses_compact_conditional_and_one_relaxed_transfer() {
         .expect("branch budget report");
     let words = code[metadata.code_offset + branch.pc_start as usize
         ..metadata.code_offset + branch.pc_end as usize]
-        .chunks_exact(4)
-        .map(|chunk| u32::from_le_bytes(chunk.try_into().expect("word chunk")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|chunk| u32::from_le_bytes(*chunk))
         .collect::<Vec<_>>();
     let branch_index = words
         .iter()

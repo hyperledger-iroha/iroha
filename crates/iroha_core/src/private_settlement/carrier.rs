@@ -416,11 +416,16 @@ mod tests {
         };
         let (bundle, _) = certified_commit_bundle_fixture();
         let keys: Vec<_> = (0..=PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1)
-            .map(|i| KeyPair::from_seed(vec![0x91 + i as u8; 32], Algorithm::Ed25519))
+            .map(|i| {
+                KeyPair::from_seed(
+                    vec![0x91 + u8::try_from(i).unwrap(); 32],
+                    Algorithm::Ed25519,
+                )
+            })
             .collect();
         let sponsor = AccountId::new_multisig(
             MultisigPolicy::new(
-                PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1 as u16,
+                u16::try_from(PRIVATE_SETTLEMENT_MAX_CARRIER_SIGNERS_V1).unwrap(),
                 keys.iter()
                     .map(|key| MultisigMember::new(key.public_key().clone(), 1).unwrap())
                     .collect(),
@@ -443,7 +448,7 @@ mod tests {
                 manifest.clone(),
                 PrivateSettlementAbortReasonV1::Expired,
             )])
-            .sign_multisig(keys[..count].iter().map(|key| key.private_key()));
+            .sign_multisig(keys[..count].iter().map(iroha_crypto::KeyPair::private_key));
             signed.verify_signature().unwrap();
             assert_eq!(signed.signature_count(), count);
             assert_eq!(

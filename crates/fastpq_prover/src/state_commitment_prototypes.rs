@@ -54,27 +54,27 @@ pub use keyed::{KeyedMap, PrototypeSchema};
 const DOMAIN_NAMESPACE: u64 = 0x4732 << 32;
 
 /// Domain of the schema descriptor digest.
-pub const DOMAIN_SCHEMA: u64 = DOMAIN_NAMESPACE | 1;
+pub const DOMAIN_SCHEMA: u64 = DOMAIN_NAMESPACE | 0x01;
 /// Domain of a composite key digest.
-pub const DOMAIN_KEY: u64 = DOMAIN_NAMESPACE | 2;
+pub const DOMAIN_KEY: u64 = DOMAIN_NAMESPACE | 0x02;
 /// Domain of a value digest.
-pub const DOMAIN_VALUE: u64 = DOMAIN_NAMESPACE | 3;
+pub const DOMAIN_VALUE: u64 = DOMAIN_NAMESPACE | 0x03;
 /// Domain of an entry leaf: key digest and value digest.
-pub const DOMAIN_LEAF: u64 = DOMAIN_NAMESPACE | 4;
+pub const DOMAIN_LEAF: u64 = DOMAIN_NAMESPACE | 0x04;
 /// Domain of a radix branch; the auxiliary word is the branching bit index.
-pub const DOMAIN_BRANCH: u64 = DOMAIN_NAMESPACE | 5;
+pub const DOMAIN_BRANCH: u64 = DOMAIN_NAMESPACE | 0x05;
 /// Domain of the normalised root: structure root and schema digest.
-pub const DOMAIN_ROOT: u64 = DOMAIN_NAMESPACE | 6;
+pub const DOMAIN_ROOT: u64 = DOMAIN_NAMESPACE | 0x06;
 /// Domain of a linked leaf: entry leaf and successor key digest.
-pub const DOMAIN_LINK: u64 = DOMAIN_NAMESPACE | 7;
+pub const DOMAIN_LINK: u64 = DOMAIN_NAMESPACE | 0x07;
 /// Domain of the digest of the lower sentinel of the linked-leaf map.
-pub const DOMAIN_BOUND_HEAD: u64 = DOMAIN_NAMESPACE | 8;
+pub const DOMAIN_BOUND_HEAD: u64 = DOMAIN_NAMESPACE | 0x08;
 /// Domain of the digest of the upper sentinel of the linked-leaf map.
-pub const DOMAIN_BOUND_END: u64 = DOMAIN_NAMESPACE | 9;
+pub const DOMAIN_BOUND_END: u64 = DOMAIN_NAMESPACE | 0x09;
 /// Domain of a hash-chain step and of the chain's start value.
-pub const DOMAIN_CHAIN: u64 = DOMAIN_NAMESPACE | 10;
+pub const DOMAIN_CHAIN: u64 = DOMAIN_NAMESPACE | 0x0a;
 /// Domain of an interior node of the sorted Merkle B-tree.
-pub const DOMAIN_PAGE_NODE: u64 = DOMAIN_NAMESPACE | 11;
+pub const DOMAIN_PAGE_NODE: u64 = DOMAIN_NAMESPACE | 0x0b;
 
 /// Why a carried witness does not establish its statement.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

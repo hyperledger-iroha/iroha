@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 use eyre::{Result, eyre};
 
 /// Require the complete field set without accepting extra or missing receipt fields.
-pub(crate) fn require_exact_json_fields(
+pub fn require_exact_json_fields(
     object: &norito::json::Map,
     expected: &[&str],
     label: &str,
@@ -36,7 +36,7 @@ fn require_empty_report_array(object: &norito::json::Map, field: &str, label: &s
 }
 
 /// Validate explicit empty warnings/failures and the exact checks for the admitted scope.
-pub(crate) fn validate_prepared_report_common_arrays(
+pub fn validate_prepared_report_common_arrays(
     object: &norito::json::Map,
     service_applied: bool,
     label: &str,
@@ -100,10 +100,7 @@ pub(crate) fn validate_prepared_report_common_arrays(
 
 #[cfg(test)]
 /// Apply the production receipt rules to a real producer's required scope.
-pub(crate) fn validate_inrou_checks(
-    value: &norito::json::Value,
-    required_scope: &str,
-) -> Result<()> {
+pub fn validate_inrou_checks(value: &norito::json::Value, required_scope: &str) -> Result<()> {
     let object = value
         .as_object()
         .ok_or_else(|| eyre!("Inrou report is not an object"))?;

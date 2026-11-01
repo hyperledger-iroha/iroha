@@ -74,6 +74,8 @@ new patches follow the same default gates.
   the env-toggle inventory (`specs/agents/env_var_inventory.{json,md}`),
   fails if it is stale, **and** fails when new production env shims appear
   relative to `AGENTS_BASE_REF` (auto-detected; set explicitly when needed).
+  The inventory names references by path and source line text, so edits that
+  only move a lookup do not make it stale.
   Refresh the tracker after adding/removing env lookups via
   `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`;
   use `ENV_CONFIG_GUARD_ALLOW=1` only after documenting intentional env knobs

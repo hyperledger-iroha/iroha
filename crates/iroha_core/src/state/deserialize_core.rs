@@ -13,7 +13,7 @@ std::thread_local! {
 
 /// Snapshot syntax is distinct from a local refusal by the original State pool.
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum StateRestoreError {
+pub enum StateRestoreError {
     /// Original complete parameter graph/control custody refused restoration.
     #[error(transparent)]
     Parameters(parameter_cell::ParameterCellRestoreError),
@@ -571,71 +571,6 @@ impl<'a> SnapshotJsonMap<'a> {
             source_order: None,
         })
     }
-    /// The World object of a snapshot written by the predecessor release of an upgrade
-    /// checkpoint, rewritten as this release's World object (`state::upgrade_checkpoint`).
-    ///
-    /// `Ok(None)`: `input` does not have the predecessor's World fields, so it is this release's
-    /// World. The predecessor's retired fields must hold exactly their empty values, the tables
-    /// this release added start empty and the runtime fields are founded on this release's
-    /// baseline; every other value passes unchanged.
-    fn predecessor_world_json(
-        input: &str,
-        budget: &iroha_allocation::AllocationBudget,
-    ) -> Result<Option<String>, StateRestoreError> {
-        use crate::state::upgrade_checkpoint::{
-            added_world_field, is_founded_world_field, predecessor_world_field_order,
-            retired_world_fields,
-        };
-        let current = canonical_world_field_order();
-        let predecessor = predecessor_world_field_order(current);
-        let Ok(mut map) = SnapshotJsonMap::parse_admitted(input, "world", &predecessor, budget)
-        else {
-            return Ok(None);
-        };
-        if map.require_source_order(&predecessor, "world").is_err() {
-            return Ok(None);
-        }
-        for retired in retired_world_fields() {
-            let field = format!("world.{}", retired.name);
-            let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(retired.name) else {
-                return Err(json::Error::missing_field(field).into());
-            };
-            let found: json::Value = json::from_str(raw)?;
-            let empty: json::Value = json::from_str(retired.empty_json)?;
-            if found != empty {
-                return Err(json::Error::InvalidField {
-                    field,
-                    message: "an upgrade checkpoint admits a retired World field only empty"
-                        .to_owned(),
-                }
-                .into());
-            }
-        }
-        let mut world = String::with_capacity(input.len());
-        world.push('{');
-        for (index, key) in current.iter().enumerate() {
-            if index > 0 {
-                world.push(',');
-            }
-            world.push('"');
-            world.push_str(key);
-            world.push_str("\":");
-            if let Some(added) = added_world_field(key) {
-                world.push_str(&empty_added_world_field_json(added.name)?);
-                continue;
-            }
-            if is_founded_world_field(key) {
-                world.push_str(&founded_world_field_json(key)?);
-                continue;
-            }
-            let Some(SnapshotJsonField::Borrowed { raw }) = map.remove(key) else {
-                return Err(json::Error::missing_field(format!("world.{key}")).into());
-            };
-            world.push_str(raw);
-        }
-        world.push('}');
-        Ok(Some(world))
-    }
     /// Test fixture over the production index, funded by a large private pool so
     /// fixture maps exercise the admitted entries rather than a separate parser.
     #[cfg(test)]
@@ -868,50 +803,6 @@ fn canonical_world_field_order() -> &'static [&'static str] {
     <World as norito::json::FastJsonWrite>::json_object_field_order()
         .expect("World snapshot has a fixed derived object schema")
 }
-/// The founded value of a runtime World field, in snapshot JSON.
-fn founded_world_field_json(name: &str) -> Result<String, json::Error> {
-    let field = format!("world.{name}");
-    let invalid = |message: String| json::Error::InvalidField {
-        field: field.clone(),
-        message,
-    };
-    match name {
-        "runtime_definitions" => json::to_json(
-            &crate::runtime::founded_definitions().map_err(|error| invalid(error.to_string()))?,
-        ),
-        "runtime_selection" => json::to_json(&Cell::new(
-            crate::runtime::founded_selection().map_err(|error| invalid(error.to_string()))?,
-        )),
-        _ => return Err(invalid("not a founded World field".to_owned())),
-    }
-    .map_err(|error| invalid(error.to_string()))
-}
-
-/// This release's canonical snapshot JSON of an empty table an upgrade checkpoint adds
-/// (`state::upgrade_checkpoint::ADDED_WORLD_FIELDS`).
-fn empty_added_world_field_json(name: &str) -> Result<String, json::Error> {
-    let field = format!("world.{name}");
-    match name {
-        "runtime_change_sets" => json::to_json(&Storage::<
-            iroha_data_model::runtime::lifecycle::ChangeSetId,
-            iroha_data_model::runtime::lifecycle::ChangeSetRecordV1,
-        >::new()),
-        "runtime_containments" => json::to_json(&Storage::<
-            [u8; 32],
-            iroha_data_model::runtime::lifecycle::ContainmentRecordV1,
-        >::new()),
-        _ => {
-            return Err(json::Error::InvalidField {
-                field,
-                message: "not a World field an upgrade checkpoint adds".to_owned(),
-            });
-        }
-    }
-    .map_err(|error| json::Error::InvalidField {
-        field,
-        message: error.to_string(),
-    })
-}
 /// Canonical first-release State envelope fields, in signed source order.
 const STATE_SNAPSHOT_FIELDS: &[&str] = &[
     "chain_id",
@@ -1139,17 +1030,32 @@ mod state_snapshot_decode_error_tests {
         let world = World::try_with_execution_budget([], [], [], &budget).unwrap();
         let retained_bytes = budget.reserved_bytes();
         let undo_scope_bytes = iroha_allocation::OwnedAllocationScope::allocation_layout().size();
-        assert!(retained_bytes >= undo_scope_bytes);
         crate::resource_coherence::validate_restored_policy(&world.view(), 0).unwrap();
-        // The original undo scope fits this policy, but World's retained owners
-        // occupy the entire pool. A zero limit would instead mean ExceedsLimit.
+        // The undo cut admits its complete control demand, refund scope included, before any
+        // writer. Measure that demand against a limit that cannot hold it.
         budget.set_limit_bytes(retained_bytes);
+        let demand = match validate_resource_policy_versions(&world, 0, &budget).unwrap_err() {
+            StateRestoreError::Admission(StateAdmissionError::Storage(
+                StateStorageAdmissionError::World(mv::storage::AdmittedStorageError::Allocation(
+                    iroha_allocation::AllocationRefusal::ExceedsLimit {
+                        requested_bytes, ..
+                    },
+                )),
+            )) => requested_bytes,
+            other => panic!("the complete undo demand exceeds the retained-only limit: {other:?}"),
+        };
+        assert!(demand > undo_scope_bytes);
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
+        // Fund the limit for the demand but occupy it: the refusal is now a capacity wait.
+        let limit = retained_bytes + demand;
+        budget.set_limit_bytes(limit);
+        let blocker = budget.try_reserve_bytes(demand).unwrap();
         let iroha_allocation::AllocationRefusal::Capacity {
             release: original_release,
             ..
-        } = budget.try_reserve_bytes(undo_scope_bytes).unwrap_err()
+        } = budget.try_reserve_bytes(demand).unwrap_err()
         else {
-            panic!("original World owners occupy the undo-scope capacity");
+            panic!("the occupied pool refuses the undo demand by capacity");
         };
         let refused = validate_resource_policy_versions(&world, 0, &budget).unwrap_err();
         let StateRestoreError::Admission(StateAdmissionError::Storage(
@@ -1165,11 +1071,12 @@ mod state_snapshot_decode_error_tests {
         else {
             panic!("expected original undo allocation capacity refusal: {refused:?}");
         };
-        assert_eq!(requested_bytes, undo_scope_bytes);
-        assert_eq!(reserved_bytes, retained_bytes);
-        assert_eq!(limit_bytes, retained_bytes);
+        assert_eq!(requested_bytes, demand);
+        assert_eq!(reserved_bytes, limit);
+        assert_eq!(limit_bytes, limit);
         assert_eq!(release, original_release);
-        assert_eq!(budget.reserved_bytes(), retained_bytes);
+        assert_eq!(budget.reserved_bytes(), limit);
+        drop(blocker);
         budget.set_limit_bytes(64 * 1024 * 1024);
         validate_resource_policy_versions(&world, 0, &budget).unwrap();
         assert_eq!(budget.reserved_bytes(), retained_bytes);
@@ -1501,29 +1408,11 @@ impl KuraSeed {
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
-        let checkpoint = self.kura.upgrade_checkpoint().cloned();
-        // Under an upgrade checkpoint the World may be the predecessor release's. Its key set
-        // differs from this release's, so at most one of the two shapes parses.
-        let predecessor_world = match (&checkpoint, &world_value) {
-            (Some(_), SnapshotJsonField::Borrowed { raw }) => {
-                SnapshotJsonMap::predecessor_world_json(raw, &self.execution_budget)?
-            }
-            _ => None,
-        };
-        let is_predecessor_world = predecessor_world.is_some();
-        let world_map = match &predecessor_world {
-            Some(world) => SnapshotJsonMap::parse_admitted(
-                world,
-                "world",
-                canonical_world_field_order(),
-                &self.execution_budget,
-            )?,
-            None => world_value.into_object(
-                "world",
-                canonical_world_field_order(),
-                &self.execution_budget,
-            )?,
-        };
+        let world_map = world_value.into_object(
+            "world",
+            canonical_world_field_order(),
+            &self.execution_budget,
+        )?;
         world_map.require_source_order(canonical_world_field_order(), "world")?;
         if !world_map.contains_key("contract_subject_bindings") {
             return Err((json::Error::missing_field("world.contract_subject_bindings")).into());
@@ -1668,15 +1557,13 @@ impl KuraSeed {
         let native_execution_tip::RestoredNativeTip {
             cell: native_execution_tip,
             world_root: certified_world_root,
-            checkpoint_world_root,
         } = native_tip_claim
-            .restore_with_checkpoint(
+            .restore(
                 &self.execution_budget,
                 &chain_id,
                 &network_id,
                 &block_hashes,
                 &self.kura,
-                checkpoint.as_ref(),
                 &mut |certified| {
                     observe_committee(&mut current_progress, CURRENT_COMMITTEE, certified)?;
                     observe_committee(&mut previous_progress, PREVIOUS_COMMITTEE, certified)
@@ -1875,32 +1762,10 @@ impl KuraSeed {
                 })
             })?;
         // The World is final here; authenticate it before State construction loads or
-        // recovers any durable journal on its behalf.
-        if is_predecessor_world {
-            // The checkpoint block's own certified result binds the predecessor's World root.
-            let certified = checkpoint_world_root.ok_or_else(|| json::Error::InvalidField {
-                field: "world".to_owned(),
-                message: "a predecessor release's World is admitted only at the upgrade checkpoint"
-                    .to_owned(),
-            })?;
-            world
-                .adopt_checkpoint_accumulator(&self.execution_budget, certified)
-                .map_err(restored_world_verification_error)?;
-        }
-        match certified_world_root {
-            Some(certified) => {
-                authenticate_restored_world(&world, &self.execution_budget, certified)?;
-            }
-            // Only the predecessor's World at the checkpoint has no certified successor yet.
-            None if committed_height > 0 && !is_predecessor_world => {
-                return Err((json::Error::InvalidField {
-                    field: "native_execution_tip".to_owned(),
-                    message: "a World of this release at the upgrade checkpoint needs its certified successor"
-                        .to_owned(),
-                })
-                .into());
-            }
-            None => {}
+        // recovers any durable journal on its behalf. Only empty history has no certified
+        // successor to authenticate against.
+        if let Some(certified) = certified_world_root {
+            authenticate_restored_world(&world, &self.execution_budget, certified)?;
         }
         let state = build_state(
             BuildStateInputs {
@@ -3793,195 +3658,3 @@ impl From<sccp_forgery_custody::ForgeryStorageError> for StateRestoreError {
 #[cfg(test)]
 #[path = "deserialize_snapshot_map_tests.rs"]
 mod snapshot_map_tests;
-
-#[cfg(test)]
-mod predecessor_snapshot_tests {
-    use super::*;
-
-    /// Imports a real predecessor-release payload (`snapshot.data` of a generation written by the
-    /// release named in `state::upgrade_checkpoint`) and proves the import exact: the
-    /// predecessor-registry capture of the decoded World equals the payload's own accumulator.
-    #[test]
-    #[ignore = "needs IROHA_PREDECESSOR_SNAPSHOT=<path to a predecessor snapshot.data>"]
-    fn predecessor_world_imports_exactly() {
-        let path = std::env::var("IROHA_PREDECESSOR_SNAPSHOT")
-            .expect("IROHA_PREDECESSOR_SNAPSHOT names a predecessor snapshot.data");
-        // Taira's addresses use its chain discriminant, as its node configuration selects.
-        let discriminant = std::env::var("IROHA_PREDECESSOR_CHAIN_DISCRIMINANT")
-            .map_or(369, |value| value.parse().expect("chain discriminant"));
-        let _chain =
-            iroha_data_model::account::address::ChainDiscriminantGuard::enter(discriminant);
-        let input = std::fs::read_to_string(path).expect("read the snapshot payload");
-        let budget = iroha_allocation::AllocationBudget::new(16 << 30);
-        let mut state =
-            SnapshotJsonMap::parse_admitted(&input, "state", STATE_SNAPSHOT_FIELDS, &budget)
-                .expect("State envelope");
-        let Some(SnapshotJsonField::Borrowed { raw }) = state.remove("world") else {
-            panic!("State envelope has no World");
-        };
-        let world_json = SnapshotJsonMap::predecessor_world_json(raw, &budget)
-            .expect("admissible predecessor World")
-            .expect("predecessor World shape");
-        let world_map = SnapshotJsonMap::parse_admitted(
-            &world_json,
-            "world",
-            canonical_world_field_order(),
-            &budget,
-        )
-        .expect("current World shape");
-        let ivm = IVM::try_new(0).expect("IVM");
-        let seed = IvmSeed {
-            ivm: &ivm,
-            _marker: PhantomData,
-        };
-        let mut world = parse_world(&budget, world_map, &seed).expect("predecessor World decodes");
-        // Restore fills these World fields from the State envelope, as `into_state_from_snapshot_map`.
-        world.public_lane_validators = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut state,
-            "public_lane_validators",
-        )
-        .and_then(|storage| {
-            storage.decode(
-                "public_lane_validators",
-                public_lane_validator_record_matches_key,
-            )
-        })
-        .expect("public lane validators");
-        world.public_lane_stake_shares = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut state,
-            "public_lane_stake_shares",
-        )
-        .and_then(|storage| {
-            storage.decode(
-                "public_lane_stake_shares",
-                public_lane_stake_share_matches_key,
-            )
-        })
-        .expect("public lane stake shares");
-        world.public_lane_stake_custody = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut state,
-            "public_lane_stake_custody",
-        )
-        .and_then(|storage| {
-            storage.decode(
-                "public_lane_stake_custody",
-                |_: &(LaneId, AccountId), value: &(AssetId, Quantity)| !value.1.is_zero(),
-            )
-        })
-        .expect("public lane stake custody");
-        world.public_lane_stake_reserves = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut state,
-            "public_lane_stake_reserves",
-        )
-        .and_then(|storage| {
-            storage.decode(
-                "public_lane_stake_reserves",
-                |_: &AssetId, value: &Quantity| !value.is_zero(),
-            )
-        })
-        .expect("public lane stake reserves");
-        world.space_directory_manifests = take_required::<snapshot_storage::SnapshotStorage>(
-            &mut state,
-            "space_directory_manifests",
-        )
-        .and_then(|storage| {
-            storage.decode(
-                "space_directory_manifests",
-                snapshot_storage::manifest_set_matches_key,
-            )
-        })
-        .expect("space directory manifests");
-        fn take<T: JsonDeserialize + JsonSerialize>(
-            state: &mut SnapshotJsonMap<'_>,
-            field: &str,
-        ) -> T {
-            take_required(state, field).unwrap_or_else(|error| panic!("{field}: {error:?}"))
-        }
-        snapshot_service_state::SnapshotServiceState {
-            capacity_fee_ledger: take(&mut state, "capacity_fee_ledger"),
-            capacity_disputes: take(&mut state, "capacity_disputes"),
-            provider_credit_ledger: take(&mut state, "provider_credit_ledger"),
-            sorafs_pricing: take(&mut state, "sorafs_pricing"),
-            soradns_directory_records: take(&mut state, "soradns_directory_records"),
-            soradns_directory_pending: take(&mut state, "soradns_directory_pending"),
-            soradns_directory_history: take(&mut state, "soradns_directory_history"),
-            soradns_directory_prev_of: take(&mut state, "soradns_directory_prev_of"),
-            soradns_directory_revocations: take(&mut state, "soradns_directory_revocations"),
-            soradns_release_signers: take(&mut state, "soradns_release_signers"),
-            soradns_directory_latest: take(&mut state, "soradns_directory_latest"),
-            soradns_rotation_policy: take(&mut state, "soradns_rotation_policy"),
-            soradns_last_publish_ms: take(&mut state, "soradns_last_publish_ms"),
-            soradns_history_len: take(&mut state, "soradns_history_len"),
-        }
-        .restore(&mut world)
-        .expect("service state");
-        take_required_scoped::<sccp_snapshot_state::SnapshotSccpState>(
-            &mut state,
-            sccp_snapshot_state::SCCP_SNAPSHOT_MEMBER,
-        )
-        .expect("SCCP state")
-        .restore(&mut world, &budget)
-        .expect("SCCP restore");
-        super::super::contract_subject_restore::rebuild(&mut world).expect("contract subjects");
-        let stored = world.state_accumulator.view().get().clone();
-        let block = world.try_block(&budget).expect("World block");
-        let captured = super::super::world_projection::WorldStateAccumulator::capture(&block)
-            .expect("capture");
-        drop(block);
-        let (predecessor, root) =
-            super::super::world_projection::world_state_accumulator::predecessor_root(&captured)
-                .expect("predecessor root");
-        eprintln!(
-            "entries: stored {} predecessor {} current {}; predecessor root {root}",
-            stored.entries(),
-            predecessor.entries(),
-            captured.entries()
-        );
-        assert_eq!(
-            predecessor, stored,
-            "import differs from the predecessor's World"
-        );
-        // Restore then takes the World over under this release's registry; every later check of
-        // the World (State construction, Sumeragi startup) sees only this release's accumulator.
-        let current = world
-            .adopt_checkpoint_accumulator(&budget, root)
-            .expect("adopt the checkpoint World");
-        assert_eq!(
-            world
-                .verify_state_accumulator(&budget)
-                .expect("adopted World"),
-            current
-        );
-        let kura = crate::kura::Kura::blank_kura_for_testing();
-        let query = crate::query::store::LiveQueryStore::start_test();
-        let mut state = State::new_for_testing(world, kura, query);
-        assert_eq!(
-            state
-                .verify_world_state_accumulator()
-                .expect("State over the adopted World"),
-            current
-        );
-        let counts = |state: &State| {
-            (
-                state.world.uaid_dataspaces.view().len(),
-                state.world.account_scope_directory.view().len(),
-                state.world.account_scope_accounts.view().len(),
-                state.world.account_scope_account_counts.view().len(),
-            )
-        };
-        let before = counts(&state);
-        state
-            .finalize_snapshot_derived_state_indexes(false)
-            .expect("derived indexes");
-        eprintln!(
-            "derived index counts before {before:?} after {:?}",
-            counts(&state)
-        );
-        assert_eq!(
-            state
-                .verify_world_state_accumulator()
-                .expect("State after derived indexes"),
-            current
-        );
-    }
-}

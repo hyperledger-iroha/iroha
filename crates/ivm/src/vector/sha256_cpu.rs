@@ -135,7 +135,7 @@ impl NativeSha256 {
         } else {
             &self.completions
         };
-        let _ = bank.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+        let _ = bank.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
             Some(n.saturating_add(1))
         });
         attempt.completed = true;

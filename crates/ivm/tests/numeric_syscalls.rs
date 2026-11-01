@@ -237,10 +237,7 @@ where
     // the mandatory workspace suite even when an operation costs many limbs.
     let mut prefixes = BTreeMap::<u8, BTreeSet<u64>>::new();
     let mut budget = instruction;
-    loop {
-        let Probe::OutOfGas { phase, charged } = probe(budget) else {
-            break;
-        };
+    while let Probe::OutOfGas { phase, charged } = probe(budget) {
         prefixes.entry(phase).or_default().insert(charged);
         let mut low = budget.checked_add(1).expect("bounded staged probe budget");
         let mut high = maximum_budget;

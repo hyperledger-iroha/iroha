@@ -3124,7 +3124,7 @@ fn persist_credentials_file(
             .ok()
             .flatten()
             .is_some_and(|(_, identity)| {
-                temporary.metadata().ok().is_some_and(|metadata| {
+                temporary.metadata().is_ok_and(|metadata| {
                     metadata.dev() == identity.device && metadata.ino() == identity.inode
                 })
             });

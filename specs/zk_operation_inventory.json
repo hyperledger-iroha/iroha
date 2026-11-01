@@ -824,6 +824,10 @@
     "pattern": "ExecutionProof|^SettleGameSessionV1$",
     "reason": "RaceV1 execution-proof profile, verification and settlement. The other game instructions manage sessions, inputs and payouts without a proof."
    },
+   "game_partition": {
+    "scope": "out",
+    "reason": "Native independent-root game units execute directly in IVM. Imports authenticate Sumeragi-certified source blocks and write-set membership through the native AMX tracker (crates/iroha_core/src/smartcontracts/isi/game_partition.rs), not a ZK or FHE relation."
+   },
    "governance": {
     "scope": "partial",
     "pattern": "Ballot|Conviction|Parliament",
@@ -3095,7 +3099,7 @@
     "symbol": "impl Execute for SubmitPrivacyZkX509CertificateV1"
    },
    "invocation": {
-    "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "symbol": "pub(crate) fn execute_x509_submission("},
+    "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "symbol": "pub fn execute_x509_submission("},
     "dispatch": {"path": "crates/iroha_core/src/executor/attachment_direct.rs", "symbol": "pub(super) fn apply_authorized_instruction("},
     "dispatch_guard": "Some(AttachmentExecution::QueuedX509 { binding, proof }) => { privacy::execute_x509_submission(request, binding, proof, authority, state) }",
     "context_parameter": "binding: &X509Binding,",
@@ -7428,6 +7432,10 @@
    "pattern": "zk|proof|privacy|private|kaigi|ram-?lfe|fhe|witness|/wg/|confidential|settlement|ballot|vote|tally|parliament|identifier|decrypt|ciphertext|shield|nullifier|axt|verif|credential|x509|attest",
    "out_of_scope_prefixes": [
     {
+     "prefix": "/v1/game-partitions/",
+     "reason": "Native game-unit discovery and export proofs carry Sumeragi-certified records and write-set membership, not a ZK or FHE relation (registry.modules.game_partition)."
+    },
+    {
      "prefix": "/v1/sorafs/",
      "reason": "SoraFS storage, moderation ballots, PoR/PDP/PoP and reserve proofs; owned by the SoraFS closure (registry.modules.sorafs)."
     },
@@ -11235,8 +11243,8 @@
      {
       "role": "certificate and CRL hashing",
       "algorithm": "SHA-256 AIR",
-      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs",
-      "symbol": "pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>("
+      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs",
+      "symbol": "pub fn evaluate_zk_x509_sha_batch_local_residues_over_field_v1<A: PolynomialAirFieldV1>("
      }
     ],
     "primitive_roles": [
@@ -12023,6 +12031,30 @@
     ],
     "test_evidence": "default",
     "operations": []
+   },
+   {
+    "id": "settlement.pool_activation",
+    "selector": "catalog_membership",
+    "chooses_guarantee": false,
+    "what": "Atomic private settlement has no node enable or activation prerequisite. Committed policy must admit the native IVM private-note protocol with limits covering its maximum input and output counts. Node configuration holds only the custody limits of a local sidecar store, which do not reach admission.",
+    "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_admitted_v1("},
+    "guards": [
+     {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_continuation_v1("}
+    ],
+    "operations": ["private_settlement::RegisterAtomicPrivateSettlementPrepareV1", "private_settlement::FinalizeAtomicPrivateSettlementV1"],
+    "rejection_tests": [
+     {
+      "path": "crates/iroha_core/src/private_settlement/global_state.rs",
+      "test": "state_transaction_applies_all_legs_only_at_atomic_commit_boundaries",
+      "reaches": [
+       {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_prepare_locks_v1("}
+      ]
+     }
+    ],
+    "test_evidence": "default",
+    "references": [
+     {"inventory": "runtime_validity", "key": "entries/cfg.nexus.settlement_activation"}
+    ]
    }
   ],
   "selector_census": {
@@ -12138,7 +12170,6 @@
      "site": "race.source_hash_profile"
     },
     {"token": "inline_key", "path": "crates/iroha_data_model/src/proof.rs", "count": 1, "site": "generic.verify_proof_registry_key"},
-    {"token": "kaigi_policy_key", "path": "crates/iroha_core/src/pipeline_gas_policy/retained.rs", "count": 6, "site": "kaigi.policy_named_key"},
     {
      "token": "kaigi_policy_key",
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",
@@ -12995,6 +13026,12 @@
    {
     "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt",
+    "product": "atomic_settlement",
+    "symbols": ["requirePrivateSettlementLimitV1"]
+   },
+   {
+    "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt",
     "product": "exact12_admission",
     "symbols": [
      "privacyConsensusLimitValuesV1",
@@ -13006,6 +13043,12 @@
      "requireValidPrivacyConsensusLimitsV1",
      "requireValidPrivacyPolicyScheduleV1"
     ]
+   },
+   {
+    "family": "kotlin_java_android",
+    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt",
+    "product": "atomic_settlement",
+    "symbols": ["parsePrivateSettlementLimits"]
    },
    {
     "family": "kotlin_java_android",
@@ -13158,6 +13201,12 @@
     "path": "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "product": "voting",
     "symbols": ["encodeGovernanceCastPlainBallot", "encodeGovernanceCastZkBallot"]
+   },
+   {
+    "family": "swift",
+    "path": "IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift",
+    "product": "atomic_settlement",
+    "symbols": ["decodePrivateSettlementLimits"]
    },
    {
     "family": "swift",
@@ -13817,6 +13866,12 @@
      "normalizeParliamentTransitionDraftResponseV1",
      "parliamentAttemptReadPathV1"
     ]
+   },
+   {
+    "family": "javascript",
+    "path": "javascript/iroha_js/src/privacyCapabilities.js",
+    "product": "atomic_settlement",
+    "symbols": ["parsePrivateSettlementLimits"]
    },
    {
     "family": "javascript",

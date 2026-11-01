@@ -143,7 +143,7 @@ impl ProofPhaseInvocationV1 {
             return None;
         }
         let id = PROOF_PHASE_SEQUENCE_V1
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .ok()?;
@@ -392,7 +392,7 @@ pub mod test_support {
             assert!(count > 0 && count <= NOTE_LABELS_V1.len());
             let invocation_id = events[0].unsigned("invocation_id");
             let mut last_end = 0;
-            for (index, pair) in events.chunks_exact(2).enumerate() {
+            for (index, pair) in events.as_chunks::<2>().0.iter().enumerate() {
                 pair[0].assert_fields(false);
                 pair[1].assert_fields(true);
                 for event in pair {
@@ -547,7 +547,7 @@ mod tests {
             .filter(|event| event.target == APS_PROOF_PHASE_TARGET_V1)
             .collect::<Vec<_>>();
         assert_eq!(aps.len(), 4);
-        for (index, pair) in aps.chunks_exact(2).enumerate() {
+        for (index, pair) in aps.as_chunks::<2>().0.iter().enumerate() {
             pair[0].assert_fields(false);
             pair[1].assert_fields(true);
             for event in pair {

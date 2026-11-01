@@ -1203,7 +1203,7 @@ fn sample_ternary_vector<const N: usize>(
     domain: &[u8],
 ) -> Result<SecretPolynomialVectorV1<N>, PresentationProofErrorV1> {
     let mut output = SecretPolynomialVectorV1::zero();
-    for polynomial in output.polynomials.iter_mut() {
+    for polynomial in &mut output.polynomials {
         *polynomial = randomness
             .ternary_polynomial(domain)
             .map_err(PresentationProofErrorV1::Sampling)?;
@@ -1220,7 +1220,7 @@ fn sample_gaussian_vector<const N: usize>(
         ));
     }
     let mut output = SecretPolynomialVectorV1::zero();
-    for polynomial in output.polynomials.iter_mut() {
+    for polynomial in &mut output.polynomials {
         *polynomial = randomness
             .gaussian_polynomial(profile)
             .map_err(PresentationProofErrorV1::Sampling)?;
@@ -1282,20 +1282,12 @@ fn polynomials_from_centered_projection(
         ProofPolynomialV1::from_centered_coefficients(&array)
     })
 }
-#[expect(
-    clippy::unnecessary_box_returns,
-    reason = "Polynomial vectors stay heap-owned to avoid large secret stack copies and preserve their clearing owners."
-)]
 fn multiply_vector_by_polynomial<const N: usize>(
     vector: &[ProofPolynomialV1; N],
     scalar: &ProofPolynomialV1,
 ) -> Box<[ProofPolynomialV1; N]> {
     boxed_polynomial_array_from_fn_v1(|index| scalar.multiply(vector[index]))
 }
-#[expect(
-    clippy::unnecessary_box_returns,
-    reason = "Polynomial vectors stay heap-owned to avoid large secret stack copies and preserve their clearing owners."
-)]
 fn add_arrays<const N: usize>(
     lhs: &[ProofPolynomialV1; N],
     rhs: &[ProofPolynomialV1; N],
@@ -3688,7 +3680,7 @@ mod tests {
         );
         assert_eq!(format!("{exercised:?}"), format!("{untouched:?}"));
         assert_eq!(
-            format!("{:?}", &exercised.rejections),
+            format!("{:?}", exercised.rejections),
             "ProofRejectionStatsV1(<redacted>)"
         );
         assert_eq!(

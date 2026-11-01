@@ -1,4 +1,4 @@
-//! Source-selected receipt custody and scheduler-admitted deferred ArchiveSent dispatch.
+//! Source-selected receipt custody and scheduler-admitted deferred `ArchiveSent` dispatch.
 //!
 //! Intake publishes exact bytes before verification. Only the first verified original for
 //! an actual Send becomes its permanent Archive anchor. All indexes share the existing

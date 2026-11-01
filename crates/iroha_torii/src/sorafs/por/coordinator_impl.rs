@@ -1459,7 +1459,7 @@ impl PorCoordinator {
                 .map(|(provider, epochs)| (*provider, epochs.iter().copied().collect::<Vec<_>>()))
                 .collect();
             #[cfg(test)]
-            forced.sort_by(|left, right| left.0.cmp(&right.0));
+            forced.sort_by_key(|left| left.0);
             #[cfg(test)]
             drop(forced_guard);
             #[cfg(test)]

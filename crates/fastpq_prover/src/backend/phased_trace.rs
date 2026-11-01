@@ -500,7 +500,9 @@ fn commit_oracle<T: RowValue>(
     let mut level = 1;
     while leaves.len() > 1 {
         leaves = leaves
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .enumerate()
             .map(|(index, pair)| {
                 hash_bytes_v1(

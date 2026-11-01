@@ -19,7 +19,7 @@ use iroha_primitives::numeric::Quantity;
 pub mod wallet_holdings;
 
 #[path = "asset_uid/binding_custody.rs"]
-pub(crate) mod binding_custody;
+pub mod binding_custody;
 
 pub const POLICY_ROOT: &str = "asset_uid_policy_v1/";
 pub const BINDING_ROOT: &str = "asset_uid_binding_v1/";
@@ -563,7 +563,7 @@ pub fn prepare_movements(
 /// The original transaction retains local binding, policy and usage decode refusals.
 /// TODO: admit the shared policy decoding and map scratch to the original execution
 /// pool; removing unused encoded output alone does not close that resource boundary.
-pub(crate) fn precheck_movements(
+pub fn precheck_movements(
     transaction: &StateTransaction<'_, '_>,
     movements: &[Movement<'_>],
     now_ms: u64,

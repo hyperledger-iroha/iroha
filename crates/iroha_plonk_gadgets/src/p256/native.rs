@@ -361,7 +361,7 @@ pub fn verify_prehashed_any_s(e: &[u64; 4], r: &[u64; 4], s: &[u64; 4], key: &Af
 #[must_use]
 pub fn words_from_be(bytes: &[u8; 32]) -> [u64; 4] {
     let mut out = [0_u64; 4];
-    for (index, chunk) in bytes.chunks_exact(8).enumerate() {
+    for (index, chunk) in bytes.as_chunks::<8>().0.iter().enumerate() {
         let mut word = [0_u8; 8];
         word.copy_from_slice(chunk);
         out[3 - index] = u64::from_be_bytes(word);
@@ -373,7 +373,7 @@ pub fn words_from_be(bytes: &[u8; 32]) -> [u64; 4] {
 #[must_use]
 pub fn words_to_be(words: &[u64; 4]) -> [u8; 32] {
     let mut out = [0_u8; 32];
-    for (index, chunk) in out.chunks_exact_mut(8).enumerate() {
+    for (index, chunk) in out.as_chunks_mut::<8>().0.iter_mut().enumerate() {
         chunk.copy_from_slice(&words[3 - index].to_be_bytes());
     }
     out

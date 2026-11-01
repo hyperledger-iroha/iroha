@@ -54,7 +54,9 @@ fn validate_canonical_address(bytes: &[u8]) -> Result<(), AddressAdmissionError>
     if encoded.len() != expected_len
         || !encoded.starts_with("0x")
         || !encoded.as_bytes()[2..]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .zip(bytes)
             .all(|(pair, byte)| {
                 pair[0] == hex[usize::from(byte >> 4)] && pair[1] == hex[usize::from(byte & 0x0f)]
@@ -113,29 +115,29 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSigner
     _class: jni::objects::JClass<'_>,
     input: jni::objects::JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let Some(bytes) = read_java_byte_array_bounded(
-            &mut env,
+            env,
             &input,
             "canonicalAccountAddress",
             MAX_CANONICAL_ADDRESS_BYTES_V1,
         ) else {
             return std::ptr::null_mut();
         };
-        let Some(result) = catch_unwind_to_java(&mut env, "canonical account validation", || {
+        let Some(result) = catch_unwind_to_java(env, "canonical account validation", || {
             validate_canonical_address(&bytes)
         }) else {
             return std::ptr::null_mut();
         };
         if let Err(original) = result {
-            throw_address_error(&mut env, original);
+            throw_address_error(env, original);
             return std::ptr::null_mut();
         }
         match env.byte_array_from_slice(&bytes) {
             Ok(value) => value.into_raw(),
             Err(error) => {
                 super::throw_java_illegal_state(
-                    &mut env,
+                    env,
                     format!("canonical account output allocation failed: {error}"),
                 );
                 std::ptr::null_mut()

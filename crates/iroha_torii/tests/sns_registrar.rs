@@ -1,5 +1,6 @@
 #![cfg(feature = "app_api")]
 //! Integration tests exercising the SNS registrar API surface.
+use crate::fixtures as torii_fixtures;
 use axum::{
     Router,
     body::Body,
@@ -18,8 +19,6 @@ use iroha_data_model::{
 use iroha_model_base::metadata::Metadata;
 use iroha_torii::test_utils;
 use norito::codec::Encode as _;
-#[path = "fixtures.rs"]
-mod torii_fixtures;
 struct SeededDomainRecord {
     literal: String,
     status: NameStatus,
@@ -82,7 +81,7 @@ async fn request_empty(
     uri: impl AsRef<str>,
 ) -> axum::response::Response {
     torii_fixtures::request(
-        &app,
+        app,
         Request::builder()
             .uri(uri.as_ref())
             .method(method)
@@ -93,7 +92,7 @@ async fn request_empty(
     .expect("json response")
 }
 async fn get(app: &Router, uri: impl AsRef<str>) -> axum::response::Response {
-    torii_fixtures::request(&app, torii_fixtures::get_request(&(uri.as_ref())))
+    torii_fixtures::request(app, torii_fixtures::get_request(uri.as_ref()))
         .await
         .expect("get response")
 }
@@ -105,6 +104,7 @@ fn domain_literal(label: &str) -> String {
 }
 #[tokio::test]
 async fn sns_fetch_seeded_record_and_policy_round_trip() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app =
         test_router_with_domain_records(vec![seeded_domain_record("makoto", NameStatus::Active)]);
     let record_resp = get(&app, domain_name_path("makoto")).await;
@@ -120,6 +120,7 @@ async fn sns_fetch_seeded_record_and_policy_round_trip() {
 }
 #[tokio::test]
 async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app =
         test_router_with_domain_records(vec![seeded_domain_record("casepath", NameStatus::Active)]);
     let record_resp = get(&app, "/v1/sns/names/domain/CASEPATH.UNIVERSAL").await;
@@ -132,6 +133,7 @@ async fn sns_fetch_accepts_noncanonical_domain_path_literal() {
 }
 #[tokio::test]
 async fn sns_fetch_returns_seeded_frozen_status() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app = test_router_with_domain_records(vec![seeded_domain_record(
         "frozen",
         NameStatus::Frozen(NameFrozenStateV1 {
@@ -149,6 +151,7 @@ async fn sns_fetch_returns_seeded_frozen_status() {
 }
 #[tokio::test]
 async fn sns_fetch_rejects_bare_domain_literal() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app = test_router();
     let record_resp = get(&app, "/v1/sns/names/domain/lookupcanon").await;
     assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
@@ -156,6 +159,7 @@ async fn sns_fetch_rejects_bare_domain_literal() {
 }
 #[tokio::test]
 async fn sns_fetch_missing_name_returns_not_found() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app = test_router();
     let record_resp = get(&app, "/v1/sns/names/domain/missing.universal").await;
     assert_eq!(record_resp.status(), StatusCode::NOT_FOUND);
@@ -163,6 +167,7 @@ async fn sns_fetch_missing_name_returns_not_found() {
 }
 #[tokio::test]
 async fn sns_fetch_rejects_unknown_namespace() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app = test_router();
     let record_resp = get(&app, "/v1/sns/names/not-a-namespace/casepath.universal").await;
     assert_eq!(record_resp.status(), StatusCode::BAD_REQUEST);
@@ -170,6 +175,7 @@ async fn sns_fetch_rejects_unknown_namespace() {
 }
 #[tokio::test]
 async fn sns_missing_policy_returns_not_found() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app = test_router();
     let policy_resp = get(&app, "/v1/sns/policies/65535").await;
     assert_eq!(policy_resp.status(), StatusCode::NOT_FOUND);
@@ -177,6 +183,7 @@ async fn sns_missing_policy_returns_not_found() {
 }
 #[tokio::test]
 async fn sns_mutation_routes_are_absent() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let app = test_router();
     for (method, path) in [
         ("POST", "/v1/sns/names"),

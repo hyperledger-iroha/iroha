@@ -2931,6 +2931,7 @@ dependencies = [
  "iroha_primitives",
  "iroha_test_samples",
  "iroha_zkp_halo2",
+ "keccak 0.2.2",
  "metal",
  "norito",
  "rand 0.10.3",
@@ -4970,6 +4971,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_fs",
  "iroha_genesis",
+ "iroha_managed_ipc",
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_operation_journal",
@@ -4994,7 +4996,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "time",
- "tokio",
  "toml",
  "url",
  "windows-sys 0.61.2",
@@ -5273,6 +5274,26 @@ name = "iroha_macro"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_derive",
+]
+
+[[package]]
+name = "iroha_managed_ipc"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "iroha_fs",
+ "iroha_primitives",
+ "libc",
+ "norito",
+ "rand 0.10.3",
+ "rustix 1.1.6",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -6140,6 +6161,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_logger",
+ "iroha_managed_ipc",
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_operation_journal",
@@ -6533,6 +6555,7 @@ checksum = "d8f198d1db720e4940b5a493201d199d9f24f568f8f746bd13706243a2f71598"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
+ "hybrid-array",
 ]
 
 [[package]]

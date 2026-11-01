@@ -16,7 +16,7 @@ struct Frame {
 
 /// One deployed root and its actual child frames; never a guest-provided scope.
 /// Dropping an unfinished root poisons the same transaction attempt, including unwind.
-pub(crate) struct ContractCustody<'owner, 'tx> {
+pub struct ContractCustody<'owner, 'tx> {
     owner: &'owner Owner<'tx>,
     attempt: &'owner mut Attempt,
     call: &'tx ContractInvocation,

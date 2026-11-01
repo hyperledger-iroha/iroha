@@ -701,7 +701,9 @@ mod tests {
                 let parents = levels
                     .last()
                     .unwrap()
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .enumerate()
                     .map(|(i, pair)| {
                         candidate_parent(&context, oracle, level, i, pair[0], pair[1]).unwrap()
@@ -1377,8 +1379,8 @@ mod tests {
                 words[lane] = invalid;
                 assert!(Digest::new(words).is_none());
                 let mut bytes = [0; 48];
-                for (word, chunk) in words.iter().zip(bytes.chunks_exact_mut(8)) {
-                    chunk.copy_from_slice(&word.to_le_bytes());
+                for (word, chunk) in words.iter().zip(bytes.as_chunks_mut::<8>().0.iter_mut()) {
+                    *chunk = word.to_le_bytes();
                 }
                 assert!(Digest::from_le_bytes(bytes).is_none());
             }

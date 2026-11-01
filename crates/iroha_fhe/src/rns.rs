@@ -681,7 +681,7 @@ mod tests {
         let product = checked_modulus_product(&REGISTERED).unwrap();
         assert_eq!(
             modulus_product_bit_len(&REGISTERED, 2),
-            Some((u128::BITS - product.leading_zeros()) as usize)
+            Some(product.bit_width() as usize)
         );
     }
 

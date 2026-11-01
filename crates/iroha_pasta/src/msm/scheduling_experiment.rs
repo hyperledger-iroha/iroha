@@ -184,7 +184,7 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
     );
     // Own the permit before declaring scratch so normal return, cancellation,
     // and unwinding all destroy the joined operation's buffers first.
-    let _scratch = reservation;
+    let scratch = reservation;
     CancellationToken::checkpoint(cancellation)?;
     let skip: Vec<bool> = bases
         .iter()
@@ -265,7 +265,7 @@ fn dynamic_msm<C: PastaCurve, const SECRET: bool>(
     drop(windows);
     drop(digits);
     drop(skip);
-    drop(_scratch);
+    drop(scratch);
     Ok(result)
 }
 

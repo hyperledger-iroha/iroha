@@ -35,7 +35,10 @@ use iroha_executor_data_model::isi::multisig::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_torii_shared::list_query::field;
-use std::num::{NonZeroU16, NonZeroU64};
+use std::{
+    num::{NonZeroU16, NonZeroU64},
+    sync::atomic::AtomicUsize,
+};
 
 fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519)
@@ -123,7 +126,9 @@ fn folded_transaction(
 fn block(height: usize, transactions: Vec<FoldedTransaction>) -> FoldedBlock {
     FoldedBlock {
         height,
-        hash: HashOf::from_untyped_unchecked(Hash::prehashed([height as u8; 32])),
+        hash: HashOf::from_untyped_unchecked(Hash::prehashed(
+            [u8::try_from(height).expect("test heights fit one byte"); 32],
+        )),
         transactions: Some(transactions),
     }
 }
@@ -1096,9 +1101,9 @@ impl ChainFixture {
         let current = self.chain.committed(self.chain.height());
         let next_time =
             u64::try_from(current.block().header().creation_time().as_millis()).unwrap() + 1_000;
-        let signed = self.chain.sign(signer, instructions, next_time);
-        let tx_hash = signed.hash_as_entrypoint().to_string();
-        let outcomes = self.chain.commit_at(next_time, vec![signed]);
+        let signed_transaction = self.chain.sign(signer, instructions, next_time);
+        let tx_hash = signed_transaction.hash_as_entrypoint().to_string();
+        let outcomes = self.chain.commit_at(next_time, vec![signed_transaction]);
         assert_eq!(outcomes.len(), 1);
         Submission {
             tx_hash,
@@ -1442,6 +1447,113 @@ async fn reads_fold_a_short_tail_and_answer_503_until_a_long_gap_is_indexed() {
             .iter()
             .all(|row| row["kind"].as_str() == Some("MINT"))
     );
+}
+
+/// Wait for the background pass that `feed` just started to end.
+async fn background_pass_ended(feed: &MovementFeed) {
+    for _ in 0..600 {
+        if !feed.backfilling.load(Ordering::Acquire) {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    panic!("the background pass did not end");
+}
+
+/// A fold that panics on a block stays on its recoverable worker, in a read's own tail fold and in
+/// the background pass that follows it. The read answers `503` and the index keeps what it folded,
+/// and later passes go on from there although the panic poisoned the fold owner.
+#[tokio::test]
+async fn a_panicking_fold_keeps_answering_and_a_later_pass_goes_on() {
+    static PANICS_LEFT: AtomicUsize = AtomicUsize::new(0);
+    static SUPPRESSED_PANICS: AtomicUsize = AtomicUsize::new(0);
+    fn panics_then_folds(
+        app: &crate::SharedAppState,
+        network: &NetworkId,
+        height: NonZeroUsize,
+        hash: HashOf<BlockHeader>,
+    ) -> Result<FoldedBlock, FoldRefusal> {
+        let panics = PANICS_LEFT.try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+            left.checked_sub(1)
+        });
+        if panics.is_ok() {
+            if iroha_panic_hook::is_suppressed() {
+                SUPPRESSED_PANICS.fetch_add(1, Ordering::AcqRel);
+            }
+            panic!("injected asset movement fold panic");
+        }
+        fold_block(app, network, height, hash)
+    }
+
+    let mut fixture = ChainFixture::new();
+    let genesis = fixture.genesis.clone();
+    let sender = fixture.sender_id();
+    let holding = fixture.holding(&sender);
+    let mint = |fixture: &mut ChainFixture| {
+        let mint = fixture.submit(
+            &genesis,
+            vec![Mint::asset_quantity(1_u32, holding.clone()).into()],
+        );
+        assert!(mint.succeeded);
+    };
+    mint(&mut fixture);
+    let app = fixture.app();
+    let feed: &'static MovementFeed = Box::leak(Box::new(MovementFeed {
+        fold_block: panics_then_folds,
+        ..MovementFeed::new(MAX_ROWS)
+    }));
+    let definition = fixture.definition.clone();
+    let movements = || {
+        feed.page(
+            app.state.as_ref(),
+            &prepared(&ListQuery::new().limit(500), &definition.to_string()),
+            &definition,
+            &DataspaceReadVisibility::all_for_tests(),
+        )
+        .expect("the index answers within a short tail of the tip")
+        .items
+        .len()
+    };
+    assert!(feed.ensure_current(&app).await.is_ok());
+    let folded = feed.read().height;
+    assert_eq!(movements(), 1);
+
+    mint(&mut fixture);
+    PANICS_LEFT.store(2, Ordering::Release);
+    let response = feed
+        .ensure_current(&app)
+        .await
+        .expect_err("a panicked fold leaves the index behind the tip");
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["x-iroha-reject-code"], INDEXING_CODE);
+    let body = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .unwrap();
+    let envelope: ErrorEnvelope = norito::json::from_slice(&body).unwrap();
+    assert_eq!(
+        envelope.details.unwrap().actual.as_deref(),
+        Some(folded.to_string().as_str())
+    );
+    background_pass_ended(feed).await;
+    assert_eq!(PANICS_LEFT.load(Ordering::Acquire), 0);
+    assert_eq!(
+        SUPPRESSED_PANICS.load(Ordering::Acquire),
+        2,
+        "the read's worker and the background worker"
+    );
+    assert!(!iroha_panic_hook::is_suppressed());
+    assert_eq!(feed.read().height, folded);
+    assert_eq!(movements(), 1, "what was folded stays readable");
+
+    feed.start_background(&app);
+    background_pass_ended(feed).await;
+    assert_eq!(feed.read().height as u64, fixture.chain.height());
+    assert_eq!(movements(), 2);
+
+    mint(&mut fixture);
+    assert!(feed.ensure_current(&app).await.is_ok());
+    assert_eq!(feed.read().height as u64, fixture.chain.height());
+    assert_eq!(movements(), 3);
 }
 
 /// One test drives the node's shared index, through the collection engine.

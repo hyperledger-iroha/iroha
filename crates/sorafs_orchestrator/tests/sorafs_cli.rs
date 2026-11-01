@@ -158,12 +158,15 @@ fn tempdir() -> std::io::Result<CanonicalTempDir> {
         path,
     })
 }
-fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
-    let keypair = KeyPair::try_from_seed(
+fn manifest_submit_keypair() -> KeyPair {
+    KeyPair::try_from_seed(
         b"sorafs-cli-manifest-submit-authority".to_vec(),
         Algorithm::Ed25519,
     )
-    .expect("fixture SoraFS CLI manifest authority key");
+    .expect("fixture SoraFS CLI manifest authority key")
+}
+fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
+    let keypair = manifest_submit_keypair();
     let authority = AccountId::new(keypair.public_key().clone()).to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
@@ -225,12 +228,15 @@ fn deploy_checkpoint() -> iroha_data_model::sumeragi_finality::SumeragiFinalityC
     )
     .expect("decode independently selected native checkpoint")
 }
-fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
-    let keypair = KeyPair::try_from_seed(
+fn deploy_keypair() -> KeyPair {
+    KeyPair::try_from_seed(
         b"sorafs-cli-deploy-authority-seed".to_vec(),
         Algorithm::Ed25519,
     )
-    .expect("fixture SoraFS CLI deploy authority key");
+    .expect("fixture SoraFS CLI deploy authority key")
+}
+fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
+    let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     let checkpoint = deploy_checkpoint();
@@ -259,11 +265,7 @@ fn write_deploy_client_config_with_chain(
     torii_url: &str,
     chain: &str,
 ) -> (PathBuf, String) {
-    let keypair = KeyPair::try_from_seed(
-        b"sorafs-cli-deploy-authority-seed".to_vec(),
-        Algorithm::Ed25519,
-    )
-    .expect("fixture SoraFS CLI deploy authority key");
+    let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     let network_id = deploy_checkpoint().network_id();
@@ -3110,8 +3112,61 @@ fn governance_fixture_node_cid_display(root: &Path) -> String {
 fn parse_cli_json_stdout(output: &[u8]) -> Value {
     from_slice(output).expect("CLI stdout should be JSON")
 }
+/// Seed of the publisher key every build test signs its blocks with.
+const GOVERNANCE_DAG_BUILD_SEED: [u8; 32] = [0xcd; 32];
+/// Publisher peer of every build test's blocks.
+const GOVERNANCE_DAG_BUILDER_PEER_ID: &str = "12D3KooWGovernanceDagBuilder";
 fn governance_dag_build_key_hex() -> String {
-    "cd".repeat(32)
+    hex_encode(GOVERNANCE_DAG_BUILD_SEED)
+}
+/// Sign `node` as the DAG builder: a built block embeds only its own publisher's nodes.
+fn sign_as_governance_dag_builder(node: &mut GovernanceLogNodeV1) {
+    let signer = SigningKey::from_bytes(&GOVERNANCE_DAG_BUILD_SEED);
+    node.publisher_peer_id = GOVERNANCE_DAG_BUILDER_PEER_ID.as_bytes().to_vec();
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: Vec::new(),
+        signature: Vec::new(),
+    };
+    node.node_cid = node
+        .recompute_node_cid()
+        .expect("derive governance node CID");
+    let signature = signer.sign(
+        &node
+            .signature_payload_bytes()
+            .expect("encode governance node signature payload"),
+    );
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signer.verifying_key().to_bytes().to_vec(),
+        signature: signature.to_bytes().to_vec(),
+    };
+    node.validate().expect("validate builder node");
+    node.verify_publisher_signature()
+        .expect("verify builder node signature");
+}
+/// A source archive the builder may turn into a DAG: the fixture node's payload republished
+/// as the builder's own root node, which has no predecessor. The shared fixture node itself
+/// is a non-root node of another publisher, which no built DAG can embed.
+fn write_governance_dag_build_source(root: &Path) -> PathBuf {
+    let fixture: GovernanceLogNodeV1 = decode_from_bytes(
+        &fs::read(governance_fixture_root().join("node_v1.to"))
+            .expect("read governance node fixture"),
+    )
+    .expect("decode governance node fixture");
+    let mut node = GovernanceLogNodeV1 {
+        prev_cid: None,
+        submission_provenance: None,
+        ..fixture
+    };
+    sign_as_governance_dag_builder(&mut node);
+    fs::create_dir_all(root).expect("create governance DAG build source");
+    fs::write(
+        root.join("node_v1.to"),
+        to_bytes(&node).expect("encode builder root node"),
+    )
+    .expect("write builder root node");
+    root.to_path_buf()
 }
 fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
     let account_keypair = KeyPair::try_from_seed(
@@ -3165,13 +3220,12 @@ fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
         ],
         no_show_juror_ids: vec!["juror-c".to_string()],
     };
-    let signer = SigningKey::from_bytes(&[0xCD; 32]);
     let mut node = GovernanceLogNodeV1 {
         version: GOVERNANCE_LOG_VERSION_V1,
         node_cid: Vec::new(),
         prev_cid: None,
         timestamp: 1_700_000_031,
-        publisher_peer_id: b"12D3KooWGovernanceDagBuilder".to_vec(),
+        publisher_peer_id: Vec::new(),
         submission_provenance: Some(GovernanceDagSubmissionProvenanceV1 {
             publisher_account_digest: governance_dag_submission_account_digest_v1(
                 &publisher_account.encode(),
@@ -3185,22 +3239,8 @@ fn write_governance_dag_provenance_node(root: &Path) -> (PathBuf, String) {
             signature: Vec::new(),
         },
     };
-    node.node_cid = node
-        .recompute_node_cid()
-        .expect("derive governance node CID");
-    let signature = signer.sign(
-        &node
-            .signature_payload_bytes()
-            .expect("encode governance node signature payload"),
-    );
-    node.publisher_signature = GovernanceLogSignatureV1 {
-        algorithm: GovernanceSignatureAlgorithm::Ed25519,
-        public_key: signer.verifying_key().to_bytes().to_vec(),
-        signature: signature.to_bytes().to_vec(),
-    };
-    node.validate().expect("validate provenance-bearing node");
-    node.verify_publisher_signature()
-        .expect("verify provenance-bearing node signature");
+    // The build below embeds this node, so the builder publishes it.
+    sign_as_governance_dag_builder(&mut node);
     let path = root.join("finance-report.to");
     fs::write(
         &path,
@@ -3224,7 +3264,7 @@ fn assert_governance_submission_summary(value: &Value, publisher_account_digest_
     );
 }
 fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&Path>) -> Value {
-    let root = governance_fixture_root();
+    let root = write_governance_dag_build_source(&build_dir.with_file_name("source"));
     let key_hex = governance_dag_build_key_hex();
     let mut command = sorafs_cli_cmd();
     command
@@ -3244,8 +3284,12 @@ fn build_governance_dag_fixture_archive(build_dir: &Path, summary_path: Option<&
 }
 #[test]
 fn governance_dag_list_and_show_validate_fixture() {
-    let root = governance_fixture_root();
+    // The shared fixture directory also holds DAG blocks and heads; list a node-only archive.
+    let tempdir = tempdir().expect("tempdir");
+    let root = tempdir.path().join("archive");
+    fs::create_dir(&root).expect("create node archive");
     let node = root.join("node_v1.to");
+    fs::copy(governance_fixture_root().join("node_v1.to"), &node).expect("copy fixture node");
     let node_cid = governance_fixture_node_cid_display(&root);
     let list_assert = sorafs_cli_cmd()
         .arg("governance")
@@ -3544,8 +3588,8 @@ fn governance_dag_build_fixture_archive_writes_signed_blocks_and_head() {
 }
 #[test]
 fn governance_dag_build_fixture_archive_writes_car_segment() {
-    let root = governance_fixture_root();
     let tempdir = tempdir().expect("tempdir");
+    let root = write_governance_dag_build_source(&tempdir.path().join("source"));
     let build_dir = tempdir.path().join("build");
     let car_path = tempdir.path().join("governance-dag.car");
     let car_plan_path = tempdir.path().join("governance-dag-plan.json");
@@ -3977,8 +4021,8 @@ fn governance_dag_mirror_query_rejects_unknown_block_cid() {
 }
 #[test]
 fn governance_dag_checkpoint_packages_verified_snapshot_artifacts() {
-    let root = governance_fixture_root();
     let tempdir = tempdir().expect("tempdir");
+    let root = write_governance_dag_build_source(&tempdir.path().join("source"));
     let build_dir = tempdir.path().join("build");
     let car_path = tempdir.path().join("governance-dag.car");
     let car_plan_path = tempdir.path().join("governance-dag-plan.json");
@@ -4112,7 +4156,7 @@ fn governance_dag_checkpoint_rejects_bad_mirror_index_schema() {
 fn build_governance_dag_checkpoint_fixture(
     base: &Path,
 ) -> (PathBuf, PathBuf, PathBuf, PathBuf, String) {
-    let root = governance_fixture_root();
+    let root = write_governance_dag_build_source(&base.join("source"));
     let build_dir = base.join("build");
     let car_path = base.join("governance-dag.car");
     let car_plan_path = base.join("governance-dag-plan.json");

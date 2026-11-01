@@ -1,15 +1,14 @@
 //! Push bridge endpoints (FCM/APNS) – feature/config gating and happy-path smoke.
 #![cfg(all(feature = "app_api", feature = "push"))]
+use crate::fixtures;
 use axum::{
     body::to_bytes,
     http::{Request, StatusCode},
 };
 use iroha_config::parameters::actual;
 use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, World},
+    kiso::KisoHandle, query::store::LiveQueryStore, state::World,
+    sumeragi::test_chain::CertifiedTestChain,
 };
 use iroha_data_model::Registrable;
 use iroha_data_model::{
@@ -17,12 +16,9 @@ use iroha_data_model::{
     domain::Domain,
 };
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::peer::PeerId;
 use iroha_torii::{OnlinePeersProvider, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-#[path = "fixtures.rs"]
-mod fixtures;
 fn world_with_account(account_id: &AccountId) -> World {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(account_id);
@@ -52,18 +48,16 @@ fn build_torii(
     iroha_torii::TestApiRouterRuntime,
     iroha_torii::test_utils::TestDataDirGuard,
     iroha_data_model::NetworkId,
+    CertifiedTestChain,
 ) {
-    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.data_dir = data_dir.path().to_path_buf();
     cfg.torii.push = push;
+    let native_chain =
+        fixtures::commit_signed_genesis(&mut cfg, world_with_account(account_id), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = world_with_account(account_id);
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let state = native_chain.state().clone();
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(4).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -82,7 +76,7 @@ fn build_torii(
         queue,
         events,
         LiveQueryStore::start_test(),
-        kura,
+        native_chain.kura().clone(),
         state,
         da_receipt_signer,
         OnlinePeersProvider::new(peers_rx),
@@ -99,7 +93,7 @@ fn build_torii(
     let router = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
-    (torii, router, data_dir, network_id)
+    (torii, router, data_dir, network_id, native_chain)
 }
 fn register_device_request(
     network_id: &iroha_data_model::NetworkId,
@@ -107,10 +101,7 @@ fn register_device_request(
     key_pair: &iroha_crypto::KeyPair,
     token: &str,
 ) -> Request<axum::body::Body> {
-    let body = format!(
-        r#"{{"account_id":"{}","platform":"FCM","token":"{}"}}"#,
-        account_id, token
-    );
+    let body = format!(r#"{{"account_id":"{account_id}","platform":"FCM","token":"{token}"}}"#);
     let request = Request::builder()
         .method("POST")
         .uri("/v1/notify/devices")
@@ -138,7 +129,7 @@ async fn push_registration_rejected_when_disabled() {
         enabled: false,
         ..Default::default()
     };
-    let (_torii, runtime, _data_dir, network_id) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir, network_id, _native_chain) = build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
         register_device_request(&network_id, &account_id, &key_pair, "t0"),
@@ -154,7 +145,7 @@ async fn push_registration_rejected_without_credentials() {
         enabled: true,
         ..Default::default()
     };
-    let (_torii, runtime, _data_dir, network_id) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir, network_id, _native_chain) = build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
         register_device_request(&network_id, &account_id, &key_pair, "t0"),
@@ -166,7 +157,7 @@ async fn push_registration_rejected_without_credentials() {
 #[tokio::test]
 async fn push_registration_succeeds_with_credentials() {
     let (key_pair, account_id) = push_identity(13);
-    let (torii, runtime, _data_dir, network_id) = build_torii(push_config(), &account_id);
+    let (torii, runtime, _data_dir, network_id, _native_chain) = build_torii(push_config(), &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
         register_device_request(&network_id, &account_id, &key_pair, "t0"),
@@ -181,5 +172,4 @@ async fn push_registration_succeeds_with_credentials() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

@@ -422,13 +422,6 @@ pub use seal::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 #[path = "output_internal.rs"]
 mod internal;
 
-#[path = "output_time_journal.rs"]
-mod time_journal;
-
-#[cfg(test)]
-#[path = "output_time_journal_test_support.rs"]
-mod time_journal_test_support;
-
 #[path = "output_pipeline.rs"]
 mod pipeline;
 

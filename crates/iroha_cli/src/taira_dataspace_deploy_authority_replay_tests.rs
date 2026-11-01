@@ -74,7 +74,7 @@ impl Fixture {
         let chain_id = config.chain_id.clone();
         config.consensus_mode = SumeragiConsensusMode::Npos;
         let npos = SumeragiNposParameters::default();
-        // Preserve the original staking policy authored by TestChainConfig.
+        // Keep the constructor's authored staking policy; NPoS genesis requires it.
         config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 npos.epoch_length_blocks,

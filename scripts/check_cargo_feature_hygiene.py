@@ -451,6 +451,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "dev-tools",
  "fastpq-gpu",
  "iroha-core-tests",
+ "kagemusha-simulator",
  "mutation-testing",
  "privacy-release-evidence",
  "profiling",
@@ -464,6 +465,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-tests"),
     "iroha_core_zk": (
         "dev-tools",
+        "kagemusha-simulator",
         "test-utils",
         "zk-tests",
     ),

@@ -466,10 +466,10 @@ fn startup_adapter_preserves_original_refusal_and_deterministic_invalidity() {
 
 #[test]
 fn authenticated_pending_carrier_retries_original_pool_without_double_consumption() {
+    use crate::sumeragi::runtime_availability::history::sccp::SccpHistoryRead;
     // Keep retired fixture State generations from reopening this original pool.
     // Only the tested admission and synchronous owner refunds may change capacity.
     let _constructor_retirement = crossbeam_epoch::pin();
-    use crate::sumeragi::runtime_availability::history::sccp::SccpHistoryRead;
     let (chain, _) = recorded();
     let state = chain.state();
     let mut read = SccpHistoryRead::from_original_state_for_test(state);
@@ -745,10 +745,10 @@ pub(super) fn after_submits_checkpoint(height: u64, budget: &AllocationBudget) {
 
 #[test]
 fn installed_record_and_partial_delta_retry_without_readmitting_the_submit() {
+    use crate::sumeragi::runtime_availability::history::sccp::SccpHistoryRead;
     // Keep retired fixture State generations from reopening this original pool.
     // Only the tested admission and synchronous owner refunds may change capacity.
     let _constructor_retirement = crossbeam_epoch::pin();
-    use crate::sumeragi::runtime_availability::history::sccp::SccpHistoryRead;
     let (chain, _) = recorded();
     let state = chain.state();
     let mut read = SccpHistoryRead::from_original_state_for_test(state);

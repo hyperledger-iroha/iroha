@@ -487,10 +487,8 @@ impl CompleteQMaskSOpeningsV1 {
             if chunk.len_v1() != 16_384 {
                 return Err(QMaskSErrorV1::Source);
             }
-            for (i, bytes) in chunk.as_slice_v1().chunks_exact(8).enumerate() {
-                let value = Zeroizing::new(u64::from_le_bytes(
-                    bytes.try_into().map_err(|_| QMaskSErrorV1::Source)?,
-                ));
+            for (i, bytes) in chunk.as_slice_v1().as_chunks::<8>().0.iter().enumerate() {
+                let value = Zeroizing::new(u64::from_le_bytes(*bytes));
                 let index = slot * COEFFICIENTS_PER_SLOT_V1 + i;
                 if *value >= ZK_AMS_MKHE_RNS_NATIVE_MODULI_V1[coordinate.limb]
                     || (coordinate.block == 7 && index == BLOCK_COEFFICIENTS_V1 - 1 && *value != 0)

@@ -6,7 +6,7 @@ use p256::ecdsa::{
     Signature as P256Signature, SigningKey,
     signature::{Signer as _, hazmat::PrehashSigner as _},
 };
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 
 use super::*;
 use crate::kagemusha::kagemusha_wallet_v1::poseidon::{

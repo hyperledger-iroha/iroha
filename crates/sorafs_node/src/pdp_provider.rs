@@ -2346,7 +2346,7 @@ mod tests {
     }
     fn consume_failure(counter: &AtomicU64) -> bool {
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 (value != 0).then(|| value - 1)
             })
             .is_ok()

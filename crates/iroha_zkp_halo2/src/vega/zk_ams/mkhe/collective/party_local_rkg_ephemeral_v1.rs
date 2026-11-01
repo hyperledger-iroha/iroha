@@ -335,15 +335,15 @@ fn commit_rkg_ephemeral_opening_v1(
     coefficients: &[i8],
     blindings: &[Scalar; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1],
 ) -> Result<[Point; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1], ZkAmsMkheErrorV1> {
-    let chunks = coefficients.chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1);
-    if !chunks.remainder().is_empty() || chunks.len() != blindings.len() {
+    let (chunks, remainder) = coefficients.as_chunks::<ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1>();
+    if !remainder.is_empty() || chunks.len() != blindings.len() {
         return Err(ZkAmsMkheErrorV1::InvalidKeyMaterial);
     }
     let mut commitments = Vec::new();
     commitments
         .try_reserve_exact(blindings.len())
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-    for (chunk, blinding) in chunks.zip(blindings.iter()) {
+    for (chunk, blinding) in chunks.iter().zip(blindings.iter()) {
         commitments.push(
             commit_zk_ams_t256_membership_chunk_v1(
                 ZkAmsT256MembershipBoundV1::One,

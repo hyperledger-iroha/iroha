@@ -915,12 +915,11 @@ impl AppealFinanceTransactionForwarder {
             fingerprint
         };
         let mut checkpoint = authenticated_checkpoint.body.clone();
-        let recovered = checkpoint
-            .pending
-            .iter_mut()
-            .fold(false, |recovered, entry| {
-                recover_interrupted_signing(entry) || recovered
-            });
+        // Every interrupted entry is recovered; no short-circuit may skip one.
+        let mut recovered = false;
+        for entry in &mut checkpoint.pending {
+            recovered |= recover_interrupted_signing(entry);
+        }
         let forwarder = Self {
             policy,
             checkpoint_authentication: Some(CheckpointAuthenticationContext {

@@ -845,7 +845,7 @@ impl Bus {
         if let Some(v) = counts.get_mut(&ip) {
             if *v > 0 {
                 *v -= 1;
-                let _ = self.shared.sessions_total.fetch_update(
+                let _ = self.shared.sessions_total.try_update(
                     Ordering::AcqRel,
                     Ordering::Acquire,
                     |total| total.checked_sub(1),
@@ -2582,7 +2582,7 @@ impl Bus {
         {
             let map = self.inner.read().await;
             session_count = map.len();
-            for (_k, sess) in map.iter() {
+            for sess in map.values() {
                 let b = *sess.buffer_bytes.lock().await;
                 if b > 0 {
                     buffered_sessions += 1;

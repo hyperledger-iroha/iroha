@@ -207,7 +207,7 @@ impl ZkX509WitnessV1 {
         certificate_chain_der: Vec<Vec<u8>>,
         crl_der: Vec<u8>,
         ca_membership_index: u16,
-        ca_membership_siblings: [[u8; 32]; 12],
+        ca_membership_siblings: &[[u8; 32]; 12],
         wallet_ownership_signature_rs: [u8; 64],
         attribute_openings: Vec<ZkX509AttributeOpeningV1>,
     ) -> Result<Self, ZkX509WitnessCodecErrorV1> {
@@ -216,7 +216,7 @@ impl ZkX509WitnessV1 {
             crl_der,
             ca_membership_path: ZkX509CaMembershipPathV1 {
                 index: ca_membership_index,
-                siblings: ca_membership_siblings,
+                siblings: *ca_membership_siblings,
             },
             wallet_ownership_signature_rs,
             attribute_openings,
@@ -234,6 +234,11 @@ impl ZkX509WitnessV1 {
     ///
     /// The returned bytes are private. Keep them in a clearing owner such as
     /// `zeroize::Zeroizing<Vec<u8>>`; the holder prover does this automatically.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the same invalid witness shapes as [`Self::from_parts_v1`], an
+    /// oversized frame, and a failed frame encoding.
     pub fn encode_v1(&self) -> Result<Vec<u8>, ZkX509WitnessCodecErrorV1> {
         validate_witness_shape_v1(self)?;
         encode_witness_frame_v1(self)

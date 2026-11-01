@@ -1933,11 +1933,21 @@ fn roles_without_an_engine_import_none() {
 fn crate_dependents_match_the_manifests() {
     let root = workspace_root();
     let document = inventory();
-    let skip: BTreeSet<String> = strings(field(document, "scan"), "skip_directories")
-        .into_iter()
-        .collect();
-    let mut manifests = Vec::new();
-    collect(&root, &root, &skip, "Cargo.toml", &mut manifests);
+    let scan = field(document, "scan");
+    let skip: BTreeSet<String> = strings(scan, "skip_directories").into_iter().collect();
+    // The workspace manifest plus every manifest below the declared scan roots. Local
+    // untracked trees beside them (for example ignored `output/` copies) are not workspace
+    // crates and must not change the result.
+    let mut manifests = vec!["Cargo.toml".to_owned()];
+    for scan_root in strings(scan, "roots") {
+        collect(
+            &root,
+            &root.join(&scan_root),
+            &skip,
+            "Cargo.toml",
+            &mut manifests,
+        );
+    }
     let mut found = BTreeMap::new();
     for manifest in manifests {
         let source = fs::read_to_string(root.join(&manifest)).expect("read manifest");

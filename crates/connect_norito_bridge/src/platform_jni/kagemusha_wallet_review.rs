@@ -13,7 +13,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     _class: JClass<'_>,
     handle: jlong,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let mut retained = None;
         let result = wallet::run(|| {
             let issued = exchange::begin(handle as u64)?;
@@ -22,7 +22,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             Ok(result)
         });
         exchange::deliver_issued(retained, result, |result| {
-            let object = response(&mut env, result);
+            let object = response(env, result);
             (object, !object.is_null())
         })
     })
@@ -36,14 +36,14 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     handle: jlong,
     exchange_id: jlong,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             Ok(exchange::end_response(exchange::end(
                 handle as u64,
                 exchange_id as u64,
             )?))
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }
 /// Request-bound Send1/Unload8: Ready18, existing66 or tokenless maintenance67.
@@ -62,7 +62,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     first: JByteArray<'_>,
     second: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let mut admitted = None;
         let mut delivery = review::CapabilityDelivery::default();
         let result = wallet::run(|| {
@@ -70,12 +70,12 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                 u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
             let expectation =
                 u32::try_from(expectation).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-            let request_id = read(&mut env, &request_id, 32)?;
+            let request_id = read(env, &request_id, 32)?;
             let expected_projection =
-                read(&mut env, &expected_projection, review::PROJECTION_MAX_BYTES)?;
+                read(env, &expected_projection, review::PROJECTION_MAX_BYTES)?;
             let bounds = review::bounds(selector)?;
-            let first = read(&mut env, &first, bounds[0])?;
-            let second = read(&mut env, &second, bounds[1])?;
+            let first = read(env, &first, bounds[0])?;
+            let second = read(env, &second, bounds[1])?;
             let amount = u128::from(amount_low as u64) | (u128::from(amount_high as u64) << 64);
             let input = review::request(
                 &request_id,
@@ -100,7 +100,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
         });
         review::deliver(delivery, result, |result| {
             let object = response_class(
-                &mut env,
+                env,
                 result,
                 jni::jni_str!(
                     "org/hyperledger/iroha/sdk/offline/wallet/KagemushaWalletReviewReplyV1"
@@ -119,7 +119,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     exchange_id: jlong,
     token: jlong,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let mut admitted = None;
         let mut delivery = None;
         let result = wallet::run(|| {
@@ -142,7 +142,7 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
             Ok(response)
         });
         let retained = result.as_ref().is_ok_and(|response| response.kind == 65);
-        let object = response(&mut env, result);
+        let object = response(env, result);
         if let Some(delivery) = delivery.as_mut() {
             delivery.complete(retained && !object.is_null());
         }

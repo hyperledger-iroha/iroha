@@ -48,9 +48,9 @@ const RECENT: u64 = 64;
 /// A tip that moved further than this since the last advance is minted again.
 const MAX_ADVANCE: u64 = 1_024;
 /// Every retained frame must have been re-read within this age, or attestations refuse.
-pub(crate) const MAX_COVERAGE_AGE: Duration = Duration::from_secs(30 * 60);
+pub const MAX_COVERAGE_AGE: Duration = Duration::from_mins(30);
 /// Time between the starts of consecutive scrub passes.
-const SCRUB_INTERVAL: Duration = Duration::from_secs(10 * 60);
+const SCRUB_INTERVAL: Duration = Duration::from_mins(10);
 /// Frames one scrub step reads.
 const SCRUB_CHUNK: u64 = 128;
 /// Pause after each scrub step, bounding a pass to a fraction of one core.
@@ -86,7 +86,7 @@ pub enum RetainedUnavailable {
 /// Node-local holder in [`Kura`]. Requests keep the complete walk until a producer
 /// attaches; afterwards only a usable published authority admits a request.
 #[derive(Debug, Default)]
-pub(crate) struct RetainedAttestation {
+pub struct RetainedAttestation {
     attached: AtomicBool,
     poisoned: AtomicBool,
     generation: AtomicU64,
@@ -112,7 +112,7 @@ struct Published {
 /// taken with the proof and must still hold when the body is signed and when the
 /// response leaves the node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum RetainedAdmission {
+pub enum RetainedAdmission {
     /// The request read every frame itself: no producer was attached, the height is
     /// H1 or H2, or an enclosing caller keeps its full-prefix recipe.
     CompleteWalk,

@@ -128,6 +128,8 @@ use std::sync::{Mutex, OnceLock};
 pub mod parallel;
 /// Canonical host-independent builders for generated executor fixtures.
 pub mod prebuilt_fixtures;
+/// Bounded direct-IVM movement adapter for the independent-root unit prototype.
+pub mod game_unit_step;
 // Test/fixture helpers (public for tests and dev tools)
 pub mod predecoder_fixtures;
 // Re-export AES helpers used by benches and downstream users.

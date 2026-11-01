@@ -223,7 +223,7 @@ fn six_fresh_endorsements_close_admission_from_the_next_block() {
         .is_err(),
         "five of nine is short of the threshold"
     );
-    let stale = endorse(&target, &backup[..6], NOW_MS - 31 * 60 * 1000);
+    let expired = endorse(&target, &backup[..6], NOW_MS - 31 * 60 * 1000);
     assert!(
         submit(
             &state,
@@ -231,7 +231,7 @@ fn six_fresh_endorsements_close_admission_from_the_next_block() {
             NOW_MS,
             ContainRuntimeV1 {
                 containment: target.clone(),
-                endorsements: stale,
+                endorsements: expired,
             },
         )
         .is_err(),

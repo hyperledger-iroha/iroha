@@ -258,6 +258,31 @@ fn debug() { std::env::var("DEBUG_ONLY"); }
     ]
 
 
+def test_reports_change_only_when_a_reference_does(tmp_path, monkeypatch) -> None:
+    """Moving a reference leaves both reports byte-identical; changing it does not."""
+
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    monkeypatch.setattr(MODULE, "REPO_ROOT", source_root)
+    monkeypatch.setattr(MODULE, "SKIP_DIRS", set())
+    path = source_root / "owner.rs"
+    reference = 'fn read() { std::env::var("OWNER"); }\n'
+
+    def reports(source: str) -> tuple[bytes, bytes]:
+        path.write_text(source)
+        refs = MODULE.collect_inventory(source_root)
+        json_path = tmp_path / "inventory.json"
+        md_path = tmp_path / "inventory.md"
+        MODULE.write_json(json_path, refs)
+        MODULE.write_markdown(md_path, refs)
+        return json_path.read_bytes(), md_path.read_bytes()
+
+    original = reports(reference)
+    assert reports("// moved down\n\n" + reference) == original
+    assert reports(reference.replace("OWNER", "OTHER")) != original
+    assert [ref.line for ref in MODULE.extract_references(path)] == [1]
+
+
 @pytest.mark.parametrize("source", ["fn ordinary() {}", "fn dynamic(name: &str) { std::env::var(name); }"])
 def test_sources_without_literal_reads_need_no_scope_scan(tmp_path, monkeypatch, source) -> None:
     """Files unable to emit inventory rows avoid the structural scanner entirely."""

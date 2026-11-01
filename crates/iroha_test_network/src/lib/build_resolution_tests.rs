@@ -462,12 +462,12 @@ fn release_prebuilt_binary_revalidates_mutation_after_initial_resolution() {
     let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
     let contract = release_program_contract(&fixture.repo).unwrap().unwrap();
     let selected = contract.select(BinaryKind::Irohad, None).unwrap();
-    assert!(selected.command().is_ok());
+    assert!(crate::native_program_fixture::command_admitted(&selected));
     let binary = fixture.target.join(BinaryKind::Irohad.filename(false));
     set_fixture_access(&binary, "F");
     fs::write(&binary, b"mutated release executable\n").unwrap();
     set_fixture_access(&binary, "RX");
-    assert!(selected.command().is_err());
+    assert!(!crate::native_program_fixture::command_admitted(&selected));
 }
 #[test]
 fn release_prebuilt_cached_selection_rejects_native_policy_drift() {
@@ -476,7 +476,7 @@ fn release_prebuilt_cached_selection_rejects_native_policy_drift() {
     let _env = release_prebuilt_env(&fixture, &fixture.manifest_sha256);
     let contract = release_program_contract(&fixture.repo).unwrap().unwrap();
     let selected = contract.select(BinaryKind::Irohad, None).unwrap();
-    assert!(selected.command().is_ok());
+    assert!(crate::native_program_fixture::command_admitted(&selected));
     drop(contract);
     set_fixture_access(
         &fixture
@@ -484,7 +484,7 @@ fn release_prebuilt_cached_selection_rejects_native_policy_drift() {
             .join(BinaryKind::Irohad.filename(cfg!(windows))),
         "F",
     );
-    assert!(selected.command().is_err());
+    assert!(!crate::native_program_fixture::command_admitted(&selected));
 }
 #[test]
 fn release_prebuilt_resolution_rejects_feature_isolation_force_build_and_ambient_override() {

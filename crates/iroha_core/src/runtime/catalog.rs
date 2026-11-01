@@ -188,7 +188,7 @@ pub(crate) mod test_catalog {
 
     /// Run `body` with the catalog of a release whose additions are `additions` as this thread's
     /// release catalog. Code that runs on other threads still sees the real catalog.
-    pub(crate) fn with_additions<T>(additions: &[Addition], body: impl FnOnce() -> T) -> T {
+    pub fn with_additions<T>(additions: &[Addition], body: impl FnOnce() -> T) -> T {
         struct Restore(Option<&'static ReleaseCatalog>);
         impl Drop for Restore {
             fn drop(&mut self) {

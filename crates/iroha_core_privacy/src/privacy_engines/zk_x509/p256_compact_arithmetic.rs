@@ -241,7 +241,9 @@ impl P256CompactArithmeticTraceV1 {
         }
         for (index, rows) in trace
             .base
-            .chunks_exact(P256_ARITHMETIC_ROWS_PER_OPERATION_V1)
+            .as_chunks::<P256_ARITHMETIC_ROWS_PER_OPERATION_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             let operation = CompactOperationV1::from_rows_v1(

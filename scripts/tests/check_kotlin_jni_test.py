@@ -103,8 +103,17 @@ def build_outputs(tmp_path):
     return roots
 
 
-def test_parser_reads_javac_headers_without_loading_classes(tmp_path):
+def usable_javac():
+    """Return a working JDK compiler; the macOS stub without an installed JDK counts as absent."""
     javac = shutil.which("javac")
+    if javac is None:
+        return None
+    probe = subprocess.run([javac, "-version"], capture_output=True, timeout=60)
+    return javac if probe.returncode == 0 else None
+
+
+def test_parser_reads_javac_headers_without_loading_classes(tmp_path):
+    javac = usable_javac()
     if javac is None:
         pytest.skip("JDK compiler is required for the independent classfile/header oracle")
     source = tmp_path / "NativeOracle.java"
@@ -142,7 +151,7 @@ public class NativeOracle {
 @pytest.fixture(scope="module")
 def compiled_inheritance(tmp_path_factory):
     """Use javac as an independent parent-metadata oracle without loading classes."""
-    javac = shutil.which("javac")
+    javac = usable_javac()
     if javac is None:
         pytest.skip("JDK compiler is required for the independent inheritance oracle")
     root = tmp_path_factory.mktemp("classfile-inheritance")
@@ -868,12 +877,13 @@ def test_kotlin_ships_only_the_kagemusha_wallet_v1_surface():
         f"{wallet}/androidTest/java/{offline}/wallet/KagemushaProbeActivityBinding.kt",
         f"{wallet}/androidTest/java/{offline}/wallet/KagemushaProbeActivityObservationTest.kt",
         *(f"{wallet}/main/java/{offline}/wallet/KagemushaWallet{name}V1.kt" for name in (
-            "DeferredArchive", "ExchangeCall", "ExchangeLifetime", "Exchange",
-            "ReviewExecutionCleanup", "WorkerMetrics",
+            "CallObservation", "DeferredArchive", "ExchangeCall", "ExchangeLifetime", "Exchange",
+            "FoldProgress", "InvalidReason", "ReviewExecutionCleanup", "WorkerMetrics",
         )),
         *(f"{wallet}/test/kotlin/{offline}/wallet/KagemushaWallet{name}V1Test.kt" for name in (
-            "DeferredArchive", "ExchangeLifetime", "RequestBoundReview",
-            "ReviewExecutionCleanup", "WorkerMetrics",
+            "CallObservation", "DeferredArchive", "ExchangeLifetime", "FoldProgress",
+            "InvalidReason", "RequestBoundReview", "ReviewExecutionCleanup",
+            "StorageObservation", "WorkerMetrics",
         )),
         *(f"{wallet}/test/kotlin/{offline}/wallet/Kagemusha{name}Test.kt" for name in (
             "EnrollmentProbeStage", "ProbeActivityControl", "ProbeReviewCustody",
@@ -1008,10 +1018,12 @@ def test_swift_ships_no_old_kagemusha_surface():
         "Sources/IrohaSwift/KagemushaWalletDeferredArchiveV1.swift",
         "Sources/IrohaSwift/KagemushaWalletExchangeLifetimeV1.swift",
         "Sources/IrohaSwift/KagemushaWalletExchangeV1.swift",
+        "Sources/IrohaSwift/KagemushaWalletFoldProgressV1.swift",
         "Sources/IrohaSwift/KagemushaWalletLedgerFinalitySyncV1.swift",
         "Sources/IrohaSwift/KagemushaWalletReviewedExecutionV1.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletDeferredArchiveV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletExchangeLifetimeV1Tests.swift",
+        "Tests/IrohaSwiftTests/KagemushaWalletFoldProgressV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletLedgerFinalitySyncV1Tests.swift",
         "Tests/IrohaSwiftTests/KagemushaWalletReviewedExecutionV1Tests.swift",
     }

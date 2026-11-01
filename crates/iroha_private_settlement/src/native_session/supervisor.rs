@@ -94,7 +94,7 @@ async fn execute(
         }
         NativePrivateSettlementCommand::Run => match operation.run(&options).await {
             Ok(result) => NativePrivateSettlementOutcome::Verified {
-                outcome: result.outcome,
+                outcome: Box::new(result.outcome),
                 progress: Some(result.progress),
             },
             Err(error) => NativePrivateSettlementOutcome::error(error),
@@ -102,7 +102,7 @@ async fn execute(
         NativePrivateSettlementCommand::Recover => match operation.recover(&options).await {
             Ok(result) => match result.outcome {
                 Some(outcome) => NativePrivateSettlementOutcome::Verified {
-                    outcome,
+                    outcome: Box::new(outcome),
                     progress: result.progress,
                 },
                 None => NativePrivateSettlementOutcome::Pending(result.progress),

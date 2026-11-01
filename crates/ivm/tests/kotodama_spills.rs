@@ -120,8 +120,10 @@ fn frame_and_spill_offsets_above_four_kib_are_bounded_and_execute() {
     let frame_bytes = i64::from(implementation.frame_bytes);
     let words = artifact[metadata.code_offset + implementation.pc_start as usize
         ..metadata.code_offset + implementation.pc_end as usize]
-        .chunks_exact(4)
-        .map(|word| u32::from_le_bytes(word.try_into().expect("instruction word")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
         .collect::<Vec<_>>();
     assert_eq!(
         instruction::wide::opcode(words[0]),

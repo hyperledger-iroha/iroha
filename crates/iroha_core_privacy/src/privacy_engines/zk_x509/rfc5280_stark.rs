@@ -177,11 +177,13 @@ pub const ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Copy/call bus challenge lanes. This must remain equal to strict DER.
 pub const ZK_X509_RFC5280_STARK_BUS_LANES_V1: usize = 4;
 /// Maximum compressed events in any one relation.
+#[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_RELATION_EVENT_BOUND_V1: usize =
     ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
 /// Conservatively union-bounded compressed relations, including the
 /// DER-byte/DER-node serial/key-source lookups, serial copy bus, and the unified
 /// authenticated temporal/numeric lookup, plus nine normalized output role equalities.
+#[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1: usize = 39;
 /// Conservative remaining collision-security bits.
 ///
@@ -189,6 +191,7 @@ pub const ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1: usize = 39;
 /// collision polynomial has degree at most `N = 2^19`; four independent lanes
 /// therefore fail with probability `< (2^19 / 2^63)^4 = 2^-176`.  A union
 /// over at most thirty-nine relations is `< 39 * 2^-176 < 2^-170`.
+#[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_COPY_SOUNDNESS_BITS_V1: u16 = 170;
 const RFC_TUPLE_CHALLENGE_LABELS_V1: [&[u8]; 12] = [
     b"zk-x509-rfc5280-bus-tuple-slot-00-v1",
@@ -3670,7 +3673,7 @@ pub fn zk_x509_rfc_key_join_rows_v1(
 /// Exact required CRL calendar timestamps in the original RFC base polynomial.
 /// Rows are the final phase of fixed temporal slots six and seven, independent
 /// of private certificate depth, entry counts, or selected date encoding.
-pub(crate) fn zk_x509_rfc_crl_time_join_rows_v1(
+pub fn zk_x509_rfc_crl_time_join_rows_v1(
     shape: ZkX509Rfc5280StarkShapeV1,
 ) -> Result<([usize; 2], usize), ZkX509Rfc5280StarkErrorV1> {
     shape.validate()?;
@@ -4234,8 +4237,8 @@ pub(super) fn build_zk_x509_rfc5280_serial_source_rows_v1(
         || sign_padding != (magnitude[0] & 0x80 != 0)
         || usize::from(source.node.content_start)
             .checked_add(encoded.len())
-            .filter(|end| *end == usize::from(source.node.content_end))
-            .is_none()
+            .as_ref()
+            .is_none_or(|end| *end != usize::from(source.node.content_end))
         || source
             .encoded_contents
             .iter()
@@ -6891,6 +6894,13 @@ impl ZkX509Rfc5280StarkBaseMaterialV1 {
         }
         Ok(())
     }
+    /// Fill the final retained base matrix from one original row stream.
+    pub(crate) fn fill_base_matrix_v1(
+        &self,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        native_matrix::fill_base_v1(self, outputs)
+    }
     pub(crate) fn build_base_column(
         &self,
         column: usize,
@@ -7271,9 +7281,12 @@ mod aux_replay;
 #[path = "rfc5280_numeric_replay.rs"]
 mod numeric_replay;
 
-/// Named scratch for the bounded RFC auxiliary batch; destinations are caller-owned.
+/// Maximum scratch for bounded replay or initial final-owner RFC construction;
+/// destination allocations remain caller-owned and separately admitted.
 pub const fn zk_x509_rfc_aux_replay_scratch_bytes_v1() -> usize {
-    aux_replay::scratch_payload_bytes_v1()
+    let aux = aux_replay::scratch_payload_bytes_v1();
+    let base = native_matrix::scratch_payload_bytes_v1();
+    if aux > base { aux } else { base }
 }
 
 /// Replay one challenge-dependent auxiliary column with bounded memory.
@@ -7503,6 +7516,26 @@ impl<'a> ZkX509Rfc5280StarkColumnProviderV1<'a> {
     ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
         self.material.fill_base_columns_v1(first, outputs)
     }
+    /// Fill the already admitted final base matrix under the original binding.
+    pub(crate) fn fill_base_matrix_v1(
+        &self,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        self.material.fill_base_matrix_v1(outputs)
+    }
+    /// Populate disjoint auxiliary groups with their original complete recurrences.
+    pub(crate) fn fill_aux_matrix_v1(
+        &self,
+        outputs: &mut [&mut [F]],
+    ) -> Result<(), ZkX509Rfc5280StarkErrorV1> {
+        aux_replay::fill_matrix_v1(
+            self.material,
+            &self.der_challenges,
+            &self.challenges,
+            outputs,
+            &self.sha_union,
+        )
+    }
     pub(crate) fn build_base_column_v1(
         &self,
         column: usize,
@@ -7604,6 +7637,36 @@ pub fn evaluate_zk_x509_rfc5280_local_residues_v1<A: PolynomialAirFieldV1>(
     )
 }
 
+/// Native composition uses the same complete relation with immutable checked
+/// challenge families. Shape, canonicality, terminals and every residue remain
+/// checked in the shared body.
+pub(super) fn evaluate_rfc5280_local_with_bound_context_v1(
+    current: &ZkX509Rfc5280StarkBaseRowV1,
+    next: &ZkX509Rfc5280StarkBaseRowV1,
+    current_aux: &ZkX509Rfc5280StarkAuxRowV1,
+    next_aux: &ZkX509Rfc5280StarkAuxRowV1,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1,
+    capability: super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'_>,
+) -> Result<Vec<F>, ZkX509Rfc5280StarkErrorV1> {
+    evaluate_rfc5280_relation_with_context_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        RfcEvaluationChallengesV1::Bound(capability),
+        None,
+    )
+}
+
+enum RfcEvaluationChallengesV1<'a> {
+    Raw {
+        der: &'a ZkX509DerStarkChallengesV1,
+        rfc: &'a ZkX509Rfc5280StarkChallengesV1,
+    },
+    Bound(super::credential_pre_aux::ValidatedMainCompositionChallengesV1<'a>),
+}
+
 #[allow(clippy::too_many_arguments)]
 fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     current: &ZkX509Rfc5280StarkBaseRowV1<A>,
@@ -7615,8 +7678,42 @@ fn evaluate_rfc5280_relation_v1<A: PolynomialAirFieldV1>(
     challenges: &ZkX509Rfc5280StarkChallengesV1,
     terminal_claims: Option<ZkX509Rfc5280StarkTerminalClaimsV1>,
 ) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
-    der_challenges.validate()?;
-    challenges.validate()?;
+    evaluate_rfc5280_relation_with_context_v1(
+        current,
+        next,
+        current_aux,
+        next_aux,
+        fixed,
+        RfcEvaluationChallengesV1::Raw {
+            der: der_challenges,
+            rfc: challenges,
+        },
+        terminal_claims,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn evaluate_rfc5280_relation_with_context_v1<A: PolynomialAirFieldV1>(
+    current: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    next: &ZkX509Rfc5280StarkBaseRowV1<A>,
+    current_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
+    next_aux: &ZkX509Rfc5280StarkAuxRowV1<A>,
+    fixed: &ZkX509Rfc5280StarkFixedRowV1<A>,
+    challenge_context: RfcEvaluationChallengesV1<'_>,
+    terminal_claims: Option<ZkX509Rfc5280StarkTerminalClaimsV1>,
+) -> Result<Vec<A>, ZkX509Rfc5280StarkErrorV1> {
+    let bound_der;
+    let (der_challenges, challenges) = match challenge_context {
+        RfcEvaluationChallengesV1::Raw { der, rfc } => {
+            der.validate()?;
+            rfc.validate()?;
+            (der, rfc)
+        }
+        RfcEvaluationChallengesV1::Bound(capability) => {
+            bound_der = capability.phase_v1().der();
+            (&bound_der, capability.phase_v1().rfc5280())
+        }
+    };
     if let Some(claims) = terminal_claims {
         claims.validate_v1()?;
     }
@@ -11022,6 +11119,8 @@ mod tests {
     }
     #[test]
     fn mixed_profile_lookup_factors_reject_homogeneous_weight_alias() {
+        type Extension = crate::privacy_engines::transparent_stark::GoldilocksFp4V1;
+
         // Factor-level controls only: these rows are not a complete RFC witness.
         // In the old shared lookup, 96/(96*t) - 97/(97*t) was identically zero.
         let zero = [F::ZERO; ZK_X509_RFC5280_STARK_BASE_WIDTH_V1];
@@ -11088,7 +11187,6 @@ mod tests {
             source[source_column] = value;
             query[query_column] = value;
         }
-        type Extension = crate::privacy_engines::transparent_stark::GoldilocksFp4V1;
         for lane in 0..ZK_X509_RFC5280_STARK_BUS_LANES_V1 {
             let expected = profile_topology_source_factor_v1(&source, lane, &challenges);
             assert_eq!(
@@ -11119,6 +11217,8 @@ mod tests {
     }
     #[test]
     fn mixed_domain_copy_factors_reject_homogeneous_multiset_alias() {
+        type Extension = crate::privacy_engines::transparent_stark::GoldilocksFp4V1;
+
         // This is a factor-level regression, not a complete credential witness.
         // The two sides have identical domain/slot/offset multiplicities but
         // different byte assignments. Homogeneous typed factors alias exactly.
@@ -11161,7 +11261,6 @@ mod tests {
                 "affine normalization separates this alias for every admitted lane"
             );
             assert_ne!(affine_product(&left), affine_product(&right));
-            type Extension = crate::privacy_engines::transparent_stark::GoldilocksFp4V1;
             for row in left.iter().chain(&right) {
                 let extension_row = row.map(Extension::from_base);
                 assert_eq!(
@@ -12426,4 +12525,8 @@ mod tests {
     include!("rfc5280_nonkey_provenance_tests.rs");
     include!("rfc5280_sha_union_tests.rs");
     include!("rfc5280_aux_batch_tests.rs");
+    include!("rfc5280_full_matrix_source_tests.rs");
 }
+
+#[path = "rfc5280_native_matrix.rs"]
+mod native_matrix;

@@ -1685,6 +1685,10 @@ impl LaneCatalog {
     /// # Errors
     /// Returns the same [`LaneCatalogError`] as [`Self::new`] for the original input order,
     /// including empty input, active-entry bounds, policy failures and duplicate identities.
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "the active-lane bound and its const assertion prove every input index fits u16"
+    )]
     pub fn validate_borrowed(
         lane_count: NonZeroU32,
         lanes: &[LaneConfig],

@@ -1,4 +1,4 @@
-//! Shared four-validator, three-public-lane fixture using production NPoS and DA policies.
+//! Shared four-validator, three-public-lane fixture using production `NPoS` and DA policies.
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{Account, AccountId},
@@ -293,9 +293,11 @@ pub(super) fn network_builder_with_genesis_transactions(
         .expect("canonical I105 bootstrap gas account literal");
     let stake_asset_id_literal = route_stake_asset_definition_id().to_string();
     let fee_asset_id_literal = route_fee_asset_definition_id().to_string();
-    let mut npos = SumeragiNposParameters::default();
-    npos.max_validators = 4;
-    npos.epoch_length_blocks = std::num::NonZeroU64::new(3_600).unwrap();
+    let npos = SumeragiNposParameters {
+        max_validators: 4,
+        epoch_length_blocks: std::num::NonZeroU64::new(3_600).unwrap(),
+        ..Default::default()
+    };
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -408,7 +410,7 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
         else {
             continue;
         };
-        for instruction in instructions.iter() {
+        for instruction in instructions {
             let Some(parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
                 continue;
             };

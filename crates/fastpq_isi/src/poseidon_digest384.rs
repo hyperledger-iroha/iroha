@@ -400,12 +400,8 @@ impl GoldilocksDigest384V1 {
     #[must_use]
     pub fn from_le_bytes(bytes: [u8; GOLDILOCKS_DIGEST384_BYTES_V1]) -> Option<Self> {
         let mut words = [0_u64; GOLDILOCKS_DIGEST384_LANES_V1];
-        for (word, chunk) in words.iter_mut().zip(bytes.chunks_exact(8)) {
-            *word = u64::from_le_bytes(
-                chunk
-                    .try_into()
-                    .expect("a 48-byte digest has six exact eight-byte chunks"),
-            );
+        for (word, chunk) in words.iter_mut().zip(bytes.as_chunks::<8>().0) {
+            *word = u64::from_le_bytes(*chunk);
         }
         Self::new(words)
     }
@@ -828,13 +824,12 @@ fn emit_byte_field_v1(tag: u64, bytes: &[u8], emit: &mut impl FnMut(u64)) -> Opt
     }
     emit(tag);
     emit(u64::try_from(bytes.len()).ok()?);
-    let mut chunks = bytes.chunks_exact(7);
-    for chunk in &mut chunks {
+    let (chunks, remainder) = bytes.as_chunks::<7>();
+    for chunk in chunks {
         let mut word = Zeroizing::new([0_u8; 8]);
         word[..7].copy_from_slice(chunk);
         emit(u64::from_le_bytes(*word));
     }
-    let remainder = chunks.remainder();
     let mut terminal = Zeroizing::new([0_u8; 8]);
     terminal[..remainder.len()].copy_from_slice(remainder);
     terminal[remainder.len()] = 1;
@@ -1218,7 +1213,9 @@ mod tests {
         );
         encoded
             .as_bytes()
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 u8::from_str_radix(std::str::from_utf8(pair).expect("reference ASCII"), 16)
                     .expect("reference hexadecimal byte")
@@ -1531,7 +1528,7 @@ mod tests {
                 assert_eq!(lane_words, common, "exact one-word lane substitution");
                 assert!(lane_words.iter().all(|word| *word < FIELD_MODULUS));
                 let mut state = goldilocks_digest384_lane_initial_state_v1(lane).unwrap();
-                for block in lane_words.chunks_exact(RATE) {
+                for block in lane_words.as_chunks::<RATE>().0 {
                     for (word, input) in state.iter_mut().zip(block) {
                         *word = add_v1(*word, *input);
                     }
@@ -1677,14 +1674,16 @@ mod tests {
         let expected = one_shot_with_final_field(domain(), &prefix_fields, &payload);
 
         let mut final_words = payload
-            .chunks_exact(7)
+            .as_chunks::<7>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut word = [0_u8; 8];
                 word[..7].copy_from_slice(chunk);
                 u64::from_le_bytes(word)
             })
             .collect::<Vec<_>>();
-        let remainder = payload.chunks_exact(7).remainder();
+        let remainder = payload.as_chunks::<7>().1;
         let mut terminal = [0_u8; 8];
         terminal[..remainder.len()].copy_from_slice(remainder);
         terminal[remainder.len()] = 1;

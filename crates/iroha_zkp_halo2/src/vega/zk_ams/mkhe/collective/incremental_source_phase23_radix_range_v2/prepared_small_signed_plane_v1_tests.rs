@@ -168,7 +168,7 @@ fn signed_and_negative_chunks_match_integer_oracle_without_transpose() {
         let mut values = expand_small_signed_values_v1(packed, coordinate).unwrap();
         for chunk in 0..32_u8 {
             let output = values.emit_next_v1(chunk).unwrap();
-            for (local, bytes) in output.as_slice_v1().chunks_exact(32).enumerate() {
+            for (local, bytes) in output.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
                 let index = usize::from(chunk) * 512 + local;
                 let x = if coordinate.bound == 1 {
                     [-1_i8, 0, 1][index % 3]
@@ -181,7 +181,7 @@ fn signed_and_negative_chunks_match_integer_oracle_without_transpose() {
                     x
                 };
                 assert_eq!(
-                    bytes,
+                    *bytes,
                     scalar_be_v1(expected),
                     "plane={ordinal} index={index}"
                 );

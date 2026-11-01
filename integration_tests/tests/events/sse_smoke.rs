@@ -240,7 +240,7 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                                 break;
                             }
                         }
-                        Err(err) if is_read_timeout(&err) => continue,
+                        Err(err) if is_read_timeout(&err) => {}
                         Err(_) => break,
                     }
                 }
@@ -262,14 +262,13 @@ fn spawn_sse_reader(addr: IrohaSocketAddr) -> SseReader {
                     }
                     line.clear();
                     match reader.read_line(&mut line) {
-                        Ok(0) => break,
-                        Err(err) if is_read_timeout(&err) => continue,
-                        Err(_) => break,
+                        Err(err) if is_read_timeout(&err) => {}
+                        Ok(0) | Err(_) => break,
                         Ok(_) => {
-                            if let Some(rest) = parse_sse_data_line(&line) {
-                                if tx.send(rest.to_owned()).is_err() {
-                                    return;
-                                }
+                            if let Some(rest) = parse_sse_data_line(&line)
+                                && tx.send(rest.to_owned()).is_err()
+                            {
+                                return;
                             }
                         }
                     }
@@ -335,10 +334,7 @@ fn is_read_timeout_matches_timeout_kinds() {
         ErrorKind::WouldBlock,
         "would block"
     )));
-    assert!(!is_read_timeout(&std::io::Error::new(
-        ErrorKind::Other,
-        "other"
-    )));
+    assert!(!is_read_timeout(&std::io::Error::other("other")));
 }
 #[test]
 fn parse_sse_data_line_accepts_optional_space() {
@@ -366,10 +362,9 @@ fn sse_reader_connects_and_reads_data_lines() -> Result<()> {
         loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) => return,
+                Ok(0) | Err(_) => return,
                 Ok(_) if line.trim_end().is_empty() => break,
                 Ok(_) => {}
-                Err(_) => return,
             }
         }
         let headers = concat!(

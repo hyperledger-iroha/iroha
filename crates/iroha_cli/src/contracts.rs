@@ -640,7 +640,7 @@ impl Run for DebugViewArgs {
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let report = execute_local_contract_debug_view(context, self, authority)?;
         context.print_data(&report)?;
-        Ok(())
+        local_debug_outcome(report.error)
     }
 }
 #[derive(clap::Args, Debug)]
@@ -687,7 +687,7 @@ impl Run for DebugCallArgs {
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
         let report = execute_local_contract_debug_call(context, self, authority)?;
         context.print_data(&report)?;
-        Ok(())
+        local_debug_outcome(report.error)
     }
 }
 #[derive(clap::Args, Debug)]
@@ -1249,6 +1249,7 @@ fn execute_local_contract_debug_view<C: RunContext>(
         maybe_render_source_snippet(args.source_file.as_deref(), vm_diagnostic.as_ref());
     let entrypoint = build_local_debug_entrypoint(descriptor, entrypoint_pc);
     if let Err(err) = run_result {
+        let error = local_debug_execution_failure("view", &err, &syscall_trace);
         return Ok(LocalContractDebugViewResponse {
             ok: false,
             code_hash_hex: hex::encode(summary.code_hash.as_ref()),
@@ -1257,7 +1258,7 @@ fn execute_local_contract_debug_view<C: RunContext>(
             budget,
             syscall_trace,
             result: None,
-            error: Some(format!("contract debug view execution failed: {err}")),
+            error: Some(error),
             fault,
             vm_diagnostic,
             source_snippet,
@@ -1423,6 +1424,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
         maybe_render_source_snippet(args.source_file.as_deref(), vm_diagnostic.as_ref());
     let entrypoint = build_local_debug_entrypoint(descriptor, entrypoint_pc);
     if let Err(err) = run_result {
+        let error = local_debug_execution_failure("call", &err, &syscall_trace);
         return Ok(LocalContractDebugCallResponse {
             ok: false,
             code_hash_hex: hex::encode(summary.code_hash.as_ref()),
@@ -1431,7 +1433,7 @@ fn execute_local_contract_debug_call<C: RunContext>(
             budget,
             syscall_trace,
             result: None,
-            error: Some(format!("contract debug call execution failed: {err}")),
+            error: Some(error),
             fault,
             vm_diagnostic,
             source_snippet,
@@ -1470,6 +1472,33 @@ fn execute_local_contract_debug_call<C: RunContext>(
         durable_state_overlay: durable_state_overlay_json,
     })
 }
+// A failed run prints its whole report on stdout and still exits as a command failure.
+fn local_debug_outcome(error: Option<String>) -> Result<()> {
+    error.map_or(Ok(()), |error| Err(eyre!(error)))
+}
+
+// A local run holds only the state passed to it, so reading a slot that `hajimari` initializes on
+// a network stops at decoding the missing value. Name that cause beside the VM's own message.
+fn local_debug_execution_failure(
+    operation: &str,
+    error: &ivm::VMError,
+    syscall_trace: &[LocalContractSyscallTrace],
+) -> String {
+    let failure = format!("contract debug {operation} execution failed: {error}");
+    let state_value_undecodable = matches!(error, ivm::VMError::DecodeError)
+        && syscall_trace.last().is_some_and(|entry| {
+            entry.syscall == ivm::syscalls::SYSCALL_STATE_VALUE_DECODE && entry.error.is_some()
+        });
+    if !state_value_undecodable {
+        return failure;
+    }
+    format!(
+        "{failure}: a contract state value is missing or malformed. A local run holds only the \
+         state given by --durable-state-json or --durable-state-file; run `--entrypoint hajimari` \
+         and pass the `durable_state_overlay` it reports to --durable-state-json"
+    )
+}
+
 fn build_local_debug_budget(
     vm: &ivm::IVM,
     gas_limit: u64,
@@ -2614,7 +2643,7 @@ mod tests {
                 args_file: None,
             },
         };
-        args.run(&mut ctx).expect("debug view");
+        args.run(&mut ctx).expect_err("trapped debug view");
         let output = ctx.take_output().expect("output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),
@@ -2818,7 +2847,7 @@ mod tests {
                 args_file: None,
             },
         };
-        args.run(&mut ctx).expect("debug view");
+        args.run(&mut ctx).expect_err("trapped debug view");
         let output = ctx.take_output().expect("output");
         let snippet = output
             .get("source_snippet")
@@ -2960,6 +2989,132 @@ seiyaku DebugResult { permission Admin;
             assert_eq!(response.queued_instruction_count, usize::from(succeed));
             assert_eq!(response.durable_state_mutation_count, usize::from(succeed));
         }
+    }
+
+    #[test]
+    fn debug_runs_name_missing_state_and_fail_after_printing_the_report() {
+        let authority = fixture_account(0x36);
+        let mut ctx = TestContext::new(authority);
+        let program = compile_contract_program(
+            "seiyaku EmptyStateDebug {\n                state int counter;\n                hajimari() { counter = 7; }\n                kotoage fn bump() authorize(anyone) -> int { counter = counter + 1; return counter; }\n                view fn value() authorize(anyone) -> int { return counter; }\n            }",
+        );
+        let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
+        let call = |entrypoint: &str, durable_state_json: Option<String>| DebugCallArgs {
+            authority: None,
+            code_file: None,
+            code_b64: Some(code_b64.clone()),
+            entrypoint: entrypoint.to_owned(),
+            gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
+            source_file: None,
+            source_map_file: None,
+            accounts_json: None,
+            accounts_file: None,
+            durable_state_json,
+            durable_state_file: None,
+            payload: ContractPayloadArgs {
+                args: None,
+                args_file: None,
+            },
+        };
+        let view = |durable_state_json: Option<String>| DebugViewArgs {
+            authority: None,
+            code_file: None,
+            code_b64: Some(code_b64.clone()),
+            entrypoint: "value".to_owned(),
+            gas_limit: DEFAULT_CONTRACT_GAS_LIMIT,
+            source_file: None,
+            source_map_file: None,
+            accounts_json: None,
+            accounts_file: None,
+            durable_state_json,
+            durable_state_file: None,
+            payload: ContractPayloadArgs {
+                args: None,
+                args_file: None,
+            },
+        };
+
+        let call_failure = call("bump", None).run(&mut ctx).expect_err("empty state");
+        let call_report = ctx.take_output().expect("report before the failure");
+        let view_failure = view(None).run(&mut ctx).expect_err("empty state");
+        let view_report = ctx.take_output().expect("report before the failure");
+        for (failure, report) in [(call_failure, call_report), (view_failure, view_report)] {
+            let failure = failure.to_string();
+            assert_eq!(
+                report.get("ok").and_then(norito::json::Value::as_bool),
+                Some(false)
+            );
+            assert_eq!(
+                report.get("error").and_then(norito::json::Value::as_str),
+                Some(failure.as_str())
+            );
+            assert!(
+                failure.contains("state value is missing or malformed")
+                    && failure.contains("--entrypoint hajimari")
+                    && failure.contains("--durable-state-json"),
+                "{failure}"
+            );
+        }
+
+        // What the message tells the reader to do reaches the slot.
+        call("hajimari", None)
+            .run(&mut ctx)
+            .expect("initialize state");
+        let initialized = ctx.take_output().expect("initialization report");
+        let state = norito::json::to_json(
+            initialized
+                .get("durable_state_overlay")
+                .expect("durable state overlay"),
+        )
+        .expect("encode state");
+        call("bump", Some(state.clone()))
+            .run(&mut ctx)
+            .expect("call with the reported state");
+        let called = ctx.take_output().expect("call report");
+        assert_eq!(
+            called.get("result").and_then(norito::json::Value::as_str),
+            Some("8")
+        );
+        view(Some(state))
+            .run(&mut ctx)
+            .expect("view with the reported state");
+        let viewed = ctx.take_output().expect("view report");
+        assert_eq!(
+            viewed.get("result").and_then(norito::json::Value::as_str),
+            Some("7")
+        );
+    }
+
+    #[test]
+    fn debug_failure_names_state_only_when_its_decode_failed() {
+        let entry = |syscall, error: Option<&str>| LocalContractSyscallTrace {
+            pc: 0,
+            syscall,
+            gas_remaining_at_call: 0,
+            additional_gas: None,
+            error: error.map(str::to_owned),
+        };
+        let decode = ivm::syscalls::SYSCALL_STATE_VALUE_DECODE;
+        let plain = "contract debug call execution failed: instruction decode error";
+        for trace in [
+            vec![],
+            vec![entry(decode, None)],
+            vec![entry(ivm::syscalls::SYSCALL_STATE_GET, Some("failed"))],
+        ] {
+            assert_eq!(
+                local_debug_execution_failure("call", &ivm::VMError::DecodeError, &trace),
+                plain
+            );
+        }
+        let failed_decode = [entry(decode, Some("failed"))];
+        assert!(
+            local_debug_execution_failure("call", &ivm::VMError::DecodeError, &failed_decode)
+                .starts_with(&format!("{plain}: a contract state value"))
+        );
+        assert!(
+            !local_debug_execution_failure("call", &ivm::VMError::NoritoInvalid, &failed_decode)
+                .contains("state value")
+        );
     }
 
     #[test]

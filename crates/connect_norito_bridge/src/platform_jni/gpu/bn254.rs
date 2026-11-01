@@ -12,7 +12,7 @@ type Batch = fn(&[[u64; 4]], &[[u64; 4]], &mut [[u64; 4]]) -> bool;
 fn field_at(env: &mut Env<'_>, array: &JLongArray<'_>, index: usize) -> Option<[u64; 4]> {
     let offset = i32::try_from(index.checked_mul(4)?).ok()?;
     let mut words = [0i64; 4];
-    if let Err(error) = env.get_long_array_region(array, offset, &mut words) {
+    if let Err(error) = array.get_region(env, offset, &mut words) {
         throw_java_illegal_state(env, format!("BN254 input read failed: {error}"));
         return None;
     }
@@ -45,14 +45,14 @@ fn run(
     out: &JLongArray<'_>,
     operation: Batch,
 ) -> jboolean {
-    let left_len = match env.get_array_length(lhs) {
+    let left_len = match lhs.len(env) {
         Ok(len) => len,
         Err(error) => {
             throw_java_illegal_argument(env, format!("BN254 lhs length: {error}"));
             return JNI_FALSE;
         }
     };
-    let right_len = match env.get_array_length(rhs) {
+    let right_len = match rhs.len(env) {
         Ok(len) => len,
         Err(error) => {
             throw_java_illegal_argument(env, format!("BN254 rhs length: {error}"));
@@ -69,7 +69,7 @@ fn run(
     if !super::ensure_min_array_length(env, out, left_len, "BN254") {
         return JNI_FALSE;
     }
-    let count = left_len as usize / 4;
+    let count = left_len / 4;
     for index in 0..count {
         if field_at(env, lhs, index).is_none() || field_at(env, rhs, index).is_none() {
             return JNI_FALSE;
@@ -111,7 +111,7 @@ fn run(
             );
             return JNI_FALSE;
         };
-        if let Err(error) = env.set_long_array_region(out, offset, &words) {
+        if let Err(error) = out.set_region(env, offset, &words) {
             throw_java_illegal_state(env, format!("BN254 output write failed: {error}"));
             return JNI_FALSE;
         }
@@ -130,8 +130,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
     rhs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::add_batch_into)
+    crate::platform_jni::with_java_env(env, |env| {
+        run(env, &lhs, &rhs, &out, ivm::bn254_vec::add_batch_into)
     })
 }
 
@@ -146,8 +146,8 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
     rhs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::sub_batch_into)
+    crate::platform_jni::with_java_env(env, |env| {
+        run(env, &lhs, &rhs, &out, ivm::bn254_vec::sub_batch_into)
     })
 }
 
@@ -162,7 +162,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_gpu_Accelerators_na
     rhs: JLongArray<'_>,
     out: JLongArray<'_>,
 ) -> jboolean {
-    crate::platform_jni::with_java_env(env, |mut env| {
-        run(&mut env, &lhs, &rhs, &out, ivm::bn254_vec::mul_batch_into)
+    crate::platform_jni::with_java_env(env, |env| {
+        run(env, &lhs, &rhs, &out, ivm::bn254_vec::mul_batch_into)
     })
 }

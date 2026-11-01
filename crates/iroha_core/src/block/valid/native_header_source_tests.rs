@@ -23,7 +23,7 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
         predecessor.state(),
         header,
         &payload,
-        &mut Default::default(),
+        &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
     )
     .unwrap();
     assert_eq!(source.header(), proposal.header());
@@ -56,7 +56,7 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
             chain.state(),
             header,
             &payload,
-            &mut Default::default()
+            &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default()
         )
         .is_err(),
         "a committed successor cannot be attributed to a stale predecessor context"
@@ -74,7 +74,7 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
                 predecessor.state(),
                 header,
                 &changed,
-                &mut Default::default()
+                &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default()
             )
             .is_err()
         );
@@ -87,7 +87,7 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
             predecessor.state(),
             header,
             &trailing,
-            &mut Default::default()
+            &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default()
         )
         .is_err()
     );
@@ -110,7 +110,7 @@ fn native_header_source_binds_complete_original_wire_and_header_context() {
                 predecessor.state(),
                 &header,
                 &payload,
-                &mut Default::default()
+                &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default()
             )
             .is_err()
         );
@@ -137,7 +137,7 @@ fn native_rejection_after_original_source_publication_is_a_local_refusal() {
         &state,
         committed.header().unwrap(),
         &payload,
-        &mut Default::default(),
+        &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
     )
     .unwrap();
     receiver.commit_at(2_000, Vec::new());
@@ -191,7 +191,7 @@ fn native_local_refusal_after_source_publication_retains_original_capacity() {
         &state,
         committed.header().unwrap(),
         &payload,
-        &mut Default::default(),
+        &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
     )
     .unwrap();
     receiver.commit_at(2_000, Vec::new());
@@ -250,7 +250,7 @@ fn native_terminal_failure_after_source_publication_keeps_original_custody() {
         &state,
         committed.header().unwrap(),
         &payload,
-        &mut Default::default(),
+        &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
     )
     .unwrap();
     receiver.commit_at(2_000, Vec::new());

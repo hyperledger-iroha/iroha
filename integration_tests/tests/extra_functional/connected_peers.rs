@@ -25,11 +25,19 @@ fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a Netw
 }
 #[tokio::test]
 async fn connected_peers_with_f_2_1_2() -> Result<()> {
-    connected_peers_with_f(stringify!(connected_peers_with_f_2_1_2), 2).await
+    Box::pin(connected_peers_with_f(
+        stringify!(connected_peers_with_f_2_1_2),
+        2,
+    ))
+    .await
 }
 #[tokio::test]
 async fn connected_peers_with_f_1_0_1() -> Result<()> {
-    connected_peers_with_f(stringify!(connected_peers_with_f_1_0_1), 1).await
+    Box::pin(connected_peers_with_f(
+        stringify!(connected_peers_with_f_1_0_1),
+        1,
+    ))
+    .await
 }
 #[tokio::test]
 async fn register_new_peer() -> Result<()> {
@@ -142,7 +150,7 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     }
     let mut randomized_peers = {
         let mut rng = ChaCha8Rng::seed_from_u64(0x434f_4e4e);
-        network.peers().iter().choose_multiple(&mut rng, n_peers)
+        network.peers().iter().sample(&mut rng, n_peers)
     };
     let removed_peer = randomized_peers.remove(0);
     let roster_client = leader_peer(randomized_peers.iter().copied()).client();

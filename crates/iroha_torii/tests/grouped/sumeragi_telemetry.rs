@@ -1,5 +1,12 @@
 //! Grouped Torii Sumeragi and telemetry integration tests.
 
+#[path = "../../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;
+#[path = "../fixtures.rs"]
+mod fixtures;
+#[path = "../common/proof_events.rs"]
+mod proof_events;
+
 #[path = "../metrics_registry.rs"]
 mod metrics_registry;
 #[path = "../metrics_registry_reset.rs"]

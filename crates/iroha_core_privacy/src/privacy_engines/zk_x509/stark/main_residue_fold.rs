@@ -75,7 +75,7 @@ mod tests {
                 .zip(&alphas)
                 .fold(E::ZERO, |sum, (value, a)| sum.add(a.mul_base(*value)))
                 .mul_base(F(17));
-            assert!(owner.finish_v1(F(17)).unwrap() == expected);
+            assert_eq!(owner.finish_v1(F(17)).unwrap(), expected);
         }
     }
 

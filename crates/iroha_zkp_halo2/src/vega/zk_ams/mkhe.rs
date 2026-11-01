@@ -282,7 +282,6 @@ mod rns_native_qpcs_leaf;
 mod rns_native_qpcs_opening_work;
 #[path = "mkhe/rns_native_qpcs_prefix.rs"]
 mod rns_native_qpcs_prefix;
-#[cfg(test)]
 #[path = "mkhe/rns_native_resource_budget.rs"]
 mod rns_native_resource_budget;
 // Prototype tree construction is exercised by internal fixtures; production uses the verifier.
@@ -291,6 +290,10 @@ mod rns_native_resource_budget;
 mod rns_native_qpcs_tree;
 #[path = "mkhe/rns_native_radix_complement_linear_relation.rs"]
 mod rns_native_radix_complement_linear_relation;
+// Coefficient construction has no authenticated source producer or live authority yet.
+#[cfg(test)]
+#[path = "mkhe/rns_native_relation_polynomials.rs"]
+mod rns_native_relation_polynomials;
 #[path = "mkhe/rns_native_rlwe_source_statement.rs"]
 mod rns_native_rlwe_source_statement;
 #[path = "mkhe/rns_native_section_codec.rs"]
@@ -302,6 +305,8 @@ mod rns_native_source;
 #[cfg(test)]
 #[path = "mkhe/rns_native_source_packing_same_opening.rs"]
 mod rns_native_source_packing_same_opening;
+#[path = "mkhe/rns_native_source_resources.rs"]
+mod rns_native_source_resources;
 #[cfg(test)]
 #[allow(
     dead_code,
@@ -698,8 +703,12 @@ pub use rns_native_source::{
 pub use rns_native_source::{
     ZkAmsMkheRnsNativeRepeatableSourceSnapshotV1, ZkAmsMkheRnsNativeSecretChunkV1,
     ZkAmsMkheRnsNativeSourceArenaV1, ZkAmsMkheRnsNativeSourceErrorV1,
-    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceProviderV1,
-    ZkAmsMkheRnsNativeSourceSnapshotV1, ZkAmsMkheRnsNativeSourceWriterV1,
+    ZkAmsMkheRnsNativeSourceLayoutV1, ZkAmsMkheRnsNativeSourceSnapshotV1,
+    ZkAmsMkheRnsNativeSourceWriterV1,
+};
+pub use rns_native_source_resources::{
+    ZkAmsMkheRnsNativeSourceReservationV1, ZkAmsMkheRnsNativeSourceResourcesV1,
+    ZkAmsMkheRnsNativeSourceWorkspaceV1,
 };
 pub use rns_native_transcript::ZkAmsMkheRnsNativeTerminalRootsV1;
 #[cfg(test)]

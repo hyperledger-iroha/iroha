@@ -20,7 +20,7 @@ pub struct FoldTape<C: PastaCurve> {
 }
 impl<C: PastaCurve> Drop for FoldTape<C> {
     fn drop(&mut self) {
-        for coin in self.coins.iter_mut() {
+        for coin in &mut self.coins {
             clear_field(coin);
         }
     }
@@ -51,7 +51,7 @@ impl<C: PastaCurve> FoldTape<C> {
         let mut tape = Self {
             coins: Box::new([C::ScalarExt::ZERO; FOLD_COIN_COUNT]),
         };
-        for coin in tape.coins.iter_mut() {
+        for coin in &mut tape.coins {
             fill(coin)?;
         }
         Ok(tape)
@@ -67,7 +67,7 @@ impl<C: PastaCurve> FoldTape<C> {
     /// Canonical private checkpoint bytes under a clearing owner.
     pub fn to_private_bytes(&self) -> Zeroizing<Box<[u8]>> {
         let mut bytes = Zeroizing::new(vec![0; FOLD_COIN_BYTES].into_boxed_slice());
-        for (coin, destination) in self.coins.iter().zip(bytes.chunks_exact_mut(32)) {
+        for (coin, destination) in self.coins.iter().zip(bytes.as_chunks_mut::<32>().0) {
             let encoded = Zeroizing::new(coin.to_repr());
             destination.copy_from_slice(encoded.as_ref());
         }
@@ -86,7 +86,7 @@ impl<C: PastaCurve> FoldTape<C> {
         let mut tape = Self {
             coins: Box::new([C::ScalarExt::ZERO; FOLD_COIN_COUNT]),
         };
-        for (destination, encoded) in tape.coins.iter_mut().zip(bytes.chunks_exact(32)) {
+        for (destination, encoded) in tape.coins.iter_mut().zip(bytes.as_chunks::<32>().0) {
             let mut word = Zeroizing::new([0; 32]);
             word.copy_from_slice(encoded);
             let mut decoded = FieldGuard(C::ScalarExt::ZERO);

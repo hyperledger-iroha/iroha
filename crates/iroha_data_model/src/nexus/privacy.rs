@@ -62,9 +62,7 @@ impl LanePrivacyProof {
     /// Size of the encoded proof in bytes (used for attachment budget checks).
     #[must_use]
     pub fn encoded_len(&self) -> usize {
-        norito::to_bytes(self)
-            .map(|bytes| bytes.len())
-            .unwrap_or(usize::MAX)
+        norito::to_bytes(self).map_or(usize::MAX, |bytes| bytes.len())
     }
     /// Validate the complete first-release lane privacy witness shape.
     ///

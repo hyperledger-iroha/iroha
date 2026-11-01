@@ -14,8 +14,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 JNI_SOURCE = REPO_ROOT / "crates/connect_norito_bridge/src/platform_jni/part_3.rs"
 SDK_PREFIX = "Java_org_hyperledger_iroha_sdk_"
 ANDROID_PREFIX = "Java_org_hyperledger_iroha_android_"
-EXPECTED_ABI_DIGEST = "9e82e45f41068d93a3334ebfdfc5c41f17896a3ea9107213884d9013d65e81d6"
-EXPECTED_ATTRIBUTE_DIGEST = "2ce13aae27f2db4f0af112ffc17015ae9fc6125eb75e88cb40229da972c79acd"
+EXPECTED_ABI_DIGEST = "514f8dec8b26d4ab928a4d210a2356078f2823ada8e58b6246232016d4542ccb"
+EXPECTED_ATTRIBUTE_DIGEST = "3cf8bad3c1c97d0af5bd2b783f77bf8ee7e5b6c0f249555c4b8f10bfbedb2817"
 
 EXPECTED_METHODS = {
     "crypto_NativeSignerBridge": (
@@ -38,6 +38,9 @@ EXPECTED_METHODS = {
         "nativeRequireExact12CapabilityTupleForNetworkV1",
         "nativeValidateExact12SubmitProofConstructionForNetworkV1",
         "nativeSubmitProofIntentProjectionV1",
+        "nativeCreateZkX509RequestV1",
+        "nativeInspectZkX509RequestV1",
+        "nativeMaterializeZkX509StatementV1",
         "nativeExact12FixtureBundle",
         "nativeValidateExact12FixtureBundle",
     ),

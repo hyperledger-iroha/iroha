@@ -798,7 +798,7 @@ fn genesis_instruction_capability_requires_both_signed_route_and_exact_authentic
         )
         .into();
         crate::executor::Executor::Initial
-            .execute_instruction(&mut tx, &ALICE_ID, log)
+            .execute_instruction(&mut tx, &ALICE_ID, &log)
             .unwrap();
         tx.current_entrypoint_index = Some(1);
         assert!(crate::executor::root_scope::execution_root_scope(&mut tx).is_err());

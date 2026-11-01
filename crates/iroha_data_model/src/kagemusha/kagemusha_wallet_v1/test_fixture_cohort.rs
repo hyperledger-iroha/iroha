@@ -34,9 +34,8 @@ fn path_with_root(selected_root: Option<OsString>, relative: &str) -> PathBuf {
     );
     for member in COHORT_PATHS {
         let file = root.join(member);
-        let regular = std::fs::symlink_metadata(&file)
-            .map(|metadata| metadata.file_type().is_file())
-            .unwrap_or(false);
+        let regular =
+            std::fs::symlink_metadata(&file).is_ok_and(|metadata| metadata.file_type().is_file());
         assert!(
             regular,
             "{ROOT_VARIABLE} fixture cohort is incomplete: {}",

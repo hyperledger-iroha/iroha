@@ -356,7 +356,7 @@ fn initial_credit_wallet503_reopen_preserves_original_wire_and_single_dispatch()
             .open_child("install")
             .unwrap();
         let restored = journal::required_original(&directory).unwrap();
-        let request = restored.request(Instant::now() + Duration::from_secs(900));
+        let request = restored.request(Instant::now() + Duration::from_mins(15));
         assert_eq!(
             request.deadline_unix_ms,
             original.terms.signing_deadline_unix_ms

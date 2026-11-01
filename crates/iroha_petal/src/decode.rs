@@ -243,7 +243,7 @@ fn reference_levels(image: &Luma, pose: &Pose, inferred: Option<usize>) -> Optio
         );
         let a = dot_samples(image, pose, cx + sx * 100.0, cy, 5.0);
         let b = dot_samples(image, pose, cx, cy + sy * 100.0, 5.0);
-        dark[i] = 0.5 * (a + b);
+        dark[i] = f64::midpoint(a, b);
         // also refuses NaN levels, which only a non-finite pose can produce
         if !(lit[i] - dark[i]).is_finite() || lit[i] - dark[i] < 12.0 {
             return None;
@@ -336,7 +336,7 @@ fn refine_inferred_corner(image: &Luma, corners: &[Finder; 4], inferred: usize) 
     let start = points[inferred];
     let distance =
         |o: usize| ((points[o].0 - start.0).powi(2) + (points[o].1 - start.1).powi(2)).sqrt();
-    let leg = 0.5 * (distance((inferred + 1) % 4) + distance((inferred + 3) % 4));
+    let leg = f64::midpoint(distance((inferred + 1) % 4), distance((inferred + 3) % 4));
     let mut best = (f64::MIN, start);
     let mut search = |centre: (f64, f64), step: f64, reach: i32, best: &mut (f64, (f64, f64))| {
         for dy in -reach..=reach {
@@ -421,7 +421,7 @@ fn read_dots(image: &Luma, pose: &Pose, reference: &Reference) -> (Vec<u8>, Vec<
                 dark.iter().sum::<f64>() / dark.len() as f64,
             );
             if l - d > 0.2 {
-                *threshold = 0.5 * (l + d);
+                *threshold = f64::midpoint(l, d);
             }
         }
     }
@@ -495,7 +495,7 @@ fn two_means(values: &[f64]) -> f64 {
         if lows == 0 || highs == 0 {
             break;
         }
-        let next = 0.5 * (low / lows as f64 + high / highs as f64);
+        let next = f64::midpoint(low / lows as f64, high / highs as f64);
         let moved = (next - threshold).abs();
         threshold = next;
         if moved < 1e-4 {

@@ -1,5 +1,6 @@
 //! Smoke test that Torii exposes account query routes via the merged sub-router.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -7,12 +8,11 @@ use iroha_core::state::World;
 use iroha_data_model::{Registrable, account::Account, domain::Domain};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn account_query_subrouter_exposes_endpoints() {
     // Minimal Torii setup
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let account_id = ALICE_ID.clone();
     let domain_id: iroha_model_base::domain::DomainId =

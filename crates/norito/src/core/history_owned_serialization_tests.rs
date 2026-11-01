@@ -289,7 +289,12 @@ fn heap_ties_use_canonical_payload_order_independent_of_insertion() {
     assert_ne!(first.tag, tied.tag, "equal priorities carry distinct bytes");
     let mut expected = [0_u8; HEAP_TIE_PAYLOAD_BYTES];
     expected[..8].copy_from_slice(&(HEAP_TIE_ITEMS as u64).to_le_bytes());
-    for (chunk, (priority, tag)) in expected[8..].chunks_exact_mut(5).zip(heap_tie_pairs()) {
+    for (chunk, (priority, tag)) in expected[8..]
+        .as_chunks_mut::<5>()
+        .0
+        .iter_mut()
+        .zip(heap_tie_pairs())
+    {
         chunk.copy_from_slice(&[4, 1, priority, 1, tag]);
     }
     for mode in 0..4 {
@@ -412,7 +417,12 @@ fn heap_canonical_frame_charges_both_real_tie_sort_passes_exactly() {
     );
     let mut expected = [0_u8; HEAP_TIE_PAYLOAD_BYTES];
     expected[..8].copy_from_slice(&(HEAP_TIE_ITEMS as u64).to_le_bytes());
-    for (chunk, (priority, tag)) in expected[8..].chunks_exact_mut(5).zip(heap_tie_pairs()) {
+    for (chunk, (priority, tag)) in expected[8..]
+        .as_chunks_mut::<5>()
+        .0
+        .iter_mut()
+        .zip(heap_tie_pairs())
+    {
         chunk.copy_from_slice(&[4, 1, priority, 1, tag]);
     }
     assert_eq!(
@@ -694,11 +704,14 @@ fn heap_singletons_and_tie_groups_preserve_sequence_positions() {
         .unwrap();
     let mut expected = [0_u8; 38];
     expected[..8].copy_from_slice(&6_u64.to_le_bytes());
-    for (chunk, (priority, tag)) in
-        expected[8..]
-            .chunks_exact_mut(5)
-            .zip([(0, 2), (0, 7), (1, 9), (2, 8), (2, 255), (3, 0)])
-    {
+    for (chunk, (priority, tag)) in expected[8..].as_chunks_mut::<5>().0.iter_mut().zip([
+        (0, 2),
+        (0, 7),
+        (1, 9),
+        (2, 8),
+        (2, 255),
+        (3, 0),
+    ]) {
         chunk.copy_from_slice(&[4, 1, priority, 1, tag]);
     }
     assert_eq!(bytes, expected);

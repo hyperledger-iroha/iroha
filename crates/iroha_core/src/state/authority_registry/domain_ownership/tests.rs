@@ -290,6 +290,10 @@ fn named_descriptor_and_full_controller_geometry_are_exact_local_work() {
 }
 
 #[test]
+#[expect(
+    clippy::zero_sized_map_values,
+    reason = "Storage snapshot parts encode current unit-valued membership rows and their separate undo map"
+)]
 fn single_noop_insert_and_empty_absent_images_have_exact_physical_work() {
     for kind in 0..4 {
         let mut world = if kind == 3 {
@@ -328,7 +332,7 @@ fn single_noop_insert_and_empty_absent_images_have_exact_physical_work() {
                     BTreeMap::from([(id("absent"), None)]),
                 );
                 world.domains_by_owner = Storage::from_snapshot_parts(
-                    Default::default(),
+                    BTreeMap::default(),
                     OwnerUndo::from([((ALICE_ID.clone(), id("live")), None)]),
                 );
                 2

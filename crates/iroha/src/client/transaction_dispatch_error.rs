@@ -328,6 +328,36 @@ pub(super) const DEFINITE_DISPATCH_ROWS: &[DefiniteDispatchRow] = {
             true,
             Refused,
         ),
+        // The committed runtime selection refused an instruction. The envelope code is the stable
+        // `RuntimeRejectionV1::code()` execution would commit for the same envelope.
+        definite(
+            400,
+            "definition_inactive",
+            "PRTRY:RUNTIME_REJECTED",
+            true,
+            Refused,
+        ),
+        definite(
+            400,
+            "definition_restricted",
+            "PRTRY:RUNTIME_REJECTED",
+            true,
+            Refused,
+        ),
+        definite(
+            400,
+            "expectation_mismatch",
+            "PRTRY:RUNTIME_REJECTED",
+            true,
+            Refused,
+        ),
+        definite(
+            400,
+            "malformed_payload",
+            "PRTRY:RUNTIME_REJECTED",
+            true,
+            Refused,
+        ),
         definite(
             403,
             "unregistered_authority",

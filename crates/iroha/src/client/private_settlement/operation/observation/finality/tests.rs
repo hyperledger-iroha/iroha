@@ -49,18 +49,18 @@ fn carrier(
     let mut builder = BlockBuilder::new(header);
     let mut identities = Vec::new();
     let mut outputs = Vec::new();
-    for (index, (instruction, rejected)) in instructions.into_iter().enumerate() {
+    for (index, (instruction, rejected)) in (0_u32..).zip(instructions) {
         let mut transaction =
             TransactionBuilder::new(client.network_id, client.account.clone(), fee.clone())
                 .with_instructions([instruction]);
         transaction.set_creation_time(Duration::from_millis(
-            header.creation_time_ms - 1 - index as u64,
+            header.creation_time_ms - 1 - u64::from(index),
         ));
         let transaction = transaction.sign(client.key_pair.private_key());
         identities.push(super::super::super::identity(&transaction));
         builder.push_transaction(transaction);
         outputs.push(ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
-            input_index: index as u32,
+            input_index: index,
             result: TransactionResult::new(if rejected {
                 Err(TransactionRejectionReason::LimitCheck(
                     TransactionLimitError {
@@ -107,11 +107,12 @@ impl Fixture {
         let journal = checkpoint(&request, &certificates);
         let (barrier, mut bundle) = bundle(&request, &journal);
         if alternate {
-            for (index, leg) in bundle.legs.iter_mut().enumerate() {
+            for (index, leg) in (0_u8..).zip(bundle.legs.iter_mut()) {
+                let position = usize::from(index);
                 let (authority, keys) =
                     iroha_test_samples::private_settlement::finalization_authority_v1(
-                        request.manifest().legs[index].route,
-                        index as u8,
+                        request.manifest().legs[position].route,
+                        index,
                     );
                 let votes = super::super::super::super::tests::phase_votes_v1(
                     &authority,
@@ -120,9 +121,8 @@ impl Fixture {
                     &[1, 2, 3],
                 );
                 leg.prepare =
-                    aggregate_phase_votes_v1(&leg.prepare.body, index as u8, &authority, &votes)
-                        .unwrap();
-                assert_ne!(leg.prepare, barrier.prepare_certificates[index]);
+                    aggregate_phase_votes_v1(&leg.prepare.body, index, &authority, &votes).unwrap();
+                assert_ne!(leg.prepare, barrier.prepare_certificates[position]);
             }
         }
         let mut proofs = BTreeMap::from([(1, native.genesis_proof().clone())]);
@@ -797,8 +797,10 @@ async fn aborted_final_tip_before_prepare_recovers_after_cold_reopen_without_pha
         "one untrusted locator and H1/H2 native proofs only"
     );
     let operation = fixture.operation();
-    let mut options = PrivateSettlementRunOptions::default();
-    options.max_finality_proof_reads = 1;
+    let options = PrivateSettlementRunOptions {
+        max_finality_proof_reads: 1,
+        ..PrivateSettlementRunOptions::default()
+    };
     let recovered = operation.recover(&options).await.unwrap();
     assert!(matches!(
         recovered.outcome,

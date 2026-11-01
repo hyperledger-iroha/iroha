@@ -129,6 +129,8 @@ required-features = ["cli", "dev-tools"]
 [[test]]
 name = "sorafs_car_integration"
 path = "tests/sorafs_car_integration.rs"
+# The harness drives the feature-gated CLI binaries, so it runs only where they are built.
+required-features = ["cli", "dev-tools", "da_harness"]
 
 [[test]]
 name = "sorafs_fetch_cli"

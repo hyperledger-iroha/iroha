@@ -80,7 +80,7 @@ fn execute_initial_sorafs(
     match crate::executor::Executor::Initial.execute_instruction(
         state_transaction,
         authority,
-        instruction.into(),
+        &instruction.into(),
     ) {
         Ok(()) => Ok(()),
         Err(iroha_data_model::executor::ValidationFail::InstructionFailed(error)) => Err(error),
@@ -122,7 +122,7 @@ fn initial_executor_sorafs_direct_provider_owner_instructions_remain_closed() {
         .into_instruction_box(),
     ] {
         let error = crate::executor::Executor::Initial
-            .execute_instruction(&mut stx, &alice(), instruction)
+            .execute_instruction(&mut stx, &alice(), &instruction)
             .expect_err("retired direct owner changes remain closed even for permission holders");
         assert!(
             matches!(error, iroha_data_model::executor::ValidationFail::NotPermitted(message)
@@ -161,7 +161,7 @@ fn initial_executor_sorafs_role_grant_use_and_revoke_are_exact() {
         .execute_instruction(
             &mut stx,
             &alice(),
-            Grant::account_role(role_id.clone(), bob()).into(),
+            &Grant::account_role(role_id.clone(), bob()).into(),
         )
         .expect("an exact current role holder may delegate the role");
     assert!(
@@ -179,7 +179,7 @@ fn initial_executor_sorafs_role_grant_use_and_revoke_are_exact() {
         .execute_instruction(
             &mut stx,
             &alice(),
-            Revoke::account_role(role_id, bob()).into(),
+            &Revoke::account_role(role_id, bob()).into(),
         )
         .expect("an exact current role holder may revoke the role");
     let error = execute_initial_sorafs(pricing, &bob(), &mut stx)
@@ -239,7 +239,7 @@ fn initial_executor_sorafs_rejects_malformed_unit_and_foreign_role_permissions()
                 .execute_instruction(
                     &mut stx,
                     &alice(),
-                    Grant::account_permission(permission.clone(), bob()).into(),
+                    &Grant::account_permission(permission.clone(), bob()).into(),
                 )
                 .expect_err("malformed unit permission must fail at the Initial grant boundary");
             assert!(
@@ -250,7 +250,7 @@ fn initial_executor_sorafs_rejects_malformed_unit_and_foreign_role_permissions()
                 .execute_instruction(
                     &mut stx,
                     &alice(),
-                    Grant::account_role(role_id, bob()).into(),
+                    &Grant::account_role(role_id, bob()).into(),
                 )
                 .expect_err("malformed role permission must fail before the Core grant handler");
             assert!(

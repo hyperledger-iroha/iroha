@@ -301,7 +301,7 @@ fn indirect_or_network_scoped_execution_cannot_acquire_genesis_authority() {
     );
     assert!(
         crate::executor::Executor::Initial
-            .execute_instruction(&mut tx, transaction.authority(), boxed)
+            .execute_instruction(&mut tx, transaction.authority(), &boxed)
             .is_err()
     );
     assert!(native::read_head(tx.world(), None).unwrap().is_none());

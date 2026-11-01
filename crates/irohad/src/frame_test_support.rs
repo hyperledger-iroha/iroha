@@ -10,8 +10,8 @@ pub fn assert_frame_encoding<T: norito::NoritoSerialize>(
     assert!(T::frame_name() == frame, "unexpected frame projection");
     let encoded = zeroize::Zeroizing::new(norito::encode_canonical(value).expect("encode frame"));
     let view = norito::core::from_bytes_view(&encoded).expect("valid frame header");
-    assert!(view.schema() == norito::schema::identity::frame_hash::<T>());
-    assert!(view.schema() == norito::core::schema_hash_for_name(frame));
+    assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
+    assert_eq!(view.schema(), norito::core::schema_hash_for_name(frame));
     encoded
 }
 

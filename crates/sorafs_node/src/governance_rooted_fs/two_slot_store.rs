@@ -1127,7 +1127,7 @@ impl RootedDirectory {
         validate_component(name)?;
         self.verify()?;
         let path = self.display_path.join(name);
-        let retained_metadata = native_metadata(&handle)?;
+        let retained_metadata = native_metadata(handle)?;
         validate_file_metadata(&path, &retained_metadata, max_bytes, private)?;
         #[cfg(windows)]
         if private {

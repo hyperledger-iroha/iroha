@@ -42,6 +42,7 @@ pub mod runtime_provider_registry;
 #[cfg(unix)]
 #[path = "sccp_keeper.rs"]
 mod sccp_keeper;
+mod game_partition;
 mod sccp_staking_policy;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[path = "soracloud_runtime.rs"]
@@ -4438,6 +4439,14 @@ impl Iroha {
                 supervisor.monitor(child);
             }
         }
+        // Native game-unit delivery uses committed peer pins and the existing validator
+        // identity. No operator relay key, journal or external scheduler is involved.
+        if !emergency_fast {
+            supervisor.monitor(game_partition::start(
+                Arc::clone(&state), Arc::clone(&queue),
+                config.common.key_pair.clone(), supervisor.shutdown_signal(),
+            ));
+        }
         // The SCCP keeper is a supervised task of its own and never aborts the node: its
         // public RPC delays neither block production nor any other task.
         #[cfg(unix)]
@@ -4818,9 +4827,8 @@ impl Iroha {
                     iroha_logger::error!(?err, "Torii failed to terminate gracefully");
                     shutdown_on_failure.send();
                     std::process::exit(1);
-                } else {
-                    iroha_logger::debug!("Torii exited normally");
                 }
+                iroha_logger::debug!("Torii exited normally");
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
@@ -6313,7 +6321,7 @@ fn insufficient_storage_headroom(
 }
 /// Basis points as a percentage, for operator messages.
 fn basis_points_percent(bps: u16) -> String {
-    if bps % 100 == 0 {
+    if bps.is_multiple_of(100) {
         format!("{}%", bps / 100)
     } else {
         format!("{}.{:02}%", bps / 100, bps % 100)
@@ -6896,7 +6904,7 @@ metadata = {}
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "37af6d032c455549e0e10568d910720bc0ec6b5b67f03ffe47fc62469a90f65d";
+        "4ba3c287c81a746c34afaf55040a2eff7b4107ca787e1c1a208a5f34d9822493";
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
@@ -8345,9 +8353,7 @@ fn run_main_with_config_guard(
     // oversubscription with the IVM scheduler. Keep a slightly higher minimum
     // to prevent HTTP/p2p tasks from starving under consensus body/chunk load, and use the
     // available parallelism as the auto baseline instead of a fixed floor.
-    let auto_budget = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4);
+    let auto_budget = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
     let budget = if max > 0 {
         max
     } else if min > 0 {
@@ -8468,7 +8474,7 @@ fn run_main_with_config_guard(
 fn adopt_managed_listeners(
     startup: &StartupArgs,
     config: &Config,
-) -> ReportResult<Option<iroha_deploy::managed::RuntimeListeners>, MainError> {
+) -> ReportResult<Option<iroha_managed_ipc::RuntimeListeners>, MainError> {
     match (
         &startup.managed_listeners,
         startup.managed_listener_deadline_ns,
@@ -8485,7 +8491,7 @@ fn adopt_managed_listeners(
                 iroha_primitives::addr::SocketAddr::Host(_) => Err(Report::new(MainError::Config)
                     .attach("managed listeners require exact numeric socket addresses")),
             };
-            iroha_deploy::managed::adopt_runtime_listeners(
+            iroha_managed_ipc::adopt_runtime_listeners(
                 directory,
                 numeric(config.network.address.value())?,
                 numeric(config.torii.address.value())?,
@@ -10206,7 +10212,7 @@ mod tests {
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
         assert!(compact_source.contains(
-            "lettelemetry_profile=if!emergency_fast{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
+            "lettelemetry_profile=ifemergency_fast{iroha_config::parameters::actual::TelemetryProfile::Disabled}else{config.telemetry_profile};"
         ));
         assert!(
             compact_source.contains(
@@ -10279,7 +10285,7 @@ mod tests {
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
         ));
         assert!(compact_source.contains(
-            "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
+            "letmutacceleration=config.accel;acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
         ));
         assert!(compact_source.contains(
             "if!emergency_fast{letdeadlock_shutdown=supervisor.shutdown_signal();supervisor.monitor(tokio::spawn(asyncmove{loop{tokio::select!{()=deadlock_shutdown.receive()=>break,()=tokio::time::sleep(Duration::from_secs(10))=>{}}"
@@ -10547,7 +10553,7 @@ mod tests {
             .0;
         assert!(
             run_main_source.contains(
-                "runtime_provider_registry::resolve_runtime_deps(&config,runtime_provider_registry)"
+                "runtime_provider_registry::resolve_runtime_deps(config,runtime_provider_registry)"
             ),
             "standard CLI startup must resolve the sanitized deployment registry request"
         );
@@ -10605,7 +10611,7 @@ mod tests {
             .expect("stock runtime-provider broker construction in run_main");
         let resolution = run_main_source
             .find(
-                "runtime_provider_registry::resolve_runtime_deps(&config,runtime_provider_registry)",
+                "runtime_provider_registry::resolve_runtime_deps(config,runtime_provider_registry)",
             )
             .expect("provider resolution in run_main");
         let runtime_start = run_main_source
@@ -11191,7 +11197,11 @@ mod tests {
                 .try_get_matches_from(["iroha3d", "--version"])
                 .expect_err("version display exits through clap");
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
-            assert_eq!(error.render().to_string(), "iroha3d executable-version\n");
+            // The version names its source because one package version can span sources.
+            assert_eq!(
+                error.render().to_string(),
+                "iroha3d executable-version (source local-fast-build)\n"
+            );
         }
         #[test]
         fn whitespace_only_arguments_are_ignored() {

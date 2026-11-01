@@ -505,14 +505,14 @@ impl HistoryBlockRow {
 /// Maximum fixed-size block summaries retained by the Explorer feed. The lowest
 /// heights leave first, so recent windows stay warm. Each reader scope occupies
 /// a distinct entry within this same bound.
-pub(crate) const EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY: usize = 16_384;
+pub const EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY: usize = 16_384;
 
 /// Fixed-size projection of one committed block for an exact visibility scope.
 /// Retaining a count for every route combination would grow with block contents;
 /// retaining only this reader's final counts keeps cache memory independent of
 /// transaction count and route-plan size.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ExplorerBlockSummary {
+pub struct ExplorerBlockSummary {
     hash: HashOf<BlockHeader>,
     height: u64,
     visibility_digest: [u8; 32],
@@ -561,11 +561,14 @@ impl ExplorerBlockSummary {
     }
 }
 
+/// Cached block summaries keyed by height and block hash.
+type ExplorerBlockSummaryEntries = BTreeMap<(u64, [u8; 32]), Arc<ExplorerBlockSummary>>;
+
 /// Bounded summaries of committed blocks the Explorer feed has read. Committed
 /// rows are reused only when their height, hash, exact reader scope and current
 /// canonical source token all agree. Source mutation and appends invalidate reuse.
-pub(crate) struct ExplorerBlockSummaryCache {
-    entries: Mutex<BTreeMap<(u64, [u8; 32]), Arc<ExplorerBlockSummary>>>,
+pub struct ExplorerBlockSummaryCache {
+    entries: Mutex<ExplorerBlockSummaryEntries>,
     capacity: usize,
 }
 

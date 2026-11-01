@@ -1,4 +1,7 @@
 //! Grouped integration harness for Torii queries and proof flows.
+#[path = "proof_fixtures.rs"]
+mod proof_fixtures;
+
 #[path = "iterable_queries_torii.rs"]
 mod iterable_queries_torii;
 #[path = "iterable_query_smoke.rs"]

@@ -154,7 +154,10 @@ fn captured_source_has_exact_transitive_paths_access_and_extent_without_disk_fal
             access,
             maximum: input.maximum,
         };
-        assert!(ConfigFileSource::read(image, &path, request).unwrap() == input.bytes);
+        assert_eq!(
+            ConfigFileSource::read(image, &path, request).unwrap(),
+            input.bytes
+        );
         let wrong_access = if access == ConfigFileAccess::Private {
             ConfigFileAccess::Public
         } else {
@@ -187,7 +190,10 @@ fn captured_source_has_exact_transitive_paths_access_and_extent_without_disk_fal
             .write_atomic(name, b"changed on disk", PublishMode::Replace)
             .unwrap();
         // Parsing uses the original image; the mandatory complete validation rejects disk drift.
-        assert!(ConfigFileSource::read(image, &path, request).unwrap() == input.bytes);
+        assert_eq!(
+            ConfigFileSource::read(image, &path, request).unwrap(),
+            input.bytes
+        );
         assert!(image.revalidate().is_err());
         directory
             .directory

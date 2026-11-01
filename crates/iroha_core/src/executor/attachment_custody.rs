@@ -10,6 +10,9 @@
 //! TODO(I.2, I.3, I.4): complete typed native consumers, raw/proved-root custody
 //! and their same atomic State attempt. Unsupported-consumer admission remains
 //! closed. Consumption is bookkeeping, never proof acceptance or an effect.
+//! TODO(I.1, M.2): transaction-level proof carriers gain a custody scope with
+//! their first consuming route; until then admission refuses them and no
+//! invocation binding matches a `Transaction` declaration.
 
 use iroha_data_model::{
     account::AccountId,
@@ -27,7 +30,7 @@ use iroha_data_model::{
 
 /// A deterministic custody refusal; original signature/schema causes are retained.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-pub(crate) enum CustodyError {
+pub enum CustodyError {
     /// The original signature cannot be verified; this is not an admission verdict.
     #[error(transparent)]
     Signature(#[from] TransactionSignatureError),
@@ -91,7 +94,6 @@ pub(crate) enum CustodyError {
 )]
 #[derive(Clone, Copy)]
 enum InvocationBinding {
-    Transaction,
     Direct {
         instruction_index: u32,
     },
@@ -112,7 +114,6 @@ impl InvocationBinding {
     }
     fn matches(self, declared: &ActionInvocationBindingV1) -> bool {
         match (self, declared) {
-            (Self::Transaction, ActionInvocationBindingV1::Transaction) => true,
             (
                 Self::Direct {
                     instruction_index: actual,
@@ -137,7 +138,7 @@ impl InvocationBinding {
 
 /// Proof-free values supplied by the native consumer, not copied from the guest.
 #[derive(Clone, Copy)]
-pub(crate) struct ActionRequest<'a> {
+pub struct ActionRequest<'a> {
     pub(crate) index: u32,
     pub(crate) operation: &'a ActionOperationV1,
     pub(crate) role: ActionRoleV1,
@@ -153,7 +154,7 @@ struct Owner<'tx> {
 
 /// An opaque, copyable host token; copying it never duplicates consumption rights.
 #[derive(Clone, Copy)]
-pub(crate) struct AttachmentHandle<'owner, 'tx> {
+pub struct AttachmentHandle<'owner, 'tx> {
     owner: &'owner Owner<'tx>,
     generation: u64,
     action: u32,
@@ -202,7 +203,7 @@ impl Attempt {
 }
 
 /// One local attempt borrowing the complete original signed owner.
-pub(crate) struct AttachmentCustody<'tx> {
+pub struct AttachmentCustody<'tx> {
     owner: Owner<'tx>,
     attempt: Attempt,
 }
@@ -246,18 +247,6 @@ impl<'tx> AttachmentCustody<'tx> {
         } else {
             self.attempt.refuse(CustodyError::ForeignOwner)
         }
-    }
-
-    /// Visit the transaction-level carrier scope under the original signer.
-    pub(crate) fn transaction<T, E: From<CustodyError>>(
-        &mut self,
-        visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,
-    ) -> Result<T, E> {
-        self.invoke(
-            InvocationBinding::Transaction,
-            self.owner.source.authority(),
-            visit,
-        )
     }
 
     /// Visit an already authorized direct native instruction at its exact position.
@@ -324,7 +313,7 @@ impl<'tx> AttachmentCustody<'tx> {
 }
 
 /// A lexical host invocation; its actor is supplied by the ordinary authorization owner.
-pub(crate) struct Invocation<'owner, 'tx> {
+pub struct Invocation<'owner, 'tx> {
     owner: &'owner Owner<'tx>,
     attempt: &'owner mut Attempt,
     binding: InvocationBinding,
@@ -586,13 +575,13 @@ fn bit(index: u32) -> u16 {
 }
 
 mod host;
-pub(crate) use host::ContractCustody;
+pub use host::ContractCustody;
 
 /// Bounded native PGC relation consumer; no executor or State authority.
-pub(crate) mod pgc_bootstrap;
+pub mod pgc_bootstrap;
 
 /// Original signed X.509 request and proof custody for direct and queued application.
-pub(crate) mod x509;
+pub mod x509;
 
 #[cfg(test)]
 mod tests;

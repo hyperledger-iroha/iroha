@@ -353,9 +353,10 @@ pub fn pixels_per_unit(config: &CaptureConfig) -> f64 {
     let (x1, y1) = h.apply(612.0, 512.0);
     let (x2, y2) = h.apply(512.0, 412.0);
     let (x3, y3) = h.apply(512.0, 612.0);
-    0.5 * (((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt()
-        + ((x3 - x2).powi(2) + (y3 - y2).powi(2)).sqrt())
-        / 200.0
+    f64::midpoint(
+        ((x1 - x0).powi(2) + (y1 - y0).powi(2)).sqrt(),
+        ((x3 - x2).powi(2) + (y3 - y2).powi(2)).sqrt(),
+    ) / 200.0
 }
 
 /// Supersampling factor of the geometric stage of [`capture`].
@@ -378,7 +379,9 @@ pub fn capture(source: &Rgb, config: &CaptureConfig) -> Luma {
     let src_w = source.width;
     let linear: Vec<f64> = source
         .data
-        .chunks_exact(3)
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|px| {
             srgb_decode(
                 (0.299 * f64::from(px[0]) + 0.587 * f64::from(px[1]) + 0.114 * f64::from(px[2]))

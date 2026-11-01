@@ -80,13 +80,13 @@ where
     }
 }
 
-pub(crate) fn retryable_approval_error(error: &eyre::Report) -> bool {
+pub fn retryable_approval_error(error: &eyre::Report) -> bool {
     error
         .downcast_ref::<iroha_torii_shared::amx_approval_read::AmxApprovalReadFailureV1>()
-        .is_some_and(|failure| failure.is_valid())
+        .is_some_and(iroha_torii_shared::amx_approval_read::AmxApprovalReadFailureV1::is_valid)
 }
 
-pub(crate) fn approval_retry_delay(error: &eyre::Report) -> Duration {
+pub fn approval_retry_delay(error: &eyre::Report) -> Duration {
     Duration::from_millis(
         error
             .downcast_ref::<iroha_torii_shared::amx_approval_read::AmxApprovalReadFailureV1>()
@@ -96,13 +96,11 @@ pub(crate) fn approval_retry_delay(error: &eyre::Report) -> Duration {
     .max(Duration::from_millis(200))
 }
 
-pub(crate) fn approval_deadline_error(
-    original: Option<eyre::Report>,
-    context: String,
-) -> eyre::Report {
-    match original {
-        Some(error) => error.wrap_err(context),
-        None => eyre!(context),
+pub fn approval_deadline_error(original: Option<eyre::Report>, context: String) -> eyre::Report {
+    if let Some(error) = original {
+        error.wrap_err(context)
+    } else {
+        eyre!(context)
     }
 }
 
@@ -438,7 +436,7 @@ mod approval_error_tests {
             observed_height: None,
             retry_after_ms: Some(7_000),
         };
-        let report: eyre::Report = original.clone().into();
+        let report: eyre::Report = original.into();
         assert_eq!(approval_retry_delay(&report), Duration::from_secs(7));
         let error = approval_deadline_error(Some(report), "absolute approval deadline".into());
         assert_eq!(
@@ -533,7 +531,7 @@ fn balance_observation_from_proof(
     }
 }
 
-pub(crate) struct Observer {
+pub struct Observer {
     verifier: SumeragiFinalityVerifier,
     global: AmxForeignInstanceV1,
     pub decision: Option<AmxOutcomeV1>,
@@ -697,7 +695,7 @@ impl Observer {
     }
 }
 
-pub(crate) fn evidence(block: &SignedBlock, index: u32) -> Result<CommittedTransaction> {
+pub fn evidence(block: &SignedBlock, index: u32) -> Result<CommittedTransaction> {
     let entrypoint = block
         .network_entrypoint_at(index as usize)
         .ok_or_else(|| eyre!("input absent"))?
@@ -721,7 +719,7 @@ pub(crate) fn evidence(block: &SignedBlock, index: u32) -> Result<CommittedTrans
     })
 }
 
-pub(crate) async fn assert_privileged_bank_approval(
+pub async fn assert_privileged_bank_approval(
     root: &Root,
     approval: &AmxDebitApprovalV1,
     block: &VerifiedSumeragiBlock,
@@ -774,7 +772,7 @@ pub(crate) async fn assert_privileged_bank_approval(
 
 // The SDK opaque permission result intentionally exposes no unauthenticated World DTO. This
 // test also authenticates the complete response to verify monetary rows at that same cut.
-pub(crate) async fn approval_response(
+pub async fn approval_response(
     root: &Root,
     approval: &AmxDebitApprovalV1,
     height: u64,

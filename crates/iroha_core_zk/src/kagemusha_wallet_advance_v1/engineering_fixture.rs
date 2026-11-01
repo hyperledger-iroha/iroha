@@ -1,6 +1,6 @@
 //! Engineering enrollment fixture: an explicit test issuer under scheme root `signing_key(17)`
 //! and enrollment signer `signing_key(79)`, opaque platform evidence and Ed25519 account keys.
-//! Shared by this crate's enrollment tests and iroha_core's in-process monetary acceptance;
+//! Shared by this crate's enrollment tests and `iroha_core`'s in-process monetary acceptance;
 //! no attestation verifier admits its evidence and it is never a production issuer.
 
 use super::test_support::{public_key, signing_key};
@@ -118,6 +118,13 @@ pub fn fixture() -> Fixture {
 }
 
 /// The component fixture moved to an installed engineering scheme and installation.
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "only iroha_core's simulator acceptance calls this, through `kagemusha-simulator`"
+    )
+)]
 pub fn installed_fixture(scheme: KagemushaWalletSchemeV1, installation: InstallationV1) -> Fixture {
     let mut f = fixture();
     f.config.scheme = scheme;
@@ -308,6 +315,13 @@ pub fn issuer_result(f: &Fixture, request: &RequestV1) -> ResultV1 {
 
 /// Run the complete E1–E6 enrollment of `f` on `provider` and return the four opened
 /// originals (credential, certificate set, account, asset).
+#[cfg_attr(
+    test,
+    expect(
+        dead_code,
+        reason = "only iroha_core's simulator acceptance calls this, through `kagemusha-simulator`"
+    )
+)]
 pub fn enroll<F: KagemushaWalletFsV1, P: KagemushaWalletPlatformV1>(
     provider: KagemushaWalletProviderV1<F, P>,
     f: &Fixture,

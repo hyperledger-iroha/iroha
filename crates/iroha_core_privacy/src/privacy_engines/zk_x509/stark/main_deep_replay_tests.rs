@@ -279,3 +279,21 @@ fn native19_eight_column_deep_grouping_parity_and_timing() {
         "native19 DEEP exact eight-column diagnostic: coefficients_per_column={length}, original_horner={original_horner:?}, power_setup={power_setup:?}, power_dot_products={dot_products:?}, original_divisions={original_divisions:?}, grouped_with_individual_checks={grouped_divisions:?}; no source replay/FFT/commitment/full-proof work included, shared host load must be recorded"
     );
 }
+
+#[test]
+fn retained_widened_openings_match_horner_at_full_carry_block_boundaries() {
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    let points = [extension(101), extension(127)];
+    let powers = MainDeepPointPowersV1::new_v1(points, 2049).unwrap();
+    for length in [1023, 1024, 1025, 2048, 2049] {
+        let coefficients = ZeroizingMainTraceColumnV1(
+            (0..length)
+                .map(|index| F(p - 1 - (index % 31) as u64))
+                .collect(),
+        );
+        assert_eq!(
+            powers.evaluate_v1(&coefficients).unwrap(),
+            points.map(|point| horner(&coefficients, point))
+        );
+    }
+}

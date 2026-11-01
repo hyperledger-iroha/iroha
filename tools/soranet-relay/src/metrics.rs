@@ -25,7 +25,7 @@ fn load_f64(atom: &AtomicU64) -> f64 {
     f64::from_bits(atom.load(Ordering::Relaxed))
 }
 fn saturating_add(atom: &AtomicU64, value: u64) {
-    let _ = atom.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = atom.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         Some(current.saturating_add(value))
     });
 }

@@ -29,11 +29,11 @@ pub fn ensure_genesis_topology_is_generation_zero(
 }
 
 #[cfg(test)]
-pub(crate) use generate::resolve_staking_policy as resolve_test_staking_policy;
+pub use generate::resolve_staking_policy as resolve_test_staking_policy;
 
 #[cfg(test)]
 /// Explicit ordinary policy for fixtures that do not select a public liability profile.
-pub(crate) fn test_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+pub fn test_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
     generate::resolve_staking_policy(None, false).expect("explicit Kagami fixture staking policy")
 }
 

@@ -129,7 +129,7 @@ fn names_current_tip_uses_three_original_frames_at_later_height_and_keeps_source
             sizing.total_allocated_bytes()
         );
         assert_eq!(
-            *genesis_sizing_bytes.get_or_insert(sizing.total_allocated_bytes()),
+            *genesis_sizing_bytes.get_or_insert_with(|| sizing.total_allocated_bytes()),
             sizing.total_allocated_bytes(),
             "genesis sizing work must not grow with the chain"
         );

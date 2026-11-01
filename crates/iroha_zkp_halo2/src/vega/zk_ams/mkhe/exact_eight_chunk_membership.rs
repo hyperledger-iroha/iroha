@@ -566,7 +566,9 @@ impl<R: ExactEightChunkMembershipRoleV1> ExactEightChunkMembershipEvidenceV1<R> 
         let chunk_allocation = chunks.as_ptr();
         let mut prover_transcripts = [[0_u8; 32]; ZK_AMS_MKHE_EXACT_MEMBERSHIP_CHUNKS_V1];
         for (index, coefficients) in coefficients
-            .chunks_exact(ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1)
+            .as_chunks::<ZK_AMS_MEMBERSHIP_CHUNK_COEFFICIENTS_V1>()
+            .0
+            .iter()
             .enumerate()
         {
             let ordinal =

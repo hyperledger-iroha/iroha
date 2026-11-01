@@ -1571,7 +1571,7 @@ fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSource
         .zip(&names.sources)
         .filter(|(_, name)| reached.contains(*name))
         .collect::<Vec<_>>();
-    sources.sort_by(|(_, left), (_, right)| left.cmp(right));
+    sources.sort_by_key(|(_, left)| *left);
     field(&mut transcript, (sources.len() as u64).to_le_bytes());
     for (source, name) in sources {
         field(&mut transcript, name);
@@ -1610,7 +1610,7 @@ fn source_graph_fingerprint(request: &SourceLinkRequest, names: &CanonicalSource
             .zip(names)
             .filter(|(_, name)| reached.contains(*name))
             .collect::<Vec<_>>();
-        modules.sort_by(|(_, left), (_, right)| left.cmp(right));
+        modules.sort_by_key(|(_, left)| *left);
         field(&mut transcript, (modules.len() as u64).to_le_bytes());
         for ((entry, module), name) in modules {
             field(&mut transcript, [u8::from(entry)]);
@@ -1660,7 +1660,7 @@ fn source_package_graph_fingerprint(
             .zip(names)
             .filter(|(_, name)| reached.contains(*name))
             .collect::<Vec<_>>();
-        modules.sort_by(|(_, left), (_, right)| left.cmp(right));
+        modules.sort_by_key(|(_, left)| *left);
         field(transcript, (modules.len() as u64).to_le_bytes());
         for ((entry, module), name) in modules {
             field(transcript, [u8::from(entry)]);

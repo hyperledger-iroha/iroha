@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_fs::{PrivateDirectory, PublishMode};
+pub(super) use iroha_managed_ipc::random_token;
 use std::{
     fs::{self, File},
     io::{Read as _, Seek as _, SeekFrom},
@@ -630,7 +631,7 @@ impl ManagedStore {
                     request.startup_timeout,
                 );
                 return match cleanup {
-                    Ok(_) => Err(error),
+                    Ok(_) => Err(error.into()),
                     Err(cleanup) => Err(Error::Invalid(format!(
                         "listener handoff failed: {error}; startup cleanup is unconfirmed: {cleanup}"
                     ))),
@@ -1098,12 +1099,12 @@ fn open_log(
     match directory.open_read(log_name) {
         Ok(file) => Ok(file),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(Error::Invalid(match peer {
-                Some(index) => {
+            Err(Error::Invalid(peer.map_or_else(
+                || "the supervisor has not written a log yet".into(),
+                |index| {
                     format!("validator {index} has not written a log yet; it may not have started")
-                }
-                None => "the supervisor has not written a log yet".into(),
-            }))
+                },
+            )))
         }
         Err(error) => Err(error.into()),
     }
@@ -1192,10 +1193,6 @@ fn discard_generation(directory: &PrivateDirectory) -> Result<()> {
     transport::clear_stopped_endpoint(directory)?;
     directory.clear_contents_preserving(&["operation.lock", "runtime.lock"])?;
     Ok(())
-}
-
-pub(super) fn random_token() -> String {
-    hex::encode(rand::random::<[u8; 32]>())
 }
 
 pub(super) fn acquire(directory: &PrivateDirectory, file: &str, name: &str) -> Result<File> {
@@ -1484,8 +1481,9 @@ fn exchange_optional(
     );
     match observed {
         Ok(status) => Ok(Some(status)),
-        Err(transport::RequestFailure::Refused(error)) => Err(error),
+        Err(transport::RequestFailure::Refused(error)) => Err(error.into()),
         Err(transport::RequestFailure::Unavailable(error)) => {
+            let error = Error::from(error);
             let _runtime = match acquire(directory, "runtime.lock", &context.name) {
                 Ok(runtime) => runtime,
                 Err(Error::Busy(_)) => return Err(error),

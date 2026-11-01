@@ -139,7 +139,7 @@ impl DeviceHealth {
             &self.completions
         };
         if let Some(count) = bank.get(kernel) {
-            let _ = count.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+            let _ = count.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
                 Some(n.saturating_add(1))
             });
         }

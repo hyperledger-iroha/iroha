@@ -770,6 +770,17 @@ pub(crate) fn record_write_amx_record(
     });
     Ok(())
 }
+/// Commit an irreversible native game export in the same transaction witness as its State removal.
+pub(crate) fn record_write_game_unit_export(
+    record: &iroha_data_model::game_partition::GameUnitExportV1,
+) -> Result<(), norito::Error> {
+    let key = record.witness_key();
+    let value = norito::encode_canonical(record)?;
+    with_active_slot(|witness| {
+        witness.writes.insert(key, value);
+    });
+    Ok(())
+}
 /// Commit a public private-root registration/cursor under its domain-separated proof key.
 pub(crate) fn record_write_private_dataspace(
     record: &iroha_data_model::private_dataspace::PrivateDataspaceRecord,
@@ -956,8 +967,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
             let present = state_block
                 .world
                 .account_permissions_iter(&acc)
-                .ok()
-                .is_some_and(|mut it| it.any(|p| p.name() == perm_s));
+                .is_ok_and(|mut it| it.any(|p| p.name() == perm_s));
             let canonical_account = acc.to_string();
             let k = enc_key_prefix(
                 ExecutionWitnessKeyTagV1::AccountPermission,
@@ -979,8 +989,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
             let present = state_block
                 .world
                 .role(&role_id)
-                .ok()
-                .is_some_and(|r| r.permissions().any(|p| p.name() == perm_s));
+                .is_ok_and(|r| r.permissions().any(|p| p.name() == perm_s));
             let k = enc_key_prefix(ExecutionWitnessKeyTagV1::RolePermission, role_s, perm_s);
             let v = Json::new(present).get().as_bytes().to_vec();
             with_active_slot(|g| {

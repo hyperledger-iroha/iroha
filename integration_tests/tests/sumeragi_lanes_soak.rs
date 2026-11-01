@@ -580,7 +580,7 @@ fn soak(
     // The run is exported whether it passed or not: the node logs and the timeline are what
     // `scripts/sumeragi_soak.py --analyze` judges a failure from.
     if let Ok(out) = std::env::var(OUT_ENV) {
-        for peer_index in 0..peers.len() {
+        for (peer_index, peer) in peers.iter().enumerate() {
             if let Some(boot) = boots
                 .iter_mut()
                 .rev()
@@ -588,7 +588,7 @@ fn soak(
             {
                 boot.end_ms = Some(now_ms());
                 boot.ended = "stopped";
-                boot.log = peers[peer_index].latest_stdout_log_path();
+                boot.log = peer.latest_stdout_log_path();
             }
         }
         let load = submitters
@@ -620,6 +620,8 @@ fn soak(
 
 /// Agreement: once idle, every running peer holds the same global blocks and lane records.
 fn agree(network: &Network) -> Result<()> {
+    /// One peer's committed header chain and its lane records.
+    type PeerView = (Vec<(u64, String)>, BTreeMap<LaneId, SumeragiLaneRecord>);
     let mut target = 0;
     wait_until(
         Duration::from_secs(120),
@@ -639,7 +641,7 @@ fn agree(network: &Network) -> Result<()> {
             Ok(heights.iter().all(|height| *height == target))
         },
     )?;
-    let mut reference: Option<(Vec<(u64, String)>, BTreeMap<LaneId, SumeragiLaneRecord>)> = None;
+    let mut reference: Option<PeerView> = None;
     for peer in running(network) {
         let mut headers: Vec<(u64, String)> = peer
             .client()

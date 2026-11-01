@@ -35,7 +35,9 @@ fn bytes(record: &Value, key: &str) -> Vec<u8> {
     let text = field(record, key);
     assert_eq!(text.len() % 2, 0);
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let part = std::str::from_utf8(pair).unwrap();
             u8::from_str_radix(part, 16).expect("captured hexadecimal bytes")

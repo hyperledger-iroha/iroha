@@ -4191,7 +4191,7 @@ mod multisig {
                 signatories.push(account);
             }
             let mut signatories_with_weights = BTreeMap::new();
-            for (account, weight) in signatories.into_iter().zip(self.weights.into_iter()) {
+            for (account, weight) in signatories.into_iter().zip(self.weights) {
                 if weight == 0 {
                     return Err(eyre!("signatory weights must be non-zero"));
                 }
@@ -5326,16 +5326,13 @@ mod transaction {
         format!("{base}-{}", index + 1)
     }
     fn ping_nonce_seed() -> u64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| {
-                u64::from_le_bytes(
-                    d.as_nanos().to_le_bytes()[..8]
-                        .try_into()
-                        .expect("eight-byte nonce seed"),
-                )
-            })
-            .unwrap_or(0)
+        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| {
+            u64::from_le_bytes(
+                d.as_nanos().to_le_bytes()[..8]
+                    .try_into()
+                    .expect("eight-byte nonce seed"),
+            )
+        })
     }
     fn maybe_add_ping_nonce(metadata: &mut Metadata, seed: u64, index: usize) -> bool {
         if metadata.contains(&PING_NONCE_KEY) {
@@ -6532,7 +6529,7 @@ mod trigger {
             eyre::bail!("--data-proof hash must be 32 bytes (64 hex chars)");
         }
         let mut proof_hash = [0u8; 32];
-        for (index, chunk) in hash_hex.as_bytes().chunks_exact(2).enumerate() {
+        for (index, chunk) in hash_hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
             let byte_text =
                 std::str::from_utf8(chunk).map_err(|e| eyre!("invalid hex for proof hash: {e}"))?;
             proof_hash[index] = u8::from_str_radix(byte_text, 16)

@@ -171,7 +171,7 @@ fn execute_initial(
     instruction: impl Into<iroha_data_model::isi::InstructionBox>,
 ) -> Result<(), InstructionExecutionError> {
     crate::executor::Executor::Initial
-        .execute_instruction(transaction, authority, instruction.into())
+        .execute_instruction(transaction, authority, &instruction.into())
         .map_err(|error| match error {
             iroha_data_model::ValidationFail::InstructionFailed(error) => error,
             other => panic!("moderation must reach its exact native handler: {other:?}"),
@@ -2245,8 +2245,12 @@ fn pending_bond_liability_blocks_transfer_and_burn_but_allows_exact_excess() {
     }
     let escrow_asset = AssetId::new(definition, escrow.clone());
     assert_eq!(
-        unsettled_moderation_bond_liability(&fixture.state.world.view(), &escrow_asset)
-            .expect("sum retained bond liabilities"),
+        unsettled_moderation_bond_liability_with_owner(
+            &fixture.state.world.view(),
+            &escrow_asset,
+            None
+        )
+        .expect("sum retained bond liabilities"),
         Quantity::from(300_u32)
     );
     assert_eq!(
@@ -2389,8 +2393,12 @@ fn pending_bond_liability_blocks_transfer_and_burn_but_allows_exact_excess() {
         })
         .expect("rotate the active policy away from the historical bond definition");
     assert_eq!(
-        unsettled_moderation_bond_liability(&fixture.state.world.view(), &escrow_asset)
-            .expect("all challenge liabilities are settled"),
+        unsettled_moderation_bond_liability_with_owner(
+            &fixture.state.world.view(),
+            &escrow_asset,
+            None
+        )
+        .expect("all challenge liabilities are settled"),
         Quantity::zero()
     );
     let historical_reference = retained_moderation_asset_definition_reference(

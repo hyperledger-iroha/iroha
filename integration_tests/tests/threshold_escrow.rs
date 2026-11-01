@@ -148,6 +148,10 @@ async fn deploy_threshold_escrow(
     .await?;
     Ok(contract_address)
 }
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The call receives its signer, contract entrypoint, payload and expected status explicitly."
+)]
 async fn call_contract_expect_status(
     client: &Client,
     authority: &AccountId,

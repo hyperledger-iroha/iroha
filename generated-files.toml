@@ -28,6 +28,22 @@ forbidden_tracked_globs = [
   "**/*.class",
 ]
 allowed_tracked_paths = ["dist/.gitkeep"]
+# Text evidence inside sealed validation records keeps the `target/` or `build/`
+# path segment it was captured under: each record's SHA256SUMS names these paths,
+# and the ignore files re-include exactly these roots. Only the listed text
+# suffixes are exempt, so a binary build output placed here is still forbidden.
+allowed_tracked_globs = [
+  "docs/validation/parliament_ballot_fatal_control/build/**/*.template",
+  "docs/validation/parliament_ballot_fatal_control/build/*.json",
+  "docs/validation/parliament_ballot_fatal_control/build/*.txt",
+  "docs/validation/parliament_ballot_component_families/record/capture/source/target/**/*.template",
+  "docs/validation/parliament_ballot_content_lifetime/source/target/**/*.template",
+  "docs/validation/parliament_ballot_family_domains/source/target/**/*.template",
+  "docs/validation/parliament_ballot_lifetime_ledger/capture/source-snapshots/target/**/*.template",
+  "docs/validation/parliament_ballot_request_machine/capture/source/target/**/*.template",
+  "docs/validation/parliament_ballot_request_machine/components/response-l0/source/target/**/*.template",
+  "docs/validation/parliament_ballot_sequence_composition/capture/source/target/**/*.template",
+]
 generated_source_extensions = [
   ".go",
   ".java",
@@ -525,6 +541,9 @@ kind = "file"
 outputs = [
   "fixtures/privacy/exact12_v1.tsv",
   "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64",
+  "fixtures/privacy/exact12_compiled_profile_catalog_v1.norito.b64",
+  "fixtures/privacy/exact12_capability_manifest_v1.norito.b64",
+  "fixtures/privacy/exact12_capability_manifest_v1.json",
 ]
 generator = "cargo run --locked --offline -p iroha_data_model --features dev-tools,privacy-exact12-conformance --bin privacy_exact12_fixtures -- --write --output-root \"${IROHA_PRIVACY_EXACT12_STAGE:?set an existing absolute external staging root}\""
 generator_sources = [
@@ -590,6 +609,39 @@ generator = "python3 scripts/fhe_bgv_cost_model.py --rederive --write"
 generator_sources = ["scripts/fhe_bgv_cost_model.py"]
 inputs = ["specs/fhe_bgv_cost_summary.json"]
 check = "python3 scripts/fhe_bgv_cost_model.py"
+
+[[generated]]
+name = "iroha-zkp-vole-crt-tables"
+kind = "file"
+outputs = [
+  "crates/iroha_zkp_vole/src/crt/generated/faest_128f_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_128s_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_192f_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_192s_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_256f_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_256s_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_em_192f_tables.rs",
+  "crates/iroha_zkp_vole/src/crt/generated/faest_em_192s_tables.rs",
+]
+generator = "cargo test -p iroha_zkp_vole --test conformance_crt -- --ignored"
+generator_sources = [
+  "crates/iroha_zkp_vole/src/crt/algo.rs",
+  "crates/iroha_zkp_vole/src/crt/bits.rs",
+  "crates/iroha_zkp_vole/src/crt/codec.rs",
+  "crates/iroha_zkp_vole/src/crt/cost.rs",
+  "crates/iroha_zkp_vole/src/crt/f4.rs",
+  "crates/iroha_zkp_vole/src/crt/generator.rs",
+  "crates/iroha_zkp_vole/src/crt/gf2poly.rs",
+  "crates/iroha_zkp_vole/src/crt/linalg.rs",
+  "crates/iroha_zkp_vole/src/crt/matrix.rs",
+  "crates/iroha_zkp_vole/tests/conformance_crt.rs",
+]
+# The generator derives every table from the profile parameters alone.
+inputs = [
+  "crates/iroha_zkp_vole/src/crt/tables.rs",
+  "crates/iroha_zkp_vole/src/field/poly.rs",
+]
+check = "cargo test -p iroha_zkp_vole --test conformance_crt"
 
 [[generated]]
 name = "norito-rpc-fixtures"

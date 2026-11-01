@@ -176,7 +176,7 @@ fn provisional_emergency_manifest_install_is_empty_and_one_shot() {
         );
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &provisional));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &privacy
         ));
     });
@@ -1191,9 +1191,9 @@ fn axt_incarnation_transition_preparation_preserves_existing_and_marks_exact_cha
         tx.world
             .axt_authorization_transitioned
             .insert(DataSpaceId::new(10));
-        let previous: BTreeMap<_, _> = [0, 1, 2, 4]
+        let previous: BTreeMap<_, _> = [0_u8, 1, 2, 4]
             .into_iter()
-            .map(|lane| (LaneId::new(lane), Hash::new([lane as u8])))
+            .map(|lane| (LaneId::new(u32::from(lane)), Hash::new([lane])))
             .collect();
         let mut next = previous.clone();
         next.insert(LaneId::new(1), Hash::new([42]));

@@ -269,8 +269,7 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
         .map_err(failure)?
         .map(|checkpoint| UpgradeCheckpointV1::from_config(&checkpoint));
     if let Some(checkpoint) = &checkpoint {
-        copy.set_upgrade_checkpoint(checkpoint.clone())
-            .map_err(failure)?;
+        copy.set_upgrade_checkpoint(checkpoint).map_err(failure)?;
     }
     let (mut state, from_snapshot) = match restore_snapshot(
         config,
@@ -284,7 +283,7 @@ pub fn check_replay(config: &Config) -> ReportResult<ReplayCheckReportV1, MainEr
         Err(error) => {
             if let Some(checkpoint) = &checkpoint {
                 return Err(Report::new(error).change_context(MainError::CheckReplay).attach(format!(
-                        "blocks up to the upgrade checkpoint at height {} are the previous release's history and are never re-executed; replay needs the checkpoint snapshot or a later snapshot of this release",
+                        "blocks up to the upgrade checkpoint at height {} are the previous release's history and are never re-executed; replay needs a snapshot of this release above the checkpoint",
                         checkpoint.height
                     )));
             }

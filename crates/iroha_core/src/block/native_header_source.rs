@@ -93,7 +93,7 @@ impl ValidBlock {
                 successor_context.prepare_continuation(
                     &view,
                     &block.header(),
-                    pulse,
+                    pulse.as_ref(),
                     expected_context,
                 )
             });

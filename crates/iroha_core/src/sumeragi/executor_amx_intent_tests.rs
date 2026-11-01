@@ -295,10 +295,10 @@ fn original_paid_intent_namespace_refusal_retains_both_buffers_and_exact_commit_
 #[test]
 fn original_paid_intent_commit_repetition_and_archive_reopen_are_create_only_and_zero_new_pool_bytes()
  {
+    use std::os::unix::fs::MetadataExt as _;
     // Keep constructor-retired State generations outside this operation's
     // original-pool refusal and synchronous refund observations.
     let _state_retirement = crossbeam_epoch::pin();
-    use std::os::unix::fs::MetadataExt as _;
     with_paid_worker(|chain, instruction, customer, worker, blocks| {
         let (block, qc) = paid_block(chain, worker, instruction, &customer, false);
         let source = worker

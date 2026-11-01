@@ -24,16 +24,17 @@ fn standard_launcher_qualifies_and_supervises_governance_dag_service_adapters() 
         .find("sorafs_node::NodeHandle::clone(sorafs_node)")
         .map(|offset| node_construction + offset)
         .expect("launcher eventually shares the embedded SoraFS node");
+    // Startup preparation owns the opened State until activation admits providers.
     let state_open = compact_source
-        .find("Kura::new_with_configured_lane_catalog(")
-        .expect("launcher contains the persistent-state startup corridor");
+        .find("Box::pin(PreparedStartup::prepare(config,genesis)).await?")
+        .expect("launcher prepares persistent state before provider activation");
     assert!(
-        qualification < state_open
-            && state_open < supervisor
+        state_open < qualification
+            && qualification < supervisor
             && supervisor < install
             && install < service_spawn
             && install < first_node_clone,
-        "provider qualification, state opening, service preparation, mirror-reader installation, service spawn, and first node sharing must retain their startup-fatal order"
+        "state preparation, provider qualification, service preparation, mirror-reader installation, service spawn, and first node sharing must retain their startup-fatal order"
     );
     assert_eq!(
         compact_source[node_construction..first_node_clone]

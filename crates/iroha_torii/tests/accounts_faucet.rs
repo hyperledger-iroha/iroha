@@ -19,7 +19,10 @@ use iroha_data_model::{
     isi::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     level::Level,
     nexus::PublicLaneMonetaryPlanV1,
-    parameter::{Parameter, system::SumeragiNposParameters},
+    parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+    },
     prelude::{
         Account, Asset, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction,
     },
@@ -38,8 +41,6 @@ use std::{
     sync::Arc,
 };
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[path = "accounts_faucet_policy_tests.rs"]
 mod policy_tests;
 struct FaucetTestContext {
@@ -123,15 +124,23 @@ fn build_faucet_test_context_with_enabled(
         faucet_selector,
         register_user,
         faucet_enabled,
-        false,
+        FaucetIngress::NonAuthoritative,
     )
+}
+/// Whether the fixture Torii names its local peer as the authoritative faucet ingress.
+#[derive(Clone, Copy)]
+enum FaucetIngress {
+    /// No local peer identity, so faucet writes have no authoritative route.
+    NonAuthoritative,
+    /// The fixture peer routes faucet writes authoritatively.
+    Authoritative,
 }
 fn build_faucet_test_context_with_authority(
     prefund_user: bool,
     faucet_selector: Option<&str>,
     register_user: bool,
     faucet_enabled: bool,
-    authoritative: bool,
+    ingress: FaucetIngress,
 ) -> FaucetTestContext {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let data_dir = tempfile::tempdir().expect("isolated faucet Torii persistence");
@@ -219,9 +228,10 @@ fn build_faucet_test_context_with_authority(
     let stake_asset_id = staking.stake_asset_id.clone();
     let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
         .build(&authority_id);
-    let stake_definition = AssetDefinition::numeric(
+    let stake_definition = AssetDefinition::new(
         stake_asset_id.clone(),
         "Staked XOR".to_owned(),
+        iroha_primitives::numeric::NumericSpec::fractional(9),
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
@@ -239,31 +249,36 @@ fn build_faucet_test_context_with_authority(
     });
     let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
     let _network_id = iroha_torii::test_utils::signed_query_network_id();
-    let mut world = World::with_assets(
+    let world = World::with_assets(
         [domain, stake_domain],
         accounts,
         [asset_definition, stake_definition],
         stake_assets,
         [],
     );
-    world
-        .set_parameter_for_testing(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
-        .expect("valid default consensus parameters");
-    if let Some(selector) = faucet_selector {
-        if selector != canonical_selector {
-            let alias: AssetDefinitionAlias = selector.parse().expect("asset alias");
-            let mut block = world.block();
-            let mut tx = block.transaction_without_telemetry(
-                iroha_config::parameters::actual::LaneConfig::default(),
-                0,
-            );
-            tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
-                .expect("bind alias");
-            tx.apply();
-            block.commit();
-        }
+    // Monetary and consensus policy is authored by the signed genesis; a parameter seeded into
+    // the pre-genesis World would be read as parent authority without its staking policy.
+    let npos = SumeragiNposParameters::default();
+    native_config.consensus_mode = SumeragiConsensusMode::Npos;
+    native_config.genesis_parameters.extend([
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            npos.epoch_length_blocks,
+        )),
+        Parameter::Custom(npos.into_custom_parameter()),
+    ]);
+    if let Some(selector) = faucet_selector
+        && selector != canonical_selector
+    {
+        let alias: AssetDefinitionAlias = selector.parse().expect("asset alias");
+        let mut block = world.block();
+        let mut tx = block.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        tx.bind_asset_definition_alias(&asset_definition_id, &(alias), None, None, 10_000)
+            .expect("bind alias");
+        tx.apply();
+        block.commit();
     }
     let mut seed_instructions: Vec<InstructionBox> = vec![
         Mint::asset_quantity(
@@ -290,7 +305,7 @@ fn build_faucet_test_context_with_authority(
                 peer_id: PeerId::new(key_pair.public_key().clone()),
                 stake_account: validator.clone(),
                 initial_stake: Quantity::from(1_000_u32),
-                metadata: Default::default(),
+                metadata: iroha_model_base::metadata::Metadata::default(),
                 monetary_plan: PublicLaneMonetaryPlanV1::genesis_registration(
                     AssetId::new(stake_asset_id.clone(), validator.clone()),
                     AssetId::new(stake_asset_id.clone(), escrow_id.clone()),
@@ -428,10 +443,9 @@ fn build_faucet_test_context_with_authority(
         ),
     )
     .expect("valid Torii faucet fixture");
-    let torii = if authoritative {
-        torii.with_local_peer_id(local_peer_id)
-    } else {
-        torii
+    let torii = match ingress {
+        FaucetIngress::Authoritative => torii.with_local_peer_id(local_peer_id),
+        FaucetIngress::NonAuthoritative => torii,
     };
     FaucetTestContext {
         native_chain: parking_lot::Mutex::new(native_chain),
@@ -958,11 +972,10 @@ async fn accounts_faucet_repeated_claims_do_not_spend_without_local_authority() 
     let user_asset_id = AssetId::new(asset_definition_id.clone(), user_id.clone());
     assert!(view.world().asset(&user_asset_id).is_err());
     let authority_asset_id = AssetId::new(asset_definition_id, authority_id);
-    let authority_balance = view
-        .world()
-        .asset(&authority_asset_id)
-        .map(|asset| asset.value().as_ref().to_string())
-        .unwrap_or_else(|_| "0".to_owned());
+    let authority_balance = view.world().asset(&authority_asset_id).map_or_else(
+        |_| "0".to_owned(),
+        |asset| asset.value().as_ref().to_string(),
+    );
     assert_eq!(authority_balance, "50000");
     app.shutdown().await;
 }
@@ -1504,12 +1517,17 @@ async fn accounts_faucet_puzzle_ignores_uncertified_claim() {
     app.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;
 
 #[tokio::test]
 async fn authoritative_faucet_submission_executes_the_exact_prepared_transfer() {
-    let context = build_faucet_test_context_with_authority(false, None, false, true, true);
+    let context = build_faucet_test_context_with_authority(
+        false,
+        None,
+        false,
+        true,
+        FaucetIngress::Authoritative,
+    );
     let params = faucet_pow_scrypt_params(
         context.pow_scrypt_log_n,
         context.pow_scrypt_r,

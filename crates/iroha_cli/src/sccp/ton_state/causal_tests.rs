@@ -233,6 +233,8 @@ fn genuine_older_minter_state_and_retired_wallet_preserve_original_pending_retry
     let base =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sccp-continuation");
     std::fs::create_dir_all(&base).unwrap();
+    // Private-directory custody admits only normal path components.
+    let base = base.canonicalize().unwrap();
     let dir = tempfile::Builder::new()
         .prefix("older-minter-retry-")
         .tempdir_in(base)
@@ -361,6 +363,8 @@ fn retry_reselection_uses_the_actual_locked_step_after_another_process_appends()
     let base =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sccp-continuation");
     std::fs::create_dir_all(&base).unwrap();
+    // Private-directory custody admits only normal path components.
+    let base = base.canonicalize().unwrap();
     let dir = tempfile::Builder::new()
         .prefix("reselected-retry-")
         .tempdir_in(base)

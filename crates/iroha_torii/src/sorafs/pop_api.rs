@@ -135,8 +135,8 @@ impl PopCredentialRuntimeConfigV1 {
             || self.wallet_state_dir.as_os_str().is_empty()
             || self.issuer_state_dir == self.wallet_state_dir
             || self.worker_interval.is_zero()
-            || self.worker_interval > Duration::from_secs(60 * 60)
-            || self.max_finalized_time_skew > Duration::from_secs(5 * 60)
+            || self.worker_interval > Duration::from_hours(1)
+            || self.max_finalized_time_skew > Duration::from_mins(5)
             || self.max_finalized_time_skew.subsec_nanos() != 0
             || self.enrollment_recipient_public_key_digest == [0; 32]
             || self.wallet_recipient_public_key_digest == [0; 32]

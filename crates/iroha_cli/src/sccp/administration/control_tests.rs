@@ -49,6 +49,8 @@ fn workspace_temp() -> tempfile::TempDir {
     let base =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/sccp-continuation");
     std::fs::create_dir_all(&base).unwrap();
+    // Private-directory custody admits only normal path components.
+    let base = base.canonicalize().unwrap();
     tempfile::Builder::new()
         .prefix("control-selection-")
         .tempdir_in(base)

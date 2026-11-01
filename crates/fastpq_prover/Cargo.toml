@@ -10,12 +10,13 @@ publish = false
 default = []
 dev-tools = []
 # Paired Keccak NEON/SSE2; all other targets retain deterministic scalar execution.
-simd = []
+simd = ["keccak/parallel"]
 # Synchronous GPU FFT/LDE planner helpers exercised by the `planner` benchmark.
 bench = []
 fastpq-gpu = ["dep:block", "dep:metal"]
 
 [dependencies]
+keccak = { version = "0.2.2", default-features = false }
 iroha_model_base = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 fastpq_isi = { path = "../fastpq_isi" }

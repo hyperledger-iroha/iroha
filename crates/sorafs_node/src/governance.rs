@@ -6751,7 +6751,7 @@ fn plan_governance_publication_source_artifacts(
         verify_complete_interrupted_source_pair(root_guard, identity, inventory.next_position)?;
     }
     plan.source_files
-        .sort_by(|left, right| right.rollback_rank.cmp(&left.rollback_rank));
+        .sort_by_key(|entry| std::cmp::Reverse(entry.rollback_rank));
     if inventory.source_files.is_empty() {
         plan.source_root = Some(GovernancePublicationPlannedDirectoryRemoval {
             parent: root_directory.clone(),
@@ -6952,7 +6952,7 @@ fn plan_governance_publication_car_artifacts(
                 )?);
         }
         plan.car_files
-            .sort_by(|left, right| right.rollback_rank.cmp(&left.rollback_rank));
+            .sort_by_key(|entry| std::cmp::Reverse(entry.rollback_rank));
     }
     if inventory.car_files.is_empty() {
         plan.car_root = Some(GovernancePublicationPlannedDirectoryRemoval {

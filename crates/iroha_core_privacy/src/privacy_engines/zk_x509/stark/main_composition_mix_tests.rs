@@ -62,13 +62,45 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
 }
 
 #[test]
+fn indexed_widened_mix_preserves_order_carries_and_empty_input() {
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    for length in [0, 1, 2, 7, 8, 9, 1023, 1024, 1025, 2048, 4097] {
+        let residues = (0..length)
+            .map(|index| F(p - 1 - (index % 31) as u64))
+            .collect::<Vec<_>>();
+        let alphas = (0..length)
+            .map(|index| {
+                E::from_coefficients(core::array::from_fn(|lane| {
+                    F(p - 1 - ((index + lane) % 17) as u64)
+                }))
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut visited = 0;
+        let actual = mix_indexed_residues_v1(length, |index| {
+            assert_eq!(index, visited);
+            visited += 1;
+            (residues[length - 1 - index], alphas[length - 1 - index])
+        });
+        assert_eq!(visited, length);
+        assert_eq!(actual, scalar_mix(&residues, &alphas));
+        assert_eq!(actual, mix_residues_v1(&residues, &alphas));
+    }
+}
+
+#[test]
 fn every_registration_mix_is_identical_across_worker_schedules() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let fixtures = layout
         .registered_segments
         .iter()
         .enumerate()
-        .map(|(index, registration)| fixture(registration.segment.constraint_count, index as u8))
+        .map(|(index, registration)| {
+            fixture(
+                registration.segment.constraint_count,
+                u8::try_from(index).unwrap(),
+            )
+        })
         .collect::<Vec<_>>();
     let expected = fixtures
         .iter()
@@ -138,7 +170,10 @@ fn streamed_mixture_clears_products_carries_and_completed_blocks_on_every_exit()
 #[test]
 #[ignore = "release-only isolated scalar versus widened composition-mix timings"]
 fn composition_mix_cost_diagnostic() {
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     for width in [90, 593, 1024, 2145] {
         let (residues, alphas) = fixture(width, 73);
         let iterations = (1 << 24) / width;

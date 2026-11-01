@@ -143,8 +143,9 @@ fn startup_history_reads_descending_once_and_returns_original_ascending_window()
     let mut parent = genesis;
     let mut expected = Vec::new();
     for height in 1..=6 {
-        let body = block(height, parent.0, parent.1, &[height as u8]);
-        let qc = commit_qc(&body, Hash32([height as u8 + 2; 32]));
+        let seed = u8::try_from(height).unwrap();
+        let body = block(height, parent.0, parent.1, &[seed]);
+        let qc = commit_qc(&body, Hash32([seed + 2; 32]));
         parent = (qc.block_hash, qc.result);
         expected.push(body.header().clone());
         original.append(&body, &qc).unwrap();

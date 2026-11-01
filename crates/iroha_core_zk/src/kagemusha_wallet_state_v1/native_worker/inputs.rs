@@ -167,7 +167,7 @@ fn incoming_send_selector(payment: &KagemushaWalletPaymentV1) -> Result<u8, Erro
     Ok(2 + selected)
 }
 /// Receive's compiled route: a Request quoting an earlier credential of this incarnation
-/// is ReceiveRenewed, and the Payment's lineage controls select the incoming σ_send key.
+/// is `ReceiveRenewed`, and the Payment's lineage controls select the incoming `σ_send` key.
 pub(super) fn receive_route(
     renewed: bool,
     payment: &KagemushaWalletPaymentV1,

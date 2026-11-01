@@ -215,6 +215,10 @@ impl PeerProcesses {
             .transpose()
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "A restart receives its custody directory, record, ownership lock, daemon pin, launch, listeners and budget explicitly."
+    )]
     pub(super) fn start(
         &mut self,
         directory: &PrivateDirectory,

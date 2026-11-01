@@ -1740,9 +1740,7 @@ fn verify_audit_path_shape(
             found: path.len(),
         });
     }
-    for (path_position, (node, expected_side)) in
-        path.iter().zip(expected_sides.into_iter()).enumerate()
-    {
+    for (path_position, (node, expected_side)) in path.iter().zip(expected_sides).enumerate() {
         if node.side != expected_side {
             return Err(TransparencyLedgerError::ProofPathIndexMismatch {
                 leaf_index,

@@ -673,9 +673,7 @@ impl WorkerPool {
 }
 fn resolve_worker_threads(configured: usize) -> usize {
     if configured == 0 {
-        let detected = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let detected = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         detected.clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX)
     } else {
         configured.max(1)
@@ -718,8 +716,7 @@ fn dispatch_pending(pool: &mut WorkerPool, pending: &mut Vec<ZkTask>) {
 fn process_job(job: ZkTask) {
     let dig = job.digest();
     let outcome = ivm::zk::check_diagnostic_trace(&job.snapshot)
-        .map(|()| TraceCheckOutcome::Checked)
-        .unwrap_or(TraceCheckOutcome::Rejected);
+        .map_or(TraceCheckOutcome::Rejected, |()| TraceCheckOutcome::Checked);
     if let Some(cache) = RESULT_CACHE.get() {
         cache.record(dig, Instant::now());
     }
@@ -1152,8 +1149,7 @@ mod tests {
     #[test]
     fn worker_threads_auto_is_bounded() {
         let expected = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1)
+            .map_or(1, std::num::NonZero::get)
             .clamp(AUTO_WORKER_MIN, AUTO_WORKER_MAX);
         assert_eq!(resolve_worker_threads(0), expected);
         assert!(resolve_worker_threads(0) <= AUTO_WORKER_MAX);

@@ -7,7 +7,7 @@ use iroha_futures::supervisor::ShutdownSignal;
 /// A supervising parent holds the write end of the child's stdin pipe. When the parent exits for
 /// any reason, including SIGKILL, the pipe closes and the node shuts down cleanly through the same
 /// signal a panic uses. Bytes written to the pipe are discarded; a read error also shuts down.
-pub(super) fn spawn_input_close_shutdown(
+pub fn spawn_input_close_shutdown(
     input: impl std::io::Read + Send + 'static,
     signal: ShutdownSignal,
 ) -> std::io::Result<()> {

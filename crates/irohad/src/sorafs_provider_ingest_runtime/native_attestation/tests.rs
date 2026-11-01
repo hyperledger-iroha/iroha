@@ -11,6 +11,12 @@ fn fixture() -> (
     SorafsProviderAttestationJournal,
 ) {
     let root = tempfile::tempdir().unwrap();
+    // Provider-attestation custody opens its root only as an owner-private directory.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
     let key = KeyPair::try_from_seed(vec![0x35; 32], Algorithm::Ed25519).unwrap();
     let authority = AccountId::new(key.public_key().clone());
     let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(

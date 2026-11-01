@@ -291,10 +291,9 @@ fn find_active_trigger_ids_includes_registered() -> Result<()> {
     if let Err(err) = client.submit(
         Grant::account_permission(permission, ALICE_ID.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        if !is_permission_grant_repetition(&err, &expected_permission) {
-            return Err(err);
-        }
+    ) && !is_permission_grant_repetition(&err, &expected_permission)
+    {
+        return Err(err);
     }
     // Register a by-call trigger that won't fire automatically; keep it active.
     let trig_id: TriggerId = "qtrig_active_ids".parse()?;

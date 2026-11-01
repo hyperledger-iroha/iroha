@@ -114,6 +114,16 @@ fn service() -> (AccountService, Arc<Transport>) {
         transport,
     )
 }
+/// A temporary directory with the owner-only mode a retained `PrivateDirectory` requires.
+fn private_tempdir() -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+    }
+    root
+}
 fn key(seed: u8) -> KeyPair {
     KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).unwrap()
 }
@@ -232,7 +242,7 @@ fn configure_and_enroll_retain_one_canonical_instruction_and_exact_original_wire
     let now = current_unix_ms().unwrap();
     let configure = configure(&service.config, now);
     let enroll = enroll(&service.config, now);
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");
@@ -349,7 +359,7 @@ fn recovery_keeps_original_request_and_dispatches_each_purpose_at_most_once() {
     let now = current_unix_ms().unwrap();
     let configure = configure(&service.config, now);
     let mut enroll = enroll(&service.config, now);
-    let root = tempfile::tempdir().unwrap();
+    let root = private_tempdir();
     let parent = iroha_fs::PrivateDirectory::open(root.path()).unwrap();
     let configured = root.path().join("configure");
     let enrolled = root.path().join("enroll");

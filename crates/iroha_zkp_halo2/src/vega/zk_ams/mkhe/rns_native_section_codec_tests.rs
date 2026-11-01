@@ -276,7 +276,7 @@ fn envelope_fixture(fixture: &CodecFixture) -> ZkAmsMkheRnsNativeProofEnvelopeV1
 #[test]
 fn indexed_root_writers_preserve_all_six_native_lanes() {
     let mut words = [0_u8; 48];
-    for (lane, bytes) in words.chunks_exact_mut(8).enumerate() {
+    for (lane, bytes) in words.as_chunks_mut::<8>().0.iter_mut().enumerate() {
         bytes.copy_from_slice(&(lane as u64 + 1).to_le_bytes());
     }
     let first = ProofDigestV1::from_le_bytes(words).expect("canonical six-lane fixture");

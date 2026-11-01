@@ -431,7 +431,7 @@ fn ceil_log2_v1(value: u16) -> Option<u16> {
     Some(if value == 1 {
         0
     } else {
-        u16::try_from(u16::BITS - (value - 1).leading_zeros()).ok()?
+        u16::try_from((value - 1).bit_width()).ok()?
     })
 }
 #[cfg(test)]
@@ -447,8 +447,7 @@ fn weighted_exponent_union_security_bits_v1(terms: &[(u16, u16)]) -> Option<u16>
             .checked_mul(u128::from(multiplicity))?;
         numerator = numerator.checked_add(weight)?;
     }
-    let ceiling_log =
-        u16::try_from(u128::BITS - (numerator.checked_sub(1)?).leading_zeros()).ok()?;
+    let ceiling_log = u16::try_from((numerator.checked_sub(1)?).bit_width()).ok()?;
     scale.checked_sub(ceiling_log)
 }
 #[cfg(test)]

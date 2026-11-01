@@ -2242,7 +2242,7 @@ fn mk_app_state_for_tests_with_world_and_options_and_network_id_and_nexus(
 }
 
 /// Author the signed query for the exact network established by this fixture's genesis.
-pub(crate) fn authorize_native_query_for_fixture(
+pub fn authorize_native_query_for_fixture(
     network: NetworkId,
     request: iroha_data_model::query::QueryRequest,
     authority: AccountId,
@@ -2264,7 +2264,7 @@ pub(crate) fn authorize_native_query_for_fixture(
         nonce,
     )
 }
-pub(crate) fn signed_native_find_triggers_query_for_fixture(
+pub fn signed_native_find_triggers_query_for_fixture(
     network: NetworkId,
     authority: AccountId,
     key: &KeyPair,
@@ -2286,7 +2286,7 @@ fn signed_native_find_active_trigger_ids_query_for_fixture(
 }
 
 /// Native listener fixtures execute their own signed genesis before any network-bound
-/// AppState owner is constructed. The bare H0 fixture remains deliberately separate.
+/// `AppState` owner is constructed. The bare H0 fixture remains deliberately separate.
 pub fn mk_native_app_state_for_tests() -> SharedAppState {
     mk_native_app_state_for_tests_with_world(World::default())
 }
@@ -2319,7 +2319,7 @@ pub fn mk_native_app_state_for_tests_with_world_and_nexus(
 }
 
 pub fn mk_native_app_state_for_tests_with_options(
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2336,14 +2336,14 @@ pub fn mk_native_app_state_for_tests_with_options(
 }
 
 pub fn mk_native_app_state_for_tests_with_iso_bridge(
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
 ) -> SharedAppState {
     mk_native_app_state_for_tests_with_options(iso, None, None, None)
 }
 
 fn mk_native_app_state_for_tests_with_options_and_scope(
     world: World,
-    iso: Option<iroha_config::parameters::actual::IsoBridge>,
+    iso: Option<&iroha_config::parameters::actual::IsoBridge>,
     deploy_limit: Option<(u32, u32)>,
     norito_rpc: Option<iroha_config::parameters::actual::NoritoRpcTransport>,
     push: Option<iroha_config::parameters::actual::Push>,
@@ -2352,7 +2352,7 @@ fn mk_native_app_state_for_tests_with_options_and_scope(
 ) -> SharedAppState {
     mk_app_state_for_tests_with_native_scope(
         AppFixtureWorld::PreGenesis(world),
-        iso.as_ref(),
+        iso,
         deploy_limit,
         norito_rpc,
         push,
@@ -2365,6 +2365,10 @@ fn mk_native_app_state_for_tests_with_options_and_scope(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The fixture threads each independently optional node configuration override."
+)]
 fn mk_app_state_for_tests_with_native_scope(
     fixture_world: AppFixtureWorld,
     iso: Option<&iroha_config::parameters::actual::IsoBridge>,

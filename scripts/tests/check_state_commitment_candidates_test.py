@@ -19,6 +19,8 @@ SPEC = importlib.util.spec_from_file_location("check_state_commitment_candidates
 assert SPEC and SPEC.loader
 CHECKER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CHECKER)
+# The command line requires the independent observation contract before reading evidence.
+ORDINARY_OBSERVATION = ("--require-observation-contract", "ordinary_native_v1")
 
 PROCESS = {
     "peak_rss_bytes": 4096,
@@ -704,7 +706,7 @@ class RecordSummaries(unittest.TestCase):
         tracked = (REPOSITORY / CHECKER.SUMMARY).read_bytes()
         output = StringIO()
         with redirect_stdout(output), redirect_stderr(output):
-            self.assertEqual(CHECKER.main(["--refresh", "untrusted-run"]), 1)
+            self.assertEqual(CHECKER.main(["--refresh", "untrusted-run", *ORDINARY_OBSERVATION]), 1)
             self.assertEqual(CHECKER.main(["--manifest-sha256", "a" * 64]), 1)
         self.assertIn("not written", output.getvalue())
         self.assertEqual((REPOSITORY / CHECKER.SUMMARY).read_bytes(), tracked)
@@ -1184,6 +1186,18 @@ class TrackedSummary(unittest.TestCase):
         )
         self.assert_reported(lambda s: s["units"].pop("wall_ns"), "units differs from the checker's table")
 
+    def test_a_run_records_a_digest_only_for_a_dirty_checkout(self) -> None:
+        def recording(dirty, digest):
+            return lambda s: s["benchmark_identity"]["runs"][0].update(source_dirty=dirty, source_dirty_digest=digest)
+
+        self.assert_reported(recording(True, None), "source_dirty_digest is not a SHA-256 digest")
+        self.assert_reported(recording(True, "abc"), "source_dirty_digest is not a SHA-256 digest")
+        self.assert_reported(recording(False, "d" * 64), "source_dirty_digest is recorded for a clean checkout")
+        self.assert_reported(recording(None, "d" * 64), "source_dirty is not recorded")
+        # What the harness writes for a clean checkout and for a dirty one.
+        for dirty, digest in ((False, None), (True, "d" * 64)):
+            self.assertFalse([error for error in self.errors(recording(dirty, digest)) if "source_dirty" in error])
+
     def test_classes_units_and_notes_of_the_measured_sections_are_the_checkers_text(self) -> None:
         text = "differs from the checker's text"
         for section, key in (
@@ -1241,7 +1255,7 @@ class TrackedSummary(unittest.TestCase):
         )
         output = StringIO()
         with redirect_stdout(output), redirect_stderr(output):
-            self.assertEqual(CHECKER.main(["--reproduce"]), 0)
+            self.assertEqual(CHECKER.main(["--reproduce", *ORDINARY_OBSERVATION]), 0)
         self.assertIn("exactly what its cited raw records give", output.getvalue())
 
     def test_the_measured_sources_are_bound(self) -> None:
@@ -1960,7 +1974,9 @@ class Refresh(unittest.TestCase):
             unequal = self.run_directory(root, "unequal", [broken], CHECKER.expected_config(REPOSITORY))
             output = StringIO()
             with redirect_stdout(output), redirect_stderr(output):
-                self.assertEqual(CHECKER.main(["--refresh", str(unequal), "--manifest-sha256", *self.pins([unequal])]), 1)
+                self.assertEqual(
+                    CHECKER.main(["--refresh", str(unequal), "--manifest-sha256", *self.pins([unequal]), *ORDINARY_OBSERVATION]), 1
+                )
             self.assertIn("differs between repetitions", output.getvalue())
             self.assertIn("not written", output.getvalue())
             # A directory that is not a harness run, or a report of another
@@ -1972,7 +1988,9 @@ class Refresh(unittest.TestCase):
             for directory, fragment in ((root / "empty", "FileNotFoundError"), (root / "odd", "KeyError")):
                 output = StringIO()
                 with redirect_stdout(output), redirect_stderr(output):
-                    self.assertEqual(CHECKER.main(["--refresh", str(directory), "--manifest-sha256", "a" * 64]), 1)
+                    self.assertEqual(
+                        CHECKER.main(["--refresh", str(directory), "--manifest-sha256", "a" * 64, *ORDINARY_OBSERVATION]), 1
+                    )
                 self.assertIn(fragment, output.getvalue())
                 self.assertIn("not written", output.getvalue())
             self.assertEqual((REPOSITORY / CHECKER.SUMMARY).read_text(), tracked)

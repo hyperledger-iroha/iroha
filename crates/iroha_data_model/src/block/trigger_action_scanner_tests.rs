@@ -479,7 +479,7 @@ fn typed_removal_of_canonical_by_call_authority_is_rejected() {
     assert_typed_semantic_refusal(&changed.frame(), ScanError::NonCanonical);
 }
 
-/// Exact JsonWireOwned field type, used only to express protocol-invalid text
+/// Exact `JsonWireOwned` field type, used only to express protocol-invalid text
 /// which Json's public constructors intentionally refuse to store.
 #[derive(norito::derive::SerializePayload)]
 struct RawJsonText(String);

@@ -78,7 +78,7 @@ fn test_network_id(seed: &str) -> iroha_data_model::NetworkId {
 }
 #[cfg(test)]
 fn test_ticket_revocation_store() -> Arc<Mutex<TicketRevocationStore>> {
-    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_secs(900))
+    let limits = TicketRevocationStoreLimits::new(1_024, Duration::from_mins(15))
         .expect("test replay-store limits must be valid");
     let store = TicketRevocationStore::in_memory(limits)
         .expect("test in-memory replay store must be available");
@@ -3279,6 +3279,10 @@ pub mod handles {
     use iroha_primitives::addr::SocketAddr;
     /// Start Peer in `state::Connecting` state
     #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the spawned peer task owns its consensus capability snapshot"
+    )]
     pub(crate) fn connecting<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         peer_addr: SocketAddr,
         peer_id: iroha_model_base::peer::PeerId,
@@ -3368,6 +3372,10 @@ pub mod handles {
     }
     /// Start Peer in `state::ConnectedFrom` state
     #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the spawned peer task owns its consensus capability snapshot"
+    )]
     pub(crate) fn connected_from<T: Pload + crate::network::message::ClassifyTopic, E: Enc>(
         our_public_address: SocketAddr,
         key_pair: Arc<KeyPair>,
@@ -6088,9 +6096,10 @@ mod state {
                 );
                 return Err(crate::Error::HandshakeConsensusMismatch { reason });
             }
-            let required = caps
-                .required_host_profiles
-                .map_or_else(crate::HostProfileSet::default, |cell| cell.current());
+            let required = caps.required_host_profiles.map_or_else(
+                crate::HostProfileSet::default,
+                super::super::RequiredHostProfiles::current,
+            );
             if let Some(reason) = host_profile_mismatch(&required, &peer_config.host_profiles) {
                 iroha_logger::warn!(%reason, "peer rejected due to consensus config mismatch");
                 return Err(crate::Error::HandshakeConsensusMismatch { reason });

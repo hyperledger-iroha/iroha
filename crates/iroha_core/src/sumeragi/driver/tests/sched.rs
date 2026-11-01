@@ -885,8 +885,10 @@ fn repeated_commit_failures_preserve_backoff_and_reset_after_success() {
         assert_eq!(exec.calls.len(), 2 * (attempt + 1));
         assert!(
             exec.calls
-                .chunks_exact(2)
-                .all(|calls| calls == ["prepare", "commit"])
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .all(|calls| *calls == ["prepare", "commit"])
         );
         assert_eq!(sched.wakeup(), now + delay);
         assert!(sched.next(now + delay - 1).is_none(), "no early retry");

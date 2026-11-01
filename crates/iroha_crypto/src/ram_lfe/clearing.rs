@@ -7,7 +7,7 @@
 //! temporaries while computing on the array are not covered.
 
 use std::ops::{Deref, DerefMut};
-use subtle::ConstantTimeEq;
+use subtle::{Choice, ConstantTimeEq};
 use zeroize::Zeroize;
 
 /// One heap allocation of `N` secret scalars, cleared on drop.
@@ -25,6 +25,21 @@ where
         Self(Box::new([T::default(); N]))
     }
 
+    /// Allocate a zeroed fixed-size owner without a large stack temporary.
+    /// Reservation failure occurs before any private scalar is copied. The
+    /// conversion to a boxed slice may shrink through the infallible allocator;
+    /// this is not a guarantee that every allocation failure is recoverable.
+    pub(super) fn try_zeroed() -> Result<Self, std::collections::TryReserveError> {
+        let mut cells = Vec::new();
+        cells.try_reserve_exact(N)?;
+        cells.resize(N, T::default());
+        let cells = cells.into_boxed_slice();
+        let array = cells
+            .try_into()
+            .unwrap_or_else(|_| unreachable!("fixed clearing length"));
+        Ok(Self(array))
+    }
+
     /// Copy a borrowed array into a new allocation.
     pub(super) fn copy_of(value: &[T; N]) -> Self {
         let mut owner = Self::zeroed();
@@ -34,7 +49,12 @@ where
 
     /// Return whether every cell is at its zero default, without an early exit.
     pub(super) fn is_zero(&self) -> bool {
-        self.0.as_slice().ct_eq([T::default(); N].as_slice()).into()
+        self.0
+            .iter()
+            .fold(Choice::from(1), |equal, cell| {
+                equal & cell.ct_eq(&T::default())
+            })
+            .into()
     }
 }
 
@@ -168,5 +188,19 @@ mod tests {
             .is_err()
         );
         assert_eq!(cleared_cells() - before, 24);
+    }
+    #[test]
+    fn fallible_fixed_owner_uses_heap_and_clears() {
+        const CELLS: usize = 300_000;
+        let before = cleared_cells();
+        let mut owner = ClearingArray::<u16, CELLS>::try_zeroed().unwrap();
+        assert!(owner.is_zero());
+        owner[0] = 256;
+        owner[CELLS - 1] = 1;
+        let address = owner.as_ptr();
+        let moved = std::convert::identity(owner);
+        assert_eq!(moved.as_ptr(), address);
+        drop(moved);
+        assert_eq!(cleared_cells() - before, CELLS);
     }
 }

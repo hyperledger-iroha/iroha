@@ -15,8 +15,8 @@ impl CodeWords {
             values: [0; MAX_WORDS],
             len: bytes.len() / 4,
         };
-        for (target, bytes) in words.values.iter_mut().zip(bytes.chunks_exact(4)) {
-            *target = u32::from_le_bytes(bytes.try_into().expect("exact instruction word"));
+        for (target, bytes) in words.values.iter_mut().zip(bytes.as_chunks::<4>().0) {
+            *target = u32::from_le_bytes(*bytes);
         }
         Some(words)
     }

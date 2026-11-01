@@ -214,7 +214,7 @@ pub fn policy_for_exact(
 }
 
 /// Read the exact policy without losing the transaction's original decoder refusal.
-pub(crate) fn policy_for_exact_in_transaction(
+pub fn policy_for_exact_in_transaction(
     world: &WorldTransaction<'_, '_>,
     definition: &AssetDefinitionId,
     dataspace: DataSpaceId,
@@ -253,7 +253,7 @@ pub fn activation_for_exact(
 }
 
 /// Read the activation marker with local decoder failures retained by its transaction.
-pub(crate) fn activation_for_exact_in_transaction(
+pub fn activation_for_exact_in_transaction(
     world: &WorldTransaction<'_, '_>,
     policy: &RetailDailyLimitPolicyV1,
 ) -> Result<RetailDailyActivationV1, InstructionExecutionError> {
@@ -284,7 +284,7 @@ pub fn has_policy_for_definition(
 }
 
 /// Discover the governed definition without converting an unfinished decode to absence or rejection.
-pub(crate) fn has_policy_for_definition_in_transaction(
+pub fn has_policy_for_definition_in_transaction(
     world: &WorldTransaction<'_, '_>,
     definition: &AssetDefinitionId,
 ) -> Result<bool, InstructionExecutionError> {
@@ -320,18 +320,8 @@ fn has_policy_for_definition_attempt(
     Ok(true)
 }
 
-pub fn identity_for_exact(
-    world: &impl WorldReadOnly,
-    definition: &AssetDefinitionId,
-    dataspace: DataSpaceId,
-    account: &AccountId,
-) -> Result<Option<RetailIdentityAttestationV1>, String> {
-    identity_for_exact_attempt(world, None, definition, dataspace, account)
-        .map_err(ReadError::into_string)
-}
-
 /// Read an identity attestation while preserving original transaction-local decode failures.
-pub(crate) fn identity_for_exact_in_transaction(
+pub fn identity_for_exact_in_transaction(
     world: &WorldTransaction<'_, '_>,
     definition: &AssetDefinitionId,
     dataspace: DataSpaceId,
@@ -375,7 +365,7 @@ pub fn usage_for_exact(
 }
 
 /// Read a usage row with decoder refusals bound to the original transaction.
-pub(crate) fn usage_for_exact_in_transaction(
+pub fn usage_for_exact_in_transaction(
     world: &WorldTransaction<'_, '_>,
     key: &RetailDailyUsageKeyV1,
 ) -> Result<Option<Quantity>, InstructionExecutionError> {

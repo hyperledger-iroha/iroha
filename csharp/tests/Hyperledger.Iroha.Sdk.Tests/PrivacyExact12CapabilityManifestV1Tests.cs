@@ -451,6 +451,29 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     }
 
     [Fact]
+    public void DecodesTheManifestCoreSerializesAgainstItsCatalog()
+    {
+        var manifest = CoreFixture("exact12_capability_manifest_v1.norito.b64");
+        var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(
+            manifest,
+            CoreFixture("exact12_compiled_profile_catalog_v1.norito.b64"));
+        Assert.Equal(manifest, decoded.CanonicalArchive);
+        Assert.Equal(3UL, decoded.CommittedHeight);
+        Assert.All(decoded.Protocols, row => Assert.True(row.LocalCompiledTupleMatches));
+        Assert.NotEmpty(decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1].PolicyCanonicalBytes);
+        Assert.NotEmpty(decoded.Protocols[(int)PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1].PolicyCanonicalBytes);
+    }
+
+    [Fact]
+    public void RetiredProtocolDrainFieldIsRejected()
+    {
+        var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo:
+            Struct(U64(3), U64(4), EnumValue(6, Struct(U32(3))), Option(U64(7_200), present: true)));
+        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
+            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
+    }
+
+    [Fact]
     public void ConsensusUpdatesCanLoosenWithinHardBoundsButCannotBeNoopOrExceedBounds()
     {
         foreach (var next in new[] { 512U, 1536U, 2048U, 0U, 1024U, 2049U })
@@ -684,6 +707,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             consensusLimits,
             Option(pending ?? Array.Empty<byte>(), present: pending is not null));
     }
+
+    private static byte[] CoreFixture(string name) => Convert.FromBase64String(
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures/privacy", name)).Trim());
 
     private static byte[] BuildManifestArchive(
         IReadOnlyList<byte[]> rows,

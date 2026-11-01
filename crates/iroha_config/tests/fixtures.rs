@@ -375,7 +375,7 @@ fn torii_ram_lfe_parses() {
     assert!(!debug.contains("4e525430"));
     assert_eq!(
         program.receipt_ttl,
-        Some(Duration::from_millis(30_000)),
+        Some(Duration::from_secs(30)),
         "receipt ttl should parse as milliseconds"
     );
 }

@@ -59,7 +59,7 @@ pub fn std_env(key: &str) -> Option<Cow<'static, str>> {
         Ok(value) => Some(Cow::from(value)),
         Err(std::env::VarError::NotPresent) => None,
         Err(_) => {
-            log::error!("Found non-unicode characters in env var `{key}`, ignoring",);
+            log::error!("Found non-unicode characters in env var `{key}`, ignoring");
             None
         }
     }

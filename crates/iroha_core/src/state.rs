@@ -49,6 +49,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
+use iroha_data_model::game_partition::GamePartitionStateV1;
 #[cfg(test)]
 use iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT;
 use iroha_data_model::nft_market::{NftCustodyRecordV1, NftSaleRecordV1};
@@ -1239,6 +1240,7 @@ macro_rules! with_world_overlay_fields {
             execution_proof_profiles,
             execution_proof_verifications,
             game_sessions,
+            game_partitions,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4234,6 +4236,8 @@ pub struct WorldData {
     pub(crate) execution_proof_verifications: Storage<Hash, ExecutionProofVerificationV1>,
     /// Authoritative generic game session records, including closed custody identities.
     pub(crate) game_sessions: Storage<Hash, GameSessionRecordV1>,
+    /// Independent native game partition records with certified export/import state.
+    pub(crate) game_partitions: Storage<Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5253,6 +5257,7 @@ pub struct WorldBlockFields<'world> {
     pub(crate) execution_proof_verifications:
         StorageField<'world, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageField<'world, Hash, GameSessionRecordV1>,
+    pub(crate) game_partitions: StorageField<'world, Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6461,6 +6466,7 @@ impl WorldBlock<'_> {
             execution_proof_profiles,
             execution_proof_verifications,
             game_sessions,
+            game_partitions,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7009,6 +7015,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) execution_proof_verifications:
         StorageTransaction<'block, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageTransaction<'block, Hash, GameSessionRecordV1>,
+    pub(crate) game_partitions: StorageTransaction<'block, Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9255,6 +9262,7 @@ pub struct WorldView<'world> {
     pub(crate) execution_proof_verifications:
         StorageView<'world, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageView<'world, Hash, GameSessionRecordV1>,
+    pub(crate) game_partitions: StorageView<'world, Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -11679,9 +11687,7 @@ const PIPELINE_AUTO_WORKER_MIN: usize = 2;
 const PIPELINE_AUTO_WORKER_MAX: usize = 8;
 fn resolve_pipeline_worker_threads(configured: usize) -> usize {
     if configured == 0 {
-        let detected = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let detected = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         detected.clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX)
     } else {
         configured.max(1)
@@ -13265,14 +13271,17 @@ impl<'state> StateBlock<'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Returns the world view associated with this block scope.
     #[inline]
@@ -13929,21 +13938,22 @@ impl<'state> StateBlock<'state> {
         .map_err(|error| {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
         })?;
-        let mut private_changed = false;
-        if let Some(pending) = private.pending_update
+        let limits_due = if let Some(pending) = private.pending_update
             && pending.effective_at_height == incoming_height
         {
             private.current_limits = pending.next_limits;
             private.pending_update = None;
-            private_changed = true;
-        }
-        if private
+            true
+        } else {
+            false
+        };
+        let drain_due = private
             .protocol_closure_drain
-            .is_some_and(|drain| drain.effective_at_height == incoming_height)
-        {
+            .is_some_and(|drain| drain.effective_at_height == incoming_height);
+        if drain_due {
             private.protocol_closure_drain = None;
-            private_changed = true;
         }
+        let private_changed = limits_due || drain_due;
         // Prepare the exact retained successor before mutating either committed owner.
         // An absent extension remains absent during untouched baseline replay.
         let successor = if private_changed {
@@ -14674,14 +14684,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
         iroha_data_model::block::consensus::PublicLaneStakingPolicyError,
     > {
-        if let Some(original) = self.genesis_staking_policy {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_staking_policy()
-        }
+        self.genesis_staking_policy.map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_staking_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
 
     /// Borrow the exact ordinary predecessor fee policy without a local mirror.
@@ -14718,14 +14731,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Return whether execution is currently inside a scheduled or data-trigger body.
     #[inline]
@@ -14925,7 +14941,7 @@ pub struct StateView<'state> {
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
     /// Lifetime diagnostic owner; keep last so snapshot fields release first.
-    created_at: StateViewLifetimeDiagnostic,
+    _lifetime_diagnostic: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
@@ -15129,7 +15145,7 @@ impl<'state> StateQueryView<'state> {
             self.parameters_before_latest_block
                 .get()
                 .as_ref()
-                .unwrap_or(self.world.parameters.get())
+                .unwrap_or_else(|| self.world.parameters.get())
         } else {
             self.world.parameters.get()
         };
@@ -21326,6 +21342,8 @@ macro_rules! world_ro_accessors {
             storage execution_proof_verifications: Hash => ExecutionProofVerificationV1;
             /// Generic immutable manifests, certified progress, and settlement receipts.
             storage game_sessions: Hash => GameSessionRecordV1;
+            /// Independent native game partitions and durable transfer receipts.
+            storage game_partitions: Hash => GamePartitionStateV1;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -23607,16 +23625,13 @@ impl WorldTransaction<'_, '_> {
             if is_consensus_owned_custom_parameter(id) {
                 continue;
             }
-            let replace = match old_defaults.get(id) {
-                None => true,
-                Some(previous) => {
-                    previous != next
-                        && candidate
-                            .custom()
-                            .get(id)
-                            .is_none_or(|current| current == previous)
-                }
-            };
+            let replace = old_defaults.get(id).is_none_or(|previous| {
+                previous != next
+                    && candidate
+                        .custom()
+                        .get(id)
+                        .is_none_or(|current| current == previous)
+            });
             if replace {
                 let prepared = candidate.prepare_custom_parameter(next, pool)?;
                 candidate = prepared
@@ -25119,6 +25134,7 @@ impl WorldTransaction<'_, '_> {
             execution_proof_profiles: _,
             execution_proof_verifications: _,
             game_sessions: _,
+            game_partitions: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -25572,6 +25588,7 @@ impl WorldTransaction<'_, '_> {
         self.execution_proof_profiles.apply();
         self.execution_proof_verifications.apply();
         self.game_sessions.apply();
+        self.game_partitions.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();
@@ -26527,10 +26544,7 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
-    #[expect(
-        dead_code,
-        reason = "TODO: connect nonblocking native publication admission to the lifecycle fence and its exact ReleaseWait observation"
-    )]
+    #[cfg(test)]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
     ) -> Result<PublicationGuard<'_>, iroha_allocation::release::ReleaseWait> {
@@ -27167,10 +27181,6 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -27267,10 +27277,6 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -31982,7 +31988,7 @@ impl State {
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
-                created_at: Instant::now().into(),
+                _lifetime_diagnostic: Instant::now().into(),
             })
         }
     }
@@ -43976,21 +43982,6 @@ impl StateTransaction<'_, '_> {
                 ) {
                     continue;
                 }
-                // A suspended callback must not reject the unrelated transaction whose data
-                // event matched it. The event is consumed; restoring the runtime never replays
-                // events skipped while this incarnation's consent was stale or restricted.
-                match crate::smartcontracts::isi::triggers::check_trigger_runtime(
-                    action.metadata(),
-                    action.executable(),
-                    &self.world,
-                    self._curr_block.height().get(),
-                ) {
-                    Ok(()) => {}
-                    Err(Error::Runtime(_)) => continue,
-                    // A local refusal is not a governance suspension. Retain its execution
-                    // deferral and refuse this attempt without consuming a committed event.
-                    Err(error) => return Err(ValidationFail::from(error).into()),
-                }
                 (action.executable().clone(), action.authority().clone())
             };
             if self.data_trigger_firings_in_tx >= MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
@@ -44437,7 +44428,7 @@ impl StateTransaction<'_, '_> {
         crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             self,
             None,
         )
@@ -44582,19 +44573,6 @@ impl StateTransaction<'_, '_> {
         _step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
-        self.world
-            .triggers
-            .inspect_by_id(id, |action| {
-                crate::smartcontracts::isi::triggers::check_trigger_runtime(
-                    action.metadata(),
-                    executable,
-                    &self.world,
-                    self._curr_block.height().get(),
-                )
-            })
-            .ok_or_else(|| Error::from(FindError::Trigger(id.clone())))
-            .and_then(core::convert::identity)
-            .map_err(ValidationFail::from)?;
         let (res, _outcome_override): (_, Option<TriggerCompletedOutcome>) = match executable {
             ExecutableRef::Instructions(instructions) => {
                 let instruction_groups = std::collections::BTreeMap::from([(
@@ -44696,11 +44674,7 @@ impl StateTransaction<'_, '_> {
                             iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                                 instruction,
                             ) => {
-                                executor.execute_instruction(
-                                    self,
-                                    authority,
-                                    instruction.clone(),
-                                )?;
+                                executor.execute_instruction(self, authority, instruction)?;
                                 executed_instructions.push(instruction.clone());
                             }
                             iroha_data_model::transaction::ExecutableBatchItem::ContractCall(
@@ -45004,7 +44978,7 @@ impl StateTransaction<'_, '_> {
                     crate::validation_fee::enforce_opaque_deferred_instruction_views(
                         artifacts.queued_instruction_views(),
                         artifacts.queued_instruction_authority_count(),
-                        artifacts.queued_instruction_views(),
+                        &artifacts.queued_instruction_views(),
                         self,
                         runtime_origin,
                     )?;
@@ -45308,7 +45282,7 @@ impl StateTransaction<'_, '_> {
                                 crate::validation_fee::enforce_opaque_deferred_instruction_views(
                                     artifacts.queued_instruction_views(),
                                     artifacts.queued_instruction_authority_count(),
-                                    artifacts.queued_instruction_views(),
+                                    &artifacts.queued_instruction_views(),
                                     self,
                                     runtime_origin,
                                 )?;
@@ -45370,7 +45344,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<ExecutionStep, ValidationFail> {
         let executor = self.world.executor.clone();
         for instruction in &instructions {
-            executor.execute_instruction(self, authority, instruction.clone())?;
+            executor.execute_instruction(self, authority, instruction)?;
         }
         Ok(instructions.into())
     }

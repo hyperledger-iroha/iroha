@@ -31,7 +31,7 @@ fn short_instance_cosets_match_dense_coefficients_and_keep_storage() {
                         if j == 1 {
                             C::ScalarExt::ZERO
                         } else {
-                            C::ScalarExt::from(u64::try_from(j).unwrap() + 3)
+                            C::ScalarExt::from(j + 3)
                         }
                     })
                     .collect()

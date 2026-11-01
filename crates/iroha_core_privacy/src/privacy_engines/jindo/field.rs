@@ -90,10 +90,8 @@ impl JindoFieldElementV1 {
     /// Decode one canonical 32-byte little-endian residue.
     pub(crate) fn from_canonical_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut limbs = [0_u64; 4];
-        for (limb, chunk) in limbs.iter_mut().zip(bytes.chunks_exact(8)) {
-            let mut word = [0_u8; 8];
-            word.copy_from_slice(chunk);
-            *limb = u64::from_le_bytes(word);
+        for (limb, chunk) in limbs.iter_mut().zip(bytes.as_chunks::<8>().0) {
+            *limb = u64::from_le_bytes(*chunk);
         }
         if !Self::less_than(limbs, Self::MODULUS) {
             return None;
@@ -104,7 +102,7 @@ impl JindoFieldElementV1 {
     pub(crate) fn to_canonical_bytes(self) -> [u8; 32] {
         let limbs = self.to_canonical_limbs();
         let mut bytes = [0_u8; 32];
-        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
+        for (chunk, limb) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(limbs) {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
         bytes
@@ -259,7 +257,7 @@ mod tests {
     use super::*;
     fn canonical_from_limbs(limbs: [u64; 4]) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
-        for (chunk, limb) in bytes.chunks_exact_mut(8).zip(limbs) {
+        for (chunk, limb) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(limbs) {
             chunk.copy_from_slice(&limb.to_le_bytes());
         }
         bytes

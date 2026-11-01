@@ -171,7 +171,7 @@ fn existing_radix_candidate_coordinate_v1(
 
 fn next_existing_radix_assembly_instance_v1() -> Result<u64, ZkAmsMkheErrorV1> {
     NEXT_EXISTING_RADIX_ASSEMBLY_INSTANCE_V1
-        .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
             current.checked_add(1)
         })
         .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)

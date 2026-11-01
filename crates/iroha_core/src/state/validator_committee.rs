@@ -28,10 +28,6 @@ use mv::storage::StorageReadOnly;
 pub mod tests;
 
 /// A requested exit cannot release either a current seat or an immutable future seat.
-#[expect(
-    single_use_lifetimes,
-    reason = "stable Rust requires a named reference lifetime in the iterator item"
-)]
 pub fn peer_has_committee_obligation<'a>(
     world: &impl WorldReadOnly,
     current: impl IntoIterator<Item = &'a PeerId>,
@@ -298,7 +294,7 @@ fn validate_current_beacon(
 
 /// Check one snapshot cut with its own certified walk.
 #[cfg(test)]
-pub(crate) fn validate_committed_progress(
+pub fn validate_committed_progress(
     world: &impl WorldReadOnly,
     chain_id: &iroha_model_base::chain::ChainId,
     network: iroha_data_model::NetworkId,
@@ -323,7 +319,7 @@ pub(crate) fn validate_committed_progress(
 }
 
 /// The cut of an empty history holds no native authority or preparation at all.
-pub(crate) fn validate_empty_progress(world: &impl WorldReadOnly) -> Result<(), Attempt<String>> {
+pub fn validate_empty_progress(world: &impl WorldReadOnly) -> Result<(), Attempt<String>> {
     validate_persisted_progress(world)?;
     if !world.consensus_schedule().entries().is_empty()
         || world
@@ -348,7 +344,7 @@ pub(crate) fn validate_empty_progress(world: &impl WorldReadOnly) -> Result<(), 
 ///
 /// The cut takes one certified block at a time, so that a single walk from signed genesis
 /// checks the snapshot World and its predecessor together.
-pub(crate) struct CommittedProgress<'w, W> {
+pub struct CommittedProgress<'w, W> {
     world: &'w W,
     network: iroha_data_model::NetworkId,
     height: u64,

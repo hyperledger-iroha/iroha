@@ -358,6 +358,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the test inspects the drop-only charge field that holds the escrow's backing"
+    )]
     fn bounded_inputs_keep_exact_original_charges_until_drop_and_unwind() {
         let _fixture_retirement_pin = crossbeam_epoch::pin();
         let holder = authority(1);
@@ -510,6 +514,10 @@ mod tests {
         assert_eq!(budget.reserved_bytes(), baseline);
     }
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "the test inspects the drop-only charge field that holds the escrow's backing"
+    )]
     fn complete_release_inputs_refuse_without_refunding_an_admitted_prefix() {
         use iroha_allocation::release::ReleaseRegistration;
         use std::task::{Context, Poll, Waker};

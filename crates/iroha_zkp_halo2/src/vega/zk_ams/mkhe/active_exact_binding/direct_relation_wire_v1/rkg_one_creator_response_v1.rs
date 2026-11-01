@@ -69,7 +69,7 @@ fn fill_exact_masks_v1<R: MaskedRelaxedRandomSourceV1>(
     responses: &mut [u8],
     random: &mut R,
 ) -> Result<(), ZkAmsMkheErrorV1> {
-    for encoded in responses.chunks_exact_mut(8) {
+    for encoded in responses.as_chunks_mut::<8>().0 {
         let mask = sample_exact_uniform_signed_box(random, MASK_COEFFICIENT_BOUND_V1)?;
         encoded.copy_from_slice(&mask.to_be_bytes());
     }
@@ -237,11 +237,8 @@ impl ZeroizingMaskChunkV1 {
             .0
             .try_reserve_exact(WITNESS_CHUNK_COEFFICIENTS_V1)
             .map_err(|_| ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
-        for word in bytes.chunks_exact(8) {
-            values.0.push(i64::from_be_bytes(
-                word.try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            ));
+        for word in bytes.as_chunks::<8>().0 {
+            values.0.push(i64::from_be_bytes(*word));
         }
         Ok(values)
     }

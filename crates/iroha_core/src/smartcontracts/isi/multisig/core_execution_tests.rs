@@ -475,7 +475,7 @@ fn initial_executor_runs_multisig_flow() {
         .expect("authenticate original multisig bootstrap instruction");
     let executor = Executor::Initial;
     executor
-        .execute_instruction(&mut state_transaction, &signer1_id, instruction)
+        .execute_instruction(&mut state_transaction, &signer1_id, &instruction)
         .expect("multisig register");
     let policy = multisig_policy_from_spec(&spec).expect("policy");
     let expected_id = AccountId::new_multisig(policy);
