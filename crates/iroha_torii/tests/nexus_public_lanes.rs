@@ -14,7 +14,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
-    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+    asset::{Asset, AssetDefinition, AssetId},
     domain::Domain,
     isi::staking::{ActivatePublicLaneValidator, BondPublicLaneStake, RegisterPublicLaneValidator},
     nexus::{
@@ -112,9 +112,10 @@ async fn nexus_public_lane_endpoints_list_records() {
     assert_eq!(shares["total"], Value::from(2));
     let resp = fixtures::request(
         &router,
-        with_loopback_connect_info(fixtures::get_request(
-            &(format!("/v1/nexus/public-lanes/0/stake?validator={validator}")),
-        )),
+        with_loopback_connect_info(fixtures::get_request(&format!(
+            "/v1/nexus/public-lanes/0/stake?validator={}",
+            iroha_torii::test_utils::percent_encode(&validator.to_string())
+        ))),
     )
     .await
     .unwrap();

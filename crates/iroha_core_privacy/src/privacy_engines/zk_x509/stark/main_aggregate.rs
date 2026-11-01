@@ -457,6 +457,8 @@ pub fn commit_zk_x509_main_base_phase_v1_with_rng<'a, R: TryRng>(
             io: &io,
         },
         rng,
+        #[cfg(test)]
+        commit_timer.commitment_context_v1(),
     )?;
     #[cfg(test)]
     commit_timer.complete_v1();
@@ -561,6 +563,8 @@ impl<'a> ZkX509MainAwaitingCredentialBindingV1<'a> {
                 io: &io,
             },
             rng,
+            #[cfg(test)]
+            Default::default(),
         )?;
         #[cfg(test)]
         commit_timer.complete_v1();

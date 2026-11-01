@@ -650,6 +650,14 @@ The persisted storage boundary is fail-closed in v1:
   byte-rate ceilings. Saturated Torii requests receive `429` with
   `Retry-After`; no request thread sleeps or waits on an unbounded scheduler
   queue;
+- `sorafs_cli proof verify` accepts `--payload=PATH` to reconstruct the complete
+  file layout from the original source file or directory through the same bounded
+  native acquisition used for storage preparation. This input is required for
+  multi-file CAR verification: the canonical chunk-fetch envelope contains no
+  file paths. Any supplied chunk plan must match the source payload exactly;
+  the unchanged verifier checks the manifest, PoR, root CID and complete canonical
+  CAR bytes. Missing layout, changed paths, changed source bytes and mismatched
+  plans refuse before writing a successful summary;
 - startup rejects unsupported index versions, duplicate or noncanonical
   manifest IDs, traversal-bearing chunk/file names, inconsistent index,
   manifest, file-layout, chunk-plan commitment, or PoR geometry. Missing,

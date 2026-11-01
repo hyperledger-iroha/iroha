@@ -1,6 +1,6 @@
 //! Tests covering transaction parameter JSON encoding/decoding.
 use iroha_data_model::parameter::TransactionParameters;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use norito::json::{JsonDeserialize, JsonSerialize, Parser};
 #[test]
 fn transaction_parameters_json_serializes_max_signatures() {

@@ -107,7 +107,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
     let mut req = fixtures::get_request(
         &(format!(
             "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
-            urlencoding::encode(&asset_id)
+            iroha_torii::test_utils::percent_encode(&asset_id)
         )),
     );
     req.extensions_mut()

@@ -9,8 +9,8 @@ use super::{
     VEGA_MDL_RFC3339_UTC_SECONDS_TEXT_BYTES_V1,
 };
 use core::{cmp::Ordering, ops::Range};
-use once_cell::sync::Lazy;
-pub(super) static FIGURE9_LAYOUT: Lazy<Figure9Layout> = Lazy::new(Figure9Layout::build);
+use std::sync::LazyLock;
+pub(super) static FIGURE9_LAYOUT: LazyLock<Figure9Layout> = LazyLock::new(Figure9Layout::build);
 /// Canonical byte range of the per-element random salt in the birth record.
 pub(super) const FIGURE9_BIRTH_RANDOM_RANGE: Range<usize> = 13..29;
 #[derive(Clone, Debug)]

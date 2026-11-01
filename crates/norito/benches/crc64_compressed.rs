@@ -1,6 +1,6 @@
 //! Benchmark CRC64 over large payloads with zstd enabled (SIMD-accelerated CRC64).
-use crc64fast::Digest as Crc64Digest;
 use criterion::{BenchmarkId, Criterion};
+use norito::core::Crc64Digest;
 use std::io::Cursor;
 fn random_bytes(n: usize) -> Vec<u8> {
     // Deterministic pseudo-random bytes
@@ -53,7 +53,7 @@ fn bench_crc64_compressed(c: &mut Criterion) {
                 })
             },
         );
-        // Streaming over decompressed bytes via zstd::Decoder, updating crc64fast::Digest
+        // Streaming over decompressed bytes via zstd::Decoder, updating Crc64Digest
         group.bench_with_input(
             BenchmarkId::new("stream_hardware", format!("{mib}MiB")),
             &compressed,

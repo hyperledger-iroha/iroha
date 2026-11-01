@@ -433,7 +433,7 @@ fn sandbox_genesis_and_queued_input_share_original_native_network() {
     );
 }
 impl Sandbox {
-    fn trigger_registration_metadata(&self, data_scope: bool) -> Metadata {
+    fn trigger_registration_metadata(&self, executable: &Executable, data_scope: bool) -> Metadata {
         let height = u64::try_from(self.state.view().height()).unwrap_or(u64::MAX);
         let registered_ms = self
             .state
@@ -452,6 +452,25 @@ impl Sandbox {
             .expect("registered timestamp metadata key");
         metadata.insert(key_height, Json::new(height));
         metadata.insert(key_time, Json::new(registered_ms));
+        // Direct typed-store registration must retain the same deferred consent
+        // as Register, captured before either constructor takes the trigger writer.
+        let mut world = self.state.world.block();
+        let transaction = world.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        let expected = crate::runtime::expectation::capture_executable(executable, &transaction)
+            .expect("Sandbox action has an installed runtime closure");
+        crate::runtime::expectation::check(&expected, &transaction, height)
+            .expect("Sandbox action is allowed at its registration height");
+        let digest = crate::runtime::expectation::digest_owned(&expected, &transaction)
+            .expect("Sandbox runtime consent is canonically encodable");
+        metadata.insert(
+            crate::smartcontracts::isi::triggers::TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY
+                .parse()
+                .expect("runtime consent metadata key"),
+            Json::new(digest),
+        );
         if data_scope {
             for (key, value) in crate::smartcontracts::isi::triggers::global_data_trigger_scope_metadata_for_testing(
                 &GENESIS_ACCOUNT.id,
@@ -491,18 +510,19 @@ impl Sandbox {
         repeats: Repeats,
         label: u32,
     ) -> Self {
+        let mut action = Action::new(
+            transfer(src, quantity, dest),
+            repeats,
+            GENESIS_ACCOUNT.id.clone(),
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        )
+        .expect("sandbox time-trigger action satisfies validation invariants");
+        action.metadata = self.trigger_registration_metadata(&action.executable, false);
         let mut block = self.state.world.triggers.block();
         let mut transaction = block.transaction();
         let trigger = Trigger::new(
             format!("time-{src}-{dest}-{label}").parse().unwrap(),
-            Action::new(
-                transfer(src, quantity, dest),
-                repeats,
-                GENESIS_ACCOUNT.id.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-            )
-            .expect("sandbox time-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata(false)),
+            action,
         )
         .try_into()
         .unwrap();
@@ -574,24 +594,25 @@ impl Sandbox {
         repeats: Repeats,
         label: u32,
     ) -> Self {
+        let mut action = Action::new(
+            [InstructionBox::from(Transfer::asset_quantity(
+                asset(src),
+                amount,
+                ACCOUNT[dest].id.clone(),
+            ))],
+            repeats,
+            GENESIS_ACCOUNT.id.clone(),
+            AssetEventFilter::new()
+                .for_events(AssetEventSet::Added)
+                .for_asset(asset(src)),
+        )
+        .expect("sandbox data-trigger action satisfies validation invariants");
+        action.metadata = self.trigger_registration_metadata(&action.executable, true);
         let mut block = self.state.world.triggers.block();
         let mut transaction = block.transaction();
         let trigger = Trigger::new(
             format!("data-{src}-{dest}-{label}").parse().unwrap(),
-            Action::new(
-                [InstructionBox::from(Transfer::asset_quantity(
-                    asset(src),
-                    amount,
-                    ACCOUNT[dest].id.clone(),
-                ))],
-                repeats,
-                GENESIS_ACCOUNT.id.clone(),
-                AssetEventFilter::new()
-                    .for_events(AssetEventSet::Added)
-                    .for_asset(asset(src)),
-            )
-            .expect("sandbox data-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata(true)),
+            action,
         )
         .try_into()
         .unwrap();

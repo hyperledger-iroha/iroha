@@ -6,6 +6,18 @@
 
 use super::*;
 
+/// Original public batch coordinates, carried only by diagnostic callbacks.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct JoinedTraceBatchCoordinatesV1 {
+    /// Original native group index.
+    pub(crate) group: usize,
+    /// First original column within that group.
+    pub(crate) start: usize,
+    /// Exclusive original column bound within that group.
+    pub(crate) end: usize,
+}
+
 /// Which independently committed transcript phase the joined row belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinedTraceColumnKindV1 {
@@ -208,12 +220,20 @@ impl JoinedTraceCommitmentPlanV1 {
         opening_indices: &[usize],
         cut: Option<&retained_commitment::RetainedMerkleCutV1>,
         mut coefficients: impl FnMut(usize, usize) -> Result<Vec<F>, AggregateStarkErrorV1>,
-        mut evaluate: impl FnMut(
+        #[cfg(not(test))] mut evaluate: impl FnMut(
             &[ZeroizingFieldColumnV1],
             u8,
             u8,
             Option<&[usize]>,
         ) -> Result<Vec<C>, AggregateStarkErrorV1>,
+        #[cfg(test)] mut evaluate: impl FnMut(
+            &[ZeroizingFieldColumnV1],
+            u8,
+            u8,
+            Option<&[usize]>,
+            JoinedTraceBatchCoordinatesV1,
+        ) -> Result<Vec<C>, AggregateStarkErrorV1>,
+        #[cfg(test)] observation: commitment_observation::ContextV1,
     ) -> Result<
         (
             StreamingRowCommitmentResultV1,
@@ -239,7 +259,9 @@ impl JoinedTraceCommitmentPlanV1 {
             if !opening_indices.is_empty() {
                 return Err(AggregateStarkErrorV1::InvalidLayout);
             }
-            RetainedReplayBuilderV1::Initial(StreamingRowCommitmentV1::new(
+            #[cfg(test)]
+            let setup = observation.enter(commitment_observation::OperationV1::StreamSetup);
+            let builder = StreamingRowCommitmentV1::new(
                 domains.digest_context,
                 leaf,
                 node,
@@ -247,7 +269,12 @@ impl JoinedTraceCommitmentPlanV1 {
                 rows,
                 self.width,
                 &[],
-            )?)
+            )?;
+            #[cfg(test)]
+            let builder = builder.with_observation_v1(observation.clone());
+            #[cfg(test)]
+            setup.complete();
+            RetainedReplayBuilderV1::Initial(builder)
         };
         let mut initial = if matches!(&builder, RetainedReplayBuilderV1::Initial(_)) {
             Some(initial_coalescing::InitialCoalescerV1::new_v1(rows)?)
@@ -269,7 +296,14 @@ impl JoinedTraceCommitmentPlanV1 {
                     RetainedReplayBuilderV1::Selected(builder) => Some(builder.selected_rows_v1()),
                 };
                 let evaluated_rows = selected.map_or(rows, <[usize]>::len);
-                let evaluations = evaluate(&batch, *native, self.commitment_lde_log2, selected)?;
+                let evaluations = evaluate(
+                    &batch,
+                    *native,
+                    self.commitment_lde_log2,
+                    selected,
+                    #[cfg(test)]
+                    JoinedTraceBatchCoordinatesV1 { group, start, end },
+                )?;
                 if evaluations.len() != batch.len()
                     || evaluations
                         .iter()

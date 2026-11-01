@@ -20,8 +20,8 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_model_base::{domain::DomainId, topology::DataSpaceId};
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Quantity;
-use nonzero_ext::nonzero;
 
 fn owner(index: u16) -> AccountId {
     let mut seed = vec![0xB7; 32];

@@ -15,6 +15,120 @@ public sealed class KaigiV1Tests
     private static readonly KaigiId CallId = new("wonderland.sora", "weekly-sync");
     private static readonly string[] Accounts = Fixture()["accounts"]!.AsArray().Select(static item => item!.GetValue<string>()).ToArray();
 
+    [Theory]
+    [InlineData("wonderland.sora")]
+    [InlineData("xn--bcher-kva.universal")]
+    [InlineData("banka.xn--bcher-kva")]
+    [InlineData("bank_a.universal")]
+    [InlineData("_banka.universal")]
+    [InlineData("banka_.universal")]
+    public void DomainUsesNativeCanonicalAdmissionForConstructionAndRetainedRecords(string domain)
+    {
+        var id = new KaigiId(domain, "weekly-sync");
+        Assert.Equal(domain, id.DomainId);
+        var instruction = TransactionInstruction.EndKaigi(id);
+        Assert.NotEmpty(instruction.EncodeInstructionBox(Accounts[0]));
+
+        var root = JsonNode.Parse(RecordBytes())!;
+        root["id"]!["domain_id"] = domain;
+        var record = KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString()));
+        Assert.Equal(id, record.Id);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("banka")]
+    [InlineData(".universal")]
+    [InlineData("banka.")]
+    [InlineData("a.b.c")]
+    [InlineData("BANKA.universal")]
+    [InlineData("banka.UNIVERSAL")]
+    [InlineData("bad!.universal")]
+    [InlineData("-banka.universal")]
+    [InlineData("banka-.universal")]
+    [InlineData("ab--cd.universal")]
+    [InlineData("xn--.universal")]
+    [InlineData("xn--a.universal")]
+    [InlineData("xn--abc.universal")]
+    [InlineData("bücher.universal")]
+    [InlineData(" banka.universal")]
+    [InlineData("banka.universal ")]
+    [InlineData("bank\0.universal")]
+    public void DomainRejectsNoncanonicalSpellingWithoutNormalizing(string domain)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new KaigiId(domain, "weekly-sync"));
+        var root = JsonNode.Parse(RecordBytes())!;
+        root["id"]!["domain_id"] = domain;
+        Assert.ThrowsAny<ArgumentException>(() =>
+            KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+    }
+
+    [Fact]
+    public void DomainPreservesNativeLabelBounds()
+    {
+        var label = new string('a', 63);
+        Assert.Equal($"{label}.{label}", new KaigiId($"{label}.{label}", "call").DomainId);
+        Assert.Throws<ArgumentException>(() => new KaigiId($"{label}a.universal", "call"));
+        Assert.Throws<ArgumentException>(() => new KaigiId($"banka.{label}a", "call"));
+    }
+
+    [Theory]
+    [InlineData("caf\u00e9")]
+    [InlineData("\u56f3\u66f8\u9928")]
+    [InlineData("call-\U0001f4de")]
+    public void NamesPreserveCanonicalUnicodeInConstructionAndRetainedRecords(string name)
+    {
+        var id = new KaigiId(CallId.DomainId, name);
+        Assert.Equal(name, id.CallName);
+        var call = new NewKaigi(id, Accounts[0], metadata: new Dictionary<string, JsonNode?>
+        {
+            [name] = JsonValue.Create("exact"),
+        });
+        Assert.True(call.Metadata.ContainsKey(name));
+        Assert.NotEmpty(TransactionInstruction.CreateKaigi(call).EncodeInstructionBox(Accounts[0]));
+
+        var root = JsonNode.Parse(RecordBytes())!;
+        root["id"]!["call_name"] = name;
+        root["metadata"] = new JsonObject { [name] = "exact" };
+        var record = KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString()));
+        Assert.Equal(id, record.Id);
+        Assert.True(record.Call.Metadata.ContainsKey(name));
+    }
+
+    [Theory]
+    [InlineData("cafe\u0301")]
+    [InlineData("a@b")]
+    [InlineData("a#b")]
+    [InlineData("a$b")]
+    [InlineData("a\u2066b")]
+    public void NamesRejectNoncanonicalUnicodeAndReservedSyntax(string name)
+    {
+        Assert.Throws<ArgumentException>(() => new KaigiId(CallId.DomainId, name));
+        Assert.Throws<ArgumentException>(() => new NewKaigi(CallId, Accounts[0],
+            metadata: new Dictionary<string, JsonNode?> { [name] = null }));
+        var root = JsonNode.Parse(RecordBytes())!;
+        root["id"]!["call_name"] = name;
+        Assert.Throws<ArgumentException>(() =>
+            KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+        root["id"]!["call_name"] = CallId.CallName;
+        root["metadata"] = new JsonObject { [name] = null };
+        Assert.Throws<ArgumentException>(() =>
+            KaigiRecordV1.FromJson(Encoding.UTF8.GetBytes(root.ToJsonString())));
+    }
+
+    [Fact]
+    public void NamesRejectUnpairedSurrogatesAndEnforceUtf8ByteBounds()
+    {
+        var boundary = new string('\u00e9', 127) + "a";
+        Assert.Equal(boundary, new KaigiId(CallId.DomainId, boundary).CallName);
+        foreach (var invalid in new[] { new string('\u00e9', 128), new string('\ud800', 1), new string('\udc00', 1) })
+        {
+            Assert.Throws<ArgumentException>(() => new KaigiId(CallId.DomainId, invalid));
+            Assert.Throws<ArgumentException>(() => new NewKaigi(CallId, Accounts[0],
+                metadata: new Dictionary<string, JsonNode?> { [invalid] = null }));
+        }
+    }
+
     [Fact]
     public void ScalarPreservesZeroAndModulusMinusOneWithoutHashMarkerOrReduction()
     {

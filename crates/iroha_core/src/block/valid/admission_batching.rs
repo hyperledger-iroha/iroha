@@ -20,8 +20,8 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 #[cfg(all(feature = "bls", feature = "telemetry"))]
 use iroha_model_base::topology::LaneId;
+use iroha_primitives::nonzero;
 use iroha_primitives::time::TimeSource;
-use nonzero_ext::nonzero;
 use std::sync::Arc;
 fn setup_world_with_account(algo: Algorithm) -> (State, AccountId, NetworkId, KeyPair) {
     use iroha_core::{kura::Kura, query::store::LiveQueryStore};

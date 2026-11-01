@@ -16,7 +16,7 @@ pub trait WorldProjection {
         encode: impl Fn(&V) -> Result<Hash, String>,
     ) -> Result<(), Self::Error>;
 
-    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
+    fn append_cell_with<V: mv::CellValue, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cell: &CellField<'_, V, C>,
@@ -71,7 +71,7 @@ impl<T: WorldProjection> WorldProjection for &mut T {
     ) -> Result<(), Self::Error> {
         (**self).append_storage_with(name, storage, encode)
     }
-    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
+    fn append_cell_with<V: mv::CellValue, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cell: &CellField<'_, V, C>,
@@ -113,7 +113,7 @@ impl WorldProjection for WorldDeltaBuilder {
         Self::append_storage_with(self, name, storage, encode)
     }
 
-    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
+    fn append_cell_with<V: mv::CellValue, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cell: &CellField<'_, V, C>,
@@ -143,7 +143,7 @@ impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> Appe
     }
 }
 
-impl<V: Value + Encode, C: Send + Sync + 'static> AppendWorldField for CellField<'_, V, C> {
+impl<V: mv::CellValue + Encode, C: Send + Sync + 'static> AppendWorldField for CellField<'_, V, C> {
     fn append_world_field<P: WorldProjection>(
         &self,
         name: &'static str,

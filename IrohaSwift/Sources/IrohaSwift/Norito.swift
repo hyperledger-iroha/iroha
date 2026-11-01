@@ -51,7 +51,7 @@ public func noritoSchemaHash(forTypeName name: String) -> [UInt8] {
     return Array(SHA256.hash(data: input).prefix(16))
 }
 
-// CRC64 (reflected, init/xor = all-ones) to match Rust crc64fast output.
+// CRC-64/XZ (reflected, init/xor = all-ones) to match Rust Norito's checksum.
 private let CRC64_TABLE: [UInt64] = {
     let poly: UInt64 = 0xC96C5795D7870F42
     var table = [UInt64](repeating: 0, count: 256)

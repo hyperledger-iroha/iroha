@@ -91,6 +91,7 @@ const {
 const ARCHIVE = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 1, 2, 3, 4]);
 const CATALOG = Uint8Array.from([0x4e, 0x52, 0x54, 0x30, 9, 8, 7, 6]);
 const ACTIVE_PROTOCOL = "anonymous-pgc-k-out-of-n-v1";
+const NOTE_PROTOCOL = "iroha-ivm-private-note-stark-v1";
 const OPERATION_TUPLES = Object.freeze([
   ["zk_ace_authorization_action_v1", "authorization_action", 0],
   ["anonymous_pgc_payment_action_v1", "payment_action", 6],
@@ -660,12 +661,17 @@ test("decodes the manifest Core serializes", async () => {
     const { current_limits: current, pending_update: pending } = manifest.consensus_policy;
     assert.equal(current.retained_root_count, 2048);
     assert.equal(pending.next_limits.retained_root_count, 1024);
-    assert.equal(pending.effective_at_height, 302n);
+    assert.deepEqual({ ...pending.next_limits, retained_root_count: current.retained_root_count }, current);
+    assert.equal(pending.effective_at_height, 4n);
     const row = (protocol) => manifest.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol)];
     assert.equal(row(ACTIVE_PROTOCOL).policy.pending_update.next_limits.limits.max_anonymity_set_size, 32);
+    const note = row(NOTE_PROTOCOL);
+    assert.equal(note.policy.pending_update.next_limits.limits.max_input_count, 1);
+    for (const { policy } of [note, row(ACTIVE_PROTOCOL)]) {
+      assert.notDeepEqual(policy.pending_update.next_limits, policy.current_limits);
+    }
     assert.deepEqual(manifest.canonicalBytes(), Uint8Array.from(CORE_MANIFEST_ARCHIVE));
     // Core wraps each digest and the mask in a one-element array; the model exposes the inner value.
-    const note = row("iroha-ivm-private-note-stark-v1");
     assert.equal(note.privacy_feature_mask, 7);
     assert.deepEqual(note.compiled_profile.value.parameter_id, Array(32).fill(1));
     assert.equal(manifest.manifest_digest.length, 32);
@@ -684,11 +690,13 @@ test("decodes the manifest Core serializes", async () => {
 });
 
 test("refuses limit and update fields Core does not serialize", async () => {
-  const pendingProtocol = (p) => p.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(ACTIVE_PROTOCOL)].policy.pending_update;
+  const pendingProtocol = (p, protocol) => p.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol)].policy.pending_update;
   for (const extend of [
     (p) => { p.consensus_policy.current_limits.private_settlement = {}; },
+    (p) => { p.consensus_policy.current_limits.unknown_limit = 1; },
     (p) => { p.consensus_policy.pending_update.next_limits.private_settlement = {}; },
-    (p) => { pendingProtocol(p).private_settlement_drain_blocks = null; },
+    (p) => { pendingProtocol(p, ACTIVE_PROTOCOL).private_settlement_drain_blocks = null; },
+    (p) => { pendingProtocol(p, NOTE_PROTOCOL).private_settlement_drain_blocks = null; },
   ]) {
     const extended = JSON.parse(CORE_MANIFEST_JSON); extend(extended);
     await withNative(coreManifestNative(JSON.stringify(extended)), () => {

@@ -22,6 +22,42 @@ fn nested_generic_field_keeps_its_required_bound() {
 }
 
 #[test]
+fn lifetime_only_field_gets_no_type_param_bound() {
+    let mut generics: Generics = syn::parse_quote!(<'world>);
+    let field: syn::Type = syn::parse_quote!(StorageBlock<'world, AccountId, Account>);
+    add_type_param_bound(&mut generics, &field, quote!(DemoTrait));
+    assert!(generics.where_clause.is_none());
+}
+#[test]
+fn lifetime_only_field_keeps_lifetime_sensitive_bound() {
+    let mut generics: Generics = syn::parse_quote!(<'a>);
+    let field: syn::Type = syn::parse_quote!(&'a [u8]);
+    add_bound(&mut generics, &field, quote!(DemoTrait));
+    let predicates = generics
+        .where_clause
+        .as_ref()
+        .expect("lifetime-dependent field keeps its bound")
+        .predicates
+        .to_token_stream()
+        .to_string();
+    assert!(predicates.contains("& 'a [u8] : DemoTrait"));
+}
+#[test]
+fn type_param_field_keeps_type_param_bound() {
+    let mut generics: Generics = syn::parse_quote!(<'a, T>);
+    let field: syn::Type = syn::parse_quote!(Cow<'a, [T]>);
+    add_type_param_bound(&mut generics, &field, quote!(DemoTrait));
+    let predicates = generics
+        .where_clause
+        .as_ref()
+        .expect("type-parameter field keeps its bound")
+        .predicates
+        .to_token_stream()
+        .to_string();
+    assert!(predicates.contains("Cow < 'a , [T] > : DemoTrait"));
+}
+
+#[test]
 fn generic_json_fallback_merges_generics_and_reuses_deserialize_obligation() {
     let input: DeriveInput = parse_quote! {
         struct Envelope<T, const N: usize> where T: Clone { value: [T; N] }

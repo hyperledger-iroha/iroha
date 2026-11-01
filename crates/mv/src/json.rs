@@ -5,7 +5,7 @@
 //! without pulling Serde into the dependency graph. The former `mv::serde`
 //! shim has been removed; callers should import these helpers directly.
 use crate::{
-    Key, Value,
+    CellValue, Key, Value,
     cell::{Block as CellBlock, Cell, CellAllocationCharges},
     storage::{Block as StorageBlock, Storage, StorageMode, StorageReadOnly},
 };
@@ -441,7 +441,7 @@ pub struct CellSeeded<S> {
 impl<S> CellSeeded<S>
 where
     S: ValueSeed,
-    S::Value: Value,
+    S::Value: CellValue,
 {
     /// Parse `Cell` from `parser`, expecting `{ "revert": null | { "value": <Value> }, "blocks": <Value> }`.
     pub fn deserialize(
@@ -652,7 +652,7 @@ fn write_storage_json_entry<K: JsonKeyCodec, V: JsonSerialize>(
 }
 impl<V, Charge> JsonSerialize for Cell<V, Charge>
 where
-    V: JsonSerialize + Value,
+    V: JsonSerialize + CellValue,
     Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
@@ -674,7 +674,7 @@ where
 }
 impl<V, Charge> JsonSerialize for CellBlock<'_, V, Charge>
 where
-    V: JsonSerialize + Value,
+    V: JsonSerialize + CellValue,
     Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
@@ -686,7 +686,7 @@ where
 }
 impl<V, A, Charge> JsonSerialize for crate::cell::Detached<V, A, Charge>
 where
-    V: JsonSerialize + Value,
+    V: JsonSerialize + CellValue,
     Charge: Send + Sync + 'static,
 {
     fn json_serialize(&self, out: &mut String) {
@@ -818,7 +818,7 @@ where
 }
 impl<V> JsonDeserialize for Cell<V>
 where
-    V: JsonSerialize + JsonDeserialize + Value,
+    V: JsonSerialize + JsonDeserialize + CellValue,
     ValueFromJson<V>: ValueSeed<Value = V>,
 {
     fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
@@ -851,8 +851,8 @@ fn write_blocks<K, V, M: MapMode + NodeCloning<K, V>>(
     blocks: &BptreeMapReadTxn<'_, K, V, M>,
     out: &mut String,
 ) where
-    K: JsonKeyCodec + Clone + Ord + fmt::Debug + Send + Sync + 'static,
-    V: JsonSerialize + Clone + Send + Sync + 'static,
+    K: JsonKeyCodec + Clone + Ord + fmt::Debug + 'static,
+    V: JsonSerialize + Clone + 'static,
 {
     out.push('{');
     let mut iter = blocks.iter();

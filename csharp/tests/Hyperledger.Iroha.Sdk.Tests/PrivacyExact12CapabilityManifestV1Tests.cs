@@ -462,8 +462,10 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         Assert.All(decoded.Protocols, row => Assert.True(row.LocalCompiledTupleMatches));
         // Core's bytes spell the consensus policy exactly as the managed builder does.
         Assert.Equal(
-            ConsensusPolicy(pending: Struct(U64(2), U64(302), ConsensusLimits(1024))),
+            ConsensusPolicy(pending: Struct(U64(2), U64(4), ConsensusLimits(1024))),
             decoded.ConsensusPolicy);
+        Assert.NotEmpty(decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1].PolicyCanonicalBytes);
+        Assert.NotEmpty(decoded.Protocols[(int)PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1].PolicyCanonicalBytes);
         foreach (var (protocol, reason) in new[]
         {
             (PrivacyProtocolIdV1.VegaExistingCredentialZkV1, PrivacyCompiledProfileUnavailableReasonV1.StatementSchemaInvalid),

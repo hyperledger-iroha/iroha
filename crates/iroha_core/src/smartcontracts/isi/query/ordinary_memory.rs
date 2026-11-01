@@ -1695,7 +1695,7 @@ mod tests {
         parameters::{FetchSize, Pagination},
         runtime::prelude::FindAbiVersion,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},

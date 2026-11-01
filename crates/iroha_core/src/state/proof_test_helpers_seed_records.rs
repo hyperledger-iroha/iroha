@@ -1,7 +1,7 @@
 #[test]
 #[allow(clippy::too_many_lines)]
 fn proof_test_helpers_seed_records() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let state = State::new(World::default(), kura, query);

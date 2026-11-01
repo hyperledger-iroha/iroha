@@ -1026,6 +1026,8 @@ mod state_snapshot_decode_error_tests {
 
     #[test]
     fn resource_restore_keeps_original_undo_acquisition_refusal_local() {
+        // Retain fixture generations while checking exact original-pool occupancy.
+        let _retirement = crossbeam_epoch::pin();
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let world = World::try_with_execution_budget([], [], [], &budget).unwrap();
         let retained_bytes = budget.reserved_bytes();
@@ -1077,6 +1079,7 @@ mod state_snapshot_decode_error_tests {
         assert_eq!(release, original_release);
         assert_eq!(budget.reserved_bytes(), limit);
         drop(blocker);
+        assert_eq!(budget.reserved_bytes(), retained_bytes);
         budget.set_limit_bytes(64 * 1024 * 1024);
         validate_resource_policy_versions(&world, 0, &budget).unwrap();
         assert_eq!(budget.reserved_bytes(), retained_bytes);

@@ -4,6 +4,7 @@ pub mod attach;
 pub mod env;
 pub mod file_source;
 pub mod read;
+pub mod terminal;
 pub mod toml;
 pub mod util;
 use crate::attach::ConfigValueAndOrigin;

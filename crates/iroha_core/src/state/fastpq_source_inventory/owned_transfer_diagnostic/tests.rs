@@ -12,9 +12,9 @@ use iroha_data_model::{
     permission::Permission,
     role::{Role, RoleId},
 };
+use iroha_primitives::nonzero;
 use iroha_primitives::{json::Json, numeric::Quantity};
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 
 type TranscriptMap = BTreeMap<Hash, Vec<TransferTranscript>>;
 

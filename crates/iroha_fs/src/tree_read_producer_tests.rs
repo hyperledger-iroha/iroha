@@ -72,7 +72,7 @@ fn closed_tree_read_keeps_native_caps_inventory_comparison_lazy_order_and_origin
     let empty = root.create_child("empty").unwrap();
     root.read_tree_scope(|tree| {
         tree.read_scope(&empty, |reader| {
-            assert!(reader.entries(0)?.is_empty());
+            assert_eq!(reader.entries(0)?, Vec::<std::ffi::OsString>::new());
             assert!(reader.compare_files(&[])?);
             Ok::<_, io::Error>(())
         })

@@ -19,9 +19,9 @@ use iroha::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_primitives::nonzero;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
-use nonzero_ext::nonzero;
 use std::time::{Duration, Instant};
 #[test]
 #[allow(clippy::too_many_lines)]

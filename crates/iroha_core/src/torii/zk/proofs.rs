@@ -304,7 +304,7 @@ mod tests {
         },
         proof::{ProofId, ProofRecord, ProofStatus},
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     fn blank_state() -> State {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();

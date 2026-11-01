@@ -8,6 +8,10 @@ use crate::privacy_engines::transparent_stark::{
 };
 use crate::privacy_engines::zk_x509::private_table::{inspection, zeroize_field_rows_v1};
 
+#[cfg(target_arch = "x86_64")]
+#[path = "main_avx2_butterfly_tests.rs"]
+mod avx2_butterfly_tests;
+
 fn policy() -> MainBoundedTransformPolicyV1 {
     // Synthetic public admission; the existing whole-layout boundary control
     // independently checks for_assembly_v1 and its exact fixed reservation.

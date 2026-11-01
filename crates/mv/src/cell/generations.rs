@@ -34,12 +34,12 @@ impl std::error::Error for CellGenerationBackingError {}
 /// This never clones a value or obtains a writer. The enclosing aggregate must
 /// finish every physical reservation before acquiring its first writer.
 #[must_use = "retain both original physical generations through acquisition"]
-pub struct CellGenerationBacking<V: Value> {
+pub struct CellGenerationBacking<V: CellValue> {
     current: ReservedEbrCell<V, AllocationCharge>,
     undo: ReservedEbrCell<Option<V>, AllocationCharge>,
     source: AllocationBudget,
 }
-impl<V: Value> CellGenerationBacking<V> {
+impl<V: CellValue> CellGenerationBacking<V> {
     /// Consume the original complete pair admission without reserving new capacity.
     /// Wrong pool/layout or either physical refusal returns both unchanged charges.
     /// If the second allocation fails, the first unused shell is freed before its

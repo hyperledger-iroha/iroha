@@ -57,12 +57,15 @@ class PublicContractSchemaTests(unittest.TestCase):
         validator = self.validator('PrivacyExact12CapabilityManifestV1')
         current = lambda m: m['consensus_policy']['current_limits']
         pending = lambda m: m['protocols'][1]['policy']['pending_update']
+        note_pending = lambda m: m['protocols'][10]['policy']['pending_update']
         profile = lambda m: m['protocols'][0]['compiled_profile']['value']
         def assign(select, key, value):
             return lambda m: select(m).__setitem__(key, value(m) if callable(value) else value)
         mutations = {
             'contract inside consensus limits': assign(current, 'private_settlement', {}),
             'drain inside a protocol update': assign(pending, 'private_settlement_drain_blocks', None),
+            'drain inside the private-note update': assign(note_pending, 'private_settlement_drain_blocks', None),
+            'unknown limit field': assign(current, 'unknown_limit', 1),
             'missing limit': lambda m: current(m).pop('retained_root_count'),
             'flat manifest digest': assign(lambda m: m, 'manifest_digest', lambda m: m['manifest_digest'][0]),
             'flat profile digest': assign(profile, 'parameter_id', lambda m: profile(m)['parameter_id'][0]),

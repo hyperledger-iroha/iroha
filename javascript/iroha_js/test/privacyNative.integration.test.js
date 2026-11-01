@@ -26,6 +26,7 @@ test("the real addon projection of Core's manifest reaches the managed parser", 
   assert.equal(pending.next_limits.retained_root_count, 1024);
   const note = manifest.protocols[10];
   assert.equal(note.protocol_id.protocol, "iroha-ivm-private-note-stark-v1");
+  assert.ok(note.policy.pending_update);
   assert.equal(note.privacy_feature_mask, 7);
   assert.equal(manifest.manifest_digest.length, 32);
 });

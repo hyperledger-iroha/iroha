@@ -485,5 +485,7 @@ def test_pull_request_workflow_and_make_guards_run_the_check_and_these_tests() -
     makefile = (root / "Makefile").read_text(encoding="utf-8")
     guards = makefile.split("\nguards:\n", 1)[1].split("\n\n", 1)[0]
     assert "\t@python3 scripts/run_guards.py" in guards.split("\n")
-    runner = (root / "scripts/run_guards.py").read_text(encoding="utf-8")
-    assert runner.count('("python3", "scripts/check_zk_x509_presentation_interval.py"),') == 1
+    runner = run_path(str(root / "scripts/run_guards.py"))
+    assert runner["GUARDS"].count(
+        ("python3", "scripts/check_zk_x509_presentation_interval.py")
+    ) == 1

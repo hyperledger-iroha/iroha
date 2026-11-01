@@ -35,6 +35,7 @@ pub mod erasure;
 pub mod fs;
 pub mod json;
 pub mod must_use;
+mod nonzero;
 pub mod numeric;
 pub mod numeric_abi;
 pub mod numeric_int;

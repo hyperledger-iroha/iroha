@@ -33,10 +33,10 @@ ordinary refund controls.
 5. Qualify the combined fixture/runtime and native release-owner corrections
    through a fresh library build, affected-owner runtimes, workspace checks and
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
-   joint X509 relation and transcript privacy, meet the unchanged proving-time
-   limit while preserving the RSS limit, and complete process observation and
-   hardware-specific address-space qualification;
-   produce current q77 maximum proofs without widening resource limits.
+   joint X509 relation and transcript privacy, qualify maximum proofs across
+   supported platforms within the unchanged proving-time and RSS limits, and
+   complete process observation and hardware-specific address-space qualification;
+   produce current q136 maximum proofs without widening resource limits.
 
 The [Windows and Intel completion goals](specs/windows_intel_completion_goals.md)
 track native custody, retained CLI/Core evidence, SDK and package qualification,

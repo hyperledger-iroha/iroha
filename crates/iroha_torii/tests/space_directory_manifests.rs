@@ -44,7 +44,7 @@ fn world_with_uaid_owner(owner: &AccountId, uaid: UniversalAccountId) -> World {
 fn filtered_manifests_uri(uaid: &UniversalAccountId, filter: &str) -> String {
     format!(
         "/v1/space-directory/uaids/{uaid}/manifests?filter={}&include_total=true",
-        urlencoding::encode(filter)
+        iroha_torii::test_utils::percent_encode(filter)
     )
 }
 fn checked_space_directory_ed25519_key_fixture() -> KeyPair {
@@ -798,7 +798,7 @@ async fn space_directory_manifest_endpoint_reports_filtered_total_across_pages()
         .router()
         .oneshot(fixtures::get_request(&format!(
             "{first_page_uri}&cursor={}",
-            urlencoding::encode(cursor)
+            iroha_torii::test_utils::percent_encode(cursor)
         )))
         .await
         .expect("second page response");

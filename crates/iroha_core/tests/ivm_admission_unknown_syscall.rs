@@ -12,8 +12,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use ivm::{ProgramMetadata, encoding, instruction};
-use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 10_000;
 fn checked_random_unknown_syscall_keypair() -> KeyPair {

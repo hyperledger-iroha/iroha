@@ -6,7 +6,7 @@ use iroha_data_model::{
     events::time::Schedule,
     transaction::signed::TransactionEntrypoint,
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use norito::codec::DecodeAll as _;
 
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]

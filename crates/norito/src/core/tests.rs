@@ -4,7 +4,6 @@ use crate::{
     DeserializePayload, NoritoDeserialize, NoritoSerialize, SerializePayload, codec,
     codec::{encode_adaptive, encode_with_header_flags},
 };
-use crc64fast::Digest;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[test]
@@ -269,9 +268,10 @@ fn owned_value_decode_depth_guard_is_bounded_and_restores() {
 #[test]
 fn crc64_matches_digest() {
     let data = b"123456789";
-    let mut digest = Digest::new();
+    let mut digest = Crc64Digest::new();
     digest.write(data);
     assert_eq!(crc64(data), digest.sum64());
+    assert_eq!(crc64(data), 0x995d_c9bb_df19_39fa, "CRC-64/XZ check value");
 }
 #[cfg(feature = "compression")]
 #[test]

@@ -62,8 +62,8 @@ where
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Insert current and a missing first undo preimage under already-held writers.
@@ -108,8 +108,8 @@ where
 
 impl<K, V, P> BptreeMapCheckpoint<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Insert through two original parent checkpoints under one joined admission.

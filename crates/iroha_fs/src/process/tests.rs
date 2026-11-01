@@ -65,7 +65,7 @@ fn explicit_settings_and_observations_reach_the_original_image() {
     let output = command.output().unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, format!("{arguments:?}\nfinal\n").as_bytes());
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, Vec::<u8>::new());
 }
 
 #[test]
@@ -82,7 +82,7 @@ fn explicit_file_and_pipe_streams_preserve_binary_bytes() {
         .stderr(ProcessStdio::piped());
     let output = command.spawn().unwrap().wait_with_output().unwrap();
     assert!(output.status.success());
-    assert!(output.stdout.is_empty());
+    assert_eq!(output.stdout, Vec::<u8>::new());
     assert_eq!(output.stderr, bytes);
     assert_eq!(fs::read(output_path).unwrap(), bytes);
 }
@@ -124,7 +124,7 @@ fn drop_with_external_input_terminates_owned_original() {
     drop(child);
     line.clear();
     output.read_to_string(&mut line).unwrap();
-    assert!(line.is_empty());
+    assert_eq!(line, "");
     drop(input);
 }
 

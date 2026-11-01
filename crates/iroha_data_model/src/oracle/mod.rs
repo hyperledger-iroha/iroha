@@ -3967,7 +3967,7 @@ mod tests {
     }
     #[test]
     fn oracle_change_required_votes_follow_class() {
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let low = nonzero!(1_usize);
         let medium = nonzero!(2_usize);
         let high = nonzero!(3_usize);

@@ -532,6 +532,40 @@ mod tests {
     }
 
     #[test]
+    fn borrowed_nexus_retains_frozen_private_settlement_bytes_and_field_position() {
+        let nexus = Nexus::default();
+        let runtime = runtime(&nexus);
+        let borrowed = BorrowedNexusPolicy::new(&nexus, &runtime, None, None, None).unwrap();
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let mut encoded = Vec::new();
+        norito::core::serialize_to_writer(&borrowed, &mut encoded).unwrap();
+        let decoded = norito::codec::decode_adaptive::<NexusStaticAuthorityV1>(&encoded).unwrap();
+        let mut remaining = decoded.bare_policy_preimage.as_slice();
+        let mut fields = Vec::new();
+        while !remaining.is_empty() {
+            let (length, prefix) = norito::core::read_len_from_slice_with_flags(
+                remaining,
+                norito::core::default_encode_flags(),
+            )
+            .unwrap();
+            let (field, rest) = remaining[prefix..].split_at(length);
+            fields.push(field);
+            remaining = rest;
+        }
+        // Independent V1 wire literal shared with the configuration owner's
+        // original-contract test; it is not generated from this projection.
+        let expected = hex::decode(concat!(
+            "02010002ff0008201c00000000000008b00400000000000008b004000000000000",
+            "08b0040000000000001c0400000000000000040010000004004000000400000100",
+            "0400000400080000800000000000080000100000000000080000400000000000",
+            "0840420f0000000000040001000008000000c0000000000201000b0100000000000000020100",
+        ))
+        .unwrap();
+        assert_eq!(fields.len(), 21);
+        assert_eq!(fields[11], expected, "private settlement follows AXT");
+    }
+
+    #[test]
     fn static_nexus_policy_roundtrips_and_matches_existing_digest() {
         let policy = authority(&Nexus::default());
         assert_eq!(

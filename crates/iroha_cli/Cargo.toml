@@ -74,7 +74,6 @@ clap = { workspace = true, features = ["derive"] }
 clap-markdown = "0.1.5"
 humantime = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
-supports-color = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
 futures = { workspace = true, features = ["async-await", "std"] }
 base64 = { workspace = true }
@@ -96,7 +95,6 @@ tiny-keccak = { workspace = true }
 sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "gif"], optional = true }
 png = "0.18.0"
-pathdiff = "0.2.3"
 tempfile = { workspace = true }
 
 [dev-dependencies]

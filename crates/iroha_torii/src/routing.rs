@@ -3601,8 +3601,8 @@ impl MaybeTelemetry {
         let (peers_tx, peers_rx) = watch::channel(<_>::default());
         let (_mh, time_source) = TimeSource::new_mock(core::time::Duration::default());
         let queue_cfg = iroha_config::parameters::actual::Queue {
-            capacity: nonzero_ext::nonzero!(1usize),
-            capacity_per_user: nonzero_ext::nonzero!(1usize),
+            capacity: iroha_primitives::nonzero!(1usize),
+            capacity_per_user: iroha_primitives::nonzero!(1usize),
             transaction_time_to_live: core::time::Duration::from_secs(1),
             ..Default::default()
         };
@@ -5381,20 +5381,20 @@ async fn handle_connect_session_with_rng<R: rand::rand_core::TryCryptoRng + ?Siz
     let wallet_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=wallet&token={}&relay={}",
         sid_b64,
-        urlencoding::encode(&network_id_literal),
+        crate::percent_encoding::encode(&network_id_literal),
         app_pk_b64,
         nonce_b64,
-        urlencoding::encode(&node),
+        crate::percent_encoding::encode(&node),
         token_wallet,
         token_relay
     );
     let app_uri = format!(
         "iroha://connect?sid={}&network_id={}&app_pk={}&nonce={}&node={}&v=1&role=app&token={}&relay={}",
         sid_b64,
-        urlencoding::encode(&network_id_literal),
+        crate::percent_encoding::encode(&network_id_literal),
         app_pk_b64,
         nonce_b64,
-        urlencoding::encode(&node),
+        crate::percent_encoding::encode(&node),
         token_app,
         token_relay
     );
@@ -8272,8 +8272,13 @@ fn bind_permanent_asset_alias_for_test(
     alias: &str,
 ) {
     use iroha_core::smartcontracts::Execute as _;
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut tx = block.transaction();
     iroha_data_model::isi::SetAssetDefinitionAlias::bind(
@@ -8356,8 +8361,13 @@ fn bind_account_alias_for_test(
         u64::MAX,
         iroha_model_base::metadata::Metadata::default(),
     );
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut tx = block.transaction();
     // Alias repair validates the parent namespace before the existing child lease.
@@ -8524,8 +8534,13 @@ fn grant_account_alias_resolve_for_test(
     };
     let permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::account::CanResolveAccountAlias { scope }.into();
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut tx = block.transaction();
     iroha_data_model::isi::Grant::account_permission(permission, authority.clone())
@@ -8578,8 +8593,13 @@ pub fn resolve_account_alias_with_exact_permission_for_test(
     );
     let permission: iroha_data_model::permission::Permission =
         iroha_executor_data_model::permission::account::CanResolveAccountAlias { scope }.into();
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut tx = block.transaction();
     iroha_core::smartcontracts::Execute::execute(
@@ -30560,7 +30580,7 @@ mod soradns_tests {
         ipfs::IpfsPath,
         soradns::{DIRECTORY_RECORD_VERSION_V1, ResolverDirectoryRecordV1},
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::{str::FromStr, sync::Arc};
     fn make_state() -> Arc<State> {
         let kura = Kura::blank_kura_for_testing();
@@ -34472,7 +34492,7 @@ mod sse_filter_tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{block::BlockHeader, events::{EventBox, pipeline::{BlockEvent, BlockStatus, TransactionEvent, TransactionStatus}}};
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     routing_test! { sync tx_status_eq_builds_matching_filter
         // Build filter expr: tx_status == Approved
         let expr = crate::filter::FilterExpr::Eq(
@@ -38699,7 +38719,7 @@ mod explorer_lookup_tests {
             .method("GET")
             .uri(format!(
                 "{ENDPOINT_EXPLORER_INSTRUCTIONS}?account={}&limit=10",
-                urlencoding::encode(&alice.to_string())
+                crate::percent_encoding::encode(&alice.to_string())
             ))
             .body(axum::body::Body::empty())
             .unwrap();
@@ -38781,7 +38801,7 @@ mod explorer_lookup_tests {
             .method("GET")
             .uri(format!(
                 "{ENDPOINT_EXPLORER_INSTRUCTIONS}?account={}&limit=10",
-                urlencoding::encode(&multisig.to_string())
+                crate::percent_encoding::encode(&multisig.to_string())
             ))
             .body(axum::body::Body::empty())
             .unwrap();
@@ -43539,7 +43559,7 @@ mod cursor_mode_tests {
         dsl::{CompoundPredicate, SelectorTuple},
         parameters::{FetchSize, QueryParams},
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::sync::Arc;
     fn make_minimal_state(authority: &AccountId) -> State {
         let kura = Kura::blank_kura_for_testing();
@@ -52814,7 +52834,7 @@ mod space_directory_manifest_helper_tests {
         uaid: UniversalAccountId,
     ) {
         let header = iroha_data_model::block::BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
+            iroha_primitives::nonzero!(1_u64),
             None,
             None,
             0,
@@ -58128,20 +58148,20 @@ routing_test! { async public_lane_handlers_hide_future_created_autoscale_stale_r
             "7".to_owned(),
         );
         let lane_catalog = iroha_data_model::nexus::LaneCatalog::new(
-            nonzero_ext::nonzero!(2_u32),
+            iroha_primitives::nonzero!(2_u32),
             vec![LaneConfig::default(), autoscale_lane],
         )
         .expect("future-created autoscale lane catalog");
         let mut nexus = state.nexus.write();
         nexus.autoscale.enabled = true;
-        nexus.autoscale.min_lane_id = nonzero_ext::nonzero!(1_u32);
-        nexus.autoscale.max_lane_id_exclusive = nonzero_ext::nonzero!(2_u32);
+        nexus.autoscale.min_lane_id = iroha_primitives::nonzero!(1_u32);
+        nexus.autoscale.max_lane_id_exclusive = iroha_primitives::nonzero!(2_u32);
         nexus.lane_catalog = lane_catalog;
         nexus.lane_config =
             iroha_config::parameters::actual::LaneConfig::from_catalog(&nexus.lane_catalog);
     }
     {
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         stx.world.public_lane_validators_mut_for_testing().insert(

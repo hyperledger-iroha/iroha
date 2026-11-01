@@ -539,7 +539,7 @@ fn exited_root_and_live_descendant_keep_full_admission_through_drop_reaper() {
     await_guard_drop(&weak);
     line.clear();
     output.read_to_string(&mut line).unwrap();
-    assert!(line.is_empty());
+    assert_eq!(line, "");
 }
 
 #[cfg(all(windows, feature = "tokio"))]

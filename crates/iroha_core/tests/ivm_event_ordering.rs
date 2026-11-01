@@ -9,8 +9,8 @@ use iroha_crypto::Hash;
 use iroha_data_model::{block::BlockHeader, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_primitives::nonzero;
 use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, syscalls};
-use nonzero_ext::nonzero;
 use std::{str::FromStr, sync::Arc};
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);

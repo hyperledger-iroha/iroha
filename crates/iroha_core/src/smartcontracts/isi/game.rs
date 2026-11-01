@@ -1762,7 +1762,7 @@ mod tests {
         let (pristine, mut session, relayer) = payout_state(huge);
         let state = crate::pipeline::overlay::test_support::state_after_genesis(pristine.world);
         let next_header = BlockHeader::new(
-            nonzero_ext::nonzero!(2_u64),
+            iroha_primitives::nonzero!(2_u64),
             state.view().latest_block_hash(),
             None,
             0,
@@ -2125,7 +2125,7 @@ mod tests {
         assert!(get(&st, &session.session_id).unwrap().liability.is_zero());
     }
     pub(super) fn header() -> BlockHeader {
-        BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 1_000, 0)
+        BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 1_000, 0)
     }
     fn signed_checkpoint(
         session: &GameSessionRecordV1,

@@ -16,7 +16,7 @@ use concread::ebrcell::{EbrCellFrozen, EbrCellFrozenRead};
 /// An aggregate must keep this owner and the original refund scope until all its
 /// readers retire; abandoning it is not acknowledgement that readers retired.
 /// No wrapper, payload or identity allocation is added by this owner.
-pub struct FrozenDetached<V: Value, Admission, Charge: Send + Sync + 'static = Untracked> {
+pub struct FrozenDetached<V: CellValue, Admission, Charge: Send + Sync + 'static = Untracked> {
     revert: EbrCellFrozen<Option<V>, Charge>,
     blocks: EbrCellFrozen<V, Charge>,
     metadata: DetachedMetadata<Admission>,
@@ -27,13 +27,13 @@ pub struct FrozenDetached<V: Value, Admission, Charge: Send + Sync + 'static = U
 /// This retains actual original backing, not copied scalar authority. It grants
 /// no writer, publication or refund authority; the aggregate retains Admission
 /// and its original scope in `FrozenDetached` until read retirement completes.
-pub struct FrozenDetachedRead<V: Value, Charge: Send + Sync + 'static = Untracked> {
+pub struct FrozenDetachedRead<V: CellValue, Charge: Send + Sync + 'static = Untracked> {
     revert: EbrCellFrozenRead<Option<V>, Charge>,
     blocks: EbrCellFrozenRead<V, Charge>,
     identity: crate::BlockPublicationIdentity,
 }
 
-impl<V: Value, A, C: Send + Sync + 'static> Detached<V, A, C> {
+impl<V: CellValue, A, C: Send + Sync + 'static> Detached<V, A, C> {
     /// Move the exact original current/undo backing and metadata into frozen custody.
     /// No writer, collector pin, clone, allocation or new identity is acquired.
     pub fn freeze_pair(self) -> FrozenDetached<V, A, C> {
@@ -50,7 +50,7 @@ impl<V: Value, A, C: Send + Sync + 'static> Detached<V, A, C> {
     }
 }
 
-impl<V: Value, A, C: Send + Sync + 'static> FrozenDetached<V, A, C> {
+impl<V: CellValue, A, C: Send + Sync + 'static> FrozenDetached<V, A, C> {
     /// Retain both same original backing allocations and their existing local cut.
     pub fn readers(&self) -> FrozenDetachedRead<V, C> {
         FrozenDetachedRead {
@@ -161,7 +161,7 @@ impl<V: Value, A, C: Send + Sync + 'static> FrozenDetached<V, A, C> {
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> FrozenDetachedRead<V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> FrozenDetachedRead<V, C> {
     /// Borrow the same original staged current backing, never a new target view.
     pub fn current(&self) -> &EbrCellFrozenRead<V, C> {
         &self.blocks

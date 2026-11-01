@@ -36,13 +36,17 @@ def _delivery(value,expected_delivery=None):
 
 def _wait_join(native, waited, process):
     observer.require(type(waited) is dict and set(waited)=={
-        'pid','status','cpu_user_ns','cpu_system_ns'}
+        'pid','status','cpu_user_ns','cpu_system_ns','peak_rss_bytes'}
         and all(owned._unsigned(waited[key]) for key in waited)
         and waited['pid']==native['root_pid']==process['pid']
         and waited['cpu_user_ns']==process['cpu_user_ns']
-        and waited['cpu_system_ns']==process['cpu_system_ns'],
+        and waited['cpu_system_ns']==process['cpu_system_ns']
+        and waited['peak_rss_bytes']==process['peak_rss_bytes']
+        and waited['peak_rss_bytes']>0
+        and process['peak_rss_source']=='kernel_child_rusage',
         'original wait4 resource join differs')
-    observer.require(all(owned._unsigned(process[key]) for key in ('pid','cpu_user_ns','cpu_system_ns'))
+    observer.require(all(owned._unsigned(process[key]) for key in
+                         ('pid','cpu_user_ns','cpu_system_ns','peak_rss_bytes'))
                      and type(process['timed_out']) is bool, 'invalid outer process counters')
     terminal=native['terminal'];status=waited['status']
     observer.require(status<1<<32, 'wait4 status extent')
@@ -95,8 +99,11 @@ def validate(admission,lifecycle,terminal,process,baseline,context,slack_ns,*,ex
         and baseline['started_monotonic_ns']<=capture['started_ns']<=capture['finished_ns']
             <=baseline['finished_monotonic_ns'], 'baseline differs from actual owned initial sample')
     sampled=process['sampled']
+    peak_rss=sample['rss_bytes']
     if sampled['state']=='validated':
         observer.require(owned._unsigned(sampled['sampled_cpu_time_ns'])
+                         and owned._unsigned(sampled['sampled_peak_rss_bytes'])
+                         and sampled['sampled_peak_rss_bytes']>=peak_rss
                          and type(sampled['observations']) is int and sampled['observations']>=2,
                          'invalid Linux sampled totals')
         last_cpu=sample['cpu_time_ns']+sampled['sampled_cpu_time_ns']
@@ -110,6 +117,9 @@ def validate(admission,lifecycle,terminal,process,baseline,context,slack_ns,*,ex
     total=process['cpu_user_ns']+process['cpu_system_ns']
     observer.require(owned._unsigned(total) and last_cpu<=total+slack_ns,
                      'live CPU exceeds actual wait4 accounting')
+    # smaps_rollup walks page tables; wait4 retains a separately accounted
+    # kernel high-water mark. Neither metric orders the other. The shared
+    # harness replays retained samples and applies the requested bound to each.
     if terminal is not None:
         owned.validate_terminal(terminal,reader,native,last_cpu,total,slack_ns)
 
@@ -124,9 +134,15 @@ def publish(owner,records,status,user_ns,system_ns,sampled,slack_ns):
         'supervisor_pid':owner.native.supervisor}
     _delivery(admission['delivery']);owned.validate_admission(admission['reader'])
     native=abi.report(owner.native.final_raw,owner.native.supervisor,owner.child.pid)
+    # Linux wait4 reports KiB. Retain the original reap's high-water mark,
+    # independently of the outer report and the workload emitter's RSS claim.
+    maxrss=owner.waited[2].ru_maxrss
+    observer.require(type(maxrss) is int and 0<maxrss<=((1<<64)-1)//1024,
+                     'original wait4 peak RSS unavailable or invalid')
     lifecycle={'version':1,'kind':'linux_owned_final_lifecycle',
         'native_json':owner.native.final_raw.decode('utf-8'),
-        'wait4':{'pid':owner.waited[0],'status':status,'cpu_user_ns':user_ns,'cpu_system_ns':system_ns},
+        'wait4':{'pid':owner.waited[0],'status':status,'cpu_user_ns':user_ns,'cpu_system_ns':system_ns,
+                 'peak_rss_bytes':maxrss*1024},
         'wnowait':owner.wnowait,'finish_before_reap':True}
     if owner.terminal_fact is not None:
         initial=admission['reader']['capture']['sample']['cpu_time_ns']

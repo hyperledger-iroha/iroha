@@ -8,8 +8,8 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use std::sync::Arc;
 #[test]
 fn ivm_instruction_executes() {

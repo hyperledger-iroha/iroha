@@ -1032,7 +1032,7 @@ impl SignedBlock {
         da_commitments: Option<DaCommitmentBundle>,
         da_proof_policies: Option<DaProofPolicyBundle>,
     ) -> Result<SignedBlock, iroha_crypto::Error> {
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let da_commitments = da_commitments.filter(|bundle| !bundle.is_empty());
         let mut entry_merkle = MerkleTree::default();
         for tx in &transactions {

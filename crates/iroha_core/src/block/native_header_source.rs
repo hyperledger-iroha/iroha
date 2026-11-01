@@ -87,16 +87,8 @@ impl ValidBlock {
         };
         let generation = state.state_view_generation();
         let view = state.query_view();
-        let authenticated = successor_context
-            .authenticate(&view, &block.header(), &expected_context)
-            .and_then(|()| {
-                successor_context.prepare_continuation(
-                    &view,
-                    &block.header(),
-                    pulse.as_ref(),
-                    expected_context,
-                )
-            });
+        let authenticated =
+            successor_context.authenticate(&view, &block.header(), &expected_context);
         let observed_generation = state.state_view_generation();
         if !crate::state::is_stable_state_view_generation(generation, observed_generation) {
             return Err(BlockValidationError::NativeSourceChanged {

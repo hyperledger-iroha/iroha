@@ -999,8 +999,8 @@ mod tests {
         },
     };
     use iroha_primitives::json::Json;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
     use std::{
         num::NonZeroU64,
         sync::{

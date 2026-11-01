@@ -5,9 +5,9 @@ use http_body_util::BodyExt as _;
 use iroha_core::state::{State, World, WorldReadOnly};
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{num::NonZeroUsize, sync::Arc};
 use tower::ServiceExt as _;
 const ACCOUNT_SIGNATORY: &str =

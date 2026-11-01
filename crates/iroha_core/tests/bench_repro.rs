@@ -1,91 +1,257 @@
-//! Reproduces the ISI gas calibration benchmark setup for debugging.
+//! Reproduces the actual signed-genesis ISI gas calibration fixture.
+
+#[path = "../benches/support/isi_gas_fixture.rs"]
+mod isi_gas_fixture;
 
 use iroha_core::{
     executor::{Executor, InstructionExecutionProfile},
     gas,
-    kura::Kura,
-    query::store::LiveQueryStore,
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::{
-    alias_setup::{
-        AliasDomainIntentV1, AliasIntentV1, AliasLeaseAcquisitionV1, AliasQuoteGuardV1,
-        ResolvedDomainV1,
-    },
-    isi::alias_setup::EnsureAlias,
-    prelude::*,
-};
+use iroha_data_model::{block::consensus::SumeragiRootScope, prelude::*};
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::topology::DataSpaceId;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
-fn bench_block_header() -> BlockHeader {
-    BlockHeader::new(nonzero!(2_u64), None, None, 0, 0)
-}
-fn build_bench_state() -> (State, AccountId, AccountId) {
+
+fn build_bench_state() -> (State, AccountId) {
     let (authority, _) = gen_account_in("wonderland");
-    let (recipient, _) = gen_account_in("wonderland");
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let domain = Domain::new(domain_id.clone()).build(&authority);
-    let genesis_domain =
-        Domain::new(DomainId::try_new("genesis", "universal").expect("valid genesis domain id"))
-            .build(&authority);
-    let bench_domain =
-        Domain::new(DomainId::try_new("bench", "universal").expect("valid bench domain id"))
-            .build(&authority);
-    let authority_account = Account::new(authority.clone()).build(&authority);
-    let recipient_account = Account::new(recipient.clone()).build(&recipient);
+    let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
     let world = World::with(
-        [genesis_domain, domain, bench_domain],
-        [authority_account, recipient_account],
+        [Domain::new(domain_id).build(&authority)],
+        [Account::new(authority.clone()).build(&authority)],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_handle);
-    (state, authority, recipient)
-}
-#[test]
-fn execute_register_domain_like_bench() {
-    let (state, authority, _recipient) = build_bench_state();
-    let executor = Executor::default();
-    let mut block = state.block(bench_block_header());
-    let mut tx = block.transaction();
-    let domain_id = DomainId::try_new("bench", "universal").expect("valid domain id");
-    let instr = EnsureAlias::new(
-        AliasIntentV1::Domain(AliasDomainIntentV1 {
-            domain: ResolvedDomainV1::new(domain_id.clone(), DataSpaceId::UNIVERSAL),
-            owner: authority.clone(),
-        }),
-        AliasLeaseAcquisitionV1::new(1, None),
-        AliasQuoteGuardV1 {
-            expected_policy_version: 0,
-            expected_payment_asset: AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").expect("valid payment asset domain"),
-                "xor".parse().expect("valid payment asset name"),
-            ),
-            max_amount: 0_u64.into(),
-            valid_until_ms: 0,
-        },
+    (
+        isi_gas_fixture::state_after_signed_genesis(
+            world,
+            vec![
+                Grant::account_permission(
+                    iroha_executor_data_model::permission::role::CanManageRoles,
+                    authority.clone(),
+                )
+                .into(),
+            ],
+        ),
+        authority,
     )
-    .into();
-    let _ = gas::meter_instruction(&instr, &iroha_core::gas::DEFAULT_ZK_GAS)
-        .expect("gas quote must complete for this fixture");
-    executor
-        .execute_instruction_with_profile(
-            &mut tx,
-            &authority,
-            instr,
-            InstructionExecutionProfile::Bench,
+}
+
+#[test]
+fn fixture_retains_signed_genesis_and_original_root_authority() {
+    let (state, authority) = build_bench_state();
+    assert_eq!(state.committed_height(), 1);
+    assert_eq!(state.exact_durable_block_count().unwrap(), 1);
+    let genesis = state
+        .block_by_height(1_usize.try_into().unwrap())
+        .expect("original genesis read completes")
+        .expect("original genesis is retained");
+    assert_eq!(
+        state.network_id_ref(),
+        &NetworkId::from_genesis_hash(genesis.hash())
+    );
+    let signed = iroha_data_model::sumeragi_finality::signed_genesis_consensus_metadata(&genesis)
+        .expect("signed genesis metadata");
+    assert_eq!(
+        signed.sumeragi_context.root_scope,
+        SumeragiRootScope::Global
+    );
+    assert_eq!(
+        iroha_core::sumeragi::lanes::routing::committed_root_scope(state.view().world()),
+        Some(signed.sumeragi_context.root_scope),
+    );
+    assert!(state.view().world().account(&authority).is_ok());
+    let _ = isi_gas_fixture::block_header(&state);
+}
+
+#[test]
+fn execute_register_account_like_bench_rolls_back_after_each_iteration() {
+    let (state, authority) = build_bench_state();
+    let (registered, _) = gen_account_in("wonderland");
+    let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
+    for _ in 0..2 {
+        let mut block = state.block(isi_gas_fixture::block_header(&state));
+        let mut tx = block.transaction();
+        let instruction: InstructionBox =
+            Register::account(Account::new(registered.clone())).into();
+        let quote = gas::meter_instruction(&instruction, &gas::DEFAULT_ZK_GAS)
+            .expect("gas quote completes");
+        assert!(quote > 0);
+        Executor::default()
+            .execute_instruction_with_profile(
+                &mut tx,
+                &authority,
+                instruction,
+                InstructionExecutionProfile::Bench,
+            )
+            .expect("actual benchmark-profile instruction execution");
+        assert!(tx.world.accounts().get(&registered).is_some());
+        assert!(tx.world.accounts().get(&authority).is_some());
+        assert!(tx.world.domains().get(&domain_id).is_some());
+        // Match the bench: no apply or block commit, so the next fresh
+        // transaction sees the original committed State and can register again.
+        drop(tx);
+        drop(block);
+        assert!(state.view().world().accounts().get(&registered).is_none());
+        assert_eq!(state.committed_height(), 1);
+    }
+}
+
+#[test]
+fn execute_domain_owned_asset_definition_like_bench_rolls_back_after_each_iteration() {
+    let (state, authority) = build_bench_state();
+    let domain = DomainId::try_new("wonderland", "universal").unwrap();
+    let definition = isi_gas_fixture::domain_owned_asset_definition(domain.clone(), "xor");
+    let id = definition.id().clone();
+    for _ in 0..2 {
+        let mut block = state.block(isi_gas_fixture::block_header(&state));
+        let mut tx = block.transaction();
+        Executor::default()
+            .execute_instruction_with_profile(
+                &mut tx,
+                &authority,
+                Register::asset_definition(definition.clone()).into(),
+                InstructionExecutionProfile::Bench,
+            )
+            .expect("domain owner registers the benchmark asset after genesis");
+        let registered = tx.world.asset_definition(&id).unwrap();
+        assert_eq!(registered.owning_domain(), &Some(domain.clone()));
+        assert_eq!(registered.owned_by(), &authority);
+        drop(tx);
+        drop(block);
+        assert!(state.view().world().asset_definition(&id).is_err());
+        assert_eq!(state.committed_height(), 1);
+    }
+}
+
+#[test]
+fn execute_role_grant_and_revoke_like_bench_preserves_holder_and_rolls_back() {
+    for recipient_holds_role in [false, true] {
+        let (state, authority) = build_bench_state();
+        let (recipient, _) = gen_account_in("wonderland");
+        let role: RoleId = "bench_role".parse().unwrap();
+        let execute = |tx: &mut iroha_core::state::StateTransaction<'_, '_>, instruction| {
+            Executor::default()
+                .execute_instruction_with_profile(
+                    tx,
+                    &authority,
+                    instruction,
+                    InstructionExecutionProfile::Bench,
+                )
+                .expect("authorized benchmark role operation");
+        };
+        {
+            let mut block = state.block(isi_gas_fixture::block_header(&state));
+            let mut tx = block.transaction();
+            execute(
+                &mut tx,
+                Register::account(Account::new(recipient.clone())).into(),
+            );
+            execute(
+                &mut tx,
+                Register::role(Role::new(role.clone(), authority.clone())).into(),
+            );
+            if recipient_holds_role {
+                execute(
+                    &mut tx,
+                    Grant::account_role(role.clone(), recipient.clone()).into(),
+                );
+            }
+            tx.apply();
+            block
+                .commit_world_overlay_for_testing()
+                .expect("commit role setup");
+        }
+        for _ in 0..2 {
+            let mut block = state.block(isi_gas_fixture::block_header(&state));
+            let mut tx = block.transaction();
+            let instruction = if recipient_holds_role {
+                Revoke::account_role(role.clone(), recipient.clone()).into()
+            } else {
+                Grant::account_role(role.clone(), recipient.clone()).into()
+            };
+            execute(&mut tx, instruction);
+            assert!(
+                tx.world
+                    .account_roles_iter(&authority)
+                    .any(|held| held == &role)
+            );
+            assert_eq!(
+                tx.world
+                    .account_roles_iter(&recipient)
+                    .any(|held| held == &role),
+                !recipient_holds_role,
+            );
+            drop(tx);
+            drop(block);
+            let view = state.view();
+            assert!(
+                view.world()
+                    .account_roles_iter(&authority)
+                    .any(|held| held == &role)
+            );
+            assert_eq!(
+                view.world()
+                    .account_roles_iter(&recipient)
+                    .any(|held| held == &role),
+                recipient_holds_role,
+            );
+            assert_eq!(state.committed_height(), 1);
+        }
+    }
+}
+
+#[test]
+fn execute_trigger_like_bench_owns_callback_and_rolls_back_consumption() {
+    use iroha_core::smartcontracts::isi::triggers::set::SetReadOnly;
+
+    let (state, authority) = build_bench_state();
+    let id: TriggerId = "bench_callback".parse().unwrap();
+    {
+        let mut block = state.block(isi_gas_fixture::block_header(&state));
+        let mut tx = block.transaction();
+        let action = Action::new(
+            Vec::<InstructionBox>::new(),
+            Repeats::Exactly(1),
+            authority.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(id.clone())
+                .under_authority(authority.clone()),
         )
-        .expect("bench profile execution");
-    assert!(
-        tx.world.domains().get(&domain_id).is_some(),
-        "domain remains present after exact alias lifecycle execution"
-    );
-    assert!(
-        tx.world.accounts().get(&authority).is_some(),
-        "authority account present"
-    );
+        .unwrap();
+        Executor::default()
+            .execute_instruction_with_profile(
+                &mut tx,
+                &authority,
+                Register::trigger(Trigger::new(id.clone(), action)).into(),
+                InstructionExecutionProfile::Bench,
+            )
+            .expect("register callback through the permission-enforcing executor");
+        tx.apply();
+        block.commit_world_overlay_for_testing().unwrap();
+    }
+    for _ in 0..2 {
+        let mut block = state.block(isi_gas_fixture::block_header(&state));
+        let mut tx = isi_gas_fixture::component_transaction(&mut block);
+        Executor::default()
+            .execute_instruction_with_profile(
+                &mut tx,
+                &authority,
+                ExecuteTrigger::new(id.clone()).into(),
+                InstructionExecutionProfile::Bench,
+            )
+            .expect("empty callback retains its bounded pre-body invocation owner");
+        assert!(tx.world.triggers().inspect_by_id(&id, |_| ()).is_none());
+        drop(tx);
+        drop(block);
+        assert_eq!(
+            state
+                .view()
+                .world()
+                .triggers()
+                .inspect_by_id(&id, |action| *action.repeats()),
+            Some(Repeats::Exactly(1)),
+            "dropping the measured overlay restores callback consumption",
+        );
+        assert_eq!(state.committed_height(), 1);
+    }
 }

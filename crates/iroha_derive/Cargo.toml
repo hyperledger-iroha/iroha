@@ -34,7 +34,6 @@ trybuild = { workspace = true, optional = true }
 iroha_macro = { workspace = true }
 iroha_config_base = { workspace = true }
 
-impls = { workspace = true }
 expect-test = { workspace = true }
 
 [[test]]

@@ -17,9 +17,7 @@ use iroha_config::{
 };
 use iroha_core::{
     kiso::KisoHandle,
-    kura::Kura,
     prelude::World,
-    query::store::LiveQueryStore,
     queue::Queue as CoreQueue,
     smartcontracts::Execute,
     state::{State, StateReadOnly, WorldReadOnly},

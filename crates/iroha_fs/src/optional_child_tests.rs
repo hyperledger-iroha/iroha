@@ -189,7 +189,7 @@ fn private_child_publication_refuses_late_destination_absence_without_staging_an
     )
     .unwrap_err();
     assert_eq!(error.kind(), io::ErrorKind::NotFound);
-    assert!(parent.entries(1).unwrap().is_empty());
+    assert_eq!(parent.entries(1).unwrap(), Vec::<std::ffi::OsString>::new());
     std::fs::rename(&displaced, &destination).unwrap();
     assert_eq!(original.identity().unwrap(), expected);
     assert_eq!(

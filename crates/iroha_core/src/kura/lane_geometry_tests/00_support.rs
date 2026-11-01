@@ -14,7 +14,7 @@ use iroha_config::{
 use iroha_data_model::nexus::{
     LaneCatalog, LaneConfig as ModelLaneConfig, LaneLifecycleParameterV1,
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::{
     collections::BTreeMap,
     fs,

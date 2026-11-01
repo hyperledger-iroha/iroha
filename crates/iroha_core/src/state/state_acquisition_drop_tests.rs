@@ -168,7 +168,7 @@ fn membership_probe_callback(
     })
 }
 
-fn held_cell_observation<V: mv::Value, Charge: Send + Sync + 'static>(
+fn held_cell_observation<V: mv::CellValue, Charge: Send + Sync + 'static>(
     target: &mv::cell::Cell<V, Charge>,
     journal: mv::cell::Detached<V, (), Charge>,
 ) -> (

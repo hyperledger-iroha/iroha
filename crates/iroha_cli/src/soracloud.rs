@@ -20763,9 +20763,10 @@ fn resolve_manifest_path(base_dir: &Path, path: &str) -> PathBuf {
         base_dir.join(candidate)
     }
 }
+mod relative_path;
 fn relative_path_string(from_file: &Path, to_path: &Path) -> String {
     let base_dir = from_file.parent().unwrap_or_else(|| Path::new("."));
-    pathdiff::diff_paths(to_path, base_dir)
+    relative_path::diff_paths(to_path, base_dir)
         .unwrap_or_else(|| to_path.to_path_buf())
         .to_string_lossy()
         .into_owned()

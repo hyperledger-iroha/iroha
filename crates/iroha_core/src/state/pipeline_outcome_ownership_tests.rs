@@ -12,7 +12,7 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
         "__registered_block_height".parse::<Name>().unwrap(),
         Json::new(0u64),
     );
-    let mut child_trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
+    let child_trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
         ExecuteTriggerEventFilter,
     > = Trigger::new(
         child.clone(),
@@ -34,7 +34,7 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
     } else {
         vec![InstructionBox::from(ordinary_tail_batch(&fixture))]
     };
-    let mut parent_trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
+    let parent_trigger: crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger<
         PipelineEventFilterBox,
     > = Trigger::new(
         parent.clone(),
@@ -49,12 +49,6 @@ fn pipeline_receipt_fixture(nested: bool) -> (Box<OrdinaryEconomicFixture>, Trig
     )
     .try_into()
     .unwrap();
-    {
-        let mut capture_block = fixture.state.block(fixture.parent.header());
-        let capture = capture_block.transaction();
-        capture_fixture_trigger_runtime(&mut child_trigger, &capture.world);
-        capture_fixture_trigger_runtime(&mut parent_trigger, &capture.world);
-    }
     // Use the actual typed trigger store, as existing pipeline/Time fixtures do.
     // Register before the applying block so its use-time incarnation guard holds.
     let mut block = fixture.state.world.triggers.block();

@@ -163,7 +163,6 @@ thiserror = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 tracing = { workspace = true }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
-supports-color = { workspace = true }
 toml = { workspace = true }
 norito = { workspace = true, default-features = false }
 iroha_i18n = { workspace = true }
@@ -179,16 +178,13 @@ blake3 = { workspace = true }
 [dev-dependencies]
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
 iroha_service_model = { workspace = true }
-p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa"] }
 iroha_deploy = { workspace = true }
 iroha_musubi_service = { workspace = true, features = ["test-fixtures"] }
 iroha_executor_data_model = { workspace = true }
 iroha_torii = { workspace = true, default-features = false, features = ["test-fixtures"] }
 iroha_core = { workspace = true, default-features = false, features = ["runtime", "iroha-core-tests"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
-serial_test = "4.0.1"
 tempfile = { workspace = true }
-assertables = { workspace = true }
 iroha_test_samples = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker" }
 rcgen = "0.14.5"

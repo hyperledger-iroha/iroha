@@ -839,11 +839,42 @@ public sealed class TransactionBuilderTests
     [InlineData("ali ce")]
     [InlineData("ali\u00A0ce")]
     [InlineData("ali\u0000ce")]
+    [InlineData("a@b")]
+    [InlineData("a#b")]
+    [InlineData("a$b")]
+    [InlineData("cafe\u0301")]
+    [InlineData("a\u2066b")]
     public void TransactionEncodingContextRejectsNonExactNames(string name)
     {
         var context = new TransactionEncodingContext(FixtureAccountId);
 
         Assert.Throws<ArgumentException>(() => context.EncodeName(name));
+    }
+
+    [Theory]
+    [InlineData("caf\u00e9")]
+    [InlineData("\u56f3\u66f8\u9928")]
+    [InlineData("name-\U0001f4de")]
+    public void CanonicalUnicodeNamesRetainExactTransactionBytes(string name)
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        Assert.Equal(name, ReadNoritoString(context.EncodeName(name)));
+        var envelope = NewTransactionBuilder()
+            .TransferAsset(FixtureAssetDefinitionId, "1", FixtureAccountId)
+            .SetMetadata(name, JsonValue.Create("exact"))
+            .BuildSigned(Convert.FromHexString(FixtureSeedHex));
+        Assert.Equal(name, Assert.Single(ReadEncodedMetadata(envelope.PayloadBytes)).Key);
+        AssertSignedEnvelopeStructure(envelope, Convert.FromHexString(FixtureSeedHex));
+    }
+
+    [Fact]
+    public void NameEncodingRejectsUnpairedSurrogatesAndCountsUtf8Bytes()
+    {
+        var context = new TransactionEncodingContext(FixtureAccountId);
+        foreach (var boundary in new[] { new string('a', 255), new string('\u00e9', 127) + "a" })
+            Assert.Equal(boundary, ReadNoritoString(context.EncodeName(boundary)));
+        foreach (var invalid in new[] { new string('a', 256), new string('\u00e9', 128), new string('\ud800', 1), new string('\udc00', 1) })
+            Assert.Throws<ArgumentException>(() => context.EncodeName(invalid));
     }
 
     [Theory]

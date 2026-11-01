@@ -75,19 +75,22 @@ certificate validity periods are private, so only the proof binds them: a
 window past a private certificate expiry passes state admission and is
 rejected by the relation.
 
-No SDK builds an X509 statement today. Ordinary Rust holder preflight accepts
-the exact leaf-first certificate DER path and complete CRL DER, validates the
+SDK direct-request builders materialize the original action's statement and
+intent binding from a caller-supplied public window. They do not select private
+certificate bounds or provide a complete holder workflow. Ordinary Rust holder
+preflight accepts the exact leaf-first certificate DER path and complete CRL DER, validates the
 closed encoding profile, and calls the canonical interval definition. Typed
 failures have one public owner, `privacy_engines::zk_x509::errors`. A successful
 bounds result does not authenticate signatures, certificate path linkage,
 governance, revocation or possession, and does not establish proof validity.
 The native reference relation performs those separate checks. Any SDK builder
-added with X.5 must use this helper or reproduce the shared vectors in its own
+that derives presentation bounds must use this helper or reproduce the shared vectors in its own
 language and be added to the site inventory. The ordinary native
 `zk_x509::holder` API exposes the canonical wallet ownership challenge,
 bounded owned witness construction and complete self-verifying prover.
-Statement builders, SDK bindings, paired-host transport and endpoint privacy
-policy remain X.5 work.
+Complete SDK proving, paired-host transport and endpoint privacy policy remain
+X.5 work. Current native admission still refuses the incomplete joint security
+construction.
 
 ## Holder privacy
 
@@ -195,7 +198,9 @@ submission and clock margin before invoking the complete native prover.
 The self-verified proof remains opaque inside `ZkX509PendingCredentialProofV1`.
 Its consuming `release` repeats original-statement/State/time/network validation
 and checks only publication, submission and clock reserve. Completed stages are
-not charged again. Explicit local time inputs cannot move backwards. Every
+not charged again. Explicit local time inputs and the retained trusted block
+timestamp cannot move backwards between phases. Equal block timestamps permit
+a quiet chain; they do not establish that a supplied snapshot is current. Every
 phase retains the original signed/public deadline; failed, superseded or expired
 attempts consume their owner and never return rewritten statements or fallback
 CRLs. Private timing diagnostics stay redacted. Release and subsequent consensus

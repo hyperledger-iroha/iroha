@@ -174,7 +174,7 @@ mod tests;
 
 // Closed typed constructors: only exact original-owner moves are allowed here.
 // The aggregate cannot inject payload callbacks while a field leaves its slot.
-impl<'a, V: Value, C: Send + Sync + 'static> CellField<'a, V, C> {
+impl<'a, V: mv::CellValue, C: Send + Sync + 'static> CellField<'a, V, C> {
     pub(crate) fn install_frozen_publication(
         &mut self,
         target: &'a mv::cell::Cell<V, C>,

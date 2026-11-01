@@ -53,7 +53,7 @@ impl<I: Iterator + core::iter::FusedIterator> core::iter::FusedIterator for Pagi
 mod tests {
     use super::*;
     use iroha_data_model::query::parameters::Pagination;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     #[test]
     fn empty() {
         assert_eq!(

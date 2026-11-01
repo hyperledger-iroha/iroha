@@ -149,7 +149,7 @@ fn command_refusal_has_no_publication_acknowledgement() {
     ] {
         let mut output = Vec::new();
         assert!(run(command.into_iter().map(OsString::from), &mut output).is_err());
-        assert!(output.is_empty());
+        assert_eq!(output, Vec::<u8>::new());
     }
 }
 

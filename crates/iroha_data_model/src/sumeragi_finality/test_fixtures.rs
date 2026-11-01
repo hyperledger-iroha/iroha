@@ -163,6 +163,28 @@ impl NativeFinalityFixture {
         Self::start_with_mode(chain_id, SumeragiConsensusMode::Permissioned)
     }
 
+    /// Start a permissioned signed genesis at the explicitly selected millisecond.
+    ///
+    /// The original transaction is authored one millisecond earlier, before either
+    /// signature is created. Supplied later execution results remain synthetic.
+    /// # Panics
+    /// Panics when the selected genesis time is zero or cannot have a successor.
+    #[must_use]
+    pub fn start_at(chain_id: &str, genesis_time_ms: u64) -> Self {
+        assert!(genesis_time_ms > 0 && genesis_time_ms < u64::MAX);
+        Self::start_with_genesis_inputs(
+            chain_id,
+            SumeragiConsensusMode::Permissioned,
+            crate::block::consensus::SumeragiRootScope::Global,
+            false,
+            crate::parameter::system::SumeragiNposParameters::default(),
+            4,
+            None,
+            Vec::new(),
+            genesis_time_ms,
+        )
+    }
+
     /// Start a signed genesis with the explicitly selected consensus policy.
     /// All certificates are genuine native BLS; supplied execution results remain synthetic.
     #[must_use]
@@ -226,6 +248,7 @@ impl NativeFinalityFixture {
             4,
             Some(nexus_amx_context_hash),
             extra,
+            1,
         )
     }
 
@@ -246,6 +269,7 @@ impl NativeFinalityFixture {
             committee_seats,
             None,
             Vec::new(),
+            1,
         )
     }
 
@@ -259,6 +283,7 @@ impl NativeFinalityFixture {
         committee_seats: usize,
         nexus_amx_context_hash: Option<[u8; 32]>,
         extra: Vec<InstructionBox>,
+        genesis_time_ms: u64,
     ) -> Self {
         assert!(!chain_id.is_empty(), "fixture chain label must be selected");
         assert!((4..=31).contains(&committee_seats) && (committee_seats - 1).is_multiple_of(3));
@@ -330,7 +355,7 @@ impl NativeFinalityFixture {
             AccountId::new(authority.public_key().clone()),
             FeePaymentIntent::authority(vec![], None),
         );
-        tx.set_creation_time(Duration::from_millis(0));
+        tx.set_creation_time(Duration::from_millis(genesis_time_ms - 1));
         let tx = tx
             .with_instructions(instructions)
             .sign(authority.private_key());

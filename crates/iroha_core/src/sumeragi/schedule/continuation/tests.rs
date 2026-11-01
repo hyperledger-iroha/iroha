@@ -298,15 +298,31 @@ fn ordinary_continuation_requested_and_done_rollback_reuse_exact_graph_at_full_c
         norito::encode_canonical(&lease.get().schedule).unwrap(),
         pristine
     );
-    let completed = CompletedExecution::Retained(lease.complete(altered, None)).into_inputs();
+    let completed = CompletedExecution::Retained(lease.complete(altered, None));
     assert_eq!(pointers(completed.get()), physical);
     assert!(completed.belongs_to(&pool));
     assert!(
         original.prepare(&view, &header, None, expected).is_err(),
         "consumed output cannot reopen its original capture"
     );
-    drop(held);
     drop(completed);
+    assert_eq!(pool.reserved_bytes(), retained);
+    assert_eq!(
+        poll(&mut registration, &refusal),
+        Poll::Pending,
+        "extracted schedule rollback cannot refund its original graph"
+    );
+    original.prepare(&view, &header, None, expected).unwrap();
+    let returned = original
+        .lend(&view, &header, SumeragiRootScope::Global, &verified)
+        .unwrap();
+    assert_eq!(pointers(returned.get()), physical);
+    assert_eq!(
+        norito::encode_canonical(&returned.get().schedule).unwrap(),
+        pristine
+    );
+    drop(returned);
+    drop(held);
 }
 
 fn requested<'a>(block: &'a StateBlock<'_>) -> &'a NativeExecutionInputs {

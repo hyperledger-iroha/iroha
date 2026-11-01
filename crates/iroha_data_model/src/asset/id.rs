@@ -120,9 +120,9 @@ impl AssetDefinitionId {
 }
 const ASSET_DEFINITION_ADDRESS_VERSION: u8 = 1;
 const ASSET_DEFINITION_ADDRESS_LEN: usize = 1 + 16 + 4;
-// `bs58` documents this as its allocation-free output bound: ceil(input_len * 1.5).
+// Allocation-free Base58 text bound for the address payload.
 const ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN: usize =
-    ASSET_DEFINITION_ADDRESS_LEN + ASSET_DEFINITION_ADDRESS_LEN.div_ceil(2);
+    crate::base58::max_encoded_len(ASSET_DEFINITION_ADDRESS_LEN);
 
 fn asset_definition_id_json_error(message: &'static str) -> norito::json::Error {
     norito::json::Error::WithPos {
@@ -356,8 +356,7 @@ impl AssetDefinitionId {
             ));
         }
         let mut payload = [0_u8; ASSET_DEFINITION_ADDRESS_LEN];
-        let decoded_len = bs58::decode(input)
-            .onto(&mut payload)
+        let decoded_len = crate::base58::decode_into(input, &mut payload)
             .map_err(|_| ParseError::new("Asset Definition ID must be valid Base58"))?;
         if decoded_len != ASSET_DEFINITION_ADDRESS_LEN {
             return Err(ParseError::new(
@@ -433,8 +432,7 @@ fn address_checksum(payload: &[u8]) -> [u8; 4] {
 impl fmt::Display for AssetDefinitionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut encoded = [0_u8; ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN];
-        let encoded_len = bs58::encode(self.address_payload())
-            .onto(&mut encoded[..])
+        let encoded_len = crate::base58::encode_into(&self.address_payload(), &mut encoded)
             .map_err(|_| fmt::Error)?;
         let literal = core::str::from_utf8(&encoded[..encoded_len]).map_err(|_| fmt::Error)?;
         f.write_str(literal)

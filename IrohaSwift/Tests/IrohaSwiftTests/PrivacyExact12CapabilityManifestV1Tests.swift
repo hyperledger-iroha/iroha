@@ -228,11 +228,24 @@ final class PrivacyExact12CapabilityManifestV1Tests: XCTestCase {
         XCTAssertEqual(manifest.consensusPolicy.currentLimits.retainedRootCount, 2_048)
         let pending = try XCTUnwrap(manifest.consensusPolicy.pendingUpdate)
         XCTAssertEqual(pending.nextLimits.retainedRootCount, 1_024)
-        XCTAssertEqual(pending.effectiveAtHeight, 302)
-        XCTAssertEqual(
-            try XCTUnwrap(manifest.row(for: .anonymousPgcKOutOfNV1).policy).pendingUpdate?.effectiveAtHeight,
-            302
+        XCTAssertEqual(pending.effectiveAtHeight, 4)
+        for protocolId in [PrivacyProtocolIdV1.anonymousPgcKOutOfNV1, .irohaIvmPrivateNoteStarkV1] {
+            XCTAssertEqual(
+                try XCTUnwrap(manifest.row(for: protocolId).policy).pendingUpdate?.effectiveAtHeight,
+                4
+            )
+        }
+    }
+
+    func testProtocolUpdateFieldCoreDoesNotSerializeIsRejected() throws {
+        let policy = structure(
+            enumValue(6), enumValue(6, structure(u32(4))),
+            option(structure(u64(2), u64(302), enumValue(6, structure(u32(3))), option(u64(1))))
         )
+        let fixture = makeFixture(jindoPolicyOverride: policy)
+        XCTAssertThrowsError(try PrivacyExact12CapabilityManifestCodecV1.decode(
+            fixture.manifest, nativeCatalogArchive: fixture.catalog
+        ))
     }
 
     private func coreFixture(_ name: String) -> Data {

@@ -9,7 +9,7 @@ use iroha_core::{
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 const ACCOUNT_SIGNATORY: &str =

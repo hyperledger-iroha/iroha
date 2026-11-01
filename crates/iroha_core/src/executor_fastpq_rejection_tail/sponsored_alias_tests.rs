@@ -17,8 +17,8 @@ use iroha_data_model::{
     sns::{NameControllerV1, NameRecordV1},
     transaction::TransactionBuilder,
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
-use nonzero_ext::nonzero;
 
 fn fixture() -> (State, FeeSponsorProgramId, AssetDefinitionId) {
     let domain = DomainId::try_new("fees", "universal").unwrap();

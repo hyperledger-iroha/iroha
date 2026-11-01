@@ -19,8 +19,10 @@ mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod certified_originals_auth;
+mod error_chain;
 mod finality_interval;
 mod game;
+mod game_partitions;
 mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
@@ -39,9 +41,9 @@ mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
+mod percent_encoding;
 pub mod privacy_issuance_api;
 mod private_dataspaces;
-mod game_partitions;
 mod private_root_export;
 #[doc(hidden)]
 pub mod profile_stats;
@@ -5283,7 +5285,7 @@ fn is_canonical_proof_record_path(path: &str) -> bool {
     if encoded_id.contains('/') {
         return false;
     }
-    let Ok(decoded_id) = urlencoding::decode(encoded_id) else {
+    let Ok(decoded_id) = crate::percent_encoding::decode(encoded_id) else {
         return false;
     };
     let Ok(id) = decoded_id.parse::<iroha_data_model::proof::ProofId>() else {
@@ -5304,7 +5306,8 @@ fn is_canonical_proof_record_path(path: &str) -> bool {
     let canonical = id.to_string();
     // URL path_segments and Torii's existing component encoder differ only in
     // whether data colons are escaped. Both retain the same exact ProofId.
-    canonical.replace('/', "%2F") == encoded_id || urlencoding::encode(&canonical) == encoded_id
+    canonical.replace('/', "%2F") == encoded_id
+        || crate::percent_encoding::encode(&canonical) == encoded_id
 }
 fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|segment| {
@@ -19869,7 +19872,7 @@ fn torii_read_path_arg_encoded(
     label: &str,
 ) -> Result<String, Response> {
     torii_proxy_path_arg(request, index, label)
-        .map(|value| urlencoding::encode(&value).into_owned())
+        .map(|value| crate::percent_encoding::encode(&value).into_owned())
 }
 #[cfg(feature = "app_api")]
 #[expect(
@@ -43671,7 +43674,9 @@ fn build_gc_runtime(
     Some(runtime)
 }
 /// Torii errors.
-#[derive(thiserror::Error, displaydoc::Display, pretty_error_debug::Debug)]
+///
+/// `Debug` prints the message followed by its chain of causes.
+#[derive(thiserror::Error, displaydoc::Display)]
 pub enum Error {
     /// Failed to process query
     Query(#[from] iroha_data_model::ValidationFail),
@@ -43811,6 +43816,13 @@ pub enum Error {
     /// Torii server terminated with an error
     FailedExit,
 }
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        error_chain::write_error_chain(self, f)
+    }
+}
+
 fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     use iroha_data_model::{
         ValidationFail as V, isi::error::InstructionExecutionError as I,

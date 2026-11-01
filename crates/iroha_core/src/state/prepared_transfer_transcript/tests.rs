@@ -3,8 +3,8 @@
 use super::*;
 use crate::query::store::LiveQueryStore;
 use iroha_data_model::{block::BlockHeader, fastpq::TransferSmtWitness};
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use nonzero_ext::nonzero;
 
 fn state() -> State {
     State::new(

@@ -3,7 +3,7 @@
 use super::*;
 
 pub(super) type SnapshotCache =
-    SyncOnceCell<Result<Arc<IvmElectionsSnapshot>, InvalidIvmElectionSnapshot>>;
+    OnceLock<Result<Arc<IvmElectionsSnapshot>, InvalidIvmElectionSnapshot>>;
 
 /// Storage evidence that the block-start projection is still exact.
 pub(super) trait UnchangedElections: WorldReadOnly {

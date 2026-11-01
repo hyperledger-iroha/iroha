@@ -18,9 +18,9 @@ use iroha_data_model::{
     prelude::{Account, Domain, Grant, InstructionBox},
 };
 use iroha_executor_data_model::permission::governance::CanManageConfidentialParams;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn fresh_state() -> State {
     let domain_id: iroha_model_base::domain::DomainId =
         iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain");

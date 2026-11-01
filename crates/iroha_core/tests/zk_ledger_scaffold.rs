@@ -23,9 +23,9 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{num::NonZeroU64, str::FromStr};
 use zk_components::execute_isi_component;
 const NATIVE_PIPA_R_BACKEND: &str = "pipa-r/pasta";
@@ -609,7 +609,7 @@ fn zk_roots_are_bounded_in_world_state() {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     // Create state and set a small ZK cap
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -764,7 +764,7 @@ fn frontier_checkpoints_respect_reorg_depth_bound() {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let mut state = State::new_for_testing(World::new(), kura, query);

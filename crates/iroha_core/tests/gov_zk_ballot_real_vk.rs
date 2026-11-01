@@ -15,9 +15,9 @@ use iroha_data_model::{
         zk::CreateElection,
     },
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 
 #[test]
 fn zk_ballot_unqualified_keys_cannot_register_or_create_an_election() {

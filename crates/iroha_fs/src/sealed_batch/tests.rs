@@ -413,7 +413,7 @@ fn actual_native_process_launches_with_all_five_originals_live() {
             .unwrap();
         assert_eq!(result.status.code(), Some(19));
         assert_eq!(result.stdout, b"immutable-flat-batch");
-        assert!(result.stderr.is_empty());
+        assert_eq!(result.stderr, Vec::<u8>::new());
         batch.revalidate().unwrap();
     }
     let recovered = ReaderDirectory::open(owner.path())

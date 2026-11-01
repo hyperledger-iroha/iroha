@@ -378,3 +378,15 @@ denies `proptest` in every required graph.
 Because the package is a workspace member, workspace Clippy lints it. The crate
 root allows `clippy::type_complexity` for its upstream generic signatures, and
 the two redundant `into_raw() as *mut Leaf` casts are removed.
+
+B+tree key and value bounds carry no auto traits. Map, transaction, snapshot,
+owned and admission types and their safe impls require only the ordering,
+cloning and `'static` bounds their operations use. `Send`/`Sync` for keys and
+values appears only on the explicit `unsafe impl Send`/`Sync` of the map, read
+and write transactions, cursors and nodes: those raw-pointer types are
+thread-safe through these impls alone, so a map of non-`Send` payloads still
+cannot cross threads. Naming or normalizing a map type therefore no longer
+re-proves the auto traits of every key and value type in each generic context,
+which dominated type checking in crates with hundreds of maps. EBR cells keep
+`Send + Sync` on their payloads because retired generations are destroyed by
+whichever thread advances the epoch.

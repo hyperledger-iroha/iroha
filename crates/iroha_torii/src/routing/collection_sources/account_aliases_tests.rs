@@ -74,8 +74,13 @@ fn set_primary_for_test(state: &Arc<CoreState>, account: &dm::AccountId, literal
     let catalog = state.nexus_snapshot().dataspace_catalog;
     let label = iroha_data_model::account::rekey::AccountAlias::from_literal(literal, &catalog)
         .expect("fixture alias");
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.world_mut_for_testing()
@@ -369,8 +374,13 @@ fn grant_resolve_for_test(state: &Arc<CoreState>, grantee: &dm::AccountId, liter
     let resolved =
         iroha_data_model::alias_setup::ResolvedAccountAliasV1::resolve_catalog(literal, &catalog)
             .expect("fixture alias");
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut tx = block.transaction();
     tx.world_mut_for_testing().add_account_permission(
@@ -606,8 +616,13 @@ async fn inactive_alias_index_consumes_one_bounded_query_scan_allowance() {
             )
         })
         .collect();
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = fixture.state.block(header);
     let mut tx = block.transaction();
     tx.world_mut_for_testing()
@@ -742,8 +757,13 @@ async fn malformed_sns_alias_record_does_not_request_a_larger_owner() {
     .unwrap();
     let selector = iroha_core::sns::selector_for_account_alias(&label, &catalog).unwrap();
     let storage_key = iroha_core::sns::record_storage_key(&selector);
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = fixture.state.block(header);
     let mut tx = block.transaction();
     let world = tx.world_mut_for_testing();

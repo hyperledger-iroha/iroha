@@ -1,7 +1,8 @@
 //! Closed immutable bridge from prepared public relations to the DEEP arithmetic.
 //!
-//! Transcript binding consumes the outer `FixedAir` identity and exact statement;
-//! polynomial/AIR arithmetic borrows its original complete `CompactTransferAir`.
+//! Transcript binding reads the outer identity and exact statement through the
+//! sealed typed AIR view; polynomial/AIR arithmetic borrows its original complete
+//! `CompactTransferAir`.
 //! The implementations are the raw SMT owner and the typed batch segment
 //! wrappers, including the complete-effect source wrapper. Public callers cannot replace either side of this pair.
 

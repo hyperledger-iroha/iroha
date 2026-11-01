@@ -10,7 +10,7 @@ use std::ops::{Deref, DerefMut};
 
 mod sealed {
     pub trait Sealed {}
-    impl<V: mv::Value, C: Send + Sync + 'static> Sealed for mv::cell::Block<'_, V, C> {}
+    impl<V: mv::CellValue, C: Send + Sync + 'static> Sealed for mv::cell::Block<'_, V, C> {}
     impl<K: mv::Key, V: mv::Value, M: mv::storage::StorageMode<K, V>> Sealed
         for mv::storage::Block<'_, K, V, M>
     {
@@ -34,7 +34,7 @@ pub trait OriginalPublicationBlock: BlockRetirement + sealed::Sealed + Sized {
     fn into_publication(self) -> Self::Publication;
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> OriginalPublicationBlock
+impl<'a, V: mv::CellValue, C: Send + Sync + 'static> OriginalPublicationBlock
     for mv::cell::Block<'a, V, C>
 {
     type Publication = mv::cell::BlockPublicationSlot<'a, V, C>;

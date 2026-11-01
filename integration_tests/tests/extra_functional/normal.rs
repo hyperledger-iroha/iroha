@@ -3,8 +3,8 @@ use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
 use iroha::data_model::{asset::AssetDefinitionId, parameter::BlockParameter, prelude::*};
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_test_network::*;
-use nonzero_ext::nonzero;
 #[test]
 #[allow(clippy::too_many_lines)]
 fn transactions_should_be_applied() -> Result<()> {

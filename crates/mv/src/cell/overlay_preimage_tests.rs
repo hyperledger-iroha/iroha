@@ -9,7 +9,7 @@ use std::{
     },
 };
 
-fn pair<V: crate::Value + Copy>(value: Option<TouchedValue<'_, V>>) -> Option<(V, V)> {
+fn pair<V: crate::CellValue + Copy>(value: Option<TouchedValue<'_, V>>) -> Option<(V, V)> {
     value.map(|value| (*value.before, *value.after))
 }
 

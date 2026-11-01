@@ -115,8 +115,11 @@ High-level smart contract language targeting IVM bytecode:
 - **Host-owned Transaction Scheduling:** Hosts schedule transactions and publish their declared writes; each IVM executes one contract invocation sequentially.
 - **Startup Jingle:** When built with the optional `beep` feature,
   `irohad` calls `IVM::beep_music()` and plays a short tune when the
-  configuration enables it. Disable via `ivm.banner.beep = false` in your node
-  config.
+  configuration enables it. The tune is synthesized in-process as a WAV file
+  and played with the platform's built-in player (`afplay` on macOS, `paplay`
+  or `aplay` on Linux, PowerShell's `SoundPlayer` on Windows); hosts without a
+  player or audio device skip it silently. Disable via `ivm.banner.beep = false`
+  in your node config.
 - **Merkle‑Backed Memory:** Memory writes are batched until `commit()` recomputes a Merkle root over the entire image. The root calculation now hashes chunks in parallel with Rayon for faster commits. Authentication paths can be requested for proofs.
 - **Governed Heap Growth:** Hosts set a per-runtime heap ceiling. `SYSCALL_GROW_HEAP` may extend the active heap only up to that ceiling and never beyond the ABI address window.
 - **Declared Access Sets:** Hosts receive each transaction's declared state accesses and report observed accesses, so host schedulers derive conflicts from declarations rather than execution history.

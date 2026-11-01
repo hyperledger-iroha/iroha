@@ -3380,6 +3380,10 @@ fn committee_history_observation_keeps_original_read_deadline_before_query() -> 
     Ok(())
 }
 
+#[expect(
+    dead_code,
+    reason = "the rotation workload attaches its own roots; the shared harness's self-started two-bank `Exchange` flow is driven only by the native_amx_network target"
+)]
 #[path = "support/native_amx_harness.rs"]
 #[expect(
     dead_code,

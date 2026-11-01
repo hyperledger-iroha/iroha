@@ -24,7 +24,7 @@ fn retained_cwd_selects_original_after_caller_drop_without_changing_parent() {
     let output = child.output().unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"original-directory\0bytes");
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, Vec::<u8>::new());
     assert_eq!(std::env::current_dir().unwrap(), parent);
     assert!(weak.upgrade().is_none());
 }

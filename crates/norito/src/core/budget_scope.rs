@@ -130,16 +130,63 @@ pub(super) fn with_active<R>(body: impl for<'a> FnOnce(BudgetLayers<'a>) -> R) -
     })
 }
 
+/// Run `body` with `layers` appended to the active scope chain.
+///
+/// Only the call of `body` depends on the caller's types. Building and
+/// installing the node live in the non-generic helpers below, so the many
+/// decode call sites share one copy of that code instead of instantiating it
+/// (and its thread-local accessors) once per closure type.
 pub(super) fn with_layers<R>(
     layers: &[ActiveDecodeBudgetLayer],
     depth: usize,
     body: impl FnOnce() -> R,
 ) -> R {
-    let previous_depth = DECODE_NESTING_DEPTH.with(Cell::get);
-    let previous = ACTIVE.with(Cell::get);
+    let previous = ActiveScope::current();
     // SAFETY: the previous synchronous scope encloses this call and cannot end
     // until it returns/unwinds. No mutable reference to its node is created.
-    let parent = unsafe { previous.as_ref() };
+    let node = chained_node(layers, unsafe { previous.node.as_ref() });
+    // The node stays in this stack place through `body`; `restore` unlinks it
+    // from TLS on return and unwind, before the node can drop.
+    let restore = install(&node, previous, depth);
+    let value = body();
+    drop(restore);
+    value
+}
+
+/// The active node pointer and nesting depth saved while a nested scope runs.
+#[derive(Clone, Copy)]
+struct ActiveScope {
+    node: *const ScopeNode<'static>,
+    depth: usize,
+}
+
+impl ActiveScope {
+    fn current() -> Self {
+        Self {
+            node: ACTIVE.with(Cell::get),
+            depth: DECODE_NESTING_DEPTH.with(Cell::get),
+        }
+    }
+}
+
+/// Restores the saved scope when an installed node leaves scope, including on unwind.
+struct Restore {
+    previous: ActiveScope,
+    _not_send: PhantomData<Rc<()>>,
+}
+
+impl Drop for Restore {
+    fn drop(&mut self) {
+        ACTIVE.with(|slot| slot.set(self.previous.node));
+        DECODE_NESTING_DEPTH.with(|slot| slot.set(self.previous.depth));
+    }
+}
+
+/// Build the node that extends `parent` with the layers not already visible in it.
+fn chained_node<'a>(
+    layers: &'a [ActiveDecodeBudgetLayer],
+    parent: Option<&'a ScopeNode<'a>>,
+) -> ScopeNode<'a> {
     let prior = BudgetLayers { head: parent };
     let mut visible = [None; VISIBLE_LAYERS];
     for (slot, layer) in visible.iter_mut().zip(prior.iter()) {
@@ -160,36 +207,28 @@ pub(super) fn with_layers<R>(
                 .expect("live layer slice count fits usize");
         }
     }
-    let node = ScopeNode {
+    ScopeNode {
         previous: parent,
         layers,
         prior_count: prior.len(),
         count,
         visible,
-    };
-    struct Restore {
-        previous: *const ScopeNode<'static>,
-        depth: usize,
-        _not_send: PhantomData<Rc<()>>,
     }
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            ACTIVE.with(|slot| slot.set(self.previous));
-            DECODE_NESTING_DEPTH.with(|slot| slot.set(self.depth));
-        }
-    }
+}
+
+/// Make `node` the active scope until the returned guard drops.
+///
+/// The caller keeps `node` in place and drops the guard before the node.
+fn install(node: &ScopeNode<'_>, previous: ActiveScope, depth: usize) -> Restore {
     let restore = Restore {
         previous,
-        depth: previous_depth,
         _not_send: PhantomData,
     };
-    // The node stays in this stack place through `body`. The erased lifetime is
-    // confined to TLS and every dereference is bounded by `restore` above.
-    ACTIVE.with(|slot| slot.set(core::ptr::from_ref(&node).cast::<ScopeNode<'static>>()));
-    DECODE_NESTING_DEPTH.with(|slot| slot.set(previous_depth.max(depth)));
-    let value = body();
-    drop(restore);
-    value
+    // The erased lifetime is confined to TLS and every dereference is bounded
+    // by the returned guard.
+    ACTIVE.with(|slot| slot.set(core::ptr::from_ref(node).cast::<ScopeNode<'static>>()));
+    DECODE_NESTING_DEPTH.with(|slot| slot.set(previous.depth.max(depth)));
+    restore
 }
 
 #[cfg(test)]

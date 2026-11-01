@@ -456,6 +456,14 @@ int32_t connect_norito_chain_discriminant_scope_exit(uint64_t token);
 // 1..127 are rejected before input is read. No output allocation is returned.
 int32_t connect_norito_domain_id_validate_v1(const char* input, unsigned long input_len);
 
+// ---------------- Canonical Name identity ----------------
+// Require exact native-canonical UTF-8 Name text under the pinned NFC profile.
+// No normalization is performed. Returns 0 when valid, 1 when invalid, -1 for
+// null input, -2 for invalid UTF-8, and -3 for a native panic. Lengths outside
+// 1..255 are rejected before input is read. No output allocation is returned.
+// This additive ABI-33 export must be admitted explicitly by native consumers.
+int32_t connect_norito_name_validate_v1(const char* input, unsigned long input_len);
+
 // ---------------- Account address helpers ----------------
 int32_t connect_norito_account_address_parse(
     const char* input,

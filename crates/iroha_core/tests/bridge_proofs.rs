@@ -12,9 +12,9 @@ use iroha_data_model::{
     prelude::*,
     proof::{ProofBox, ProofId, ProofRecord, ProofStatus},
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 #[path = "common/root_scope_fixture.rs"]
 mod root_scope_fixture;
 fn bridge_proof_id(proof: &BridgeProof) -> ProofId {

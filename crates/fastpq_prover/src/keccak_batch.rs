@@ -165,7 +165,7 @@ mod paired_permutation_tests {
         for seed in [0_u64, 1, 17, u64::MAX] {
             let mut actual = Zeroizing::new([[0_u64; 25]; 2]);
             for (index, word) in actual.iter_mut().flatten().enumerate() {
-                *word = seed.wrapping_add((index as u64).wrapping_mul(0x9e3779b97f4a7c15));
+                *word = seed.wrapping_add((index as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15));
             }
             let mut scalar = Zeroizing::new(*actual);
             keccak::Keccak::new().with_f1600(|permute| scalar.iter_mut().for_each(permute));
@@ -177,7 +177,8 @@ mod paired_permutation_tests {
             let mut software = Zeroizing::new([[0_u64; 25]; 2]);
             for lane in 0..2 {
                 let input = Zeroizing::new(core::array::from_fn::<_, 136, _>(|index| {
-                    seed.wrapping_add((index * 31 + lane * 47) as u64) as u8
+                    seed.wrapping_add((index * 31 + lane * 47) as u64)
+                        .to_le_bytes()[0]
                 }));
                 for (word, bytes) in actual[lane].iter_mut().zip(input.as_chunks::<8>().0) {
                     *word = u64::from_le_bytes(*bytes);

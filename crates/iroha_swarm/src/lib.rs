@@ -892,7 +892,7 @@ mod tests {
     }
     #[test]
     fn development_manifest_requires_existing_per_node_config() {
-        let output = build_as_string(nonzero_ext::nonzero!(4u16), false, None, false, None);
+        let output = build_as_string(iroha_primitives::nonzero!(4u16), false, None, false, None);
         for index in 0..4 {
             assert!(output.contains(&format!("${{IROHA_PEER{index}_CONFIG_FILE:?")));
             for suffix in ["KAGEMUSHA_LOAD_KEYRING", "KAGEMUSHA_LOAD_SUBMITTER"] {
@@ -947,7 +947,7 @@ mod tests {
     #[test]
     fn minimum_committee_build_banner() {
         let output = build_as_string(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             false,
             Some("."),
             false,
@@ -961,7 +961,7 @@ mod tests {
     #[test]
     fn minimum_committee_build_banner_nocache() {
         let output = build_as_string(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             false,
             Some("."),
             true,
@@ -974,7 +974,7 @@ mod tests {
     #[test]
     fn multiple_build_banner_nocache() {
         let output = build_as_string(
-            nonzero_ext::nonzero!(7u16),
+            iroha_primitives::nonzero!(7u16),
             false,
             Some("."),
             true,
@@ -987,14 +987,14 @@ mod tests {
     }
     #[test]
     fn minimum_committee_pull_healthcheck() {
-        let output = build_as_string(nonzero_ext::nonzero!(4u16), true, None, false, None);
+        let output = build_as_string(iroha_primitives::nonzero!(4u16), true, None, false, None);
         assert!(output.contains("pull_policy: missing"));
         assert!(output.contains("start_period: 4s"));
         assert_runtime_genesis_artifact_contract(&output, 4);
     }
     #[test]
     fn multiple_pull_healthcheck_nocache() {
-        let output = build_as_string(nonzero_ext::nonzero!(4u16), true, None, true, None);
+        let output = build_as_string(iroha_primitives::nonzero!(4u16), true, None, true, None);
         assert_eq!(output.matches("pull_policy: always").count(), 4);
         assert_eq!(output.matches("start_period: 4s").count(), 4);
         assert_runtime_genesis_artifact_contract(&output, 4);
@@ -1004,7 +1004,7 @@ mod tests {
         let temp = TempDir::new("runtime_inputs");
         let target_path = temp.path().join("deployment/docker-compose.yml");
         let output = build_with_paths(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             false,
             None,
             false,
@@ -1029,7 +1029,7 @@ mod tests {
         let target_path = temp.path().join("docker-compose.yml");
         let overrides = valid_peer_overrides();
         let output = build_with_paths(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             false,
             None,
             false,
@@ -1057,7 +1057,7 @@ mod tests {
         let mut invalid = valid_peer_overrides();
         invalid[0].p2p_port = 0;
         let result = Swarm::deterministic_dev(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             b"iroha-swarm-tests",
             false,
             IMAGE,
@@ -1074,7 +1074,7 @@ mod tests {
         let mut duplicated = valid_peer_overrides();
         duplicated[1].api_port = duplicated[0].p2p_port;
         let result = Swarm::deterministic_dev(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             b"iroha-swarm-tests",
             false,
             IMAGE,
@@ -1097,7 +1097,7 @@ mod tests {
         let target_dir = temp.path().join("deployment");
         std::fs::create_dir_all(&target_dir).expect("should create target directory");
         let result = Swarm::deterministic_dev(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             b"iroha-swarm-tests",
             false,
             IMAGE,
@@ -1118,7 +1118,7 @@ mod tests {
             api_port: 9100,
         }];
         let result = Swarm::deterministic_dev(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             b"iroha-swarm-tests",
             false,
             IMAGE,
@@ -1157,7 +1157,7 @@ mod tests {
     #[test]
     fn deterministic_development_mode_rejects_empty_seed() {
         let result = Swarm::deterministic_dev(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             b"",
             false,
             IMAGE,
@@ -1246,9 +1246,10 @@ mod tests {
     fn deterministic_development_compose_renders_one_streaming_identity_per_validator() {
         let temp = TempDir::new("streaming_identity_overrides");
         let target_path = temp.path().join("docker-compose.yml");
-        let default_output = build_as_string(nonzero_ext::nonzero!(7u16), false, None, false, None);
+        let default_output =
+            build_as_string(iroha_primitives::nonzero!(7u16), false, None, false, None);
         let override_output = build_with_paths(
-            nonzero_ext::nonzero!(4u16),
+            iroha_primitives::nonzero!(4u16),
             false,
             None,
             false,

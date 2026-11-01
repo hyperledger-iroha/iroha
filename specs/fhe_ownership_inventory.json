@@ -66,7 +66,7 @@
   {"name": "iroha_crypto", "path": "crates/iroha_crypto", "depends_on": ["fastpq_isi", "soranet_pq", "iroha_fhe"]},
   {"name": "iroha_zkp_halo2", "path": "crates/iroha_zkp_halo2", "depends_on": ["fastpq_isi", "iroha_fhe", "iroha_crypto"]},
   {"name": "iroha_data_model", "path": "crates/iroha_data_model", "depends_on": ["fastpq_isi", "iroha_crypto"]},
-  {"name": "fastpq_prover", "path": "crates/fastpq_prover", "depends_on": ["fastpq_isi", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model"]},
+  {"name": "fastpq_prover", "path": "crates/fastpq_prover", "depends_on": ["fastpq_isi", "iroha_fhe", "iroha_crypto", "iroha_zkp_halo2", "iroha_data_model"]},
   {
    "name": "iroha_core_zk",
    "path": "crates/iroha_core_zk",
@@ -239,6 +239,21 @@
    "prefix": "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/toolbox.rs",
    "assignment": "every_function",
    "reason": "Bootle-Lantern toolbox: consumer of the shared kernels. Every function stays assigned so a kernel re-introduced here is caught."
+  },
+  {
+   "prefix": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+   "assignment": "every_function",
+   "reason": "Complete ownership of the FastPQ C.8 RNS relation and its private integer gates, including inline test units; not a second native FHE arithmetic implementation."
+  },
+  {
+   "prefix": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+   "assignment": "every_function",
+   "reason": "Complete ownership of the FastPQ C.8 RNS relation and its private integer gates, including inline test units; not a second native FHE arithmetic implementation."
+  },
+  {
+   "prefix": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
+   "assignment": "every_function",
+   "reason": "Complete centered-conversion relation ownership; consumes the same kernel and native FHE conversion owner as the canonical RNS module."
   }
  ],
  "primitives": [
@@ -397,7 +412,16 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/iroha_core_privacy/src/privacy_engines/jindo/security.rs": ["check_prime_difference_classes_v1"],
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
+       "Builder::reconstruct",
+       "compile"
+      ],
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
+       "compile_extension"
+      ],
+      "crates/iroha_core_privacy/src/privacy_engines/jindo/security.rs": [
+       "check_prime_difference_classes_v1"
+      ],
       "crates/iroha_crypto/src/fhe_bfv.rs": [
        "add_plain_scalar_bounded_noise",
        "decrypt_bfv_full_bootstrap_raw_extracted_sample_scaled_v1",
@@ -409,12 +433,29 @@
        "validate_bounded_noise_key_switch_entry_residuals",
        "validate_key_switch_entry_residuals"
       ],
-      "crates/iroha_fhe/src/accel.rs": ["mul_mod_assign_scalar", "mul_scalar_mod_scalar"],
-      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
-      "crates/iroha_fhe/src/modular.rs": ["WordModulus::mul", "is_prime_u64", "reduce_be_bytes_mod_u64"],
-      "crates/iroha_fhe/src/ntt.rs": ["cyclic_ntt_in_place_scalar", "negacyclic_multiply_ntt_in_place"],
-      "crates/iroha_fhe/src/rns.rs": ["basis_extend_target_limbs", "reconstruct_coefficient"],
-      "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::conversion_target"]
+      "crates/iroha_fhe/src/accel.rs": [
+       "mul_mod_assign_scalar",
+       "mul_scalar_mod_scalar"
+      ],
+      "crates/iroha_fhe/src/bgv/profile.rs": [
+       "BgvProfile::new"
+      ],
+      "crates/iroha_fhe/src/modular.rs": [
+       "WordModulus::mul",
+       "is_prime_u64",
+       "reduce_be_bytes_mod_u64"
+      ],
+      "crates/iroha_fhe/src/ntt.rs": [
+       "cyclic_ntt_in_place_scalar",
+       "negacyclic_multiply_ntt_in_place"
+      ],
+      "crates/iroha_fhe/src/rns.rs": [
+       "basis_extend_target_limbs",
+       "reconstruct_coefficient"
+      ],
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "RnsBasis::conversion_target"
+      ]
      }
     },
     {
@@ -466,11 +507,26 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/iroha_crypto/src/fhe_bfv.rs": ["encode_packed_plaintext_slots"],
-      "crates/iroha_fhe/src/ntt.rs": ["negacyclic_multiply_ntt_in_place", "transform_parameters"],
-      "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
-      "crates/iroha_fhe/src/rns.rs": ["basis_extend_target_limbs"],
-      "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::new", "RnsBasis::new"]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
+       "RnsScaleDownPlan::new"
+      ],
+      "crates/iroha_crypto/src/fhe_bfv.rs": [
+       "encode_packed_plaintext_slots"
+      ],
+      "crates/iroha_fhe/src/ntt.rs": [
+       "negacyclic_multiply_ntt_in_place",
+       "transform_parameters"
+      ],
+      "crates/iroha_fhe/src/ntt_plan.rs": [
+       "NegacyclicPlan::new"
+      ],
+      "crates/iroha_fhe/src/rns.rs": [
+       "basis_extend_target_limbs"
+      ],
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "CongruentScaleDown::new",
+       "RnsBasis::new"
+      ]
      }
     },
     {
@@ -1547,12 +1603,29 @@
      "role": "canonical",
      "callers_exhaustive": true,
      "callers": {
-      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
-      "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs": ["Compiler::constant"],
-      "crates/iroha_fhe/src/constant_time.rs": ["FixedModulus::is_consistent"],
-      "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new"],
-      "crates/iroha_fhe/src/prime_power.rs": ["PrimePowerContext::at_precision", "PrimePowerContext::new"],
-      "crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::conversion_target", "basis_prime"]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
+       "RnsScaleDownPlan::build_witness"
+      ],
+      "crates/iroha_fhe/src/bgv/profile.rs": [
+       "BgvProfile::new"
+      ],
+      "crates/iroha_fhe/src/bgv/upper_digits/compiler.rs": [
+       "Compiler::constant"
+      ],
+      "crates/iroha_fhe/src/constant_time.rs": [
+       "FixedModulus::is_consistent"
+      ],
+      "crates/iroha_fhe/src/ntt_plan.rs": [
+       "NegacyclicPlan::new"
+      ],
+      "crates/iroha_fhe/src/prime_power.rs": [
+       "PrimePowerContext::at_precision",
+       "PrimePowerContext::new"
+      ],
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "RnsBasis::conversion_target",
+       "basis_prime"
+      ]
      }
     },
     {
@@ -1642,13 +1715,39 @@
      "role": "canonical",
      "callers_exhaustive": false,
      "callers": {
-      "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": ["ApplicationPolynomialV1::scale_centered", "ProofPolynomialV1::scale_canonical_unchecked", "multiply_negacyclic_crt_ntt_v1"],
-      "crates/iroha_fhe/src/accel.rs": ["mul_scalar_mod_with"],
-      "crates/iroha_fhe/src/bgv/cipher.rs": ["PublicKey::encrypt_from_coins"],
-      "crates/iroha_fhe/src/bgv/keys.rs": ["SwitchingKey::from_coins", "masked_error"],
-      "crates/iroha_fhe/src/bgv/threshold.rs": ["DealerKeyShares::take_share", "SecretKeyShare::try_into_subset_additive", "ThresholdSelection::coefficient"],
-      "crates/iroha_fhe/src/constant_time.rs": ["CenteredCrt3::reconstruct_mod_target", "FixedModulus::mul", "FixedModulus::power"],
-      "crates/iroha_fhe/src/ntt_plan.rs": ["NegacyclicPlan::new", "NegacyclicPlan::pointwise_mul_add_assign", "NegacyclicPlan::pointwise_mul_assign"]
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
+       "RnsScaleDownPlan::build_witness"
+      ],
+      "crates/iroha_core_privacy/src/privacy_engines/bootle_lantern/ring.rs": [
+       "ApplicationPolynomialV1::scale_centered",
+       "ProofPolynomialV1::scale_canonical_unchecked",
+       "multiply_negacyclic_crt_ntt_v1"
+      ],
+      "crates/iroha_fhe/src/accel.rs": [
+       "mul_scalar_mod_with"
+      ],
+      "crates/iroha_fhe/src/bgv/cipher.rs": [
+       "PublicKey::encrypt_from_coins"
+      ],
+      "crates/iroha_fhe/src/bgv/keys.rs": [
+       "SwitchingKey::from_coins",
+       "masked_error"
+      ],
+      "crates/iroha_fhe/src/bgv/threshold.rs": [
+       "DealerKeyShares::take_share",
+       "SecretKeyShare::try_into_subset_additive",
+       "ThresholdSelection::coefficient"
+      ],
+      "crates/iroha_fhe/src/constant_time.rs": [
+       "CenteredCrt3::reconstruct_mod_target",
+       "FixedModulus::mul",
+       "FixedModulus::power"
+      ],
+      "crates/iroha_fhe/src/ntt_plan.rs": [
+       "NegacyclicPlan::new",
+       "NegacyclicPlan::pointwise_mul_add_assign",
+       "NegacyclicPlan::pointwise_mul_assign"
+      ]
      }
     },
     {
@@ -2444,7 +2543,8 @@
    "notes": [
     "Up to 64 primes below 2^62 per basis; every basis product is odd, so centered representatives are unique and no tie rule is needed.",
     "Branch-free in residue values. RnsBasis::reconstruct_canonical and reconstruct_centered return Natural values and are for public data only.",
-    "iroha_fhe::rns keeps the u128 reconstruction for the retained BFV adapters; the BGV path does not call it (tests/bgv_surface.rs)."
+    "iroha_fhe::rns keeps the u128 reconstruction for the retained BFV adapters; the BGV path does not call it (tests/bgv_surface.rs).",
+    "FastPQ RnsScaleDownPlan::build_witness calls CongruentScaleDown::dropped through its native: CongruentScaleDown field, then RnsBasis::mixed_radix_in_place and RnsBasis::exceeds_half_bit through the returned &RnsBasis. RnsCenteredExtensionPlan::build_witness calls the latter two through its native: RnsBasis field. The structural caller scanner does not infer stored-field or method-result receiver types; these concrete calls remain with the canonical iroha_fhe owner, while the three callers_exhaustive flags honestly record that scanner limitation."
    ],
    "implementations": [
     {
@@ -2458,7 +2558,7 @@
      "path": "crates/iroha_fhe/src/rns_chain.rs",
      "symbol": "CongruentScaleDown::dropped",
      "role": "canonical",
-     "callers_exhaustive": true,
+     "callers_exhaustive": false,
      "callers": {}
     },
     {
@@ -2480,7 +2580,14 @@
      "symbol": "CongruentScaleDown::new",
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"]}
+     "callers": {
+      "crates/fastpq_prover/src/gadgets/rns_chain_air.rs": [
+       "RnsScaleDownPlan::new"
+      ],
+      "crates/iroha_fhe/src/bgv/profile.rs": [
+       "BgvProfile::new"
+      ]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2501,7 +2608,17 @@
      "symbol": "RnsBasis::conversion_target",
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"], "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::new"]}
+     "callers": {
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
+       "RnsCenteredExtensionPlan::new"
+      ],
+      "crates/iroha_fhe/src/bgv/profile.rs": [
+       "BgvProfile::new"
+      ],
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "CongruentScaleDown::new"
+      ]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2535,8 +2652,13 @@
      "path": "crates/iroha_fhe/src/rns_chain.rs",
      "symbol": "RnsBasis::exceeds_half_bit",
      "role": "canonical",
-     "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::convert"]}
+     "callers_exhaustive": false,
+     "callers": {
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "CongruentScaleDown::apply",
+       "RnsBasis::convert"
+      ]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2550,7 +2672,15 @@
      "symbol": "RnsBasis::is_empty",
      "role": "canonical",
      "callers_exhaustive": false,
-     "callers": {"crates/iroha_fhe/src/rns_chain.rs": ["RnsBasis::is_empty", "RnsBasis::new"]}
+     "callers": {
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
+       "RnsCenteredExtensionPlan::new"
+      ],
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "RnsBasis::is_empty",
+       "RnsBasis::new"
+      ]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -2558,8 +2688,15 @@
      "role": "canonical",
      "callers_exhaustive": false,
      "callers": {
-      "crates/iroha_fhe/src/bgv/eval.rs": ["BgvProfile::key_switch"],
-      "crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"],
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
+       "RnsCenteredExtensionPlan::new"
+      ],
+      "crates/iroha_fhe/src/bgv/eval.rs": [
+       "BgvProfile::key_switch"
+      ],
+      "crates/iroha_fhe/src/bgv/profile.rs": [
+       "BgvProfile::new"
+      ],
       "crates/iroha_fhe/src/rns_chain.rs": [
        "CongruentScaleDown::apply",
        "CongruentScaleDown::new",
@@ -2575,15 +2712,31 @@
      "path": "crates/iroha_fhe/src/rns_chain.rs",
      "symbol": "RnsBasis::mixed_radix_in_place",
      "role": "canonical",
-     "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::apply", "RnsBasis::convert", "RnsBasis::reconstruct_canonical"]}
+     "callers_exhaustive": false,
+     "callers": {
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "CongruentScaleDown::apply",
+       "RnsBasis::convert",
+       "RnsBasis::reconstruct_canonical"
+      ]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
      "symbol": "RnsBasis::new",
      "role": "canonical",
      "callers_exhaustive": true,
-     "callers": {"crates/iroha_fhe/src/bgv/profile.rs": ["BgvProfile::new"], "crates/iroha_fhe/src/rns_chain.rs": ["CongruentScaleDown::new"]}
+     "callers": {
+      "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs": [
+       "RnsCenteredExtensionPlan::new"
+      ],
+      "crates/iroha_fhe/src/bgv/profile.rs": [
+       "BgvProfile::new"
+      ],
+      "crates/iroha_fhe/src/rns_chain.rs": [
+       "CongruentScaleDown::new"
+      ]
+     }
     },
     {
      "path": "crates/iroha_fhe/src/rns_chain.rs",
@@ -3767,6 +3920,45 @@
    "note": "Allocation-free checked requested-capacity bounds and visible retained Vec/Natural capacity observations complement existing matrix/layout/upper-DAG budgets. This is local resource accounting, not ciphertext arithmetic, allocator/RSS coverage, consensus policy, parameter selection or runtime activation. Callers still enforce aggregate preadmission and observation before private work.",
    "path": "crates/iroha_fhe/src/bgv/metadata.rs",
    "symbols": []
+  },
+  {
+   "id": "shared.rns_chain_air",
+   "scheme": "shared_arithmetic",
+   "component": "FastPQ canonical RNS conversion/division relations with one shared private kernel and separate public diagnostic bindings",
+   "tasks": [
+    "C.8",
+    "B.2"
+   ],
+   "executes": [],
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+   "symbols": [],
+   "note": "Proof-relation and witness preparation owned by FastPQ. Canonical native RNS conversion, admission and congruent division remain with iroha_fhe. Both active relations use one shared word-column/gate/comparator/clearing owner; diagnostic endpoint publication is separate. This entry claims no complete bootstrap/key-switch/NTT proof, authenticated key, committed hiding proof, security qualification or application activation."
+  },
+  {
+   "id": "shared.rns_chain_air_integer",
+   "scheme": "shared_arithmetic",
+   "component": "Private bounded integer polynomial gates shared by both FastPQ RNS conversion/division relations",
+   "tasks": [
+    "C.8",
+    "B.2"
+   ],
+   "executes": [],
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+   "symbols": [],
+   "note": "Proof-relation and witness preparation owned by FastPQ. Canonical native RNS conversion, admission and congruent division remain with iroha_fhe. Both active relations use one shared word-column/gate/comparator/clearing owner; diagnostic endpoint publication is separate. This entry claims no complete bootstrap/key-switch/NTT proof, authenticated key, committed hiding proof, security qualification or application activation."
+  },
+  {
+   "id": "shared.rns_chain_air_centered_extension",
+   "scheme": "shared_arithmetic",
+   "component": "Canonical centered RNS basis-extension relation using the shared word/gate/comparator owner",
+   "tasks": [
+    "C.8",
+    "B.2"
+   ],
+   "executes": [],
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
+   "symbols": [],
+   "note": "Canonical input words and ordered odd targets below 2^62, including composites/overlap/repeats; shared native RnsBasis supplies witness conversion. Structural caps and public diagnostic binding do not establish full key-switch, NTT, committed proof or application qualification."
   }
  ],
  "test_only_references": [
@@ -4312,6 +4504,49 @@
    "kind": "protocol_reference",
    "summary": "Test-only full-size F257 ScalarSlots diagnostic with honest local key generation, two bootstraps and one square/repeated refresh. Checks seven full-degree message/phase-bound checkpoints using production phase words and independent CRT, plus direct secret convolution at 135 public probes per limb; also validates the independent oracle on a small full ring. Exact finite setup budgets and one-under refusals are checked. Explicit execution is required; this test establishes no full R9, application-resource, security, custody or platform qualification.",
    "path": "crates/iroha_fhe/tests/bgv_f257_scalar_local_bootstrap.rs",
+   "whole_file": true,
+   "symbols": []
+  },
+  {
+   "id": "shared.rns_chain_air_unit_tests",
+   "scheme": "shared_arithmetic",
+   "kind": "unit_tests",
+   "summary": "Inline relation geometry, integer mutation and clearing-owner checks. Source classification only; execution and qualification require separate evidence.",
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+   "symbols": []
+  },
+  {
+   "id": "shared.rns_chain_air_integer_unit_tests",
+   "scheme": "shared_arithmetic",
+   "kind": "unit_tests",
+   "summary": "Inline relation geometry, integer mutation and clearing-owner checks. Source classification only; execution and qualification require separate evidence.",
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+   "symbols": []
+  },
+  {
+   "id": "shared.rns_chain_air_independent_oracle",
+   "scheme": "shared_arithmetic",
+   "kind": "oracle",
+   "summary": "Independent integer division and known-boundary residue oracles, including products beyond u128 and 64 dropped primes; exact/one-under public limits, polynomial mutations, clearing and uncommitted reference degree/public-binding checks. The reference intentionally exposes diagnostic cells and establishes no committed-proof, private-custody or application qualification.",
+   "path": "crates/fastpq_prover/tests/rns_chain_air.rs",
+   "whole_file": true,
+   "symbols": []
+  },
+  {
+   "id": "shared.rns_chain_air_centered_oracle",
+   "scheme": "shared_arithmetic",
+   "kind": "oracle",
+   "summary": "Independent centered-integer/known-boundary expected residues, including >u128/64-source and65-target cases, exact caps, shared-cell mutations and public reference/order/clearing checks. No committed hiding proof or key authentication.",
+   "path": "crates/fastpq_prover/tests/rns_chain_air/extension_cases.rs",
+   "whole_file": true,
+   "symbols": []
+  },
+  {
+   "id": "shared.rns_chain_air_bgv_digit_reference",
+   "scheme": "shared_arithmetic",
+   "kind": "oracle",
+   "summary": "Actual BGV profile digit partition and own/target limb correspondence, including shorter final digits and remaining-main/special mapping. This is arithmetic/layout correspondence, not authenticated switching-key validity or a complete switching proof.",
+   "path": "crates/fastpq_prover/tests/rns_chain_air/bgv_digit_cases.rs",
    "whole_file": true,
    "symbols": []
   }
@@ -11708,6 +11943,115 @@
      "zk_ams_mkhe_cks_statement_digest_v1"
     ]
    }
+  },
+  {
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+   "production": {
+    "shared.rns_chain_air": [
+     "Builder::constant",
+     "Builder::equal",
+     "Builder::gate",
+     "Builder::reconstruct",
+     "Builder::word",
+     "Geometry::admit",
+     "Geometry::new",
+     "RnsChainWitness::drop",
+     "RnsChainWitness::fmt",
+     "RnsChainWitness::row",
+     "RnsChainWitness::row_mut",
+     "RnsChainWitness::rows",
+     "RnsChainWitness::width",
+     "RnsChainWitness::zeroize",
+     "RnsKernel::evaluate_row",
+     "RnsKernel::fill_row",
+     "RnsScaleDownAir::evaluate",
+     "RnsScaleDownAir::plan",
+     "RnsScaleDownAir::public_columns",
+     "RnsScaleDownAir::public_value",
+     "RnsScaleDownAir::schema",
+     "RnsScaleDownAir::statement_bytes",
+     "RnsScaleDownPlan::bind",
+     "RnsScaleDownPlan::build_witness",
+     "RnsScaleDownPlan::check_input",
+     "RnsScaleDownPlan::evaluate_row",
+     "RnsScaleDownPlan::kernel",
+     "RnsScaleDownPlan::new",
+     "RnsScaleDownPlan::requirements",
+     "RnsScaleDownPlan::schema",
+     "add",
+     "check_input",
+     "compile",
+     "evaluate_reference",
+     "limit",
+     "multiply",
+     "native_heap_bytes",
+     "put_word",
+     "semantic_error",
+     "word_view"
+    ]
+   },
+   "test_gated": {
+    "shared.rns_chain_air_unit_tests": [
+     "mod retirement_tests"
+    ]
+   }
+  },
+  {
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+   "production": {
+    "shared.rns_chain_air_integer": [
+     "ClearingAdd::drop",
+     "GateKind::binary",
+     "GateKind::layout",
+     "IntegerError::fmt",
+     "Residues::bits",
+     "Residues::push",
+     "check_geometry",
+     "emit_add",
+     "emit_canonical",
+     "emit_product",
+     "emit_sum",
+     "evaluate",
+     "fill",
+     "fill_add_carries",
+     "fill_canonical",
+     "fill_product",
+     "fill_sum_carries",
+     "pack",
+     "public_word",
+     "word",
+     "write_bits"
+    ]
+   },
+   "test_gated": {
+    "shared.rns_chain_air_integer_unit_tests": [
+     "mod tests"
+    ]
+   }
+  },
+  {
+   "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
+   "production": {
+    "shared.rns_chain_air_centered_extension": [
+     "RnsCenteredExtensionAir::evaluate",
+     "RnsCenteredExtensionAir::plan",
+     "RnsCenteredExtensionAir::public_columns",
+     "RnsCenteredExtensionAir::public_value",
+     "RnsCenteredExtensionAir::schema",
+     "RnsCenteredExtensionAir::statement_bytes",
+     "RnsCenteredExtensionPlan::bind",
+     "RnsCenteredExtensionPlan::build_witness",
+     "RnsCenteredExtensionPlan::evaluate_row",
+     "RnsCenteredExtensionPlan::kernel",
+     "RnsCenteredExtensionPlan::new",
+     "RnsCenteredExtensionPlan::requirements",
+     "RnsCenteredExtensionPlan::schema",
+     "compile_extension",
+     "extension_counts",
+     "extension_native_heap_bytes"
+    ]
+   },
+   "test_gated": {}
   }
  ],
  "hkdf": {
@@ -17106,6 +17450,102 @@
    "files": [
     {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/mldsa/mldsa.cc.inc", "patterns": ["ntt"]},
     {"path": "vendor/boringssl-swiftpm/crypto/fipsmodule/mlkem/mlkem.cc.inc", "patterns": ["ntt"]}
+   ]
+  },
+  {
+   "id": "fastpq.rns_chain_air",
+   "component": "fastpq_prover",
+   "role": "distinct_arithmetic",
+   "tasks": [
+    "C.8",
+    "B.2"
+   ],
+   "summary": "Canonical FastPQ RNS congruent-scale-down and centered-extension relations with one private integer/kernel/comparator/clearing owner. Native arithmetic remains with iroha_fhe; diagnostic wrappers are uncommitted and intentionally publish endpoints.",
+   "files": [
+    {
+     "path": "crates/fastpq_prover/src/gadgets/rns_chain_air.rs",
+     "patterns": [
+      "bgv",
+      "fhe",
+      "ntt",
+      "rns"
+     ]
+    },
+    {
+     "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+     "patterns": [
+      "fhe",
+      "rns"
+     ]
+    },
+    {
+     "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/centered_extension.rs",
+     "patterns": [
+      "fhe",
+      "rns"
+     ]
+    },
+    {
+     "path": "crates/fastpq_prover/src/gadgets/mod.rs",
+     "patterns": [
+      "rns"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fastpq.rns_chain_air_tests",
+   "component": "fastpq_prover",
+   "role": "fhe_test_reference",
+   "tasks": [
+    "C.8",
+    "B.2"
+   ],
+   "summary": "Preserved scale-down integration tests plus independent centered conversion oracles and actual BGV digit-layout correspondence; component source classification only, no committed proof or qualification.",
+   "files": [
+    {
+     "path": "crates/fastpq_prover/tests/rns_chain_air.rs",
+     "patterns": [
+      "bgv",
+      "rns"
+     ],
+     "test_only": true
+    },
+    {
+     "path": "crates/fastpq_prover/tests/rns_chain_air/extension_cases.rs",
+     "patterns": [
+      "rns"
+     ],
+     "test_only": true
+    },
+    {
+     "path": "crates/fastpq_prover/tests/rns_chain_air/bgv_digit_cases.rs",
+     "patterns": [
+      "bgv",
+      "fhe",
+      "rns"
+     ],
+     "test_only": true
+    }
+   ]
+  },
+  {
+   "id": "fastpq.rns_chain_air_manifest",
+   "component": "fastpq_prover",
+   "role": "build_manifest",
+   "tasks": [
+    "C.8",
+    "B.2"
+   ],
+   "summary": "Ordinary acyclic FastPQ to iroha_fhe dependency and explicit integration-test registration for the canonical RNS relation.",
+   "files": [
+    {
+     "path": "crates/fastpq_prover/Cargo.toml",
+     "patterns": [
+      "fhe",
+      "rns"
+     ]
+    }
    ]
   }
  ]

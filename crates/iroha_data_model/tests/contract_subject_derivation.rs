@@ -89,6 +89,75 @@ fn reference_subject(address: &ContractAddress) -> ([u8; 32], u32) {
     }
 }
 
+const BECH32_CHARSET: &[u8; 32] = b"qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+// Independent BIP-173/BIP-350 test oracle; the address parser verifies its outputs.
+fn reference_bech32_payload(literal: &str) -> Vec<u8> {
+    let separator = literal.rfind('1').expect("separator");
+    let data = &literal.as_bytes()[separator + 1..literal.len() - 6];
+    let (mut payload, mut buffer, mut bits) = (Vec::new(), 0_u32, 0_u32);
+    for character in data {
+        let value = BECH32_CHARSET
+            .iter()
+            .position(|candidate| candidate == character)
+            .expect("bech32 character");
+        buffer = (buffer << 5) | u32::try_from(value).expect("five-bit value");
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            payload.push((buffer >> bits) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    payload
+}
+
+fn reference_bech32m_encode(hrp: &str, payload: &[u8]) -> String {
+    const GENERATOR: [u32; 5] = [
+        0x3b6a_57b2,
+        0x2650_8e6d,
+        0x1ea1_19fa,
+        0x3d42_33dd,
+        0x2a14_62b3,
+    ];
+    let (mut data, mut buffer, mut bits) = (Vec::new(), 0_u32, 0_u32);
+    for byte in payload {
+        buffer = (buffer << 8) | u32::from(*byte);
+        bits += 8;
+        while bits >= 5 {
+            bits -= 5;
+            data.push(((buffer >> bits) & 0x1f) as u8);
+            buffer &= (1 << bits) - 1;
+        }
+    }
+    if bits > 0 {
+        data.push(((buffer << (5 - bits)) & 0x1f) as u8);
+    }
+    let mut values: Vec<u8> = hrp.bytes().map(|byte| byte >> 5).collect();
+    values.push(0);
+    values.extend(hrp.bytes().map(|byte| byte & 0x1f));
+    values.extend(&data);
+    values.extend([0; 6]);
+    let mut residue = 1_u32;
+    for value in values {
+        let top = residue >> 25;
+        residue = ((residue & 0x01ff_ffff) << 5) ^ u32::from(value);
+        for (index, generator) in GENERATOR.iter().enumerate() {
+            if (top >> index) & 1 == 1 {
+                residue ^= generator;
+            }
+        }
+    }
+    residue ^= 0x2bc8_30a3;
+    data.extend((0..6).map(|index| ((residue >> (5 * (5 - index))) & 0x1f) as u8));
+    let mut literal = format!("{hrp}1");
+    literal.extend(
+        data.iter()
+            .map(|value| char::from(BECH32_CHARSET[usize::from(*value)])),
+    );
+    literal
+}
+
 fn derive(address: &ContractAddress) -> [u8; 32] {
     address
         .try_subject_key_bytes(|_| Ok::<(), Infallible>(()))
@@ -173,10 +242,11 @@ fn admission_refuses_first_and_later_attempts_and_same_input_retries() {
 
 #[test]
 fn candidate_sequence_matches_reference_for_distinct_valid_addresses() {
-    let (hrp, mut payload) = bech32::decode(KNOWN_ADDRESS).expect("V1 address payload");
+    let mut payload = reference_bech32_payload(KNOWN_ADDRESS);
+    assert_eq!(reference_bech32m_encode("irohac", &payload), KNOWN_ADDRESS);
     for seed in 0_u8..32 {
         payload[9] = seed;
-        let literal = bech32::encode::<bech32::Bech32m>(hrp, &payload).expect("V1 literal");
+        let literal = reference_bech32m_encode("irohac", &payload);
         let address: ContractAddress = literal.parse().expect("same V1 address format");
         assert_eq!(address.as_str(), literal);
         let (reference, counter) = reference_subject(&address);

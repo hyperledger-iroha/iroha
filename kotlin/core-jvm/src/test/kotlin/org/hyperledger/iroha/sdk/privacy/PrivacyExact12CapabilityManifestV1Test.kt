@@ -23,12 +23,16 @@ class PrivacyExact12CapabilityManifestV1Test {
         val policy = manifest.consensusPolicy
         assertEquals(2048, policy.currentLimits.retainedRootCount)
         assertEquals(1024, policy.pendingUpdate!!.nextLimits.retainedRootCount)
-        assertEquals(302.toBigInteger(), policy.pendingUpdate!!.effectiveAtHeight)
+        assertEquals(4.toBigInteger(), policy.pendingUpdate!!.effectiveAtHeight)
         val pgc = manifest.rowFor(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)
         assertEquals(32, pgc.policy!!.pendingUpdate!!.nextLimits.values!!.getValue("max_anonymity_set_size"))
+        val note = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
+        assertEquals(1, note.policy!!.pendingUpdate!!.nextLimits.values!!.getValue("max_input_count"))
+        for (row in listOf(pgc, note)) {
+            assertTrue(row.policy!!.currentLimits != row.policy!!.pendingUpdate!!.nextLimits)
+        }
         assertTrue(manifest.canonicalBytes().contentEquals(coreManifestArchive()))
         // Core wraps each digest and the mask in a one-element array; the model exposes the inner value.
-        val note = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
         assertEquals(7, note.privacyFeatureMask)
         assertEquals(
             PrivacyFixed32V1(ByteArray(32) { 1 }),
@@ -60,13 +64,13 @@ class PrivacyExact12CapabilityManifestV1Test {
     @Test
     fun refusesLimitAndUpdateFieldsCoreDoesNotSerialize() {
         val core = coreManifestJson()
-        val protocolUpdate = Regex(""""effective_at_height":\s*302,\s*"next_limits":\s*\{\s*"protocol"""")
+        val protocolUpdate = Regex(""""effective_at_height":\s*4,\s*"next_limits":\s*\{\s*"protocol"""")
         for (extended in listOf(
             core.replaceFirst("\"retained_root_count\": 2048", "\"retained_root_count\": 2048, \"private_settlement\": {}"),
             core.replaceFirst("\"retained_root_count\": 1024", "\"retained_root_count\": 1024, \"private_settlement\": {}"),
             protocolUpdate.replaceFirst(
                 core,
-                "\"effective_at_height\": 302, \"private_settlement_drain_blocks\": null, \"next_limits\": { \"protocol\"",
+                "\"effective_at_height\": 4, \"private_settlement_drain_blocks\": null, \"next_limits\": { \"protocol\"",
             ),
         )) {
             assertTrue(extended != core)

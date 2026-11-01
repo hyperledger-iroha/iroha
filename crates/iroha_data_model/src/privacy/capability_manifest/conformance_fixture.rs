@@ -4,9 +4,10 @@
 //! change to the manifest fails every parser that does not follow it.
 use super::{PrivacyExact12CapabilityManifestBuildErrorV1, PrivacyExact12CapabilityManifestV1};
 use crate::privacy::{
-    ANONYMOUS_PGC_MAX_RECIPIENTS_V1, AnonymousPgcLimitsV1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
-    PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PrivacyCapabilityRowV1,
-    PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileCatalogRowV1,
+    ANONYMOUS_PGC_MAX_RECIPIENTS_V1, AnonymousPgcLimitsV1, IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
+    IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1, IvmPrivateNoteLimitsV1,
+    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
+    PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileCatalogRowV1,
     PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1,
     PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
@@ -53,8 +54,10 @@ pub enum PrivacyExact12CapabilityManifestFixtureErrorV1 {
 
 /// Build the capability-manifest conformance fixture from typed Rust values.
 ///
-/// The manifest schedules a consensus update and a protocol update, and its rows mix available
+/// The manifest schedules consensus and protocol resource-limit updates. Its rows mix available
 /// compiled profiles with every unavailable reason and with a fixed-limit protocol's policy.
+/// Private-settlement validity belongs to its separate committed policy and is not part of this
+/// manifest's limits.
 ///
 /// # Errors
 ///
@@ -64,7 +67,7 @@ pub fn privacy_exact12_capability_manifest_fixture_v1()
 {
     let current_limits = PrivacyConsensusLimitsV1::taira_default();
     let scheduled_at_height = 2;
-    let effective_at_height = 302;
+    let effective_at_height = scheduled_at_height + 2;
     let mut next_limits = current_limits;
     next_limits.retained_root_count /= 2;
 
@@ -150,6 +153,12 @@ fn protocol_policy(
             PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 32,
                 max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
+            })
+        }
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+                max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1 - 1,
+                max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             })
         }
         _ => return None,

@@ -116,6 +116,11 @@ Gas enforcement (CoreHost)
   valid HEAP-sized responses inside the dispatcher quote without mutating registers on
   insufficient gas.
 - ISI syscalls charge extra gas using the native ISI schedule (`iroha_core::gas::meter_instruction`).
+- Queued output measurement uses the committed item and byte limits. Canonical encoder scratch
+  allocation can still fail with a bounded counting sink: an original local refusal defers the
+  whole attempt and survives nested rollback, while a malformed encoder result prevents artifact
+  export. A serialization failure establishes a byte-limit violation only when the sink observed
+  overflow; no partial measurement is published as an effect or a finalized receipt.
 - FASTPQ transfer batch scope syscalls charge the fixed gas. Gas: `G_fastpq_batch`; batch
   entries are charged separately with the transfer gas family when applied.
 - Contract administration bridge syscalls charge `G_contract_admin + bytes`.

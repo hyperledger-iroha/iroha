@@ -4016,9 +4016,9 @@ pub(crate) mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::peer::Peer;
     use iroha_model_base::topology::DataSpaceId;
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
-    use nonzero_ext::nonzero;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("staking fixture key generation should succeed")
     }

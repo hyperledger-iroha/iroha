@@ -494,8 +494,8 @@ mod tests {
     use super::*;
     use crate::{kura::Kura, query::store::LiveQueryStore, state::State};
     use iroha_data_model::block::BlockHeader;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
     #[test]
     fn defi_quantity_guards_reject_invalid_values() {
         assert!(ensure_quantity_non_zero(&Quantity::zero(), "amount").is_err());

@@ -5,7 +5,7 @@ use iroha_data_model::{
     prelude::SetParameter,
     transaction::{ExecutableBatchItem, executable::Executable, signed::TransactionResult},
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::{convert::TryFrom, env, error::Error, fs};
 fn reference_signer() -> Result<KeyPair, iroha_crypto::Error> {
     KeyPair::try_random()

@@ -19,11 +19,11 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Numeric;
 use iroha_test_samples::gen_account_in;
 use ivm::{ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 fn test_network_id(label: &[u8]) -> NetworkId {
     NetworkId::from_genesis_hash(

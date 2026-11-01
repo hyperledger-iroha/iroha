@@ -17,7 +17,7 @@
     },
     "pending_update": {
       "scheduled_at_height": 2,
-      "effective_at_height": 302,
+      "effective_at_height": 4,
       "next_limits": {
         "max_actions_per_transaction": 1,
         "max_actions_per_block": 2,
@@ -494,7 +494,7 @@
         },
         "pending_update": {
           "scheduled_at_height": 2,
-          "effective_at_height": 302,
+          "effective_at_height": 4,
           "next_limits": {
             "protocol": "anonymous-pgc-k-out-of-n-v1",
             "limits": {
@@ -1786,7 +1786,30 @@
         "readiness": "available",
         "detail": null
       },
-      "policy": null
+      "policy": {
+        "protocol_id": {
+          "protocol": "iroha-ivm-private-note-stark-v1",
+          "value": null
+        },
+        "current_limits": {
+          "protocol": "iroha-ivm-private-note-stark-v1",
+          "limits": {
+            "max_input_count": 2,
+            "max_output_count": 2
+          }
+        },
+        "pending_update": {
+          "scheduled_at_height": 2,
+          "effective_at_height": 4,
+          "next_limits": {
+            "protocol": "iroha-ivm-private-note-stark-v1",
+            "limits": {
+              "max_input_count": 1,
+              "max_output_count": 2
+            }
+          }
+        }
+      }
     },
     {
       "protocol_id": {
@@ -2017,38 +2040,38 @@
   ],
   "manifest_digest": [
     [
-      92,
-      188,
-      150,
-      149,
-      162,
-      175,
-      132,
-      205,
-      154,
-      144,
-      144,
-      230,
-      87,
-      161,
-      15,
-      203,
-      229,
-      139,
-      20,
-      91,
-      0,
-      219,
+      40,
+      103,
+      102,
+      90,
+      207,
+      159,
+      10,
+      13,
+      130,
+      153,
+      114,
+      169,
+      22,
       164,
-      145,
-      96,
-      151,
-      102,
-      112,
-      119,
-      102,
-      197,
-      146
+      58,
+      51,
+      131,
+      142,
+      65,
+      78,
+      72,
+      116,
+      30,
+      5,
+      21,
+      253,
+      114,
+      21,
+      186,
+      137,
+      253,
+      118
     ]
   ]
 }

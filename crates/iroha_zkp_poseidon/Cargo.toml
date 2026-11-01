@@ -12,9 +12,13 @@ categories = ["cryptography"]
 # `iroha_data_model` and everything above it.
 [dependencies]
 halo2curves = { workspace = true }
-once_cell = { workspace = true }
 zeroize = { workspace = true }
 
 [dev-dependencies]
 iroha_pasta = { workspace = true }
 sha2 = "0.11.1"
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"

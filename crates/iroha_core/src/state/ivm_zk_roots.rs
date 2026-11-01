@@ -26,7 +26,7 @@ pub type IvmZkRootsSnapshot = BTreeMap<AssetDefinitionId, IvmZkTreeRoots>;
 pub struct InvalidIvmZkRootsSnapshot;
 
 pub(super) type SnapshotCache =
-    SyncOnceCell<Result<Arc<IvmZkRootsSnapshot>, InvalidIvmZkRootsSnapshot>>;
+    OnceLock<Result<Arc<IvmZkRootsSnapshot>, InvalidIvmZkRootsSnapshot>>;
 
 /// Storage evidence that the block-start projection is still exact.
 pub(super) trait UnchangedZkAssets: WorldReadOnly {

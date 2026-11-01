@@ -31,9 +31,9 @@ mod tests {
         },
     };
     use iroha_model_base::{metadata::Metadata, topology::DataSpaceId};
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::Quantity;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
 
     fn receipt(count: usize) -> SettlementReceipt {
         let definition = AssetDefinitionId::derive_from_components(

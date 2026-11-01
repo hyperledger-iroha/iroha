@@ -12,8 +12,8 @@ use iroha_data_model::{
     isi::Grant, isi::governance::CastPlainBallot, permission::Permission,
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 fn checked_random_plain_ballot_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked plain ballot keypair")
 }

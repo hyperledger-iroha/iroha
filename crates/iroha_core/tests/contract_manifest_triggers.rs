@@ -43,8 +43,8 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, ContractManifest) {
     let meta = ivm::ProgramMetadata {
         version_major: 1,

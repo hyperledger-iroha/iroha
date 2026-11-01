@@ -296,7 +296,7 @@ fn parallel_partial_finalization_clears_tile_on_worker_error_and_worker_panic() 
                                 .finalize_in_place_v1()
                                 .map_err(map_digest_stream_error_v1)
                                 .map_err(map_transparent_error_v1)
-                        })
+                        }, &commitment_observation::ContextV1::default())
                     }));
                     if panic_at_row {
                         assert!(outcome.is_err());
@@ -408,3 +408,6 @@ fn native22_streamed_hash_prefix_and_tile_match_scalar_tree_with_stage_timings()
         );
     }
 }
+
+#[path = "joined_observation_tests.rs"]
+mod observation_tests;

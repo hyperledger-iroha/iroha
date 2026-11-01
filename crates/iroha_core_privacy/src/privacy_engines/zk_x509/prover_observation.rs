@@ -1,15 +1,25 @@
 //! Bounded public observations for isolated native prover diagnostics.
 //!
-//! Collection is explicitly scoped to the calling test thread. It never
+//! Collection starts on the calling test thread. Worker phases require an
+//! explicit parent token; unrelated threads remain unobserved. Collection never
 //! records field values, source bytes, random masks or witness-dependent row
-//! positions. Durations of nested phases overlap and must not be summed.
+//! positions. Durations of nested and overlapping phases must not be summed.
+//! Flat receipt counters remain on the initiating thread; opted-in workers
+//! contribute only to the shared phase tree. The separate closed seven-operation
+//! aggregate commitment inventory also contributes only to that tree, through
+//! an explicit context from the initial `BaseSampleAndCommit` timer. Its
+//! coordinator intervals include existing worker joins, not per-worker CPU.
 //!
 //! Every timer also opens a phase in the shared `iroha_measurement` tree of
 //! its observation, so the same instrumentation yields inclusive and exclusive
 //! times and the unattributed share. The public geometry counters and the
 //! proof size are recorded in the same record as work and byte counters. The
-//! record carries only the static labels below and never returns a value to
-//! the prover.
+//! record carries only the static phase labels below and the aggregate
+//! commitment operation labels; it never returns a value to the prover. The
+//! 75 flat phase counters and their indices remain unchanged.
+//! Whole joined transform batches also open closed relation-family children.
+//! Their original backend work counters follow the opening coordinator scope;
+//! finished diagnostic coverage validates the canonical call/column partition.
 //!
 //! When a harness directory is given, the session itself writes the record
 //! there, so a producer that fails, returns early or unwinds still leaves a
@@ -23,8 +33,12 @@ use std::{
 
 use iroha_measurement::{
     ByteKind, CollectingSink, DirectoryReport, DirectorySink, FlowKind, MeasurementRecord,
-    PhaseGuard, RecordSink, RunContext, RunIdentity, Session, TeeSink, WorkerDeclaration,
+    PhaseGuard, PhaseParent, RecordSink, RunContext, RunIdentity, Session, TeeSink,
+    WorkerDeclaration,
 };
+
+#[path = "prover_observation_transform.rs"]
+pub(super) mod transform;
 
 /// Fixed public implementation phases; the receipt cannot grow with the witness.
 #[derive(Clone, Copy, Debug)]
@@ -508,6 +522,43 @@ impl PhaseTimerV1 {
     pub(super) fn complete_v1(mut self) {
         self.complete = true;
     }
+
+    /// Attribute one original joined batch under this exact transform timer.
+    /// The synchronous evaluator and its workers finish before this timer ends.
+    pub(super) fn transform_context_v1(&self) -> transform::ContextV1 {
+        transform::ContextV1::from_parent(
+            self.active
+                .as_ref()
+                .and_then(|(_, _, _, guard)| guard.as_ref())
+                .map(PhaseGuard::parent),
+        )
+    }
+
+    /// Share this exact open phase with workers, without activating their
+    /// thread-local prover counters. Join workers before completing the timer.
+    pub(super) fn worker_parent_v1(&self) -> WorkerPhaseParentV1 {
+        WorkerPhaseParentV1 {
+            parent: self
+                .active
+                .as_ref()
+                .and_then(|(_, _, _, guard)| guard.as_ref())
+                .map(PhaseGuard::parent),
+        }
+    }
+
+    /// Share this exact phase with aggregate commitment operations, without
+    /// opening another session or adding flat phase counters. The caller keeps
+    /// the timer open until the synchronous commitment and its workers join.
+    pub(super) fn commitment_context_v1(
+        &self,
+    ) -> crate::privacy_engines::aggregate_stark::commitment_observation::ContextV1 {
+        crate::privacy_engines::aggregate_stark::commitment_observation::ContextV1::from_parent(
+            self.active
+                .as_ref()
+                .and_then(|(_, _, _, guard)| guard.as_ref())
+                .map(PhaseGuard::parent),
+        )
+    }
 }
 impl Drop for PhaseTimerV1 {
     fn drop(&mut self) {
@@ -532,6 +583,58 @@ impl Drop for PhaseTimerV1 {
                     count.elapsed += started.elapsed();
                 }
             });
+        }
+    }
+}
+
+/// Sendable ownership of one diagnostic phase, using only the existing static
+/// phase inventory. An inactive token never adopts a worker's local observation.
+///
+/// Worker phases contribute to the shared tree only; the flat receipt counters
+/// remain owned by the initiating thread. The recorder retains its original
+/// semantics: an ended parent in a live observation is counted as stale and its
+/// child attaches to the root; an ended observation cannot receive new entries.
+///
+/// TODO(WI5): instrument real transform and other worker boundaries with these
+/// tokens. This prerequisite alone does not establish the phase-detail bound.
+#[derive(Clone)]
+pub(super) struct WorkerPhaseParentV1 {
+    parent: Option<PhaseParent>,
+}
+
+impl WorkerPhaseParentV1 {
+    /// Open a phase on the current worker under this explicit parent. No label
+    /// or error payload comes from the workload.
+    pub(super) fn enter_v1(&self, phase: PhaseV1) -> WorkerPhaseV1 {
+        WorkerPhaseV1 {
+            guard: self
+                .parent
+                .as_ref()
+                .map(|parent| parent.enter(PHASE_LABELS_V1[phase as usize])),
+        }
+    }
+}
+
+/// A worker-local shared-tree phase. The underlying guard stays on its opening
+/// thread; dropping it without completion retains interruption and unwind facts.
+pub(super) struct WorkerPhaseV1 {
+    guard: Option<PhaseGuard>,
+}
+
+impl WorkerPhaseV1 {
+    /// Explicitly nest another worker phase under this still-open operation.
+    /// All children must join before this guard completes or drops.
+    pub(super) fn worker_parent_v1(&self) -> WorkerPhaseParentV1 {
+        WorkerPhaseParentV1 {
+            parent: self.guard.as_ref().map(PhaseGuard::parent),
+        }
+    }
+
+    /// Complete this operation; ordinary error returns and unwinds leave its
+    /// guard to record the original interrupted outcome instead.
+    pub(super) fn complete_v1(self) {
+        if let Some(guard) = self.guard {
+            guard.complete();
         }
     }
 }
@@ -742,6 +845,10 @@ impl ReceiptV1 {
         assert!(self.policies.iter().sum::<u64>() >= 4);
     }
 }
+
+#[cfg(test)]
+#[path = "prover_observation_worker_tests.rs"]
+mod worker_tests;
 
 #[cfg(test)]
 mod tests {

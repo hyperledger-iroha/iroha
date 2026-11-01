@@ -79,7 +79,9 @@ independent digest recomputation, native profile pin adoption, genuine IO and
 projection proof capture, native control/mutation tests, then an isolated maximum
 credential proof and fresh verification. Capture prints are observations, not
 permission to update a pin without reviewing the changed protocol. The maintained
-`scripts/check_zk_x509_proof_geometry.py` checks source-derived framing and bounds.
+`scripts/check_zk_x509_proof_geometry.py` checks source-derived framing and bounds
+in pull-request CI and `make guards`; its mutation controls exercise omitted
+openings, altered widths, framing disagreement and changes to the fixed cap.
 Neither source geometry nor CA component proofs establish full credential
 soundness, zero knowledge, 300-second performance, 12 GiB RSS or literal 32 GiB
 address-space compliance.

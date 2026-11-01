@@ -82,9 +82,11 @@ import signal
 import stat
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any
 
@@ -1359,6 +1361,17 @@ class _EvidenceSnapshot:
         self.raw: dict[str, bytes] = {}
         self.reasons: list[str] = []
         self.child_names: list[str] = []
+        # Keep journal replay on the same captured bytes without retaining a
+        # long observation window in RAM or reopening mutable evidence paths.
+        self._journal = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
+        self._journal_offsets: dict[str, tuple[int, int]] = {}
+        try:
+            self._capture(directory, descriptor)
+        except BaseException:
+            self.close()
+            raise
+
+    def _capture(self, directory: _EvidenceDirectory, descriptor: dict[str, Any]) -> None:
         inventories: dict[str, list[str]] = {"": directory._names("")}
         paths: list[str] = []
         for index, name in enumerate(inventories[""]):
@@ -1390,14 +1403,17 @@ class _EvidenceSnapshot:
                 self.reasons.append(f"unexpected_evidence_entry:{index}")
                 continue
             leaf = path.rsplit("/", 1)[-1]
+            journal_chunk = kind == "observation" and leaf.startswith("chunk-")
             if kind == "view" and leaf not in allowed_views:
                 continue
             maximum = (linux_evidence.MAX_BYTES if path in linux_evidence.PATHS.values()
                        else native_exit.MAX_TERMINAL_BYTES if leaf in {"native-admission.json", "terminal.json"}
+                       else 4 * 1024 * 1024 + 4096 if journal_chunk
                        else MAX_RECORD_BYTES if kind in {"view", "binary"} else MAX_EVIDENCE_BYTES)
             try:
                 binding, raw = directory._read(path, maximum, kind in {"view", "context"}
-                                               or path in {"report.json", "observations/baseline.json",
+                                               or journal_chunk
+                                               or path in {"report.json", "observations/baseline.json", "observations/window.json",
                                                            "observations/native-admission.json", "observations/terminal.json"}
                                                or path in linux_evidence.PATHS.values())
             except (OSError, ValueError):
@@ -1405,11 +1421,121 @@ class _EvidenceSnapshot:
                 continue
             self.bindings[path] = binding
             if raw is not None:
-                self.raw[path] = raw
+                if journal_chunk:
+                    offset = self._journal.tell()
+                    self._journal.write(raw)
+                    self._journal_offsets[path] = (offset, len(raw))
+                else:
+                    self.raw[path] = raw
         for name, previous in inventories.items():
             if directory._names(name) != previous:
                 self.reasons.append("evidence_inventory_changed")
         directory._validate()
+
+    def close(self) -> None:
+        """Release the private journal spool, including rolled disk storage."""
+        self._journal.close()
+
+    def __enter__(self) -> _EvidenceSnapshot:
+        if self._journal.closed:
+            raise ValueError("resource snapshot is closed")
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def read(self, reference: Any) -> bytes:
+        """Return an exact bound snapshot member, never a newly opened source path."""
+        if self._journal.closed:
+            raise ValueError("resource snapshot is closed")
+        binding = control.reference(reference)
+        if binding != self.bindings.get(binding["path"]):
+            raise ValueError("resource snapshot reference differs")
+        path = binding["path"]
+        if path in self._journal_offsets:
+            offset, length = self._journal_offsets[path]
+            self._journal.seek(offset)
+            raw = self._journal.read(length)
+        else:
+            raw = self.raw[path]
+        if len(raw) != binding["bytes"] or hashlib.sha256(raw).hexdigest() != binding["sha256"]:
+            raise ValueError("resource snapshot bytes differ")
+        return raw
+
+
+def _sampled_evidence_reasons(process, snapshot, limits, max_peak_rss_bytes=None):
+    """Recompute retained window metrics before trusting report resource summaries."""
+    try:
+        sampled = process["sampled"]
+        if type(sampled["state"]) is not str or sampled["state"] not in {"failed", "validated", "not_sampled"}:
+            raise ValueError("unknown resource observation state")
+        if sampled["state"] == "failed":
+            return []  # The original observation failure already rejects the run.
+        if sampled["state"] != "validated":
+            if "window" in sampled or "observations/window.json" in snapshot.bindings:
+                return ["resource_window_evidence_invalid"]
+            count = sampled["observations"]
+            if type(count) is not int or count not in (0, 1):
+                raise ValueError("invalid unwindowed observation count")
+            baseline_binding = snapshot.bindings.get("observations/baseline.json")
+            if (baseline_binding is not None) != (count == 1):
+                raise ValueError("unwindowed baseline differs from observation count")
+            baseline = None if baseline_binding is None else control.decode(snapshot.read(baseline_binding))
+            if baseline is not None:
+                rows = baseline["processes"]
+                if (type(rows) is not list or len(rows) != 1
+                        or not _unsigned(rows[0]["rss_bytes"], MAX_U64) or rows[0]["rss_bytes"] == 0
+                        or rows[0]["rss_bytes"] != baseline["rss_bytes"]):
+                    raise ValueError("invalid initial RSS accounting")
+            chunks = {name for name in snapshot.bindings if name.startswith("observations/chunk-")}
+            if chunks:
+                first = "observations/chunk-00000000000000000000.json"
+                if count != 1 or chunks != {first}:
+                    raise ValueError("retained resource samples lack a complete window")
+                expected = {"version": 1, "kind": "benchmark_process_observation_chunk", "sequence": 0,
+                            "first_observation_index": 0, "previous_chunk": None, "observations": [baseline]}
+                if snapshot.read(snapshot.bindings[first]) != control.canonical(expected):
+                    raise ValueError("unwindowed resource chunk differs from its sole baseline")
+            return (["sampled_peak_rss_exceeds_bound"]
+                    if (baseline is not None and max_peak_rss_bytes is not None
+                        and baseline["rss_bytes"] > max_peak_rss_bytes) else [])
+        reference = control.reference(sampled["window"])
+        if reference["path"] != "observations/window.json":
+            raise ValueError("resource window path differs")
+        window = control.decode(snapshot.read(reference))
+        baseline_binding = snapshot.bindings["observations/baseline.json"]
+        if control.reference(window["baseline"]) != baseline_binding:
+            raise ValueError("resource window baseline differs")
+        baseline = control.decode(snapshot.read(baseline_binding))
+        rows = baseline["processes"]
+        if type(rows) is not list or len(rows) != 1:
+            raise ValueError("resource baseline process inventory differs")
+        metrics = observer.validate_resource_window(
+            window, records=snapshot, outer_timeout_ms=limits["timeout_ms"],
+            interval_ms=limits["sampling_interval_ms"],
+            expected_processes=[{key: row[key] for key in
+                                 ("label", "identity", "cpu_counter_unit_ns")} for row in rows])
+        chunks = {name for name in snapshot.bindings if name.startswith("observations/chunk-")}
+        if chunks != {f"observations/chunk-{index:020d}.json"
+                      for index in range(window["journal"]["chunk_count"])}:
+            raise ValueError("retained resource chunk inventory differs from the window")
+        expected = {"observations": window["journal"]["recorded_count"],
+                    "sampled_cpu_time_ns": metrics["cpu_time_ns"],
+                    "sampled_peak_rss_bytes": metrics["sampled_peak_rss_bytes"],
+                    "maximum_observation_gap_ns": metrics["maximum_observation_gap_ns"]}
+        if any(type(sampled[key]) is not int or sampled[key] != value for key, value in expected.items()):
+            raise ValueError("resource summary differs from retained samples")
+        if (rows[0]["cpu_time_ns"] + metrics["cpu_time_ns"]
+                    > process["cpu_user_ns"] + process["cpu_system_ns"] + CPU_ROUNDING_SLACK_NS):
+            raise ValueError("retained CPU samples exceed original kernel accounting")
+        # smaps_rollup page-table RSS and wait4's separately accounted peak
+        # need not order each other. Preserve both exact sources and reject
+        # either exceeding the caller's bound; never add a tolerance.
+        if max_peak_rss_bytes is not None and metrics["sampled_peak_rss_bytes"] > max_peak_rss_bytes:
+            return ["sampled_peak_rss_exceeds_bound"]
+    except (KeyError, TypeError, ValueError, OSError, RuntimeError):
+        return ["resource_window_evidence_invalid"]
+    return []
 
 
 def _terminal_evidence_reasons(process, snapshot, context=None, *, required_linux=False, expected_delivery=None):
@@ -1509,20 +1635,33 @@ def _terminal_evidence_reasons(process, snapshot, context=None, *, required_linu
 def judge_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any],
                   process: dict[str, Any], requirements: dict[str, Any],
                   *, snapshot: _EvidenceSnapshot | None = None, required_linux: bool = False, expected_delivery=None,
+                  observation_limits: dict[str, Any] | None = None,
                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str],
                              list[dict[str, Any]]]:
     """Decode and judge every record the command wrote into ``run/child``.
 
     Returns the report entries, the Norito files left without a JSON view,
     the rejection reasons and the decoded records. ``requirements`` carries
-    the requested address-space limit, whether a thermal state is required
-    and the consumer's bound on the largest undivided phase. Read-only.
+    the requested address-space limit, maximum independently observed peak RSS,
+    whether a thermal state is required and the consumer's bound on the
+    largest undivided phase. Read-only.
     """
     entries: list[dict[str, Any]] = []
     if snapshot is None:
-        with _EvidenceDirectory(run) as directory:
-            snapshot = _EvidenceSnapshot(directory, descriptor)
+        with _EvidenceDirectory(run) as directory, _EvidenceSnapshot(directory, descriptor) as captured:
+            return judge_records(descriptor, run, context, process, requirements, snapshot=captured,
+                                 required_linux=required_linux, expected_delivery=expected_delivery,
+                                 observation_limits=observation_limits)
     reasons: list[str] = list(snapshot.reasons) + _terminal_evidence_reasons(process, snapshot, context, required_linux=required_linux, expected_delivery=expected_delivery)
+    rss_bound = requirements["max_peak_rss_bytes"]
+    reasons += _sampled_evidence_reasons(process, snapshot, observation_limits, rss_bound)
+    peak_rss = process.get("peak_rss_bytes")
+    rss_available = (type(peak_rss) is int and 1 <= peak_rss <= MAX_U64
+                     and process.get("peak_rss_source") == "kernel_child_rusage")
+    if not rss_available:
+        reasons.append("peak_rss_observation_invalid")
+    elif rss_bound is not None and peak_rss > rss_bound:
+        reasons.append("peak_rss_exceeds_bound")
     decoded: list[dict[str, Any]] = []
     present = snapshot.child_names
     names = [name for name in present
@@ -1587,7 +1726,7 @@ def judge_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any]
         observed = record["process"]
         if observed["pid"] != process["pid"]:
             findings.append("pid_differs_from_observed_process")
-        elif (observed["peak_rss_bytes"] > process["peak_rss_bytes"]
+        elif (rss_available and observed["peak_rss_bytes"] > peak_rss
               or observed["cpu_user_ns"] + observed["cpu_system_ns"]
               > process["cpu_user_ns"] + process["cpu_system_ns"] + CPU_ROUNDING_SLACK_NS):
             findings.append("record_exceeds_kernel_process_accounting")
@@ -1614,9 +1753,11 @@ def judge_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any]
 def collect_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any],
                     process: dict[str, Any], requirements: dict[str, Any],
                     *, snapshot: _EvidenceSnapshot | None = None, required_linux: bool = False, expected_delivery=None,
+                    observation_limits: dict[str, Any] | None = None,
                     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """Report entries, orphaned Norito files and reasons for one run directory."""
-    return judge_records(descriptor, run, context, process, requirements, snapshot=snapshot, required_linux=required_linux, expected_delivery=expected_delivery)[:3]
+    return judge_records(descriptor, run, context, process, requirements, snapshot=snapshot, required_linux=required_linux,
+                         expected_delivery=expected_delivery, observation_limits=observation_limits)[:3]
 
 
 def write_manifest(run: Path, records: Any, context: dict[str, Any],
@@ -1626,25 +1767,25 @@ def write_manifest(run: Path, records: Any, context: dict[str, Any],
     The manifest is not signed. Its own reference is returned so the caller
     can print the digest an operator retains or signs outside this tool.
     """
-    with _EvidenceDirectory(run) as directory:
-        current = _EvidenceSnapshot(directory, load_descriptor())
-    if verdict == "accepted" and current.reasons:
-        raise ValueError("accepted evidence inventory changed")
-    if snapshot is not None and any(current.bindings.get(name) != binding
-                                    for name, binding in snapshot.bindings.items()):
-        raise ValueError("evidence changed after judgment")
-    if snapshot is not None and set(current.bindings) - set(snapshot.bindings) != {"report.json"}:
-        raise ValueError("evidence added after judgment")
-    files = [current.bindings[name] for name in sorted(current.bindings)]
-    return records.publish("manifest.json", control.canonical({
-        "schema": MANIFEST_SCHEMA, "context": context, "verdict": verdict,
-        "classification": "measured", "files": files}))
+    with _EvidenceDirectory(run) as directory, _EvidenceSnapshot(directory, load_descriptor()) as current:
+        if verdict == "accepted" and current.reasons:
+            raise ValueError("accepted evidence inventory changed")
+        if snapshot is not None and any(current.bindings.get(name) != binding
+                                        for name, binding in snapshot.bindings.items()):
+            raise ValueError("evidence changed after judgment")
+        if snapshot is not None and set(current.bindings) - set(snapshot.bindings) != {"report.json"}:
+            raise ValueError("evidence added after judgment")
+        files = [current.bindings[name] for name in sorted(current.bindings)]
+        return records.publish("manifest.json", control.canonical({
+            "schema": MANIFEST_SCHEMA, "context": context, "verdict": verdict,
+            "classification": "measured", "files": files}))
 
 
 def run_requirements(arguments: argparse.Namespace) -> dict[str, Any]:
     """Operator-stated requirements beyond the record schema's own rules."""
     return validate_requirements({"classification": "engineering_target",
                                  "address_space_limit_bytes": arguments.address_space_limit_bytes,
+                                 "max_peak_rss_bytes": arguments.max_peak_rss_bytes,
                                  "thermal_state": arguments.require_thermal_state,
                                  "max_undivided_phase_ppm": arguments.max_undivided_phase_ppm})
 
@@ -1652,12 +1793,13 @@ def run_requirements(arguments: argparse.Namespace) -> dict[str, Any]:
 def validate_requirements(requirements: Any) -> dict[str, Any]:
     """Validate the exact engineering-target contract without boolean/integer coercion."""
     if (type(requirements) is not dict
-            or set(requirements) != {"classification", "address_space_limit_bytes",
+            or set(requirements) != {"classification", "address_space_limit_bytes", "max_peak_rss_bytes",
                                     "thermal_state", "max_undivided_phase_ppm"}
             or requirements["classification"] != "engineering_target"
             or type(requirements["thermal_state"]) is not bool):
         raise HarnessRefusal("requirements have invalid fields or classification")
     for field, maximum in (("address_space_limit_bytes", MAX_U64 // 2),
+                           ("max_peak_rss_bytes", MAX_U64),
                            ("max_undivided_phase_ppm", MAX_U32)):
         value = requirements[field]
         if value is not None and not (type(value) is int and 1 <= value <= maximum):
@@ -1672,10 +1814,10 @@ def _consumer_reasons(original: dict[str, Any], consumer: dict[str, Any]) -> lis
         reasons.append("consumer_requirement_not_established:address_space_limit_bytes")
     if consumer["thermal_state"] and not original["thermal_state"]:
         reasons.append("consumer_requirement_not_established:thermal_state")
-    bound = consumer["max_undivided_phase_ppm"]
-    if bound is not None and (original["max_undivided_phase_ppm"] is None
-                             or original["max_undivided_phase_ppm"] > bound):
-        reasons.append("consumer_requirement_not_established:max_undivided_phase_ppm")
+    for field in ("max_undivided_phase_ppm", "max_peak_rss_bytes"):
+        bound = consumer[field]
+        if bound is not None and (original[field] is None or original[field] > bound):
+            reasons.append("consumer_requirement_not_established:" + field)
     return reasons
 
 
@@ -1817,6 +1959,7 @@ def run_command(arguments: argparse.Namespace, *, linux_observer_factory=None, e
                         snapshot = _EvidenceSnapshot(directory, descriptor)
                     entries, orphans, record_reasons = collect_records(
                         descriptor, run, context, process, requirements, snapshot=snapshot,
+                        observation_limits=report["limits"],
                         required_linux=linux_observer_factory is not None, expected_delivery=expected_delivery)
                     report["records"], report["orphans"] = entries, orphans
                     reasons.extend(record_reasons)
@@ -1841,16 +1984,22 @@ def run_command(arguments: argparse.Namespace, *, linux_observer_factory=None, e
         reasons.append("harness_failure:" + type(error).__name__)
     finally:
         try:
-            records.publish("report.json", control.canonical(report))
-            manifest_reference = write_manifest(run, records, context, report["verdict"],
-                                                snapshot=snapshot)
-        except Exception as error:  # noqa: BLE001
-            with open(run / "harness_failure.json", "xb") as stream:
-                stream.write(control.canonical(
-                    {"schema": FAILURE_SCHEMA, "reason": type(error).__name__,
-                     "observation_exceptions": observation_exception_reasons}))
-            report["verdict"] = "rejected"
-        records.close()
+            try:
+                records.publish("report.json", control.canonical(report))
+                manifest_reference = write_manifest(run, records, context, report["verdict"],
+                                                    snapshot=snapshot)
+            except Exception as error:  # noqa: BLE001
+                with open(run / "harness_failure.json", "xb") as stream:
+                    stream.write(control.canonical(
+                        {"schema": FAILURE_SCHEMA, "reason": type(error).__name__,
+                         "observation_exceptions": observation_exception_reasons}))
+                report["verdict"] = "rejected"
+        finally:
+            try:
+                if snapshot is not None:
+                    snapshot.close()
+            finally:
+                records.close()
     summary = {
         "run_directory": str(run), "verdict": report["verdict"], "reasons": reasons,
         "manifest_sha256": None if manifest_reference is None else manifest_reference["sha256"],
@@ -1969,6 +2118,7 @@ def _derived_reasons(descriptor: dict[str, Any], run: Path, report: dict[str, An
         derived = process_reasons(process, output)
         entries, orphans, record_reasons, decoded = judge_records(
             descriptor, run, report["context"], process, requirements, snapshot=snapshot,
+            observation_limits=report["limits"],
             required_linux=expected_observation_contract == observation_contract.LINUX,
             expected_delivery=expected_delivery)
     except (KeyError, TypeError, ValueError, OSError):
@@ -1995,6 +2145,7 @@ def _derived_reasons(descriptor: dict[str, Any], run: Path, report: dict[str, An
     if consumer != requirements:
         _, _, consumer_rejections, _ = judge_records(
             descriptor, run, report["context"], process, consumer, snapshot=snapshot,
+            observation_limits=report["limits"],
             required_linux=expected_observation_contract == observation_contract.LINUX,
             expected_delivery=expected_delivery)
         reasons += ["consumer_evidence_rejected:" + reason for reason in consumer_rejections]
@@ -2007,6 +2158,16 @@ def _inspect_pinned_run(run: Path, scope: dict[str, Any], manifest_sha256: str |
                         consumer_requirements: dict[str, Any] | None = None,
                         consumer_overrides: dict[str, Any] | None = None, *,
                         expected_observation_contract, expected_delivery=None) -> dict[str, Any]:
+    with ExitStack() as owners:
+        return _inspect_retained_run(run, scope, manifest_sha256, consumer_requirements, consumer_overrides,
+                                     expected_observation_contract=expected_observation_contract,
+                                     expected_delivery=expected_delivery, owners=owners)
+
+
+def _inspect_retained_run(run: Path, scope: dict[str, Any], manifest_sha256: str | None,
+                        consumer_requirements: dict[str, Any] | None = None,
+                        consumer_overrides: dict[str, Any] | None = None, *,
+                        expected_observation_contract, expected_delivery=None, owners) -> dict[str, Any]:
     result: dict[str, Any] = {"reasons": [], "report": None, "documents": {},
                               "manifest_sha256": manifest_sha256,
                               "original_requirements": None, "consumer_requirements": None}
@@ -2030,7 +2191,7 @@ def _inspect_pinned_run(run: Path, scope: dict[str, Any], manifest_sha256: str |
                 reasons.append("manifest_digest_differs")
                 return result
             manifest = strict_json(raw)
-            snapshot = _EvidenceSnapshot(directory, descriptor)
+            snapshot = owners.enter_context(_EvidenceSnapshot(directory, descriptor))
     except (OSError, ValueError):
         reasons.append("manifest_or_evidence_unreadable")
         return result
@@ -2145,11 +2306,13 @@ def salvage(arguments: argparse.Namespace) -> int:
                           arguments.config, arguments.hardware, arguments.cache_policy)
     overrides = {key: value for key, value in {
         "address_space_limit_bytes": arguments.address_space_limit_bytes,
+        "max_peak_rss_bytes": arguments.max_peak_rss_bytes,
         "thermal_state": arguments.require_thermal_state,
         "max_undivided_phase_ppm": arguments.max_undivided_phase_ppm,
     }.items() if value is not None}
     # Validate CLI values before reading evidence, including bool-as-int helper input.
     validate_requirements(dict(classification="engineering_target", address_space_limit_bytes=None,
+                               max_peak_rss_bytes=None,
                                thermal_state=False, max_undivided_phase_ppm=None) | overrides)
     try:expected_contract,expected_delivery=observation_contract.arguments(arguments)
     except ValueError as error:raise HarnessRefusal('independent observation requirement is incomplete') from error
@@ -2229,6 +2392,9 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--address-space-limit-bytes", type=int, default=None,
                      help="enforce RLIMIT_AS on the command; the run is rejected when the "
                           "platform cannot apply it or a record observed another limit")
+    run.add_argument("--max-peak-rss-bytes", type=int, default=None,
+                     help="reject unavailable kernel child rusage or either its lifetime "
+                          "peak RSS or retained sampled RSS exceeding this acceptance bound")
     run.add_argument("--retain-output-tail-bytes", type=int, default=0,
                      help="store this many final bytes of stdout and stderr (at most "
                           f"{MAX_OUTPUT_TAIL_BYTES}); by default only their length and "
@@ -2266,6 +2432,9 @@ def parser() -> argparse.ArgumentParser:
                            "when the run was made; required for every salvage claim")
     keep.add_argument("--address-space-limit-bytes", type=int, default=None,
                       help="require the exact originally applied address-space experiment")
+    keep.add_argument("--max-peak-rss-bytes", type=int, default=None,
+                      help="require an original independently observed RSS bound no weaker "
+                           "than this one, preserving the original run's verdict")
     keep.add_argument("--require-thermal-state", action="store_true", default=None,
                       help="require that the original run required and observed thermal state")
     keep.add_argument("--max-undivided-phase-ppm", type=int, default=None,

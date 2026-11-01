@@ -186,9 +186,9 @@ function assertRunnerRejectsDotnetSdk(script, envName, label) {
       env: { ...process.env, [envName]: fakeDotnet },
     });
 
-    assert.notEqual(result.status, 0, `${label} must reject non-.NET-8 SDKs`);
+    assert.notEqual(result.status, 0, `${label} must reject non-.NET-10 SDKs`);
     assert.match(result.stdout, /^7\.0\.404$/m, `${label} must print dotnet version evidence`);
-    assert.match(result.stderr, /\.NET SDK 8\.0\.x/u, `${label} must explain the .NET 8 gate`);
+    assert.match(result.stderr, /\.NET SDK 10\.0\.x/u, `${label} must explain the .NET 10 gate`);
     assert.doesNotMatch(
       result.stderr,
       /unexpected fake dotnet invocation/u,
@@ -424,7 +424,7 @@ test("SoraFS JVM SDK runner rejects non-JDK-21 overrides before tests", () => {
   );
 });
 
-test("SoraFS C# SDK runner rejects non-.NET-8 overrides before tests", () => {
+test("SoraFS C# SDK runner rejects non-.NET-10 overrides before tests", () => {
   assertRunnerRejectsDotnetSdk(
     "ci/check_sorafs_pin_register_csharp_sdk.sh",
     "SORAFS_PIN_REGISTER_DOTNET_BIN",

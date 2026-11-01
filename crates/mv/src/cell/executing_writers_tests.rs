@@ -12,14 +12,14 @@ use std::{
     task::{Context, Wake, Waker},
 };
 
-struct Probe<V: Value> {
+struct Probe<V: CellValue> {
     cell: Arc<Cell<V>>,
     calls: AtomicUsize,
     saw_held_writer: AtomicBool,
     panic_once: AtomicBool,
 }
 
-impl<V: Value> Wake for Probe<V> {
+impl<V: CellValue> Wake for Probe<V> {
     fn wake(self: Arc<Self>) {
         let undo_released =
             self.cell.revert.is_poisoned() || self.cell.revert.try_write().is_some();
@@ -32,7 +32,7 @@ impl<V: Value> Wake for Probe<V> {
     }
 }
 
-fn arm<'a, V: Value>(
+fn arm<'a, V: CellValue>(
     cell: &Arc<Cell<V>>,
     panic_once: bool,
     registration_1: &'a mut iroha_allocation::release::ReleaseRegistration,
@@ -66,7 +66,7 @@ fn arm<'a, V: Value>(
     (probe, waits)
 }
 
-fn assert_released<V: Value>(
+fn assert_released<V: CellValue>(
     probe: &Arc<Probe<V>>,
     mut waits: [iroha_allocation::release::ReleaseFuture<'_>; 2],
 ) {

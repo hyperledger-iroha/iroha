@@ -1369,6 +1369,17 @@ int main(void) {
     static const char invalid_domain[] = "BANKA.universal";
     if (connect_norito_domain_id_validate_v1(domain, sizeof(domain) - 1) != 0) return 12;
     if (connect_norito_domain_id_validate_v1(invalid_domain, sizeof(invalid_domain) - 1) != 1) return 13;
+    static const char name[] = "caf\xc3\xa9";
+    static const char decomposed_name[] = "cafe\xcc\x81";
+    static const char invalid_utf8[] = "\xed\xa0\x80";
+    char boundary_name[255];
+    memset(boundary_name, 'a', sizeof(boundary_name));
+    if (connect_norito_name_validate_v1(name, sizeof(name) - 1) != 0) return 14;
+    if (connect_norito_name_validate_v1(decomposed_name, sizeof(decomposed_name) - 1) != 1) return 15;
+    if (connect_norito_name_validate_v1(invalid_utf8, sizeof(invalid_utf8) - 1) != -2) return 16;
+    if (connect_norito_name_validate_v1(boundary_name, sizeof(boundary_name)) != 0) return 17;
+    if (connect_norito_name_validate_v1(name, 256) != 1) return 18;
+    if (connect_norito_name_validate_v1(NULL, 0) != -1) return 19;
     for (uint32_t suite = 0; suite < 3; ++suite) {
         int result = check_mldsa_ffi(suite);
         if (result) return result;
@@ -1944,6 +1955,7 @@ cat > "$PUBLISH_MANIFEST" <<EOF
     "connect_norito_bridge_abi_version",
     "connect_norito_zk_x509_prepare_ownership_signing_v1",
     "connect_norito_domain_id_validate_v1",
+    "connect_norito_name_validate_v1",
     "soranet_mldsa_parameters",
     "soranet_mldsa_generate_keypair",
     "soranet_mldsa_sign",

@@ -16,8 +16,8 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 #[test]
 fn plain_ballot_conviction_applies() {
     // Build minimal state/transaction

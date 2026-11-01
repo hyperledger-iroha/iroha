@@ -38,8 +38,8 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use std::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::PathBuf,

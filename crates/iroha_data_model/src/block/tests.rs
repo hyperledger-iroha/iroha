@@ -916,7 +916,7 @@ fn genesis_defaults_confidential_digest() {
 }
 #[test]
 fn canonical_wire_prefixes_the_declared_version_and_header() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1002,7 +1002,7 @@ fn versioned_block_roundtrip_preserves_instruction_order() {
 }
 #[test]
 fn deframe_rejects_payload_exceeding_max_len() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     const LENGTH_OFFSET: usize = 1 + 4 + 1 + 1 + 16 + 1;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
@@ -1046,7 +1046,7 @@ fn deframe_rejects_payload_exceeding_max_len() {
 }
 #[test]
 fn framed_signed_block_decode_rejects_trailing_bytes() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1077,7 +1077,7 @@ fn framed_signed_block_decode_rejects_trailing_bytes() {
 }
 #[test]
 fn canonical_wire_deframe_roundtrip() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1118,7 +1118,7 @@ fn framed_decode_borrows_payload_from_original_wire() {
 }
 #[test]
 fn canonical_wire_matches_framed_payload() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1432,7 +1432,7 @@ fn framed_decode_counts_canonical_size_before_materialization() {
 }
 #[test]
 fn set_da_commitments_updates_header_hash() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1512,7 +1512,7 @@ fn decode_versioned_signed_block_handles_genesis_like_payload() {
 }
 #[test]
 fn decode_versioned_signed_block_accepts_framed_payload() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1723,7 +1723,7 @@ fn commit_certificate_bytes_are_carried_by_the_stored_frame() {
 }
 #[test]
 fn framed_signed_block_uses_v1_layout_flags() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1748,7 +1748,7 @@ fn framed_signed_block_uses_v1_layout_flags() {
 }
 #[test]
 fn signed_block_da_commitments_roundtrip() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),
@@ -1779,7 +1779,7 @@ fn signed_block_da_commitments_roundtrip() {
 }
 #[test]
 fn set_da_pin_intents_updates_header_hash() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
     let mut block = SignedBlock {
         signatures: crate::block::BlockSignatures::default(),

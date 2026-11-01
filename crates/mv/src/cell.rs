@@ -3,8 +3,8 @@ use std::{alloc::Layout, marker::PhantomData};
 use concread::ebrcell::{EbrCellOwned, Untracked};
 
 use crate::{
-    BlockMode, PublicationCleanup, PublicationPreparationError, PublicationPreparationResult,
-    ReleaseGuard, ReleaseNotification, Value,
+    BlockMode, CellValue, PublicationCleanup, PublicationPreparationError,
+    PublicationPreparationResult, ReleaseGuard, ReleaseNotification,
     publication::{CapturedPublication, NextPublication, Publication},
 };
 
@@ -63,7 +63,7 @@ pub use physical::PublishedPublication;
 ///     let _block = cell.block();
 /// }
 /// ```
-pub struct Cell<V: Value, Charge: Send + Sync + 'static = Untracked> {
+pub struct Cell<V: CellValue, Charge: Send + Sync + 'static = Untracked> {
     /// Process-local identity of the jointly published current/undo pair.
     pub(crate) publication: Publication,
     pub(crate) revert_released: ReleaseNotification,
@@ -98,7 +98,7 @@ impl CellAllocationCharges<Untracked> {
     }
 }
 
-impl<V: Value> Cell<V> {
+impl<V: CellValue> Cell<V> {
     /// Construct an explicitly untracked cell.
     pub fn new(v: V) -> Self {
         Self::new_charged(v, CellAllocationCharges::untracked())
@@ -132,7 +132,7 @@ impl<V: Value> Cell<V> {
     }
 }
 
-impl<V: Value> Cell<V, iroha_allocation::AllocationCharge> {
+impl<V: CellValue> Cell<V, iroha_allocation::AllocationCharge> {
     /// Attach both original physical generation shells and the exact successor.
     /// Every owner must originate from the enclosing execution pool. Refusal
     /// returns all three unchanged before acquiring any physical writer.
@@ -158,7 +158,7 @@ impl<V: Value> Cell<V, iroha_allocation::AllocationCharge> {
     }
 }
 
-impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
+impl<V: CellValue, Charge: Send + Sync + 'static> Cell<V, Charge> {
     /// Exact requested EBR allocation layouts, in current/undo order.
     ///
     /// These are concrete outer layouts, not estimates of nested or total heap
@@ -297,7 +297,7 @@ impl<V: Value, Charge: Send + Sync + 'static> Cell<V, Charge> {
 type CellWriter<'storage, V, Charge> =
     ReleaseGuard<'storage, concread::ebrcell::EbrCellWriteTxn<'storage, V, Charge>>;
 
-impl<V: Value + Default> Default for Cell<V> {
+impl<V: CellValue + Default> Default for Cell<V> {
     fn default() -> Self {
         Self::new(V::default())
     }
@@ -308,17 +308,17 @@ mod view {
     use concread::ebrcell::EbrCellReadTxn;
     use std::ops::Deref;
     /// Consistent view of the storage at the certain version
-    pub struct View<'storage, V: Value> {
+    pub struct View<'storage, V: CellValue> {
         pub(crate) blocks: EbrCellReadTxn<V>,
         pub(crate) _marker: core::marker::PhantomData<&'storage V>,
     }
-    impl<V: Value> View<'_, V> {
+    impl<V: CellValue> View<'_, V> {
         /// Read entry from the list up to certain version non-inclusive
         pub fn get(&self) -> &V {
             &self.blocks
         }
     }
-    impl<V: Value> Deref for View<'_, V> {
+    impl<V: CellValue> Deref for View<'_, V> {
         type Target = V;
         fn deref(&self) -> &Self::Target {
             self.get()
@@ -331,12 +331,12 @@ pub use view::View;
 /// Owned writers for a current-value replacement which preserves the exact undo.
 /// This is physical custody only, not authorization for a new block or State.
 #[must_use = "retain this owner until same-cut publication or abandonment"]
-pub struct CurrentReplacement<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
+pub struct CurrentReplacement<'storage, V: CellValue, Charge: Send + Sync + 'static = Untracked> {
     writers: CellWriters<'storage, V, Charge>,
     publication: &'storage Publication,
 }
 
-impl<V: Value, Charge: Send + Sync + 'static> CurrentReplacement<'_, V, Charge> {
+impl<V: CellValue, Charge: Send + Sync + 'static> CurrentReplacement<'_, V, Charge> {
     /// Borrow the original current value while both writers remain held.
     pub fn get(&self) -> &V {
         &self.writers.as_ref().blocks
@@ -358,7 +358,7 @@ impl<V: Value, Charge: Send + Sync + 'static> CurrentReplacement<'_, V, Charge> 
 ///
 /// Equal values remain explicit: a mutable borrow is not proof of a semantic
 /// change. The consumer owns any canonical encoding and equality policy.
-pub struct TouchedValue<'a, V: Value> {
+pub struct TouchedValue<'a, V: CellValue> {
     /// Value before the overlay's first mutable access.
     pub before: &'a V,
     /// Current value, including applied child changes.
@@ -371,7 +371,7 @@ pub struct TouchedValue<'a, V: Value> {
 /// predecessor identity and next publication identity. It holds no EBR pin or
 /// storage lock. Reacquisition never reconstructs or clones a successor; only the
 /// enclosing aggregate owner can supply cross-component publication authority.
-pub struct Detached<V: Value, Admission, Charge: Send + Sync + 'static = Untracked> {
+pub struct Detached<V: CellValue, Admission, Charge: Send + Sync + 'static = Untracked> {
     revert: EbrCellOwned<Option<V>, Charge>,
     blocks: EbrCellOwned<V, Charge>,
     // Capacity outlives both original payload allocations on abandonment.
@@ -386,7 +386,7 @@ struct DetachedMetadata<Admission> {
     admission: Admission,
 }
 
-impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, Charge> {
+impl<V: CellValue, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, Charge> {
     /// Return how the original block acquired its predecessor.
     pub fn mode(&self) -> BlockMode {
         self.metadata.mode
@@ -473,7 +473,7 @@ impl<V: Value, Admission, Charge: Send + Sync + 'static> Detached<V, Admission, 
 #[must_use = "preparation must be published or aborted by its aggregate owner"]
 pub struct PreparedPublication<
     'target,
-    V: Value,
+    V: CellValue,
     Admission,
     Installation,
     Charge: Send + Sync + 'static = Untracked,
@@ -484,7 +484,7 @@ pub struct PreparedPublication<
     installation: Installation,
 }
 
-impl<V: Value, Admission, Installation, Charge: Send + Sync + 'static>
+impl<V: CellValue, Admission, Installation, Charge: Send + Sync + 'static>
     PreparedPublication<'_, V, Admission, Installation, Charge>
 {
     /// Release both writers and return the original journals and deferred cleanup.
@@ -537,7 +537,7 @@ impl<V: Value, Admission, Installation, Charge: Send + Sync + 'static>
 // The original EBR generations transfer without pinning the collector or
 // invoking callbacks. Both physical writers survive through identity rotation;
 // only the returned retirement owners may pin and schedule old generations.
-fn publish_pair<'a, V: Value, Charge: Send + Sync + 'static>(
+fn publish_pair<'a, V: CellValue, Charge: Send + Sync + 'static>(
     writers: CellWriters<'a, V, Charge>,
     publication: &Publication,
     next: NextPublication,
@@ -597,7 +597,7 @@ mod block {
     use super::*;
     use std::ops::{Deref, DerefMut};
     /// Batched update to the storage that can be reverted later
-    pub struct Block<'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
+    pub struct Block<'storage, V: CellValue, Charge: Send + Sync + 'static = Untracked> {
         pub(super) writers: CellWriters<'storage, V, Charge>,
         pub(super) dirty: bool,
         pub(super) publication: &'storage Publication,
@@ -606,7 +606,7 @@ mod block {
         // Retained before original physical acquisition; capture/publication never allocate it.
         pub(super) next: Option<NextPublication>,
     }
-    impl<'storage, V: Value, Charge: Send + Sync + 'static> Block<'storage, V, Charge> {
+    impl<'storage, V: CellValue, Charge: Send + Sync + 'static> Block<'storage, V, Charge> {
         pub(super) fn new(
             writers: CellWriters<'storage, V, Charge>,
             dirty: bool,
@@ -727,25 +727,30 @@ mod block {
             &self.writers.as_ref().blocks
         }
     }
-    impl<V: Value, Charge: Send + Sync + 'static> Deref for Block<'_, V, Charge> {
+    impl<V: CellValue, Charge: Send + Sync + 'static> Deref for Block<'_, V, Charge> {
         type Target = V;
         fn deref(&self) -> &Self::Target {
             self.get()
         }
     }
-    impl<V: Value, Charge: Send + Sync + 'static> DerefMut for Block<'_, V, Charge> {
+    impl<V: CellValue, Charge: Send + Sync + 'static> DerefMut for Block<'_, V, Charge> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             self.get_mut()
         }
     }
     /// Part of block's aggregated changes which applied or aborted at the same time
-    pub struct Transaction<'block, 'storage, V: Value, Charge: Send + Sync + 'static = Untracked> {
+    pub struct Transaction<
+        'block,
+        'storage,
+        V: CellValue,
+        Charge: Send + Sync + 'static = Untracked,
+    > {
         pub(crate) applied: bool,
         pub(crate) dirty_before: bool,
         pub(crate) revert: Option<V>,
         pub(crate) block: &'block mut Block<'storage, V, Charge>,
     }
-    impl<'block, 'storage: 'block, V: Value, Charge: Send + Sync + 'static>
+    impl<'block, 'storage: 'block, V: CellValue, Charge: Send + Sync + 'static>
         Transaction<'block, 'storage, V, Charge>
     {
         /// Read the value before the parent block's first mutable access.
@@ -815,7 +820,7 @@ mod block {
             &self.block.writers.as_ref().blocks
         }
     }
-    impl<'block, 'store: 'block, V: Value, Charge: Send + Sync + 'static> Drop
+    impl<'block, 'store: 'block, V: CellValue, Charge: Send + Sync + 'static> Drop
         for Transaction<'block, 'store, V, Charge>
     {
         fn drop(&mut self) {
@@ -830,13 +835,13 @@ mod block {
             self.block.dirty = self.dirty_before;
         }
     }
-    impl<V: Value, Charge: Send + Sync + 'static> Deref for Transaction<'_, '_, V, Charge> {
+    impl<V: CellValue, Charge: Send + Sync + 'static> Deref for Transaction<'_, '_, V, Charge> {
         type Target = V;
         fn deref(&self) -> &Self::Target {
             self.get()
         }
     }
-    impl<V: Value, Charge: Send + Sync + 'static> DerefMut for Transaction<'_, '_, V, Charge> {
+    impl<V: CellValue, Charge: Send + Sync + 'static> DerefMut for Transaction<'_, '_, V, Charge> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             self.get_mut()
         }
@@ -1131,7 +1136,7 @@ mod charged_allocation_tests;
 #[path = "cell/fresh_pair_acquisition_tests.rs"]
 mod fresh_pair_acquisition_tests;
 
-impl<V: Value, Charge: Send + Sync + 'static> crate::BlockRetirement for Block<'_, V, Charge> {
+impl<V: CellValue, Charge: Send + Sync + 'static> crate::BlockRetirement for Block<'_, V, Charge> {
     fn release_writers(&mut self) {
         self.writers.release();
     }
@@ -1149,7 +1154,7 @@ mod executing_writers_tests;
 #[path = "cell/partial_acquisition_tests.rs"]
 mod partial_acquisition_tests;
 
-impl<V: Value, Charge: Send + Sync + 'static> Block<'_, V, Charge> {
+impl<V: CellValue, Charge: Send + Sync + 'static> Block<'_, V, Charge> {
     pub(super) fn prepare_attached_publication(&mut self) {
         self.writers.as_ref();
         let next = self.next.take().expect("original Cell successor identity");

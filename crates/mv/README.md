@@ -10,7 +10,11 @@ Features:
 - ability to revert changes created in the latest block
 
 The storage layer uses concread's synchronous B+tree maps and epoch cells. Its
-dependency enables `maps` and `ebr` explicitly. Finite credits, charged buffers,
+dependency enables `maps` and `ebr` explicitly. `Key` and `Value` require only
+ordering, cloning and `'static`; thread safety is enforced by the maps' own
+`Send`/`Sync` impls, so a storage of thread-local values stays on its thread.
+Cells require `CellValue` (`Value + Send + Sync`) because epoch reclamation can
+destroy a retired generation on another thread. Finite credits, charged buffers,
 generic shared shells and release observations belong to the std-only sibling
 [`iroha_allocation`](../iroha_allocation/README.md). `mv::allocation::map` retains
 only the adapters that bind those credits to real storage-engine allocations.

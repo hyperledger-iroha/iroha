@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import threading
 import unittest
 from unittest import mock
 
@@ -127,11 +128,13 @@ class PublicDeliveryFiniteTests(NativeRunTests):
         original_sample = owned.OwnedLinuxProcessReader.sample
         original_rss = owned._OwnedReads.resident_bytes
         triggered = []
+        entered = threading.Event()
 
         def wait_original(reader):
             """Wait nonreapingly for this fixture's exact installed original only."""
             self.assertIs(reader, self.owner.reader)
             self.assertIsNotNone(reader._admission_raw)
+            entered.set()
             terminal = os.waitid(os.P_PID, self.owner.child.pid, os.WEXITED | os.WNOWAIT)
             self.assertEqual(terminal.si_pid, self.owner.child.pid)
             triggered.append(site)
@@ -151,7 +154,9 @@ class PublicDeliveryFiniteTests(NativeRunTests):
 
         with mock.patch.object(owned.OwnedLinuxProcessReader, 'sample', sample), \
                 mock.patch.object(owned._OwnedReads, 'resident_bytes', rss):
-            status, line, _ = self.run_tee()
+            def after_real_site(record):
+                self.assertTrue(entered.wait(20), 'fixture did not reach the real terminal sample site')
+            status, line, _ = self.run_tee(change=after_real_site)
         self.assertEqual((status, line['verdict'], line['reasons']), (0, 'accepted', []))
         self.assertEqual(triggered, [site])
         self._closed_original(success=True)
@@ -213,11 +218,13 @@ class PublicDeliveryFiniteTests(NativeRunTests):
         original = owned.OwnedLinuxProcessReader.sample
         injected = []
         unwound = []
+        entered = threading.Event()
 
         def sample(reader, pid, image):
             """Keep the initial actual sample unchanged; then inject the declared error."""
             if reader._admission_raw is not None:
                 injected.append(True)
+                entered.set()
                 raise first
             return original(reader, pid, image)
 
@@ -233,7 +240,9 @@ class PublicDeliveryFiniteTests(NativeRunTests):
         try:
             sys.settrace(trace)
             with mock.patch.object(owned.OwnedLinuxProcessReader, 'sample', sample):
-                status, line, _ = self.run_tee()
+                def after_real_injection(record):
+                    self.assertTrue(entered.wait(20), 'fixture did not reach the real injected sample')
+                status, line, _ = self.run_tee(change=after_real_injection)
         finally:
             sys.settrace(previous)
         self.assertEqual(status, 2)

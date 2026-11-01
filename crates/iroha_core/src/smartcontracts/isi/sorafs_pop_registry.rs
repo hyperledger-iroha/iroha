@@ -2267,7 +2267,7 @@ mod tests {
         },
     };
     use iroha_primitives::json::Json;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use sorafs_manifest::pop_credentials::{
         POP_COMMITMENT_ROOT_VERSION_V1, POP_CREDENTIAL_TREE_DEPTH_V1,
         POP_REVOCATION_LIST_VERSION_V1, POP_REVOCATION_TREE_DEPTH_V1, PopCommitmentRootV1,

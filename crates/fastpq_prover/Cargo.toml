@@ -23,6 +23,7 @@ fastpq_isi = { path = "../fastpq_isi" }
 iroha_allocation = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["application"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model"] }
+iroha_fhe = { path = "../iroha_fhe", default-features = false }
 iroha_primitives = { workspace = true }
 iroha_zkp_halo2 = { workspace = true }
 norito = { workspace = true, features = ["base-codec"], default-features = false }
@@ -86,6 +87,10 @@ path = "tests/offline_compact.rs"
 [[test]]
 name = "shared_backend_inventory"
 path = "tests/shared_backend_inventory.rs"
+
+[[test]]
+name = "rns_chain_air"
+path = "tests/rns_chain_air.rs"
 
 [build-dependencies]
 cc = "1.2.45"

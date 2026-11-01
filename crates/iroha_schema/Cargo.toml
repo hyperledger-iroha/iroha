@@ -16,7 +16,6 @@ iroha_schema_derive = { path = "../iroha_schema_derive" }
 
 [dev-dependencies]
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
-impls = { workspace = true }
 
 [features]
 default = []

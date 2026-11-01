@@ -26,10 +26,10 @@ use iroha_executor_data_model::permission::governance::{
 use iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use ivm::{IVM, PointerType, host::IVMHost, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::sync::Arc;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);

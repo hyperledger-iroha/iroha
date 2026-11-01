@@ -738,3 +738,7 @@ pub(crate) mod prefix_tests;
 #[cfg(test)]
 #[path = "metal_exact_root_readonly_tests.rs"]
 mod readonly_tests;
+
+#[cfg(test)]
+#[path = "metal_exact_root_parallel_scan_tests.rs"]
+mod parallel_scan_tests;

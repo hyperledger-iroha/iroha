@@ -200,6 +200,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{error::ParseError, name::Name, state_path::StatePath};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::nonzero;
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -213,14 +214,12 @@ use mv::{
         Block as StorageBlock, Storage, Transaction as StorageTransaction, View as StorageView,
     },
 };
-use nonzero_ext::nonzero;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-use once_cell::sync::OnceCell as SyncOnceCell;
 use range_bounds::*;
 pub use range_bounds::{
     AsAssetIdAccountCompare, AsAssetIdAccountDefinitionCompare, AsBondEntitlementBondCompare,
@@ -238,7 +237,7 @@ use std::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -283,7 +282,7 @@ fn append_merge_storage_delta<K, V, M>(
 }
 fn append_merge_cell_delta<V, C>(out: &mut Vec<u8>, name: &'static str, cell: &CellBlock<'_, V, C>)
 where
-    V: MvValue + Encode,
+    V: mv::CellValue + Encode,
     C: Send + Sync + 'static,
 {
     if !cell.is_dirty() {
@@ -1123,7 +1122,7 @@ trait CellVecExt<T: MvValue> {
         self.mutate_vec(core::mem::take)
     }
 }
-impl<T: MvValue> CellVecExt<T> for Cell<Vec<T>> {
+impl<T: mv::CellValue> CellVecExt<T> for Cell<Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         let mut block = self.block();
         let mut transaction = block.transaction();
@@ -1133,7 +1132,7 @@ impl<T: MvValue> CellVecExt<T> for Cell<Vec<T>> {
         result
     }
 }
-impl<T: MvValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
+impl<T: mv::CellValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         let mut transaction = self.transaction();
         let result = f(&mut *transaction);
@@ -1141,7 +1140,7 @@ impl<T: MvValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
         result
     }
 }
-impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
+impl<T: mv::CellValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         f(&mut **self)
     }
@@ -12980,7 +12979,7 @@ pub struct StateBlockFields<'state> {
     /// Optional node-local Soracloud runtime handle; production replay does not consult it.
     pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
-    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    accounts_snapshot_cache: OnceLock<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
     /// Validated confidential-root projection for this immutable view or untouched block.
@@ -14902,7 +14901,7 @@ pub struct StateView<'state> {
     /// Latest authenticated committed ledger time captured with this view.
     query_ledger_time_ms: Option<u64>,
     /// Cached snapshot of account identifiers for this view.
-    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    accounts_snapshot_cache: OnceLock<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
     /// Validated confidential-root projection for this immutable view or untouched block.
@@ -14974,7 +14973,7 @@ pub struct StateQueryView<'state> {
     /// Latest authenticated committed ledger time captured with this query view.
     query_ledger_time_ms: Option<u64>,
     /// Cached snapshot of account identifiers for this view.
-    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    accounts_snapshot_cache: OnceLock<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
     /// Validated confidential-root projection for this immutable view or untouched block.
@@ -18678,7 +18677,7 @@ where
 /// Reconstruct a skipped derived cell together with its latest-block undo projection.
 fn rebuild_derived_cell_with_previous<V>(current: V, previous: V) -> Cell<V>
 where
-    V: MvValue + PartialEq,
+    V: mv::CellValue + PartialEq,
 {
     let rebuilt = Cell::new(previous);
     if rebuilt.view().get() != &current {
@@ -26574,11 +26573,6 @@ impl State {
     ) -> Option<Hash> {
         StateReadOnly::lane_incarnation_at_height(&self.view(), lane_id, proposal_height)
     }
-    /// Snapshot all lane routes and incarnations authoritative at one proposal height.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: wire native state publication")
-    )]
     /// Report whether a canonical Nexus runtime snapshot was decoded.
     /// Fresh state uses its configured catalog until the first canonical snapshot.
     #[must_use]
@@ -30625,7 +30619,7 @@ impl State {
             kura: &self.kura,
             query_handle: &self.query_handle,
             query_ledger_time_ms,
-            accounts_snapshot_cache: SyncOnceCell::new(),
+            accounts_snapshot_cache: OnceLock::new(),
             ivm_elections_cache: ivm_elections::SnapshotCache::new(),
             ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
             #[cfg(feature = "telemetry")]
@@ -31968,7 +31962,7 @@ impl State {
                 kura: &self.kura,
                 query_handle: &self.query_handle,
                 query_ledger_time_ms,
-                accounts_snapshot_cache: SyncOnceCell::new(),
+                accounts_snapshot_cache: OnceLock::new(),
                 ivm_elections_cache: ivm_elections::SnapshotCache::new(),
                 ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
                 #[cfg(feature = "telemetry")]
@@ -37422,7 +37416,7 @@ mod consensus_owned_parameter_tests {
     }
 
     fn second_header() -> BlockHeader {
-        BlockHeader::new(nonzero_ext::nonzero!(2_u64), None, None, 0, 0)
+        BlockHeader::new(iroha_primitives::nonzero!(2_u64), None, None, 0, 0)
     }
 
     #[test]

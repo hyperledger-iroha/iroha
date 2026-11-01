@@ -617,11 +617,11 @@ impl StateBlock<'_> {
 // Extraction moves only completed native inputs; it never reopens State journals.
 impl StateBlock<'_> {
     /// Move the exact canonical fields and original allocation ledger into execution-result
-    /// custody. The result builder retains this owner across validation, publication and replay.
+    /// custody, retaining ordinary continuation rollback through finishing and live execution.
     pub(crate) fn take_sumeragi_execution_inputs(
         &mut self,
     ) -> Result<
-        iroha_allocation::RetainedPayload<crate::sumeragi::schedule::NativeExecutionInputs>,
+        crate::sumeragi::schedule::CompletedExecution,
         crate::sumeragi::schedule::ScheduleError,
     > {
         let step = std::mem::take(
@@ -632,7 +632,7 @@ impl StateBlock<'_> {
                 .sumeragi_schedule,
         );
         match step {
-            crate::sumeragi::schedule::ScheduleStep::Done(inputs) => Ok(inputs.into_inputs()),
+            crate::sumeragi::schedule::ScheduleStep::Done(inputs) => Ok(inputs),
             other => {
                 self.fields
                     .as_mut()

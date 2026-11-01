@@ -380,16 +380,24 @@ class HarnessTransitionTests(TerminalFixture, unittest.TestCase):
         usage=SimpleNamespace(ru_utime=1.0,ru_stime=0.0,ru_maxrss=1024)
         child=SimpleNamespace(pid=424242,returncode=None)
         reaps=[None,None] if timeout else [None,(reap_status,usage)]
+        clock=SimpleNamespace(now=1)
+        original_authenticate=monitor.authenticate
+        def authenticate_exit(error):
+            # Model a terminal fact captured before the deadline followed by a
+            # delayed original reap. Clock-call counts are not the contract.
+            result=original_authenticate(error)
+            if timeout:clock.now=20_000_000
+            return result
         with mock.patch.object(harness.observer,'native_reader',return_value=reader), \
              mock.patch.object(harness,'_owned_child_monitor',return_value=monitor), \
              mock.patch.object(harness.observer,'ProcessScope',return_value=scope), \
              mock.patch.object(harness.observer,'ResourceObservationJournal',return_value=journal), \
              mock.patch.object(harness.os,'getpgid',return_value=os.getpgrp()), \
              mock.patch.object(harness.time,'sleep'), \
-             mock.patch.object(harness.time,'monotonic_ns',side_effect=[1,2,20_000_000,21_000_000] if timeout else lambda:1), \
+             mock.patch.object(harness.time,'monotonic_ns',side_effect=lambda:clock.now), \
              mock.patch.object(harness,'_try_reap',side_effect=reaps), \
              mock.patch.object(harness,'_kill_own_child',return_value=(9,usage)) as deadline, \
-             mock.patch.object(monitor,'authenticate',wraps=monitor.authenticate) as authenticate:
+             mock.patch.object(monitor,'authenticate',side_effect=authenticate_exit) as authenticate:
             result=harness.observe_child(child,mock.Mock(),records,100,10 if timeout else 10000)
         return result,authenticate.call_count,deadline.call_count,records
 

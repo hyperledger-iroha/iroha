@@ -216,10 +216,15 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     // The Upgrade-executor instruction: the authority check precedes the migration run,
     // and its failed outcome is relabelled for the instruction. Neither is the terminal
-    // trap of a run.
+    // trap of a run. The shared clone-layout budget helpers (`add_clone_bytes`,
+    // `add_account_clone_bytes`) run only inside the X.509 attachment host handler:
+    // malformed stored identity material traps that syscall, and an overflowing demand
+    // is refused node-locally.
     producer!(
         "crates/iroha_core/src/executor.rs",
         PrepareRejection: [PermissionDenied],
+        SyscallTrap: [NoritoInvalid],
+        LocalDeferral: [AllocationDeferred],
         OutsideInvocation: [DecodeError, ExceededMaxCycles, PermissionDenied],
     ),
     producer!(

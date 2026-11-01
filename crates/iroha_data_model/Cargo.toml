@@ -72,12 +72,9 @@ regex = "1.11.0"
 displaydoc = { workspace = true, features = ["std"] }
 getset = { workspace = true }
 base64 = { workspace = true, features = ["alloc"] }
-bech32 = { workspace = true }
-nonzero_ext = { workspace = true }
 rustc-hash = { workspace = true }
 blake2 = "0.11.0"
 blake3 = { workspace = true }
-bs58 = "0.5.1"
 time = { workspace = true }
 fastpq_isi = { path = "../fastpq_isi" }
 # Portable current finality verifies the canonical consensus certificate directly.

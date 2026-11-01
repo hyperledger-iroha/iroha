@@ -7,6 +7,10 @@
 use sha3::{Digest, Sha3_384};
 use zeroize::Zeroize;
 
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "privacy_outer_hash_avx2_tests.rs"]
+mod avx2_tests;
+
 /// Exact byte width of every outer SHA3-384 commitment.
 pub const PRIVACY_OUTER_DIGEST_BYTES_V1: usize = 48;
 

@@ -824,7 +824,7 @@ def test_native_release_jobs_build_and_require_the_bridge() -> None:
         "-warnaserror"
         in parity
     )
-    assert "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build" in parity
+    assert "dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build" in parity
     assert "continue-on-error:" not in parity
     assert "|| true" not in parity
     for trigger in (

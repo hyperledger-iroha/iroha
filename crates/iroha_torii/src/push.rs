@@ -30,9 +30,9 @@ use iroha_data_model::{
     },
 };
 use iroha_futures::supervisor::ShutdownSignal;
-use jsonwebtoken::{Algorithm, EncodingKey};
 #[cfg(test)]
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
+use jsonwebtoken::{Algorithm, EncodingKey};
 use parking_lot::Mutex as StorageMutex;
 use reqwest::StatusCode as HttpStatusCode;
 use sha2::{Digest as _, Sha256};

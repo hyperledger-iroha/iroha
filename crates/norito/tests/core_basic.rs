@@ -3,7 +3,7 @@ use byteorder::{ByteOrder, LittleEndian};
 use iroha_schema::IntoSchema;
 use norito::core::*;
 fn crc64_test(data: &[u8]) -> u64 {
-    let mut digest = crc64fast::Digest::new();
+    let mut digest = Crc64Digest::new();
     digest.write(data);
     digest.sum64()
 }

@@ -29,9 +29,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::str::FromStr as _;
 fn settlement_state() -> (
     Box<CertifiedTestChain>,

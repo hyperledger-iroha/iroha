@@ -5,7 +5,7 @@ use crate::{BlockCapture, BlockRetirement, CaptureCleanup};
 
 /// Caller-owned cell capture; phases reuse the same stack storage.
 #[must_use = "capture or abandon the original block through its aggregate"]
-pub struct BlockCaptureSlot<'a, V: Value, Admission, C: Send + Sync + 'static = Untracked> {
+pub struct BlockCaptureSlot<'a, V: CellValue, Admission, C: Send + Sync + 'static = Untracked> {
     phase: CapturePhase<'a, V, Admission, C>,
     started: bool,
     // Last: captured payloads and admission outlive all physical writers and
@@ -17,7 +17,7 @@ pub struct BlockCaptureSlot<'a, V: Value, Admission, C: Send + Sync + 'static = 
     clippy::large_enum_variant,
     reason = "capture phases retain the original block and admission inline without an unadmitted allocation"
 )]
-enum CapturePhase<'a, V: Value, Admission, C: Send + Sync + 'static> {
+enum CapturePhase<'a, V: CellValue, Admission, C: Send + Sync + 'static> {
     Empty,
     Attached {
         block: Block<'a, V, C>,
@@ -26,7 +26,7 @@ enum CapturePhase<'a, V: Value, Admission, C: Send + Sync + 'static> {
     Captured(Detached<V, Admission, C>),
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> Block<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> Block<'a, V, C> {
     /// Put the exact attached block in its caller's capture aggregate.
     /// No check, admission, allocation or physical release happens here.
     pub fn capture_slot<Admission>(self) -> BlockCaptureSlot<'a, V, Admission, C> {
@@ -41,7 +41,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> Block<'a, V, C> {
     }
 }
 
-impl<'a, V: Value, Admission, C: Send + Sync + 'static> BlockCapture<Admission>
+impl<'a, V: CellValue, Admission, C: Send + Sync + 'static> BlockCapture<Admission>
     for BlockCaptureSlot<'a, V, Admission, C>
 {
     type Block = Block<'a, V, C>;
@@ -114,7 +114,9 @@ impl<'a, V: Value, Admission, C: Send + Sync + 'static> BlockCapture<Admission>
     }
 }
 
-impl<V: Value, Admission, C: Send + Sync + 'static> Drop for BlockCaptureSlot<'_, V, Admission, C> {
+impl<V: CellValue, Admission, C: Send + Sync + 'static> Drop
+    for BlockCaptureSlot<'_, V, Admission, C>
+{
     fn drop(&mut self) {
         self.release();
     }

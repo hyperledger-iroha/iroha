@@ -133,7 +133,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
             Request::builder()
                 .uri(format!(
                     "/v1/nexus/dataspaces/accounts/{}/summary",
-                    urlencoding::encode(&account_literal)
+                    iroha_torii::test_utils::percent_encode(&account_literal)
                 ))
                 .body(Body::empty())
                 .expect("request"),
@@ -186,7 +186,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
     ));
     let router = build_test_router(state);
     let spaced_literal = format!("  {account_literal}  ");
-    let literal = urlencoding::encode(&spaced_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&spaced_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -232,7 +232,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         25,
     ));
     let router = build_test_router(state);
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -354,7 +354,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
     );
     let router = build_test_router(Arc::new(state));
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -525,7 +525,7 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
     assert_eq!(after.dataspaces.len(), 1);
     assert_eq!(after.dataspaces[0].dataspace_id, DataSpaceId::UNIVERSAL);
     assert_eq!(after.dataspaces[0].accounts, before.dataspaces[0].accounts);
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -692,7 +692,7 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         assert!(bindings.is_bound_to(dataspace, &primary_account_id));
         assert!(!bindings.is_bound_to(dataspace, &secondary_account_id));
     }
-    let literal = urlencoding::encode(&primary_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&primary_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -766,7 +766,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account
     let state = minimal_state();
     let router = build_test_router(state);
     let account_literal = valid_missing_account_literal();
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, _body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::NOT_FOUND);

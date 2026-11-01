@@ -33,7 +33,7 @@ impl<K: Key, V: Value + std::fmt::Debug, M: mv::storage::StorageMode<K, V>> Fiel
     }
 }
 
-impl<V: Value + std::fmt::Debug, C: Send + Sync + 'static> FieldImage for Cell<V, C> {
+impl<V: mv::CellValue + std::fmt::Debug, C: Send + Sync + 'static> FieldImage for Cell<V, C> {
     fn image(&self) -> String {
         format!("{:?}", (&*self.view(), &*self.predecessor_view()))
     }

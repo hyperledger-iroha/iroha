@@ -20,10 +20,10 @@ use iroha_executor_data_model::permission::governance::{
     CanManageParliament, CanSubmitGovernanceBallot,
 };
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly as _;
-use nonzero_ext::nonzero;
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);

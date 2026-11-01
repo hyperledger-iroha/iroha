@@ -336,8 +336,8 @@ mod tests {
         permission::Permissions,
     };
     use iroha_model_base::domain::DomainId;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
     use std::collections::BTreeMap;
     fn checked_ed25519_keypair() -> KeyPair {
         KeyPair::try_random_with_algorithm(Algorithm::Ed25519)

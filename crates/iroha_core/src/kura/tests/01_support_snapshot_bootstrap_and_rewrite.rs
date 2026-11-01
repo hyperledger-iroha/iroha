@@ -34,9 +34,9 @@ use iroha_model_base::{
     chain::ChainId,
     topology::{DataSpaceId, LaneId},
 };
+use iroha_primitives::nonzero;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
     collections::BTreeMap,

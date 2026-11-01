@@ -129,8 +129,8 @@ where
 
 impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Insert a private current value and retain its first preimage exactly once.

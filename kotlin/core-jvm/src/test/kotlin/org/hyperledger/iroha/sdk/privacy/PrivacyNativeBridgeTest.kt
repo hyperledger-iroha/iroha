@@ -214,7 +214,9 @@ class PrivacyNativeBridgeTest {
         val policy = manifest.consensusPolicy
         assertEquals(2048, policy.currentLimits.retainedRootCount)
         assertEquals(1024, policy.pendingUpdate!!.nextLimits.retainedRootCount)
-        assertEquals(7, manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1).privacyFeatureMask)
+        val note = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
+        assertTrue(note.policy!!.pendingUpdate != null)
+        assertEquals(7, note.privacyFeatureMask)
     }
 
     @Test

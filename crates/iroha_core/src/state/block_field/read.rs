@@ -22,13 +22,13 @@ impl<B: OriginalPublicationBlock> BlockField<B> {
 
 // Cell reads borrow the exact same pair in either immutable phase. Storage's
 // retained structural positions keep their separate fallible read boundary.
-enum CellReadPhase<'read, 'block, V: Value, C: Send + Sync + 'static> {
+enum CellReadPhase<'read, 'block, V: mv::CellValue, C: Send + Sync + 'static> {
     Executing(&'read mv::cell::Block<'block, V, C>),
     Frozen(&'read mv::cell::Detached<V, (), C>),
     Reading(&'read mv::cell::FrozenDetached<V, (), C>),
 }
 
-impl<'block, V: Value, C: Send + Sync + 'static> CellField<'block, V, C> {
+impl<'block, V: mv::CellValue, C: Send + Sync + 'static> CellField<'block, V, C> {
     fn cell_read_phase(&self) -> CellReadPhase<'_, 'block, V, C> {
         assert!(!self.released, "field was terminally released");
         match self.phase.as_ref() {

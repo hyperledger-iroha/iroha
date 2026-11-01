@@ -1597,10 +1597,13 @@ mod status_observation_tests {
             .with_request_deadline(deadline)
             .account_client()
             .unwrap();
+        let error = quote_fees_until(&account, &fee_payload(&account), deadline)
+            .await
+            .unwrap_err();
         assert!(
-            quote_fees_until(&account, &fee_payload(&account), deadline)
-                .await
-                .is_err()
+            error
+                .to_string()
+                .contains("committee fee quote deadline elapsed")
         );
         assert!(transport.requests.lock().unwrap().is_empty());
     }

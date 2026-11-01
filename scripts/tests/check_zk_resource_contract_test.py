@@ -683,7 +683,7 @@ def test_rust_expression_reader_and_evaluator(tmp_path: Path) -> None:
         pub const LIMIT: NonZeroU64 = nonzero!(8_u64 * 2_u64.pow(10));
         pub const fn cap() -> NonZeroU32 {
             // a comment inside the body
-            nonzero_ext::nonzero!(0x0010_0000_u32)
+            iroha_primitives::nonzero!(0x0010_0000_u32)
         }
         pub fn same() -> NonZeroU32 { cap() }
     }
@@ -714,7 +714,7 @@ def test_rust_expression_reader_and_evaluator(tmp_path: Path) -> None:
     # An anchor selects the second of two equal names.
     assert evaluate(read("LIMIT"), {}, {}, "t") == 1
     assert evaluate(read("LIMIT", anchor="pub mod second {"), {}, {}, "t") == 8_192
-    assert read("cap", "fn") == "nonzero_ext::nonzero!(0x0010_0000_u32)"
+    assert read("cap", "fn") == "iroha_primitives::nonzero!(0x0010_0000_u32)"
     assert evaluate(read("cap", "fn"), {}, {}, "t") == 1_048_576
     assert evaluate(read("same", "fn"), {"cap": "a.cap"}, {"a.cap": 7}, "t") == 7
     assert evaluate(read("small", "field", "impl Default for Limits"), {}, {}, "t") == 16
@@ -2005,6 +2005,9 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
         "governance.runtime_upgrade_provenance.signature_threshold",
         "governance.runtime_upgrade_provenance.trusted_signers",
     }.isdisjoint(execution_fields)
+    assert not any(
+        field.startswith("governance.runtime_upgrade_provenance.") for field in execution_fields
+    )
     assert "governance.fma_committee_size" in execution_fields
     # The Nexus digest is not a catalog of identities only: it is the third catalog.
     assert catalogs["execution_policy_digest_v1"]["digests"] == {
@@ -3050,8 +3053,8 @@ def test_committed_coherence_and_global_packing_guards_cannot_disappear() -> Non
         for site in proposer["enforcement"]
         if site["path"] == "crates/iroha_core/src/sumeragi/payload.rs"
     )
-    # Thirteen committed-policy sites and one global-packing site are mutated below.
-    assert len(cases) == 14
+    # Fourteen committed-policy sites and one global-packing site are mutated below.
+    assert len(cases) == 15
     assert len(
         {(owner, site["path"], CHECKER["normalize"](site["contains"])) for owner, site in cases}
     ) == len(cases)

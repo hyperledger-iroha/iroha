@@ -35,7 +35,6 @@ iroha = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["node-crypto"] }
 iroha_data_model = { workspace = true, default-features = false, features = ["application-model", "http"] }
 iroha_fs = { workspace = true }
-iroha_primitives = { workspace = true }
 iroha_service_model = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 rand = { workspace = true }

@@ -281,6 +281,14 @@ impl Drop for CompletedGoldilocksColumnsV1 {
     fn drop(&mut self) {}
 }
 
+// CPU-only owners retain the same borrowing and consuming API as Metal owners.
+#[cfg_attr(
+    not(all(feature = "fastpq-gpu", target_os = "macos")),
+    allow(
+        clippy::unused_self,
+        reason = "sealed CPU-only owners preserve the Metal ownership API"
+    )
+)]
 impl CompletedGoldilocksColumnsV1 {
     /// Consume a successfully used output and erase its complete backing.
     /// Large exclusive allocations may be cleared by independent worker tiles.
@@ -377,6 +385,14 @@ fn prepared_payload_bound_v1(
         .ok_or(GoldilocksTransformErrorV1::InvalidShape)
 }
 
+// CPU-only owners retain the same borrowing and consuming API as Metal owners.
+#[cfg_attr(
+    not(all(feature = "fastpq-gpu", target_os = "macos")),
+    allow(
+        clippy::unused_self,
+        reason = "sealed CPU-only owners preserve the Metal ownership API"
+    )
+)]
 impl PreparedGoldilocksColumnsV1 {
     /// Validate complete output and transfer it into immutable host-only custody.
     /// The device view and lane are released before the result reaches the caller.
@@ -1515,6 +1531,8 @@ mod retained_prefix_api_tests {
 
     #[test]
     fn production_prefix_cpu_validation_covers_entire_input_power_table_and_domain() {
+        fn assert_send_sync<T: Send + Sync>() {}
+
         let rows = 4096;
         let root = power_v1(7, (FIELD_MODULUS - 1) >> 12);
         let original = vec![7; 2048 + 1816];
@@ -1572,7 +1590,6 @@ mod retained_prefix_api_tests {
             .err(),
             Some(GoldilocksTransformErrorV1::NonCanonicalInput)
         );
-        fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<CompletedGoldilocksColumnsV1>();
     }
 
@@ -1595,3 +1612,7 @@ mod retained_prefix_api_tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "goldilocks_canonical_parallel_tests.rs"]
+pub(crate) mod canonical_parallel_tests;

@@ -1,5 +1,4 @@
 //! Connected peers count and reconfiguration under register/unregister.
-use assert_matches::assert_matches;
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::sandbox;
@@ -201,7 +200,11 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     }
     let status = removed_peer.status().await?;
     // Removed peer might see one extra commit while transitioning to follower mode.
-    assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
+    assert!(
+        matches!(status.blocks_non_empty, 1 | 2 | 3),
+        "removed peer reported {} non-empty blocks, expected 1..=3",
+        status.blocks_non_empty
+    );
     // Re-register the peer using the same join flow as a new peer. Keeping the
     // removed peer process online while it is outside the roster is flaky on
     // 4-peer localnets; restarting it after the register block is more stable.

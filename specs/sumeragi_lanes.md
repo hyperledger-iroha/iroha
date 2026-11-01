@@ -368,6 +368,10 @@ recomputes the floor from the lane blocks; a different declaration makes the blo
    Parent-service QC and signer custody retain the checked original proposal-header identity
    across this expansion. They still require the same admitted QC allocation, allocation pool
    and native parent cut; expanded execution roots cannot replace that source identity.
+   Native schedule continuation custody is prepared after authenticated expansion and before
+   World acquisition, against the exact expanded execution header and the same State generation.
+   Rollback retains that graph for the original attempt; retries reauthenticate the original
+   proposal and recheck the expanded header, root, pulse and pristine schedule before lending it.
    Each transaction retains its complete `TransactionEntrypoint`: `External`, sealed
    commitment or sealed reveal. A merged transaction is dropped — no effect, no fee, not in
    the executed block — when `route(tx, state before h)` (§5.1) is not the lane that carried it

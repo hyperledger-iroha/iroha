@@ -516,10 +516,16 @@ fn uid_snapshot_roundtrip_retains_membership_usage_and_existing_balances() {
 #[test]
 fn uid_jerusalem_window_tracks_dst_and_preserves_revision_usage() {
     use iroha_data_model::asset::uid::AssetUidDailyWindowV1;
-    use time::macros::datetime;
-    let ms = |date: time::OffsetDateTime| u64::try_from(date.unix_timestamp()).unwrap() * 1_000;
-    let before = ms(datetime!(2026-03-27 20:59:59 UTC));
-    let next = ms(datetime!(2026-03-27 21:00 UTC));
+    // Unix milliseconds of an instant on 2026-03-27 UTC.
+    let ms = |hour: u8, minute: u8, second: u8| {
+        let date = time::Date::from_calendar_date(2026, time::Month::March, 27)
+            .and_then(|date| date.with_hms(hour, minute, second))
+            .expect("valid UTC fixture instant")
+            .assume_utc();
+        u64::try_from(date.unix_timestamp()).unwrap() * 1_000
+    };
+    let before = ms(20, 59, 59);
+    let next = ms(21, 0, 0);
     let (f, state) = fixture(30, 20);
     {
         let mut block = state.block(header(1, before));

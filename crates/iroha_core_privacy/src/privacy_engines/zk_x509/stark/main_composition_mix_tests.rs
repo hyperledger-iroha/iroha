@@ -49,12 +49,20 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
                     streamed_mix(&residues, &alphas),
                     scalar_mix(&residues, &alphas)
                 );
+                assert_eq!(
+                    mix_residues_v1(&residues, &alphas),
+                    scalar_mix(&residues, &alphas)
+                );
             }
         }
         for seed in [0, 17, 255] {
             let (residues, alphas) = fixture(length, seed);
             assert_eq!(
                 streamed_mix(&residues, &alphas),
+                scalar_mix(&residues, &alphas)
+            );
+            assert_eq!(
+                mix_residues_v1(&residues, &alphas),
                 scalar_mix(&residues, &alphas)
             );
         }
@@ -118,6 +126,13 @@ fn every_registration_mix_is_identical_across_worker_schedules() {
                 .collect::<Vec<_>>()
         });
         assert_eq!(actual, expected);
+        let wrapper_actual = pool.install(|| {
+            fixtures
+                .par_iter()
+                .map(|(r, a)| mix_residues_v1(r, a))
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(wrapper_actual, expected);
     }
 }
 

@@ -19,9 +19,9 @@ use iroha_data_model::{
     transaction::signed_attachments::SignedAttachmentErrorV1,
     zk::BackendTag,
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use zk_components::execute_isi_component;
 
 #[path = "common/root_scope_fixture.rs"]

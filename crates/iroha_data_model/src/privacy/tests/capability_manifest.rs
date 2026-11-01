@@ -436,23 +436,39 @@ fn exact12_capability_manifest_fixture_pins_pending_updates_and_tuple_struct_jso
         privacy_exact12_capability_manifest_fixture_v1().expect("capability manifest fixture");
     let manifest: PrivacyExact12CapabilityManifestV1 =
         norito::decode_from_bytes(&fixture.manifest_norito).expect("decode manifest archive");
-    let policy = manifest.consensus_policy;
-    assert_ne!(
-        policy
-            .pending_update
-            .expect("pending consensus update")
-            .next_limits,
-        policy.current_limits
+    let current = manifest.consensus_policy.current_limits;
+    assert_eq!(current, PrivacyConsensusLimitsV1::taira_default());
+    let next = manifest
+        .consensus_policy
+        .pending_update
+        .expect("pending consensus update")
+        .next_limits;
+    assert_eq!(next.retained_root_count, current.retained_root_count / 2);
+    assert_eq!(
+        PrivacyConsensusLimitsV1 {
+            retained_root_count: current.retained_root_count,
+            ..next
+        },
+        current
     );
-    assert!(
-        manifest
+    for protocol_id in [
+        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+    ] {
+        let policy = manifest
             .protocols
             .iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+            .find(|row| row.protocol_id == protocol_id)
             .and_then(|row| row.policy)
-            .and_then(|policy| policy.pending_update)
-            .is_some()
-    );
+            .expect("protocol policy");
+        assert_ne!(
+            policy
+                .pending_update
+                .expect("pending protocol update")
+                .next_limits,
+            policy.current_limits
+        );
+    }
     // SDK JSON parsers read this exact shape: a one-field tuple struct is a one-element array.
     let projection: norito::json::Value =
         norito::json::from_json(&fixture.manifest_json).expect("manifest projection");
@@ -471,15 +487,28 @@ fn exact12_capability_manifest_fixture_pins_pending_updates_and_tuple_struct_jso
     let inner = flat["manifest_digest"][0].clone();
     *flat.get_mut("manifest_digest").expect("digest") = inner;
     assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(flat).is_err());
+    for field in ["private_settlement", "unknown_limit"] {
+        let mut extended = projection.clone();
+        extended
+            .get_mut("consensus_policy")
+            .and_then(|policy| policy.get_mut("current_limits"))
+            .and_then(norito::json::Value::as_object_mut)
+            .expect("limits object")
+            .insert(field.to_owned(), norito::json::Value::Null);
+        assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(extended).is_err());
+    }
     let mut extended = projection;
     extended
-        .get_mut("consensus_policy")
-        .and_then(|policy| policy.get_mut("current_limits"))
+        .get_mut("protocols")
+        .and_then(norito::json::Value::as_array_mut)
+        .expect("protocols array")[10]
+        .get_mut("policy")
+        .and_then(|policy| policy.get_mut("pending_update"))
         .and_then(norito::json::Value::as_object_mut)
-        .expect("limits object")
+        .expect("protocol update object")
         .insert(
-            "private_settlement".to_owned(),
-            norito::json::Value::Object(norito::json::Map::new()),
+            "private_settlement_drain_blocks".to_owned(),
+            norito::json::Value::Null,
         );
     assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(extended).is_err());
 }

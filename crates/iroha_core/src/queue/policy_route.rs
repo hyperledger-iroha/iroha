@@ -171,7 +171,7 @@ mod tests {
     use iroha_data_model::nexus::{
         AUTOSCALE_META_CREATED_HEIGHT, AUTOSCALE_META_MANAGED, LaneConfig,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
 
     #[test]
     fn private_genesis_alias_projection_is_exact_while_ordinary_registry_stays_global() {

@@ -134,7 +134,7 @@ mod tests {
         prelude::{Log, TransactionBuilder},
         transaction::FeePaymentIntent,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
 
     fn signed_source() -> SignedBlock {
         let transaction = TransactionBuilder::new(

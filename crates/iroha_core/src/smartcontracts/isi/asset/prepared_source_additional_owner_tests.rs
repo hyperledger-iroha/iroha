@@ -7,8 +7,8 @@ use crate::{
     state::{State, StateTransaction, World},
 };
 use iroha_data_model::{IntoKeyValue, asset::AssetBalanceScope, block::BlockHeader};
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use nonzero_ext::nonzero;
 
 fn wonderland_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").unwrap()

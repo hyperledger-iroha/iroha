@@ -35,11 +35,11 @@ use iroha_executor_data_model::isi::multisig::{
 use iroha_model_base::name::Name;
 use iroha_model_base::{chain::ChainId, peer::PeerId};
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
 };
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 #[cfg(feature = "zk-stark")]
 mod zk_hydration_route_tests {
     //! Real contract and trigger dispatch retain cold-registry refusals until abandonment.
@@ -12813,12 +12813,7 @@ fn generate_migration_program(
     verdict: &Result<ExecutorDataModel, iroha_data_model::ValidationFail>,
 ) -> Vec<u8> {
     use norito::codec::Encode as _;
-    let payload = match verdict {
-        Ok(model) => MigrationResultPayload::Ok(model.clone()),
-        Err(err) => MigrationResultPayload::Err(err.clone()),
-    };
-    let verdict_bytes = payload.encode();
-    build_program_from_encoded_result(&verdict_bytes)
+    build_program_from_encoded_result(&verdict.encode())
 }
 fn generate_ok_program() -> Vec<u8> {
     let verdict = Ok(());
@@ -13154,13 +13149,12 @@ fn executor_result_reader_rejects_ranges_past_readable_memory_in_both_paths() {
 }
 #[test]
 fn migration_result_requires_a_canonical_complete_payload() {
-    let discriminant_only = [0_u8; 4];
-    let mut discriminant_only_slice = discriminant_only.as_slice();
+    let discriminant_only = [0_u8; 1];
     assert!(
-        MigrationResultPayload::decode(&mut discriminant_only_slice).is_err(),
+        decode_migration_data_model(&discriminant_only).is_none(),
         "an Ok discriminant without an ExecutorDataModel must not decode"
     );
-    let canonical_unit = MigrationUnitPayload::Ok(()).encode();
+    let canonical_unit = Ok::<(), ValidationFail>(()).encode();
     assert_ne!(
         canonical_unit.as_slice(),
         discriminant_only.as_slice(),
@@ -13183,7 +13177,7 @@ fn migration_result_requires_a_canonical_complete_payload() {
         "the unit-success payload must not install an empty data model"
     );
     let model = initial_executor_data_model_fallback();
-    let canonical = MigrationResultPayload::Ok(model.clone()).encode();
+    let canonical = Ok::<ExecutorDataModel, ValidationFail>(model.clone()).encode();
     let declared_len = EXECUTOR_LENGTH_PREFIX_BYTES_U64
         + u64::try_from(canonical.len()).expect("bounded migration result");
     let complete = loaded_executor_with_result_prefix(declared_len, canonical.as_slice());
@@ -13240,7 +13234,9 @@ fn executor_result_reader_preserves_legitimate_validation_and_migration_results(
     )
     .expect("legitimate validation result is readable");
     assert!(report.verdict.is_ok());
-    let migration_verdict = MigrationUnitPayload::Ok(()).encode();
+    // A migrate entrypoint keeping the current data model answers with the
+    // same canonical bytes as a validation success.
+    let migration_verdict = validation_verdict.encode();
     let migration = loaded_executor_with_result_prefix(
         EXECUTOR_LENGTH_PREFIX_BYTES_U64
             + u64::try_from(migration_verdict.len()).expect("bounded migration result"),
@@ -13255,6 +13251,46 @@ fn executor_result_reader_preserves_legitimate_validation_and_migration_results(
             &executor_test_budget()
         )
         .expect("legitimate migration result is readable"),
+        None
+    );
+}
+#[test]
+fn migration_data_model_reader_accepts_only_one_complete_ok_model() {
+    let model = initial_executor_data_model_fallback();
+    let canonical = Ok::<ExecutorDataModel, ValidationFail>(model.clone()).encode();
+    assert_eq!(decode_migration_data_model(&canonical), Some(model.clone()));
+    let mut trailing = canonical.clone();
+    trailing.push(0);
+    assert_eq!(decode_migration_data_model(&trailing), None);
+    let mut wrong_tag = canonical;
+    wrong_tag[0] = 2;
+    assert_eq!(decode_migration_data_model(&wrong_tag), None);
+    let rejection =
+        Err::<ExecutorDataModel, ValidationFail>(ValidationFail::NotPermitted("no".into()));
+    assert_eq!(decode_migration_data_model(&rejection.encode()), None);
+    assert_eq!(
+        decode_migration_data_model(&Ok::<(), ValidationFail>(()).encode()),
+        None
+    );
+}
+#[test]
+fn canonical_default_executor_migrates_and_keeps_the_current_data_model() {
+    // `defaults/executor.to` answers every entrypoint with one `Ok(())` verdict;
+    // installing it through `Upgrade` runs this exact migration.
+    let program = ivm::prebuilt_fixtures::build_default_executor_program();
+    let executor = LoadedExecutor::load(data_model_executor::Executor::new(
+        IvmBytecode::from_compiled(program),
+    ))
+    .expect("the canonical default executor loads");
+    assert_eq!(
+        run_executor_migration(
+            &executor,
+            &executor_result_test_context(),
+            1_000_000,
+            Memory::HEAP_MAX_SIZE,
+            &executor_test_budget()
+        )
+        .expect("the canonical default executor migrates"),
         None
     );
 }

@@ -8,7 +8,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::proof::ProofId;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt as _;
 #[tokio::test]
@@ -51,7 +51,7 @@ async fn proof_tags_returns_ascii_tags() {
             }
         }),
     );
-    let backend_enc = urlencoding::encode(backend);
+    let backend_enc = iroha_torii::test_utils::percent_encode(backend);
     let hash_hex = hex::encode(proof_hash);
     let uri = format!("/v1/zk/proof-tags/{}/{}", backend_enc, hash_hex);
     let req = http::Request::builder()

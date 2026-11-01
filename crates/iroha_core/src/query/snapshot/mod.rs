@@ -480,9 +480,9 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_primitives::json::Json;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
-    use nonzero_ext::nonzero;
     use std::sync::{
         Arc,
         atomic::{AtomicU64, Ordering},
@@ -743,7 +743,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(1_u64).into()),
         };
         let payload = norito::codec::Encode::encode(
             &iroha_data_model::query::asset::prelude::FindAssetDefinitions,
@@ -824,7 +824,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(1_u64).into()),
         };
         let payload = norito::codec::Encode::encode(
             &iroha_data_model::query::asset::prelude::FindAssetDefinitions,
@@ -895,7 +895,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(1_u64).into()),
         };
         let payload =
             norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
@@ -986,7 +986,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let payload =
             norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
@@ -1066,7 +1066,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let iroha_data_model::query::QueryResponse::Iterable(first) =
@@ -1137,7 +1137,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let iroha_data_model::query::QueryResponse::Iterable(first) =
@@ -1221,7 +1221,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let iroha_data_model::query::QueryResponse::Iterable(first) =
@@ -1285,7 +1285,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let iroha_data_model::query::QueryResponse::Iterable(first) =
@@ -1352,7 +1352,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let err = run_on_snapshot_with_mode_arc_and_start_budget(
@@ -1409,11 +1409,11 @@ mod tests {
         ));
         let params = QueryParams {
             pagination: Pagination {
-                limit: Some(nonzero_ext::nonzero!(2_u64)),
+                limit: Some(iroha_primitives::nonzero!(2_u64)),
                 offset: 0,
             },
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let iroha_data_model::query::QueryResponse::Iterable(first) =
             run_on_snapshot_with_mode_arc(
@@ -1454,7 +1454,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let limits = QueryLimits::default().with_count_mode(QueryCountMode::Bounded);
         let iroha_data_model::query::QueryResponse::Iterable(first) =
@@ -1546,7 +1546,7 @@ mod tests {
             ChainId::from("account-cursor-revalidation"),
         );
         let params = QueryParams {
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(1_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(1_u64).into()),
             ..QueryParams::default()
         };
         let QueryResponse::Iterable(first) = run_on_snapshot_with_mode(
@@ -1574,7 +1574,7 @@ mod tests {
             "the first stored page must match the canonical permission order"
         );
         let mut block = state.block(BlockHeader::new(
-            nonzero_ext::nonzero!(1_u64),
+            iroha_primitives::nonzero!(1_u64),
             None,
             None,
             0,
@@ -1602,7 +1602,7 @@ mod tests {
         ) if message.contains("CanReadAccountData")));
         let role_id: RoleId = "cursor_account_reader".parse().expect("role id");
         let mut block = state.block(BlockHeader::new(
-            nonzero_ext::nonzero!(2_u64),
+            iroha_primitives::nonzero!(2_u64),
             None,
             None,
             0,
@@ -1641,7 +1641,7 @@ mod tests {
         );
         let second_cursor = second_cursor.expect("one archived page must remain");
         let mut block = state.block(BlockHeader::new(
-            nonzero_ext::nonzero!(3_u64),
+            iroha_primitives::nonzero!(3_u64),
             None,
             None,
             0,
@@ -1688,7 +1688,7 @@ mod tests {
         ));
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "missing".to_owned(),
-            cursor: nonzero_ext::nonzero!(1_u64),
+            cursor: iroha_primitives::nonzero!(1_u64),
             gas_budget: None,
         };
         let err = run_on_snapshot_with_mode_arc(
@@ -1719,7 +1719,7 @@ mod tests {
         let state = Arc::new(state);
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "missing".to_owned(),
-            cursor: nonzero_ext::nonzero!(1_u64),
+            cursor: iroha_primitives::nonzero!(1_u64),
             gas_budget: Some(1),
         };
         let err = run_on_snapshot_with_mode_arc(
@@ -1750,7 +1750,7 @@ mod tests {
         let state = Arc::new(state);
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "missing".to_owned(),
-            cursor: nonzero_ext::nonzero!(1_u64),
+            cursor: iroha_primitives::nonzero!(1_u64),
             gas_budget: Some(10),
         };
         let err = run_on_snapshot_with_mode_arc(
@@ -1788,7 +1788,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let iroha_data_model::query::QueryResponse::Iterable(first) =
             run_on_snapshot_with_mode_arc(
@@ -1849,7 +1849,7 @@ mod tests {
         set_stored_query_minimum_for_fixture(&state, 10);
         let cursor = iroha_data_model::query::parameters::ForwardCursor {
             query: "q".to_owned(),
-            cursor: nonzero_ext::nonzero!(1_u64),
+            cursor: iroha_primitives::nonzero!(1_u64),
             gas_budget: Some(1),
         };
         let req = QueryRequest::Continue(cursor);

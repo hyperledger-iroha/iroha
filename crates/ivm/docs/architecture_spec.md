@@ -255,5 +255,8 @@ separate from this canonical-node backing guarantee.
 at the refresh owner. It excludes initial construction and independent template
 copies. Dense leaf recomputation is classified by the memory-commit path metrics
 and does not separately increment this counter. Incremental path updates retain
-their separate leaf-update counter. Byte trees have no infallible `Clone` wrapper;
-internal copies explicitly choose the fallible local or original-lease path.
+their separate leaf-update counter. IVM owns these Merkle and memory-commit
+metrics in `ivm::metrics`, independent of the node telemetry crate; Core
+registers `ivm::metrics::collector()` with the node registry when telemetry
+starts. Byte trees have no infallible `Clone` wrapper; internal copies
+explicitly choose the fallible local or original-lease path.

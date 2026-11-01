@@ -13,8 +13,8 @@ use crate::{
     hash::sha3_256,
     norito_types::{IpaParams, ZkCurveId},
 };
-use once_cell::sync::{Lazy, OnceCell};
 use parking_lot::RwLock;
+use std::sync::{LazyLock, OnceLock};
 use std::{
     any::{Any, TypeId},
     collections::HashMap,
@@ -31,7 +31,7 @@ pub struct Params<B: IpaBackend> {
     g: Vec<B::Group>,
     h: Vec<B::Group>,
     u: B::Group,
-    fingerprint: OnceCell<[u8; 32]>,
+    fingerprint: OnceLock<[u8; 32]>,
 }
 impl<B: IpaBackend> Params<B> {
     /// Creates parameters for vectors of length `n` (must be a power of two greater than one).
@@ -53,7 +53,7 @@ impl<B: IpaBackend> Params<B> {
             g,
             h,
             u,
-            fingerprint: OnceCell::new(),
+            fingerprint: OnceLock::new(),
         })
     }
     /// Return a deliberately different valid generator ordering for transcript tests.
@@ -68,7 +68,7 @@ impl<B: IpaBackend> Params<B> {
             g,
             h,
             u: self.u,
-            fingerprint: OnceCell::new(),
+            fingerprint: OnceLock::new(),
         }
     }
     /// Returns the vector length `n`.
@@ -236,7 +236,7 @@ impl ParamsRegistry {
             .contains_key(&(TypeId::of::<B>(), B::CURVE_ID, n))
     }
 }
-static PARAMS_REGISTRY: Lazy<ParamsRegistry> = Lazy::new(ParamsRegistry::new);
+static PARAMS_REGISTRY: LazyLock<ParamsRegistry> = LazyLock::new(ParamsRegistry::new);
 #[cfg(test)]
 pub(crate) fn clear_params_registry_for_tests() {
     PARAMS_REGISTRY.clear();

@@ -233,7 +233,7 @@ fn validation_and_migration_preserve_local_original_pool_refusal() {
     let budget = AllocationBudget::new(0);
     let context = ExecutorContext {
         authority: iroha_test_samples::ALICE_ID.clone(),
-        curr_block: BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0),
+        curr_block: BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0),
     };
     let payload = ValidatePayload {
         context: context.clone(),

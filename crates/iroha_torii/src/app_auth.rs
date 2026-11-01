@@ -2464,9 +2464,9 @@ mod tests {
         transaction::{FeePaymentIntent, TransactionBuilder},
     };
     use iroha_model_base::domain::DomainId;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
     use mv::storage::StorageReadOnly;
-    use nonzero_ext::nonzero;
     const TEST_ACCOUNT_I105: &str = "sorauﾛ1NﾗhBUd2BﾂｦﾄiﾔﾆﾂﾇKSﾃaﾘﾒﾓQﾗrﾒoﾘﾅnｳﾘbQｳQJﾆLJ5HSE";
     const ED25519_SMALL_ORDER_POINT: [u8; ed25519_dalek::PUBLIC_KEY_LENGTH] = [
         1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,

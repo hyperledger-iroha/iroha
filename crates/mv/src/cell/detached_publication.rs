@@ -3,7 +3,7 @@ use super::*;
 use concread::ebrcell::EbrCellWriterAcquisition;
 use iroha_allocation::release::DeferredReleaseBatch;
 
-enum Role<'a, V: Value, C: Send + Sync + 'static> {
+enum Role<'a, V: CellValue, C: Send + Sync + 'static> {
     Owned(EbrCellOwned<V, C>),
     Acquired(
         ReleaseGuard<'a, EbrCellWriterAcquisition<'a, V, C>>,
@@ -12,7 +12,7 @@ enum Role<'a, V: Value, C: Send + Sync + 'static> {
     Writer(CellWriter<'a, V, C>),
     Empty,
 }
-impl<'a, V: Value, C: Send + Sync + 'static> Role<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> Role<'a, V, C> {
     fn acquire<E>(
         &mut self,
         target: &'a EbrCell<V, C>,
@@ -97,7 +97,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> Role<'a, V, C> {
     }
 }
 
-enum Phase<'a, V: Value, A, I, C: Send + Sync + 'static> {
+enum Phase<'a, V: CellValue, A, I, C: Send + Sync + 'static> {
     Original(Detached<V, A, C>),
     Acquiring {
         revert: Role<'a, Option<V>, C>,
@@ -112,7 +112,7 @@ enum Phase<'a, V: Value, A, I, C: Send + Sync + 'static> {
 /// Normal refusal can return the exact journal. Caught unwind and terminal
 /// release permit cleanup only. This grants no State or finality authority.
 #[must_use = "retain the original slot until every enclosing writer releases"]
-pub struct DetachedPublicationSlot<'a, V: Value, A, I, C: Send + Sync + 'static = Untracked> {
+pub struct DetachedPublicationSlot<'a, V: CellValue, A, I, C: Send + Sync + 'static = Untracked> {
     target: &'a Cell<V, C>,
     phase: Phase<'a, V, A, I, C>,
     attempted: bool,
@@ -121,7 +121,7 @@ pub struct DetachedPublicationSlot<'a, V: Value, A, I, C: Send + Sync + 'static 
     released: bool,
     cleanup: PublicationCleanup<I>,
 }
-impl<'a, V: Value, A, I, C: Send + Sync + 'static> DetachedPublicationSlot<'a, V, A, I, C> {
+impl<'a, V: CellValue, A, I, C: Send + Sync + 'static> DetachedPublicationSlot<'a, V, A, I, C> {
     pub(super) fn new(original: Detached<V, A, C>, target: &'a Cell<V, C>) -> Self {
         let mut cleanup = PublicationCleanup::empty();
         cleanup.writer_batches = [
@@ -322,7 +322,9 @@ impl<'a, V: Value, A, I, C: Send + Sync + 'static> DetachedPublicationSlot<'a, V
         std::mem::replace(&mut self.cleanup, PublicationCleanup::empty())
     }
 }
-impl<V: Value, A, I, C: Send + Sync + 'static> Drop for DetachedPublicationSlot<'_, V, A, I, C> {
+impl<V: CellValue, A, I, C: Send + Sync + 'static> Drop
+    for DetachedPublicationSlot<'_, V, A, I, C>
+{
     fn drop(&mut self) {
         self.release_writers();
     }

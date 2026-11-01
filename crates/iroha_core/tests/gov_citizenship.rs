@@ -17,10 +17,10 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn build_world(def_id: &AssetDefinitionId) -> World {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);

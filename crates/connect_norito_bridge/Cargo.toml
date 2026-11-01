@@ -62,7 +62,6 @@ hex = "0.4"
 x25519-dalek = "3.0.0"
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_manifest = { workspace = true }
-rand = { version = "0.10.3", default-features = false, features = ["sys_rng", "std", "std_rng"] }
 tracing.workspace = true
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 tempfile = { workspace = true }

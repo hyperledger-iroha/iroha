@@ -2027,9 +2027,8 @@ fn effective_output_format(args: &Args) -> CliOutputFormat {
     effective_output(args).format
 }
 fn color_mode() -> ColorMode {
-    if supports_color::on(supports_color::Stream::Stdout).is_some()
-        && supports_color::on(supports_color::Stream::Stderr).is_some()
-    {
+    use iroha_config_base::terminal::{TerminalStream, supports_color};
+    if supports_color(TerminalStream::Stdout) && supports_color(TerminalStream::Stderr) {
         ColorMode::Color
     } else {
         ColorMode::None

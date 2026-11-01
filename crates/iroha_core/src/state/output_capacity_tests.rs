@@ -555,7 +555,7 @@ fn try_block_rejects_an_unpublished_host_profile_and_releases_the_overlay() {
 
 #[test]
 fn same_genesis_parameter_writes_cannot_replace_either_frozen_profile() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let state = state(512);
     let initial = state.world.parameters.view().get().block();
     let ((source, output), block) = {

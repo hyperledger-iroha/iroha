@@ -8,7 +8,7 @@ use iroha_allocation::release::DeferredRelease;
 /// Original current and undo owners released from both writers, with cleanup.
 type DetachedCellPair<V, C, Cleanup> = (EbrCellOwned<V, C>, EbrCellOwned<Option<V>, C>, Cleanup);
 
-enum CellStage<'a, V: Value, C: Send + Sync + 'static> {
+enum CellStage<'a, V: CellValue, C: Send + Sync + 'static> {
     Held(ReleaseGuard<'a, EbrCellCommitSlot<'a, V, C>>),
     Released {
         _owner: EbrCellOwned<V, C>,
@@ -16,7 +16,7 @@ enum CellStage<'a, V: Value, C: Send + Sync + 'static> {
     },
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> CellStage<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> CellStage<'a, V, C> {
     fn new(writer: CellWriter<'a, V, C>) -> Self {
         Self::Held(writer.map_preserving_release(|writer| writer.commit_slot()))
     }
@@ -56,7 +56,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellStage<'a, V, C> {
     }
 }
 
-pub(super) struct PreparedCellWriters<'a, V: Value, C: Send + Sync + 'static> {
+pub(super) struct PreparedCellWriters<'a, V: CellValue, C: Send + Sync + 'static> {
     revert: Option<CellStage<'a, Option<V>, C>>,
     blocks: Option<CellStage<'a, V, C>>,
     identity: Option<PreparedIdentity<'a>>,
@@ -71,7 +71,7 @@ pub(super) struct PreparedCellWriters<'a, V: Value, C: Send + Sync + 'static> {
 /// It owns no physical lock. Keep it through the enclosing publication fences;
 /// collector work and release callbacks run only when this owner is retired.
 pub struct PublishedPublication<
-    V: Value,
+    V: CellValue,
     Admission,
     Installation,
     C: Send + Sync + 'static = Untracked,
@@ -87,7 +87,7 @@ pub struct PublishedPublication<
     _installation: Installation,
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
     pub(super) fn new(
         revert: CellWriter<'a, Option<V>, C>,
         blocks: CellWriter<'a, V, C>,
@@ -267,7 +267,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> PreparedCellWriters<'a, V, C> {
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> Drop for PreparedCellWriters<'_, V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Drop for PreparedCellWriters<'_, V, C> {
     fn drop(&mut self) {
         self.release();
     }

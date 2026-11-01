@@ -17,9 +17,9 @@ use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, trigger::CanRegisterGlobalDataTrigger,
 };
 use iroha_model_base::{domain::DomainId, metadata::Metadata};
+use iroha_primitives::nonzero;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
-use nonzero_ext::nonzero;
 use std::{num::NonZeroU64, time::Instant};
 use tokio::time::timeout;
 /// # Scenario

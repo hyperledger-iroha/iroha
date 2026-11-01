@@ -5,7 +5,7 @@ async fn ephemeral_sorted_query_respects_offset_and_limit() {
         domain::Domain,
         query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let mut d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
     let mut d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
     let mut d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);

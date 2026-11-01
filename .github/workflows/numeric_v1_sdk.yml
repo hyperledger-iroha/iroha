@@ -302,7 +302,7 @@ jobs:
           dotnet-version: 10.0.403
       - name: Verify .NET Numeric V1, quantity builders, and manifest policies
         run: >-
-          dotnet test tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj
+          dotnet test --project tests/Hyperledger.Iroha.Sdk.Tests/Hyperledger.Iroha.Sdk.Tests.csproj
           --configuration Release
           --
           --filter-class Hyperledger.Iroha.Sdk.Tests.NumericV1Tests

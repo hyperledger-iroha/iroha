@@ -17,6 +17,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use iroha_torii::test_utils::percent_encode;
 use iroha_torii::{
     Torii,
     filter::{FieldPath, FilterExpr, ListQuery},
@@ -25,7 +26,8 @@ use norito::json;
 use prometheus::core::Collector;
 use std::sync::Arc;
 use tower::ServiceExt as _;
-use urlencoding::encode;
+#[path = "fixtures.rs"]
+mod fixtures;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const I105_PREFIX: u16 = 0x002A;
@@ -44,7 +46,7 @@ fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     norito::json::to_vec(&query.to_json_value()).expect("serialize collection query")
 }
 fn encode_query_value(value: &str) -> String {
-    encode(value).into_owned()
+    percent_encode(value).into_owned()
 }
 /// Sign one repo-agreement query as the account the fixture registers for authenticated reads.
 fn signed_repo_agreements_query(

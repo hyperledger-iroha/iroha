@@ -747,7 +747,7 @@ async fn kaigi_sse_accepts_i105_relay_filter() {
     let relay_literal = relay_account.to_string();
     let uri = format!(
         "/v1/kaigi/relays/events?relay={}",
-        urlencoding::encode(&relay_literal)
+        iroha_torii::test_utils::percent_encode(&relay_literal)
     );
     let unsigned = app
         .clone()

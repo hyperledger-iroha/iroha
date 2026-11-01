@@ -5,7 +5,7 @@ use iroha_config::{base::WithOrigin, parameters::actual as A};
 use iroha_core::{kiso::KisoHandle, prelude::World, query::store::LiveQueryStore, queue::Queue};
 use iroha_data_model::NetworkId;
 use iroha_primitives::addr::socket_addr;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt;
 /// The network of the signed genesis `build_torii` applied and bound into `cfg`.

@@ -42,7 +42,10 @@ fn private_removal_keeps_initial_absence_exact_removal_and_unrelated_files() {
     let (_temporary, directory) = store();
     let directory_id = directory.identity().unwrap();
     assert!(!directory.remove_private("missing").unwrap());
-    assert!(directory.entries(0).unwrap().is_empty());
+    assert_eq!(
+        directory.entries(0).unwrap(),
+        Vec::<std::ffi::OsString>::new()
+    );
     for name in ["", ".", "..", "../record", "record/child"] {
         assert_eq!(
             directory.remove_private(name).unwrap_err().kind(),

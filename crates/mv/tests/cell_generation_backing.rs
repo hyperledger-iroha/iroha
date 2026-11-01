@@ -2,7 +2,7 @@
 
 use iroha_allocation::{AllocationBudget, AllocationCharge};
 use mv::{
-    BlockAcquisition, BlockMode, PublicationPreparationError, Value,
+    BlockAcquisition, BlockMode, CellValue, PublicationPreparationError,
     cell::{
         Cell as MvCell, CellAllocationCharges, CellGenerationBacking, CellGenerationBackingError,
         CellInitialization, CellPublicationSuccessor,
@@ -57,7 +57,7 @@ unsafe impl GlobalAlloc for ObservedAllocator {
 #[global_allocator]
 static ALLOCATOR: ObservedAllocator = ObservedAllocator;
 
-fn charges<V: Value>(budget: &AllocationBudget) -> CellAllocationCharges<AllocationCharge> {
+fn charges<V: CellValue>(budget: &AllocationBudget) -> CellAllocationCharges<AllocationCharge> {
     let [current, undo] = MvCell::<V, AllocationCharge>::allocation_layouts();
     let mut original = budget.try_reserve_layouts([current, undo]).unwrap();
     CellAllocationCharges::new(
