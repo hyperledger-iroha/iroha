@@ -6,6 +6,8 @@
 //! the same polynomial and does not relax uncertain-completion admission.
 //! Measured small selected sets use CPU Horner or interleaved eight-column pruning
 //! before any full-domain device staging is allocated.
+//! Complete measured eight-column CPU batches admit AVX2 only with the existing
+//! `simd` feature and actual hardware support; all other CPU routes stay scalar.
 
 use super::super::super::private_table::{PrivateTableV1, zeroize_fields_v1, zeroize_words_v1};
 #[cfg(test)]
@@ -32,6 +34,14 @@ pub(super) struct MainTransformReceiptV1 {
     full_dense_cpu_columns: usize,
     #[cfg(test)]
     full_prefix_cpu_columns: usize,
+    #[cfg(test)]
+    force_scalar_full_cpu: bool,
+    #[cfg(test)]
+    full_avx2_cpu_columns: usize,
+    #[cfg(test)]
+    full_avx2_vector_blocks: usize,
+    #[cfg(test)]
+    full_avx2_scalar_pairs: usize,
 }
 
 // The full MAIN layout's largest masked polynomial is native log19 plus its
@@ -275,6 +285,32 @@ impl MainTraceCosetEvaluatorV1 {
         // Selection follows complete original validation and the outer
         // uncertain-completion check, before allocating any device words.
         if self.device_columns == 0 || use_horner || use_pruned_fft {
+            // One implementation choice for the whole validated batch. Generic
+            // full-prefix shapes remain scalar; no masking coefficient is lost.
+            let full_backend = if prefix_full_batch
+                && selected_coset::measured_full_prefix_v1(
+                    native_log,
+                    common_log,
+                    columns.iter().map(|column| column.len()),
+                ) {
+                selected_coset::FullPrefixBackendV1::detect_v1()
+            } else {
+                selected_coset::FullPrefixBackendV1::Scalar
+            };
+            #[cfg(test)]
+            let full_backend = if self.receipt.force_scalar_full_cpu {
+                selected_coset::FullPrefixBackendV1::Scalar
+            } else {
+                full_backend
+            };
+            // Explicit per-invocation control storage. At most two stores per
+            // completed column; no global/TLS, window or block atomics.
+            #[cfg(test)]
+            let vector_counts: [std::sync::atomic::AtomicUsize; 8] =
+                core::array::from_fn(|_| std::sync::atomic::AtomicUsize::new(0));
+            #[cfg(test)]
+            let scalar_counts: [std::sync::atomic::AtomicUsize; 8] =
+                core::array::from_fn(|_| std::sync::atomic::AtomicUsize::new(0));
             let result = if use_pruned_fft {
                 selected_coset::evaluate_batched_v1(
                     columns,
@@ -285,12 +321,37 @@ impl MainTraceCosetEvaluatorV1 {
             } else {
                 columns
                     .par_iter()
-                    .map(|column| {
+                    .enumerate()
+                    .map(|(_column_index, column)| {
                         selected.map_or_else(
                             || {
                                 if prefix_full_batch {
+                                    #[cfg(test)]
+                                    if self.receipt.observe_full_cpu_routes {
+                                        let (output, counts) =
+                                            selected_coset::evaluate_full_counted_with_v1(
+                                                column,
+                                                native_log,
+                                                common_log,
+                                                full_backend,
+                                                |_| Ok(()),
+                                                |_| Ok(()),
+                                            )?;
+                                        vector_counts[_column_index].store(
+                                            counts.vector_blocks,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
+                                        scalar_counts[_column_index].store(
+                                            counts.scalar_pairs,
+                                            std::sync::atomic::Ordering::Relaxed,
+                                        );
+                                        return Ok(output);
+                                    }
                                     return selected_coset::evaluate_full_v1(
-                                        column, native_log, common_log,
+                                        column,
+                                        native_log,
+                                        common_log,
+                                        full_backend,
                                     );
                                 }
                                 masked_trace_coefficients_on_coset_v1(
@@ -318,6 +379,17 @@ impl MainTraceCosetEvaluatorV1 {
             if self.receipt.observe_full_cpu_routes && selected.is_none() {
                 if prefix_full_batch {
                     self.receipt.full_prefix_cpu_columns += columns.len();
+                    if full_backend.is_native_v1() {
+                        self.receipt.full_avx2_cpu_columns += columns.len();
+                    }
+                    self.receipt.full_avx2_vector_blocks += vector_counts
+                        .iter()
+                        .map(|count| count.load(std::sync::atomic::Ordering::Relaxed))
+                        .sum::<usize>();
+                    self.receipt.full_avx2_scalar_pairs += scalar_counts
+                        .iter()
+                        .map(|count| count.load(std::sync::atomic::Ordering::Relaxed))
+                        .sum::<usize>();
                 } else {
                     self.receipt.full_dense_cpu_columns += columns.len();
                 }

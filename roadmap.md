@@ -35,7 +35,7 @@ ordinary refund controls.
    fixture and native SDK artifacts on one source candidate. Qualify the
    joint X509 relation and transcript privacy, and resolve proving time and
    process observation under unchanged memory and address-space limits;
-   produce current q77 maximum proofs without widening resource limits.
+   produce current q136 maximum proofs without widening resource limits.
 
 The [Windows and Intel completion goals](specs/windows_intel_completion_goals.md)
 track native custody, retained CLI/Core evidence, SDK and package qualification,

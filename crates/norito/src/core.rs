@@ -673,7 +673,7 @@ fn limit_to_u64(limit: usize) -> u64 {
 }
 fn charge_atomic_budget(counter: &AtomicU64, amount: u64, limit: u64) -> Result<u64, u64> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(amount).filter(|next| *next <= limit)
         })
         .map(|previous| previous.saturating_add(amount))
@@ -1837,13 +1837,18 @@ impl ByteElementFramer {
         let mut block = [0_u8; BYTE_ELEMENT_RUN * Self::FIXED_STRIDE];
         let framed = if compact {
             // The compact length one is the single varint byte `0x01`.
-            for (element, &byte) in block.chunks_exact_mut(2).zip(pending) {
+            for (element, &byte) in block.as_chunks_mut::<2>().0.iter_mut().zip(pending) {
                 element[0] = 1;
                 element[1] = byte;
             }
             pending.len() * 2
         } else {
-            for (element, &byte) in block.chunks_exact_mut(Self::FIXED_STRIDE).zip(pending) {
+            for (element, &byte) in block
+                .as_chunks_mut::<{ Self::FIXED_STRIDE }>()
+                .0
+                .iter_mut()
+                .zip(pending)
+            {
                 element[..Self::FIXED_PREFIX.len()].copy_from_slice(&Self::FIXED_PREFIX);
                 element[Self::FIXED_PREFIX.len()] = byte;
             }
@@ -2915,7 +2920,7 @@ where
                 bytes: limit_to_u64(allocation_bytes),
             })?;
         entries.extend(self.iter());
-        entries.sort_unstable_by(|(ka, _), (kb, _)| ka.cmp(kb));
+        entries.sort_unstable_by_key(|(ka, _)| *ka);
         write_ordered_map_entries(writer, entries.len(), entries.iter().copied())
     }
     fn encoded_len_hint(&self) -> Option<usize> {

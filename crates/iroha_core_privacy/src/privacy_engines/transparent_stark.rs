@@ -1182,6 +1182,117 @@ fn goldilocks_fft_prefix_dif_v1<const PARALLEL_INNER: bool>(
 #[path = "transparent_stark_prefix_fft_tests.rs"]
 mod prefix_fft_tests;
 
+// Native arithmetic is production-gated; x86 test controls can still import the
+// single primitive owner in feature-off builds without enabling its dispatch.
+#[cfg(all(target_arch = "x86_64", any(feature = "simd", test)))]
+#[path = "transparent_stark_goldilocks_avx2.rs"]
+pub(crate) mod goldilocks_avx2;
+
+/// Compile-time result policy for the shared DIF arithmetic and recursion.
+///
+/// Unobserved calls return unit in every build. Explicit test controls retain
+/// public counts; no production observation state or runtime choice is added.
+pub(crate) mod dif_output {
+    #[cfg(test)]
+    use super::dif_test_counts::Counts;
+
+    mod sealed {
+        /// Limit output policies to unit and the explicit test-only counters.
+        pub trait Sealed {}
+
+        impl Sealed for () {}
+
+        #[cfg(test)]
+        impl Sealed for super::Counts {}
+    }
+
+    /// Static result type; test-only methods never enter production arithmetic.
+    pub(crate) trait DifOutputV1: sealed::Sealed + Copy + Default + Send + Sync {
+        /// Whether an explicit test requested actual loop observation.
+        #[cfg(test)]
+        const OBSERVED: bool;
+        /// Preserve the actual native window result in an observed traversal.
+        #[cfg(all(test, feature = "simd", target_arch = "x86_64"))]
+        fn from_counts(counts: Counts) -> Self;
+        /// Record one completed four-field native iteration.
+        #[cfg(all(test, target_arch = "x86_64"))]
+        fn record_vector(&mut self);
+        /// Record one completed scalar pair on the admitted native route.
+        #[cfg(test)]
+        fn record_scalar(&mut self);
+        /// Combine disjoint public counts at existing scheduling joins.
+        #[cfg(test)]
+        fn plus(self, other: Self) -> Self;
+    }
+
+    impl DifOutputV1 for () {
+        #[cfg(test)]
+        const OBSERVED: bool = false;
+        #[cfg(all(test, feature = "simd", target_arch = "x86_64"))]
+        #[inline]
+        fn from_counts(_: Counts) -> Self {}
+        #[cfg(all(test, target_arch = "x86_64"))]
+        #[inline]
+        fn record_vector(&mut self) {}
+        #[cfg(test)]
+        #[inline]
+        fn record_scalar(&mut self) {}
+        #[cfg(test)]
+        #[inline]
+        fn plus(self, _: Self) -> Self {}
+    }
+
+    #[cfg(test)]
+    impl DifOutputV1 for Counts {
+        const OBSERVED: bool = true;
+        #[cfg(all(test, feature = "simd", target_arch = "x86_64"))]
+        #[inline]
+        fn from_counts(counts: Counts) -> Self {
+            counts
+        }
+        #[cfg(all(test, target_arch = "x86_64"))]
+        #[inline]
+        fn record_vector(&mut self) {
+            self.vector_blocks += 1;
+        }
+        #[inline]
+        fn record_scalar(&mut self) {
+            self.scalar_pairs += 1;
+        }
+        #[inline]
+        fn plus(self, other: Self) -> Self {
+            Counts::plus(self, other)
+        }
+    }
+}
+
+/// Invocation-local public loop counts used only by explicit native controls.
+#[cfg(test)]
+pub(crate) mod dif_test_counts {
+    /// Actual native iterations in an explicitly observed test invocation.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(crate) struct Counts {
+        /// Four-field AVX2 loop iterations.
+        pub(crate) vector_blocks: usize,
+        /// Scalar pairs in native tiny windows or incomplete suffixes.
+        pub(crate) scalar_pairs: usize,
+    }
+
+    impl Counts {
+        /// Combine disjoint public work, without reducing private field values.
+        pub(crate) fn plus(self, other: Self) -> Self {
+            Self {
+                vector_blocks: self.vector_blocks + other.vector_blocks,
+                scalar_pairs: self.scalar_pairs + other.scalar_pairs,
+            }
+        }
+    }
+}
+
+#[cfg(all(test, target_arch = "x86_64"))]
+#[path = "transparent_stark_avx2_test_kernel.rs"]
+pub(crate) mod avx2_test_kernel;
+
 /// In-place radix-two FFT over the quartic Goldilocks extension.
 ///
 /// The evaluation domain remains in the base field, so roots and twiddles are

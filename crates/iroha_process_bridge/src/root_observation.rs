@@ -376,7 +376,7 @@ mod implementation {
             return Err(PENDING);
         }
         let token = NEXT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, next_observer_token)
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, next_observer_token)
             .map_err(|_| PANIC)?;
         owners.insert(token, Arc::new(Mutex::new(Observation::reserved())));
         Ok(token)

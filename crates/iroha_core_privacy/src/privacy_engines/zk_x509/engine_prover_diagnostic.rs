@@ -442,12 +442,8 @@ fn retained_public_candidate_replays_without_prover_v1(maximum_shape: bool) {
             "same deterministic ordinary depth-two public fixture"
         });
     let genesis = *fixture.statement.context.network_id.as_bytes();
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("privacy crate is under the repository crates directory");
-    let directory = run_directory_v1(&repository.join("dist/zk-x509-prover-evidence"))
-        .expect("persistent public diagnostic output directory");
+    let directory =
+        public_run_directory_v1().expect("persistent public diagnostic output directory");
     record_public_diagnostic_v1(&directory, &format!(
         "output_directory={}\nreplay_source_candidate={}\ncandidate_status=unverified\ncandidate_sha256={}\ncandidate_bytes={}\nactivation=unavailable\nfull_release_qualification=false\nprivate_witness_recorded=false\nproof_regenerated=false",
         directory.display(), candidate.display(), hex::encode(Sha256::digest(&proof)), proof.len(),
@@ -561,6 +557,117 @@ fn run_directory_v1(parent: &Path) -> io::Result<PathBuf> {
     Ok(directory)
 }
 
+/// Keep diagnostic artifacts outside source custody and the harness's closed
+/// child-record inventory. Both environment inputs are test-only hand-offs.
+fn public_run_directory_v1() -> io::Result<PathBuf> {
+    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("privacy crate is under the repository crates directory");
+    public_run_directory_from_v1(
+        repository,
+        std::env::var_os("IROHA_X509_PUBLIC_OUTPUT_ROOT").map(PathBuf::from),
+        std::env::var_os(iroha_measurement::HARNESS_OUTPUT_DIR_ENV).map(PathBuf::from),
+    )
+}
+
+fn public_run_directory_from_v1(
+    repository: &Path,
+    selected: Option<PathBuf>,
+    harness: Option<PathBuf>,
+) -> io::Result<PathBuf> {
+    let invalid = || {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "public output requires an existing absolute directory outside source and harness child records",
+        )
+    };
+    let selected = selected.ok_or_else(invalid)?;
+    if !selected.is_absolute() {
+        return Err(invalid());
+    }
+    let parent = selected.canonicalize()?;
+    if !parent.is_dir() || parent.starts_with(repository.canonicalize()?) {
+        return Err(invalid());
+    }
+    if let Some(harness) = harness
+        && parent.starts_with(harness.canonicalize()?)
+    {
+        return Err(invalid());
+    }
+    run_directory_v1(&parent)
+}
+
+#[test]
+fn public_output_root_is_explicit_and_outside_retained_inputs() {
+    let fixture = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let repository = fixture.join("source");
+    let inside = repository.join("dist");
+    let public = fixture.join("public");
+    let harness = fixture.join("harness-child");
+    for path in [&inside, &public, &harness] {
+        fs::create_dir_all(path).unwrap();
+    }
+    for selected in [None, Some(PathBuf::from("relative")), Some(inside.clone())] {
+        assert!(public_run_directory_from_v1(&repository, selected, None).is_err());
+    }
+    assert!(
+        public_run_directory_from_v1(&repository, Some(harness.clone()), Some(harness.clone()))
+            .is_err()
+    );
+    #[cfg(unix)]
+    {
+        let alias = fixture.join("source-alias");
+        std::os::unix::fs::symlink(&inside, &alias).unwrap();
+        assert!(public_run_directory_from_v1(&repository, Some(alias), None).is_err());
+    }
+    let directory =
+        public_run_directory_from_v1(&repository, Some(public.clone()), Some(harness.clone()))
+            .unwrap();
+    assert_eq!(
+        directory.parent(),
+        Some(public.canonicalize().unwrap().as_path())
+    );
+    assert!(directory.is_dir());
+    assert_eq!(fs::read_dir(inside).unwrap().count(), 0);
+    assert_eq!(fs::read_dir(harness).unwrap().count(), 0);
+    fs::remove_dir_all(fixture).unwrap();
+}
+
+#[test]
+fn public_output_root_environment_handoff_is_test_process_only() {
+    let fixture = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let child = std::env::current_exe().unwrap();
+    let arguments = [
+        "--exact",
+        "privacy_engines::zk_x509::engine::prover_diagnostic::public_output_root_environment_subprocess",
+        "--ignored",
+    ];
+    let accepted = std::process::Command::new(&child)
+        .args(arguments)
+        .env("IROHA_X509_PUBLIC_OUTPUT_ROOT", &fixture)
+        .env_remove(iroha_measurement::HARNESS_OUTPUT_DIR_ENV)
+        .output()
+        .unwrap();
+    assert!(accepted.status.success());
+    assert_eq!(fs::read_dir(&fixture).unwrap().count(), 1);
+    let refused = std::process::Command::new(child)
+        .args(arguments)
+        .env_remove("IROHA_X509_PUBLIC_OUTPUT_ROOT")
+        .env_remove(iroha_measurement::HARNESS_OUTPUT_DIR_ENV)
+        .output()
+        .unwrap();
+    assert!(!refused.status.success());
+    assert_eq!(fs::read_dir(&fixture).unwrap().count(), 1);
+    fs::remove_dir_all(fixture).unwrap();
+}
+
+#[test]
+#[ignore = "isolated environment hand-off helper; no proof computation"]
+fn public_output_root_environment_subprocess() {
+    assert!(public_run_directory_v1().unwrap().is_dir());
+}
+
 // Only the ignored complete-proof process uses this global hook. The hook
 // covers Rayon worker assertions too; its failure outcome never forwards an
 // internal payload to libtest or the retained public receipt.
@@ -670,14 +777,9 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     };
 
     crate::test_support::require_no_debug_assertions("run this full proof with --release");
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("Core crate is under the repository crates directory");
-    // Keep actual proof evidence in the ignored repository output directory:
-    // temporary-directory cleanup must not discard an expensive proof receipt.
-    let directory = run_directory_v1(&repository.join("dist/zk-x509-prover-evidence"))
-        .expect("persistent public diagnostic output directory");
+    // The caller owns persistent public evidence outside the retained source.
+    let directory =
+        public_run_directory_v1().expect("persistent public diagnostic output directory");
     let receipt = directory.join("receipt.txt");
     let record = |text: String| {
         eprintln!("{text}");
@@ -903,6 +1005,12 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     observation.assert_complete_main_coverage_v1(
         super::super::stark::main_diagnostic_transform_columns_v1().unwrap(),
     );
+    let attribution = observation.validate_transform_family_coverage_v1(
+        &super::super::stark::main_transform_observation::expected_v1()
+            .expect("canonical MAIN transform family census"),
+    );
+    record(format!("transform_family_coverage={attribution:?}"));
+    attribution.expect("complete canonical MAIN transform attribution");
     assert!(proof.len() <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize);
     assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
     assert!(
@@ -1119,12 +1227,8 @@ fn ordinary_holder_lifecycle_with_retained_public_receipt() {
         },
     };
     crate::test_support::require_no_debug_assertions("run this full holder proof with --release");
-    let repository = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("Core crate is under the repository crates directory");
-    let directory = run_directory_v1(&repository.join("dist/zk-x509-prover-evidence"))
-        .expect("persistent public holder diagnostic output directory");
+    let directory =
+        public_run_directory_v1().expect("persistent public holder diagnostic output directory");
     let receipt = directory.join("receipt.txt");
     let record = |text: String| {
         record_public_diagnostic_v1(&directory, &text).expect("durable public holder receipt");
@@ -1368,6 +1472,12 @@ fn ordinary_holder_lifecycle_with_retained_public_receipt() {
     observation.assert_complete_main_coverage_v1(
         super::super::stark::main_diagnostic_transform_columns_v1().unwrap(),
     );
+    let attribution = observation.validate_transform_family_coverage_v1(
+        &super::super::stark::main_transform_observation::expected_v1()
+            .expect("canonical MAIN transform family census"),
+    );
+    record(format!("transform_family_coverage={attribution:?}"));
+    attribution.expect("complete canonical MAIN transform attribution");
     assert!(proof.len() <= ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1 as usize);
     assert!(proof.len() <= ZK_X509_MAX_PROOF_BYTES_V1 as usize);
     assert!(
@@ -1381,4 +1491,36 @@ fn ordinary_holder_lifecycle_with_retained_public_receipt() {
         directory.display()
     );
     record("holder_positive_control_passed=true\nfull_release_qualification=false".into());
+}
+
+#[test]
+fn invalid_transform_attribution_is_refused_after_raw_record_retention() {
+    use super::super::prover_observation::transform::{
+        CoverageErrorV1, ExpectedV1, InvalidAttributionV1, KindV1,
+    };
+    use super::super::prover_observation::{ObservationV1, PhaseTimerV1, PhaseV1};
+    let directory = run_directory_v1(&std::env::temp_dir()).unwrap();
+    let observation = ObservationV1::begin_v1();
+    let timer = PhaseTimerV1::start_v1(PhaseV1::InitialJoinedTransform);
+    timer
+        .transform_context_v1()
+        .enter(KindV1::Base, Err(InvalidAttributionV1))
+        .complete();
+    timer.complete_v1();
+    let receipt = observation.finish_v1();
+    let record = receipt.measurement_v1().unwrap();
+    let retained = retain_phase_tree_v1(&directory, None, record).unwrap();
+    let path = retained
+        .lines()
+        .find_map(|line| line.strip_prefix("phase_tree_record="))
+        .unwrap();
+    assert!(Path::new(path).is_file());
+    let before = fs::read(path).unwrap();
+    assert_eq!(record.outcome, iroha_measurement::RunOutcome::Succeeded);
+    assert_eq!(
+        receipt.validate_transform_family_coverage_v1(&ExpectedV1::default()),
+        Err(CoverageErrorV1::InvalidAttribution)
+    );
+    assert_eq!(fs::read(path).unwrap(), before);
+    fs::remove_dir_all(directory).unwrap();
 }

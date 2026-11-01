@@ -3,10 +3,14 @@
 //! For each selected instruction, this bench:
 //! - Builds a tiny program that repeats the instruction `N` times then HALTs.
 //! - Runs the program in the VM and measures elapsed time.
-//! - Reads gas consumed from the VM and prints `ns/op`, `gas/op`, and `ns/gas`.
+//! - Emits `IVM_GAS_CALIBRATION` gas denominators separately from Criterion's
+//!   raw latency samples, for deriving `ns/op`, `gas/op`, and `ns/gas`.
 //!
 //! Use output to calibrate a target `ns_per_gas` scalar for your baseline CPU and
 //! to tune `ivm_gas_limit_per_block` for a desired block time (e.g., ~200 ms).
+#[path = "support/gas_policy.rs"]
+mod gas_policy;
+
 use criterion::{BatchSize, BenchmarkId, Criterion};
 use iroha_primitives::{
     bigint::BigInt,
@@ -42,6 +46,25 @@ fn program_for_repeated(instr: u32, reps: usize) -> Vec<u8> {
 }
 fn bench_instr(c: &mut Criterion, name: &str, instr: u32, reps: usize) {
     let code = program_for_repeated(instr, reps);
+    // Exercise the same program once outside the timing window and retain its
+    // actual gas denominator. Include the HALT charge explicitly: a raw sample
+    // measures the entire program, not one instruction.
+    let mut quoted_vm = IVM::new(1_000_000_000);
+    quoted_vm
+        .load_program(&code)
+        .expect("load calibration quote");
+    quoted_vm.registers.set(1, 123);
+    quoted_vm.registers.set(2, 7);
+    let initial_gas = quoted_vm.remaining_gas();
+    quoted_vm.run().expect("run calibration quote");
+    let total_gas = initial_gas - quoted_vm.remaining_gas();
+    let halt_gas = ivm::gas::cost_of(encoding::wide::encode_halt()).expect("HALT gas");
+    let operation_gas = ivm::gas::cost_of(instr).expect("calibration instruction gas");
+    assert_eq!(total_gas, operation_gas * reps as u64 + halt_gas);
+    println!(
+        "IVM_GAS_CALIBRATION instruction={name} operations={reps} total_gas={total_gas} halt_gas={halt_gas} gas_per_operation={operation_gas}"
+    );
+    drop(quoted_vm);
     let mut group = c.benchmark_group("ivm-gas-cal");
     group.bench_function(name, |b| {
         b.iter_batched(
@@ -58,7 +81,7 @@ fn bench_instr(c: &mut Criterion, name: &str, instr: u32, reps: usize) {
                 let start_remaining = vm.remaining_gas();
                 vm.run().expect("run");
                 let used = start_remaining - vm.remaining_gas();
-                let _gas_per_op = used as f64 / reps as f64;
+                std::hint::black_box(used);
             },
             BatchSize::SmallInput,
         )
@@ -450,6 +473,13 @@ fn run_benchmarks(c: &mut Criterion) {
 fn main() {
     // Silence ASCII banner and feature selection in benches.
     ivm::set_banner_enabled(false);
+    gas_policy::configure_from_environment();
+    // The opcode fixtures are fixed, without randomness. Echo the optional
+    // confidential calibration seed so its named-host log has the same marker
+    // as the ISI benchmark; other numeric calibration callers need no seed.
+    if let Ok(seed) = std::env::var("IROHA_CONF_GAS_SEED") {
+        println!("IROHA_CONF_GAS_SEED_ACTIVE={seed}");
+    }
     let mut c = Criterion::default().configure_from_args();
     run_benchmarks(&mut c);
     c.final_summary();

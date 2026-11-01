@@ -109,7 +109,8 @@ internal sealed class TransactionEncodingContext
 
     public byte[] EncodeName(string value)
     {
-        return EncodeString(RequireExactNonBlank(value, nameof(value)));
+        NameNative.ValidateCanonical(value, nameof(value));
+        return EncodeString(value);
     }
 
     internal static string CanonicalizeDomainId(string value, string paramName)

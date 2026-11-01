@@ -923,6 +923,6 @@ mod tests {
             .insert("--manifest-sha256".into(), "a".repeat(64).into());
         let mut output = Vec::new();
         assert!(run_bridge(arguments, &mut output, unavailable).is_err());
-        assert!(output.is_empty());
+        assert_eq!(output, Vec::<u8>::new());
     }
 }

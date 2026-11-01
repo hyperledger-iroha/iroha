@@ -555,7 +555,30 @@ class ReadOnlyGitTests(unittest.TestCase):
 
 
 class GitEnvironmentRegistryTests(unittest.TestCase):
-    """A pure Git policy must not preinstall any retained custody owner."""
+    """A pure Git policy must not preinstall any retained custody owner.
+
+    Run each registry contract in a fresh interpreter: other test modules exercise
+    custody helpers by importing them directly during suite discovery. Those
+    unrelated imports must not replace the actual public-entry import boundary.
+    """
+
+    def _run_isolated(self):
+        """Preserve every assertion while excluding unrelated test-module imports."""
+        if getattr(self, "_isolated", False):
+            return False
+        script = (
+            "import sys, unittest\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parent)!r})\n"
+            "import zk_resource_harness_test as cases\n"
+            f"case = cases.GitEnvironmentRegistryTests({self._testMethodName!r})\n"
+            "case._isolated = True\n"
+            "result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([case]))\n"
+            "raise SystemExit(0 if result.wasSuccessful() else 1)\n"
+        )
+        result = subprocess.run([sys.executable, "-I", "-c", script],
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        return True
 
     @staticmethod
     def registry():
@@ -565,6 +588,8 @@ class GitEnvironmentRegistryTests(unittest.TestCase):
             Path(delivery.__file__).parent, delivery.REVIEWED_MODULES)
 
     def test_harness_import_then_real_registry_entry_needs_no_child_or_native_load(self):
+        if self._run_isolated():
+            return
         import ctypes
         name = "compute_workspace_source_manifest"
         self.assertNotIn(name, sys.modules)
@@ -578,6 +603,8 @@ class GitEnvironmentRegistryTests(unittest.TestCase):
         self.assertNotIn(name, sys.modules)
 
     def test_local_environment_matches_registry_owned_canonical_sanitizer(self):
+        if self._run_isolated():
+            return
         import ctypes
         with mock.patch.object(subprocess, "Popen", side_effect=AssertionError("child forbidden")) as child, \
                 mock.patch.object(ctypes, "CDLL", side_effect=AssertionError("native load forbidden")) as library:
@@ -597,6 +624,8 @@ class GitEnvironmentRegistryTests(unittest.TestCase):
         self.assertNotIn("compute_workspace_source_manifest", sys.modules)
 
     def test_preinstalled_canonical_owner_is_still_refused(self):
+        if self._run_isolated():
+            return
         import ctypes
         foreign = object()
         with mock.patch.dict(sys.modules, {"compute_workspace_source_manifest": foreign}), \
@@ -831,12 +860,69 @@ class NativeRunTests(unittest.TestCase):
                 os.close(write_end)
         return result
 
+    def run_window_tee(self, **arguments):
+        """Keep the real child alive until a second real sample reaches its journal."""
+        sampled = threading.Event()
+        append = harness.observer.ResourceObservationJournal.append
+        change = arguments.pop("change", None)
+
+        def appended(journal, observation):
+            append(journal, observation)
+            if journal.count >= 2:
+                sampled.set()
+
+        def after_window(record):
+            self.assertTrue(sampled.wait(20), "fixture did not observe a second real sample")
+            if change is not None:
+                change(record)
+
+        with mock.patch.object(harness.observer.ResourceObservationJournal, "append", appended):
+            return self.run_tee(change=after_window, **arguments)
+
+    def run_terminal_tee(self, **arguments):
+        """Join a real terminal event before exercising post-run failure controls."""
+        if self.publication_fixture is None:
+            return self.run_tee(**arguments)
+        import linux_owned_process_observer as owned
+        entered = threading.Event()
+        terminals = []
+        original_sample = owned.OwnedLinuxProcessReader.sample
+        change = arguments.pop("change", None)
+
+        def sample(reader, pid, image):
+            if reader._admission_raw is not None:
+                self.assertIs(reader, self.last_owned.reader)
+                self.assertEqual(pid, self.last_owned.child.pid)
+                entered.set()
+                deadline = time.monotonic() + 20
+                while True:
+                    terminal = os.waitid(os.P_PID, pid, os.WEXITED | os.WNOWAIT | os.WNOHANG)
+                    if terminal is not None:
+                        self.assertEqual(terminal.si_pid, pid)
+                        self.assertEqual((terminal.si_code, terminal.si_status), (os.CLD_EXITED, 0))
+                        terminals.append(pid)
+                        break
+                    self.assertLess(time.monotonic(), deadline,
+                                    "fixture original did not reach a terminal event")
+                    time.sleep(0.005)
+            return original_sample(reader, pid, image)
+
+        def after_real_sample_site(record):
+            self.assertTrue(entered.wait(20), "fixture did not reach the regular sample site")
+            if change is not None:
+                change(record)
+
+        with mock.patch.object(owned.OwnedLinuxProcessReader, "sample", sample):
+            result = self.run_tee(change=after_real_sample_site, **arguments)
+        self.assertEqual(terminals, [self.last_owned.child.pid])
+        return result
+
     def report(self, line):
         run = Path(line["run_directory"])
         return run, json.loads((run / "report.json").read_text())
 
     def test_accepted_run_merges_the_record_with_kernel_process_observations(self):
-        status, line, _ = self.run_tee()
+        status, line, _ = self.run_window_tee()
         self.assertEqual((status, line["verdict"], line["reasons"]), (0, "accepted", []))
         run, report = self.report(line)
         self.assertEqual(run.parent, self.root.resolve())
@@ -896,7 +982,8 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual(report["limits"]["classification"], "local_scheduling")
         self.assertEqual(report["requirements"],
                          {"classification": "engineering_target", "address_space_limit_bytes": None,
-                          "thermal_state": False, "max_undivided_phase_ppm": None})
+                          "max_peak_rss_bytes": None, "thermal_state": False,
+                          "max_undivided_phase_ppm": None})
         manifest = json.loads((run / "manifest.json").read_text())
         self.assertEqual(manifest["verdict"], "accepted")
         self.assertEqual(line["manifest_sha256"], harness.sha256_file(run / "manifest.json")[0])
@@ -1406,6 +1493,31 @@ class NativeRunTests(unittest.TestCase):
         self.assertEqual(report["process"]["address_space"]["kernel_observed"],
                          {"soft_limit_bytes": 1 << 30, "hard_limit_bytes": 1 << 30})
 
+    def test_peak_rss_bound_uses_the_native_child_peak_and_preserves_rejected_runs(self):
+        # The fixture emitter reports just one page. Only the independently
+        # observed kernel peak can establish the requested acceptance bound.
+        for bound, accepted in ((1 << 35, True), (4096, False)):
+            with self.subTest(bound=bound):
+                status, line, _ = self.run_window_tee(
+                    hold_seconds=0.2, extra=("--max-peak-rss-bytes", str(bound)))
+                run, report = self.report(line)
+                self.assertEqual(report["requirements"]["max_peak_rss_bytes"], bound)
+                self.assertEqual(report["process"]["peak_rss_source"], "kernel_child_rusage")
+                self.assertGreater(report["process"]["peak_rss_bytes"], 4096)
+                self.assertEqual(report["process"]["sampled"]["state"], "validated")
+                if self.publication_fixture is not None:
+                    lifecycle = json.loads((run / harness.linux_evidence.PATHS["lifecycle"]).read_bytes())
+                    self.assertEqual(lifecycle["wait4"]["peak_rss_bytes"], report["process"]["peak_rss_bytes"])
+                self.assertEqual(json.loads(self.fed)["process"]["peak_rss_bytes"], 4096)
+                self.assertEqual((status, line["verdict"]),
+                                 (0, "accepted") if accepted else (1, "rejected"))
+                self.assertEqual(report["reasons"], [] if accepted else
+                                 ["sampled_peak_rss_exceeds_bound", "peak_rss_exceeds_bound"])
+                consumer = dict(report["requirements"], max_peak_rss_bytes=1 << 36)
+                findings = harness.salvage_reasons(
+                    run, {}, line["manifest_sha256"], consumer, **self.observation_requirement())
+                self.assertEqual(findings, [] if accepted else ["run_was_rejected"])
+
     def test_device_thermal_state_and_granularity_requirements_are_enforced_when_stated(self):
         def unavailable(record):
             record["process"].update(thermal_finish="unavailable", thermal_source="unavailable")
@@ -1468,7 +1580,7 @@ class NativeRunTests(unittest.TestCase):
             return real(records, name, raw)
 
         with mock.patch.object(harness.control.RecordDirectory, "publish", refuse_report):
-            status, line, _ = self.run_tee(hold_seconds=0.2)
+            status, line, _ = self.run_terminal_tee(hold_seconds=0.2)
         self.assertEqual((status, line["verdict"], line["manifest_sha256"]), (1, "rejected", None))
         run = Path(line["run_directory"])
         self.assertEqual(json.loads((run / "harness_failure.json").read_text()),
@@ -1483,7 +1595,7 @@ class NativeRunTests(unittest.TestCase):
         # A failure inside the run itself is a retained, rejected report.
         first = RuntimeError("judge failed")
         with mock.patch.object(harness, "collect_records", side_effect=first):
-            result = self.run_tee(hold_seconds=0.2)
+            result = self.run_terminal_tee(hold_seconds=0.2)
         if self.publication_fixture is not None:
             _, report = self._owned_refusal_report(result, first)
             self.assertTrue(self.initial_fixture_sample)
@@ -1503,6 +1615,7 @@ class NativeRunTests(unittest.TestCase):
             [*base, "--interval-ms", "5", "--", str(CAT)],
             [*base, "--timeout-seconds", "0", "--", str(CAT)],
             [*base, "--address-space-limit-bytes", "0", "--", str(CAT)],
+            [*base, "--max-peak-rss-bytes", "0", "--", str(CAT)],
             [*base, "--retain-output-tail-bytes", str(harness.MAX_OUTPUT_TAIL_BYTES + 1), "--", str(CAT)],
             [*base, "--retain-output-tail-bytes", "-1", "--", str(CAT)],
             [*base, "--max-undivided-phase-ppm", "0", "--", str(CAT)],
@@ -1806,9 +1919,10 @@ class PinnedEvidenceTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.serial = 0
         self.requirements = {"classification": "engineering_target", "address_space_limit_bytes": None,
-                             "thermal_state": False, "max_undivided_phase_ppm": None}
+                             "max_peak_rss_bytes": None, "thermal_state": False,
+                             "max_undivided_phase_ppm": None}
 
-    def fixture(self, requirements=None, child_change=None, report_change=None):
+    def fixture(self, requirements=None, child_change=None, report_change=None, process_change=None):
         self.serial += 1
         run = self.root / str(self.serial)
         run.mkdir(mode=0o700)
@@ -1825,18 +1939,23 @@ class PinnedEvidenceTests(unittest.TestCase):
         process = dict(record["process"], exit={"kind": "exited", "code": 0}, timed_out=False,
                        sampled={"state": "not_sampled", "reason": "exited_before_first_sample", "observations": 0},
                        address_space=harness.address_space_enforcement(limit, None), wall_ns=1_000_000_000)
+        process["peak_rss_source"] = "kernel_child_rusage"
+        if process_change:
+            process_change(process)
         (run / "child/context.json").write_bytes(harness.control.canonical(context))
         (run / "child/record.json").write_bytes(harness.control.canonical(record))
         os.chmod(run / "child/record.json", 0o644)
         if child_change:
             child_change(run)
-        entries, orphans, reasons = harness.collect_records(DESCRIPTOR, run, context, process, requirements)
+        limits = {"classification": "local_scheduling", "requested_address_space_bytes": limit,
+                  "timeout_ms": 10000, "sampling_interval_ms": 100, "output_tail_bytes": 0}
+        entries, orphans, reasons = harness.collect_records(
+            DESCRIPTOR, run, context, process, requirements, observation_limits=limits)
         stream = {"bytes": 0, "sha256": hashlib.sha256(b"").hexdigest(), "complete": True, "tail": None}
         report = {"schema": harness.REPORT_SCHEMA, "context": context,
                   "observation_contract": "ordinary_native_v1",
                   "command": {"arguments": None}, "host": {},
-                  "limits": {"classification": "local_scheduling", "requested_address_space_bytes": limit,
-                             "timeout_ms": 10000, "sampling_interval_ms": 100, "output_tail_bytes": 0},
+                  "limits": limits,
                   "requirements": requirements, "process": process,
                   "output": {"classification": "measured", "retention": "digest_only",
                              "stdout": dict(stream), "stderr": dict(stream)},
@@ -1845,9 +1964,197 @@ class PinnedEvidenceTests(unittest.TestCase):
         if report_change:
             report_change(report)
         with harness.control.RecordDirectory(run) as directory:
-            directory.publish("report.json", harness.control.canonical(report))
+            # Public synthetic intake also covers JSON numbers that the real
+            # producer's canonical unsigned encoder refuses before publication.
+            directory.publish("report.json", json.dumps(
+                report, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8"))
             binding = harness.write_manifest(run, directory, context, report["verdict"])
         return run, binding["sha256"], report
+
+    def window_fixture(self, change=None, requirements=None):
+        """Publish two synthetic samples through the actual journal writer."""
+        captured = {}
+
+        def observe(run):
+            process = captured["process"]
+            (run / "observations").mkdir(mode=0o700)
+            row = {"label": "measured_command", "identity": {"pid": process["pid"]},
+                   "cpu_time_ns": 0, "cpu_counter_unit_ns": 1_000_000, "rss_bytes": 4096}
+            first = {"started_monotonic_ns": 1_000_000, "finished_monotonic_ns": 2_000_000,
+                     "processes": [row], "cpu_time_ns": 0, "rss_bytes": 4096}
+            last = {"started_monotonic_ns": 101_000_000, "finished_monotonic_ns": 102_000_000,
+                    "processes": [dict(row, cpu_time_ns=10_000_000, rss_bytes=8192)],
+                    "cpu_time_ns": 10_000_000, "rss_bytes": 8192}
+            with harness.control.RecordDirectory(run) as records:
+                journal = harness.observer.ResourceObservationJournal(
+                    records, "observations", harness.observer.resource_window_policy(10000, 100))
+                journal.append(first)
+                baseline = records.publish("observations/baseline.json", harness.control.canonical(first))
+                journal.append(last)
+                journal.flush()
+                metrics = {"cpu_time_ns": 10_000_000, "sampled_peak_rss_bytes": 8192,
+                           "maximum_observation_gap_ns": 99_000_000,
+                           "baseline_started_monotonic_ns": 1_000_000,
+                           "baseline_finished_monotonic_ns": 2_000_000,
+                           "final_started_monotonic_ns": 101_000_000,
+                           "final_finished_monotonic_ns": 102_000_000}
+                window = {"version": 1, "kind": "benchmark_process_resource_window",
+                          "baseline": baseline, "sampler_stopped_observed": True,
+                          "journal": journal.manifest(), "outcome": dict(kind="succeeded", **metrics)}
+                binding = records.publish("observations/window.json", harness.control.canonical(window))
+            process["sampled"] = {"state": "validated", "observations": 2, "window": binding,
+                                  "sampled_cpu_time_ns": 10_000_000, "sampled_peak_rss_bytes": 8192,
+                                  "maximum_observation_gap_ns": 99_000_000}
+            if change:
+                change(run, process)
+
+        return self.fixture(requirements=requirements, child_change=observe,
+                            process_change=lambda process: captured.update(process=process))
+
+    def test_retained_resource_window_replays_exact_captured_chunk_bytes(self):
+        run, pin, report = self.window_fixture()
+        self.assertEqual(report["verdict"], "accepted")
+        harness.read_pinned_run(run, pin, expected_observation_contract='ordinary_native_v1')
+        with harness._EvidenceDirectory(run) as directory:
+            snapshot = harness._EvidenceSnapshot(directory, DESCRIPTOR)
+        self.addCleanup(snapshot.close)
+        path = "observations/chunk-00000000000000000000.json"
+        captured = snapshot.read(snapshot.bindings[path])
+        self.assertNotIn(path, snapshot.raw)
+        # Force the bounded in-memory spool to disk without changing its bytes.
+        snapshot._journal.rollover()
+        (run / path).write_bytes(b"changed after capture")
+        self.assertEqual(snapshot.read(snapshot.bindings[path]), captured)
+        self.assertEqual(harness._sampled_evidence_reasons(report["process"], snapshot, report["limits"]), [])
+        with self.assertRaises(ValueError):
+            snapshot.read(dict(snapshot.bindings[path], sha256="f" * 64))
+        self.assertEqual(harness._sampled_evidence_reasons(
+            report["process"], snapshot, dict(report["limits"], timeout_ms=1000)),
+                         ["resource_window_evidence_invalid"])
+
+    def test_snapshot_closes_rolled_storage_on_success_refusal_and_failed_construction(self):
+        actual = harness.tempfile.SpooledTemporaryFile
+        spools = []
+
+        def retained(*args, **kwargs):
+            spool = actual(*args, **kwargs)
+            spool.rollover()
+            spools.append(spool)
+            return spool
+
+        with mock.patch.object(harness.tempfile, "SpooledTemporaryFile", side_effect=retained):
+            run, pin, _ = self.window_fixture()
+            self.assertTrue(spools and all(spool.closed for spool in spools))
+            harness.read_pinned_run(run, pin, expected_observation_contract='ordinary_native_v1')
+            self.assertTrue(all(spool.closed for spool in spools))
+            malformed, bad_pin, _ = self.fixture(report_change=lambda report: report.update(requirements={}))
+            self.assertIn("report_requirements_invalid", harness.salvage_reasons(
+                malformed, {}, bad_pin, expected_observation_contract='ordinary_native_v1'))
+            self.assertTrue(all(spool.closed for spool in spools))
+            with mock.patch.object(harness, "_derived_reasons", side_effect=RuntimeError("replay failed")), \
+                    self.assertRaisesRegex(RuntimeError, "replay failed"):
+                harness.read_pinned_run(run, pin, expected_observation_contract='ordinary_native_v1')
+            self.assertTrue(all(spool.closed for spool in spools))
+            with mock.patch.object(harness._EvidenceSnapshot, "_capture", side_effect=RuntimeError("capture failed")), \
+                    self.assertRaisesRegex(RuntimeError, "capture failed"):
+                harness._EvidenceSnapshot(mock.Mock(), DESCRIPTOR)
+            self.assertTrue(all(spool.closed for spool in spools))
+
+    def test_unknown_sample_states_and_retained_later_samples_without_window_refuse(self):
+        for state in (None, True, "unknown"):
+            _, _, report = self.fixture(process_change=lambda process: process["sampled"].update(state=state))
+            self.assertEqual(report["reasons"], ["resource_window_evidence_invalid"])
+        run, _, report = self.window_fixture()
+        with harness._EvidenceDirectory(run) as directory, harness._EvidenceSnapshot(directory, DESCRIPTOR) as snapshot:
+            process = copy.deepcopy(report["process"])
+            process["sampled"] = {"state": "not_sampled", "observations": 1}
+            # Even hiding the window binding cannot hide the second retained sample.
+            del snapshot.bindings["observations/window.json"]
+            self.assertEqual(harness._sampled_evidence_reasons(process, snapshot, report["limits"]),
+                             ["resource_window_evidence_invalid"])
+
+    def test_single_baseline_chunk_needs_no_window_but_extra_chunks_cannot_be_ignored(self):
+        def initial_only(run, process):
+            baseline = json.loads((run / "observations/baseline.json").read_bytes())
+            chunk = {"version": 1, "kind": "benchmark_process_observation_chunk", "sequence": 0,
+                     "first_observation_index": 0, "previous_chunk": None, "observations": [baseline]}
+            (run / "observations/chunk-00000000000000000000.json").write_bytes(harness.control.canonical(chunk))
+            (run / "observations/window.json").unlink()
+            process["sampled"] = {"state": "not_sampled", "observations": 1}
+        run, pin, report = self.window_fixture(initial_only)
+        self.assertEqual(report["reasons"], [])
+        harness.read_pinned_run(run, pin, expected_observation_contract='ordinary_native_v1')
+
+        def extra_chunk(run, process):
+            raw = (run / "observations/chunk-00000000000000000000.json").read_bytes()
+            (run / "observations/chunk-00000000000000000001.json").write_bytes(raw)
+        _, _, report = self.window_fixture(extra_chunk)
+        self.assertEqual(report["reasons"], ["resource_window_evidence_invalid"])
+
+    def test_coordinated_lower_rss_summaries_cannot_contradict_retained_later_sample(self):
+        def lower_summaries(run, process):
+            process["peak_rss_bytes"] = 4096
+            process["sampled"]["sampled_peak_rss_bytes"] = 4096
+            child = json.loads((run / "child/record.json").read_bytes())
+            child["process"].update(peak_rss_bytes=4096, peak_rss_bytes_at_begin=4096)
+            (run / "child/record.json").write_bytes(harness.control.canonical(child))
+            window = json.loads((run / "observations/window.json").read_bytes())
+            window["outcome"]["sampled_peak_rss_bytes"] = 4096
+            raw = harness.control.canonical(window)
+            (run / "observations/window.json").write_bytes(raw)
+            process["sampled"]["window"].update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+        run, pin, report = self.window_fixture(lower_summaries)
+        self.assertEqual(report["reasons"], ["resource_window_evidence_invalid"])
+        self.assertEqual(report["records"][0]["findings"], [])
+        self.assertIn("run_was_rejected", harness.salvage_reasons(
+            run, {}, pin, expected_observation_contract='ordinary_native_v1'))
+
+    def test_replayed_rss_and_wait4_peak_each_enforce_the_bound_without_ordering(self):
+        cases = ((4096, 8192, []), (4096, 8191, ["sampled_peak_rss_exceeds_bound"]),
+                 (8193, 8192, ["peak_rss_exceeds_bound"]),
+                 (4096, 4095, ["sampled_peak_rss_exceeds_bound", "peak_rss_exceeds_bound"]),
+                 (1, 1, ["sampled_peak_rss_exceeds_bound"]))
+        for peak, bound, reasons in cases:
+            with self.subTest(kernel_peak=peak, bound=bound):
+                def kernel_peak(run, process):
+                    process["peak_rss_bytes"] = peak
+                    child = json.loads((run / "child/record.json").read_bytes())
+                    child["process"].update(peak_rss_bytes=peak, peak_rss_bytes_at_begin=peak)
+                    (run / "child/record.json").write_bytes(harness.control.canonical(child))
+                requirements = dict(self.requirements, max_peak_rss_bytes=bound)
+                run, pin, report = self.window_fixture(kernel_peak, requirements)
+                self.assertEqual(report["reasons"], reasons)
+                self.assertEqual(report["process"]["peak_rss_bytes"], peak)
+                self.assertEqual(report["process"]["sampled"]["sampled_peak_rss_bytes"], 8192)
+                self.assertEqual(harness.salvage_reasons(
+                    run, {}, pin, dict(requirements, max_peak_rss_bytes=1 << 36),
+                    expected_observation_contract='ordinary_native_v1'),
+                    ["run_was_rejected"] if reasons else [])
+                if not reasons:
+                    intake = harness.read_pinned_run(
+                        run, pin, expected_observation_contract='ordinary_native_v1')
+                    self.assertEqual(intake["original_requirements"], requirements)
+                    self.assertEqual(intake["report"]["process"]["sampled"]["sampled_peak_rss_bytes"], 8192)
+
+    def test_initial_sample_alone_enforces_rss_bound_independently_of_wait4(self):
+        def initial_only(run, process):
+            baseline = json.loads((run / "observations/baseline.json").read_bytes())
+            chunk = {"version": 1, "kind": "benchmark_process_observation_chunk", "sequence": 0,
+                     "first_observation_index": 0, "previous_chunk": None, "observations": [baseline]}
+            (run / "observations/chunk-00000000000000000000.json").write_bytes(harness.control.canonical(chunk))
+            (run / "observations/window.json").unlink()
+            process["sampled"] = {"state": "not_sampled", "observations": 1}
+            process["peak_rss_bytes"] = 1
+            child = json.loads((run / "child/record.json").read_bytes())
+            child["process"].update(peak_rss_bytes=1, peak_rss_bytes_at_begin=1)
+            (run / "child/record.json").write_bytes(harness.control.canonical(child))
+        for bound, reasons in ((4096, []), (4095, ["sampled_peak_rss_exceeds_bound"])):
+            run, pin, report = self.window_fixture(
+                initial_only, dict(self.requirements, max_peak_rss_bytes=bound))
+            self.assertEqual(report["reasons"], reasons)
+            self.assertEqual(harness.salvage_reasons(
+                run, {}, pin, expected_observation_contract='ordinary_native_v1'),
+                ["run_was_rejected"] if reasons else [])
 
     def test_mandatory_pin_refuses_before_open_and_safe_reader_returns_bound_documents(self):
         run, pin, report = self.fixture()
@@ -1887,6 +2194,7 @@ class PinnedEvidenceTests(unittest.TestCase):
         for consumer, field in (
             (dict(self.requirements, thermal_state=True), "thermal_state"),
             (dict(self.requirements, max_undivided_phase_ppm=700_000), "max_undivided_phase_ppm"),
+            (dict(self.requirements, max_peak_rss_bytes=1 << 35), "max_peak_rss_bytes"),
             (dict(self.requirements, address_space_limit_bytes=1 << 35), "address_space_limit_bytes"),
         ):
             self.assertIn("consumer_requirement_not_established:" + field,
@@ -1913,6 +2221,65 @@ class PinnedEvidenceTests(unittest.TestCase):
         with self.assertRaises(harness.HarnessRefusal):
             harness.read_pinned_run(run, pin, consumer_requirements=self.requirements, expected_observation_contract='ordinary_native_v1')
 
+    def test_peak_rss_exact_bound_accepts_and_one_byte_over_rejects_independent_peak(self):
+        peak = GOLDEN["process"]["peak_rss_bytes"]
+        original = dict(self.requirements, max_peak_rss_bytes=peak)
+        for extra, accepted in ((0, True), (1, False)):
+            with self.subTest(extra=extra):
+                run, pin, report = self.fixture(
+                    original, process_change=lambda process: process.update(peak_rss_bytes=peak + extra))
+                self.assertEqual(report["verdict"], "accepted" if accepted else "rejected")
+                self.assertEqual(report["reasons"], [] if accepted else ["peak_rss_exceeds_bound"])
+                self.assertEqual(report["records"][0]["findings"], [])
+                for consumer in (original, dict(original, max_peak_rss_bytes=peak + 1), self.requirements):
+                    findings = harness.salvage_reasons(
+                        run, {}, pin, consumer, expected_observation_contract='ordinary_native_v1')
+                    self.assertEqual(findings, [] if accepted else ["run_was_rejected"])
+        run, pin, _ = self.fixture(original)
+        inspected = harness.read_pinned_run(
+            run, pin, consumer_requirements=dict(original, max_peak_rss_bytes=peak + 1),
+            expected_observation_contract='ordinary_native_v1')
+        self.assertEqual(inspected["original_requirements"], original)
+        self.assertEqual(inspected["consumer_requirements"]["max_peak_rss_bytes"], peak + 1)
+        findings = harness.salvage_reasons(
+            run, {}, pin, dict(original, max_peak_rss_bytes=peak - 1),
+            expected_observation_contract='ordinary_native_v1')
+        self.assertEqual(findings, ["consumer_requirement_not_established:max_peak_rss_bytes",
+                                    "consumer_evidence_rejected:peak_rss_exceeds_bound"])
+
+    def test_peak_rss_requirement_rejects_unavailable_invalid_or_emitter_only_metrics(self):
+        original = dict(self.requirements, max_peak_rss_bytes=harness.MAX_U64)
+        mutations = [lambda process, value=value: process.update(peak_rss_bytes=value)
+                     for value in (None, False, True, 0, -1, 1.5, "4096", harness.MAX_U64 + 1)]
+        mutations += [lambda process, value=value: process.update(peak_rss_source=value)
+                      for value in (None, True, "unavailable", "kernel_lifetime_high_water")]
+        mutations += [lambda process: process.pop("peak_rss_bytes"),
+                      lambda process: process.pop("peak_rss_source")]
+        for change in mutations:
+            run, pin, report = self.fixture(original, process_change=change)
+            self.assertEqual(report["reasons"], ["peak_rss_observation_invalid"])
+            self.assertEqual(report["verdict"], "rejected")
+            for consumer in (original, self.requirements):
+                self.assertIn("run_was_rejected", harness.salvage_reasons(
+                    run, {}, pin, consumer, expected_observation_contract='ordinary_native_v1'))
+
+    def test_peak_rss_cli_run_requirement_and_salvage_override_preserve_original(self):
+        peak = GOLDEN["process"]["peak_rss_bytes"]
+        arguments = harness.parser().parse_args(
+            ["run", *SCOPE, "--max-peak-rss-bytes", str(peak), "--", str(TEE)])
+        original = harness.run_requirements(arguments)
+        self.assertEqual(original, dict(self.requirements, max_peak_rss_bytes=peak))
+        run, pin, report = self.fixture(original)
+        for override in ((), ("--max-peak-rss-bytes", str(peak + 1))):
+            with mock.patch.object(harness, "build_context", return_value=report["context"]):
+                status, result, _ = run_harness([
+                    "salvage", *SCOPE, "--executable", str(TEE), "--manifest-sha256", pin,
+                    "--require-observation-contract", "ordinary_native_v1", *override, str(run)])
+            self.assertEqual(status, 0)
+            self.assertEqual(result["original_requirements"], original)
+            self.assertEqual(result["consumer_requirements"]["max_peak_rss_bytes"],
+                             peak + 1 if override else peak)
+
     def test_report_observation_contract_is_mandatory_and_closed(self):
         for value in (None, True, [], "unknown"):
             run, pin, _ = self.fixture(report_change=lambda report, value=value:
@@ -1928,8 +2295,16 @@ class PinnedEvidenceTests(unittest.TestCase):
             {"address_space_limit_bytes": True}, {"address_space_limit_bytes": 0},
             {"address_space_limit_bytes": 1 << 63}, {"max_undivided_phase_ppm": True},
             {"max_undivided_phase_ppm": 0}, {"max_undivided_phase_ppm": 1 << 32},
+            {"max_peak_rss_bytes": True}, {"max_peak_rss_bytes": False},
+            {"max_peak_rss_bytes": 0}, {"max_peak_rss_bytes": -1},
+            {"max_peak_rss_bytes": 1.5}, {"max_peak_rss_bytes": "4096"},
+            {"max_peak_rss_bytes": 1 << 64},
         )]
-        invalid += [{}, dict(self.requirements, unknown=1)]
+        invalid += [{}, dict(self.requirements, unknown=1),
+                    {key: value for key, value in self.requirements.items() if key != "max_peak_rss_bytes"}]
+        for bound in (1, harness.MAX_U64):
+            self.assertEqual(harness.validate_requirements(dict(self.requirements, max_peak_rss_bytes=bound))
+                             ["max_peak_rss_bytes"], bound)
         run, pin, _ = self.fixture()
         for requirements in invalid:
             with self.assertRaises(harness.HarnessRefusal):

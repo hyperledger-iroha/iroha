@@ -95,7 +95,7 @@ fn begin_case() {
 }
 
 fn track(mut bytes: Vec<u8>) -> Vec<u8> {
-    assert!(!bytes.is_empty());
+    assert_ne!(bytes, Vec::<u8>::new());
     assert!(WATCHED.load(Ordering::Acquire).is_null());
     assert_eq!(OBSERVED.load(Ordering::Acquire), 0);
     assert_eq!(TRACKED.fetch_add(1, Ordering::AcqRel), 0);

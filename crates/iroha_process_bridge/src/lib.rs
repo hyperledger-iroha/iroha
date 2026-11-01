@@ -189,7 +189,7 @@ pub unsafe extern "C" fn iroha_process_spawn_v1(
         let bytes = unsafe { std::slice::from_raw_parts(bytes, length) };
         let command = request(bytes)?;
         let token = NEXT
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, next_process_token)
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, next_process_token)
             .map_err(|_| PANIC)?;
         let session = Arc::new(Session {
             child: Mutex::new(None),

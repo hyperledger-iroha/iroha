@@ -248,6 +248,8 @@ impl<'a> SelectedRowCommitmentV1<'a> {
         }
         // This existing owner clears rows on every error and unwind path.
         let mut inner = StreamingRowCommitmentV1 {
+            #[cfg(test)]
+            observation: commitment_observation::ContextV1::default(),
             rows,
             width,
             received_columns: 0,

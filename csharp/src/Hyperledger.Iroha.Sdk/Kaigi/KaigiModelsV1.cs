@@ -233,19 +233,12 @@ internal static class KaigiValidationV1
     }
     internal static string Name(string value, string name)
     {
-        ArgumentNullException.ThrowIfNull(value);
-        // TODO: share Rust's pinned NFC/UTS-46 owner before accepting Unicode identity names.
-        if (value.Length is < 1 or > 255 || value.Any(static ch => ch is < '!' or > '~' or '@' or '#' or '$'))
-            throw new ArgumentException("Kaigi identity names require canonical nonempty ASCII Name bytes.", name);
+        NameNative.ValidateCanonical(value, name);
         return value;
     }
     internal static string Domain(string value)
     {
-        ArgumentNullException.ThrowIfNull(value);
-        var labels = value.Split('.');
-        if (labels.Length != 2 || labels.Any(static label => label.Length is < 1 or > 63 || label[0] == '-' || label[^1] == '-' || label.Any(static ch => ch is not (>= 'a' and <= 'z') and not (>= '0' and <= '9') and not '-') || label.StartsWith("xn--", StringComparison.Ordinal) || (label.Length >= 4 && label[2..4] == "--")))
-            throw new ArgumentException("Kaigi domain requires canonical ASCII domain.dataspace labels.", nameof(value));
-        return value;
+        return TransactionEncodingContext.CanonicalizeDomainId(value, nameof(value));
     }
     internal static string? Text(string? value)
     {

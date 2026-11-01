@@ -44,7 +44,7 @@ fn main(){
 }
 ''')
     program=root/('bridge-probe.exe' if os.name=='nt' else 'bridge-probe')
-    compiler=['rustc']+(['+1.93.1-x86_64-pc-windows-msvc'] if os.name=='nt' else [])
+    compiler=['rustc']
     subprocess.run([*compiler,'--edition=2024','-C','debuginfo=0',str(source),'-o',str(program)],check=True)
     filename='iroha_process_bridge.dll' if os.name=='nt' else 'libiroha_process_bridge.so'
     library=Path(os.environ.get('IROHA_TEST_PROCESS_BRIDGE_LIBRARY',str(BASE.parent/'target'/'debug'/filename)))

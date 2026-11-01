@@ -48,7 +48,7 @@ fn decode_hex_array<const N: usize>(encoded: &str) -> Result<[u8; N], json::Erro
     }
     let mut out = [0u8; N];
     let bytes = encoded.as_bytes();
-    for (i, chunk) in bytes.chunks_exact(2).enumerate() {
+    for (i, chunk) in bytes.as_chunks::<2>().0.iter().enumerate() {
         let hi = decode_hex_nibble(chunk[0])?;
         let lo = decode_hex_nibble(chunk[1])?;
         out[i] = (hi << 4) | lo;

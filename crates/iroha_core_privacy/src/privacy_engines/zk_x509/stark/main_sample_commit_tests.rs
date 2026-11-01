@@ -501,7 +501,8 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
         let evaluate_retained = |columns: &[aggregate::ZeroizingFieldColumnV1],
                                  native,
                                  common,
-                                 selected: Option<&[usize]>| {
+                                 selected: Option<&[usize]>,
+                                 _coordinates| {
             evaluate(columns, native, common).map(|full| {
                 full.into_iter()
                     .map(|column| match selected {
@@ -523,6 +524,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
                     Ok(columns.pop().unwrap().into_vec_v1())
                 },
                 evaluate_retained,
+                Default::default(),
             )
             .unwrap();
         assert_eq!(initial.commitment.root, expected.commitment.root);
@@ -541,6 +543,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
                     Ok(columns.pop().unwrap().into_vec_v1())
                 },
                 evaluate_retained,
+                Default::default(),
             )
             .unwrap();
         assert!(absent_cut.is_none());
@@ -565,6 +568,7 @@ fn fused_joined_roots_frontiers_and_opened_rows_match_original_masks_across_grou
                 Ok(column.into_vec_v1())
             },
             evaluate_retained,
+            Default::default(),
         );
         assert!(
             mutated.is_err(),

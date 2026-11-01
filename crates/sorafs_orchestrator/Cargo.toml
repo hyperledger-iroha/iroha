@@ -73,6 +73,9 @@ toml = { workspace = true, optional = true }
 rustix = { version = "1.1.4", features = ["fs"] }
 
 [dev-dependencies]
+iroha_data_model = { workspace = true, features = ["application-model", "test-fixtures", "transparent_api"] }
+rcgen = { version = "=0.14.10", default-features = false, features = ["crypto", "ring"] }
+tokio-rustls = { workspace = true, features = ["ring"] }
 iroha_logger = { workspace = true }
 futures = "0.3.31"
 hex = "0.4.3"

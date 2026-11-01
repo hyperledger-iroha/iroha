@@ -21,6 +21,9 @@
 //! caller-selected parameter and the strict reader rejects every truncation and trailing suffix.
 mod main_aggregate;
 #[cfg(test)]
+#[path = "stark/main_transform_observation.rs"]
+pub(super) mod main_transform_observation;
+#[cfg(test)]
 use super::der_stark::{
     ZK_X509_DER_STARK_BUS_LANES_V1, ZkX509DerStarkChallengesV1, ZkX509DerStarkTerminalClaimsV1,
     evaluate_zk_x509_der_stark_residues_v1, zk_x509_der_stark_terminal_claims_v1,

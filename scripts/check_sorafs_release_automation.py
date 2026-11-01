@@ -1198,7 +1198,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         'python-version: "3.12"',
         "bash ci/check_sorafs_fixtures.sh",
         "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
-        'go-version: "1.26.x"',
+        'go-version: "1.27.x"',
         "actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1",
         'node-version: "24"',
         "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
@@ -1234,7 +1234,7 @@ WORKFLOWS: dict[str, tuple[str, ...]] = {
         "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
         "bash ci/check_sorafs_python_native_sdk.sh",
         "bash ci/sdk_sorafs_orchestrator.sh",
-        "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
+        "dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build",
         "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     ),
 }
@@ -2607,7 +2607,7 @@ def _validate_workflow_source(relative: str, source: str) -> list[str]:
                 "dotnet restore Hyperledger.Iroha.Sdk.sln",
                 "dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror",
                 "Run complete C# ABI-33 parity suite",
-                "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
+                "dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build",
             ),
         }
         for job_name, markers in required_job_markers.items():

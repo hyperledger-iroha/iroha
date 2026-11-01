@@ -457,4 +457,4 @@ jobs:
         run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore -warnaserror
       - name: Run complete C# ABI-33 parity suite
         working-directory: csharp
-        run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build
+        run: dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build

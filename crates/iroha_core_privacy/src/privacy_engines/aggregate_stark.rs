@@ -7,6 +7,10 @@
 //! minimal batched Merkle multiproofs, shared binary FRI, and opened-query
 //! verification. It deliberately contains no X.509, private-note, or PQ-MASP
 //! policy.
+#[cfg(test)]
+pub(crate) mod commitment_observation;
+#[cfg(test)]
+mod commitment_observation_tests;
 #[path = "aggregate_stark/joined_trace.rs"]
 pub mod joined_trace;
 use super::privacy_outer_hash::PRIVACY_OUTER_DIGEST_BYTES_V1;
@@ -2066,6 +2070,8 @@ pub struct StreamingRowCommitmentResultV1 {
 /// retained. A second deterministic pass after Fiat–Shamir query derivation
 /// supplies the canonical frontier and the small set of opened rows.
 pub struct StreamingRowCommitmentV1 {
+    #[cfg(test)]
+    observation: commitment_observation::ContextV1,
     rows: usize,
     width: usize,
     received_columns: usize,
@@ -2148,6 +2154,8 @@ impl StreamingRowCommitmentV1 {
             }
         }
         Ok(Self {
+            #[cfg(test)]
+            observation: commitment_observation::ContextV1::default(),
             rows,
             width,
             received_columns: 0,
@@ -2158,6 +2166,15 @@ impl StreamingRowCommitmentV1 {
             opening_indices: opening_indices.to_vec(),
             opened_rows,
         })
+    }
+    /// Attach the original diagnostic parent without moving private backings.
+    #[cfg(test)]
+    pub(crate) fn with_observation_v1(
+        mut self,
+        observation: commitment_observation::ContextV1,
+    ) -> Self {
+        self.observation = observation;
+        self
     }
     /// Absorb one complete LDE column in canonical column order.
     #[cfg(test)]
@@ -2176,6 +2193,10 @@ impl StreamingRowCommitmentV1 {
         columns: &[C],
     ) -> Result<(), AggregateStarkErrorV1> {
         const ROWS_PER_CHUNK: usize = 1024;
+        #[cfg(test)]
+        let admission = self
+            .observation
+            .enter(commitment_observation::OperationV1::ColumnAdmission);
         if self.failed
             || columns.is_empty()
             || columns.len() > MASKED_TRACE_LDE_COLUMN_BATCH_V1
@@ -2197,6 +2218,12 @@ impl StreamingRowCommitmentV1 {
         }) {
             return Err(AggregateStarkErrorV1::NonCanonicalField);
         }
+        #[cfg(test)]
+        admission.complete();
+        #[cfg(test)]
+        let absorption = self
+            .observation
+            .enter(commitment_observation::OperationV1::RowAbsorption);
         self.failed = true;
         let failure = self
             .digest_streams
@@ -2239,6 +2266,8 @@ impl StreamingRowCommitmentV1 {
         }
         self.received_columns += columns.len();
         self.failed = false;
+        #[cfg(test)]
+        absorption.complete();
         Ok(())
     }
     fn clear_private_opened_rows_v1(&mut self) {
@@ -2256,6 +2285,10 @@ impl StreamingRowCommitmentV1 {
         ),
         AggregateStarkErrorV1,
     > {
+        #[cfg(test)]
+        let preparation = self
+            .observation
+            .enter(commitment_observation::OperationV1::FinishPreparation);
         if self.failed
             || self.digest_streams.capacity() != self.rows
             || self.received_columns != self.width
@@ -2267,13 +2300,23 @@ impl StreamingRowCommitmentV1 {
         let mut cut = retained_commitment::RetainedMerkleCutV1::new_v1(self.rows)?;
         let mut accumulator =
             StreamingMerkleAccumulatorV1::new(self.context, self.node_role, self.rows, &[])?;
+        #[cfg(test)]
+        preparation.complete();
         streaming_commitment::finish_rows_retaining_v1(
             &mut accumulator,
             &mut self.digest_streams,
             &mut cut,
+            #[cfg(test)]
+            &self.observation,
         )?;
+        #[cfg(test)]
+        let root_binding = self
+            .observation
+            .enter(commitment_observation::OperationV1::RootBinding);
         let commitment = accumulator.finish()?;
         cut.bind_root_v1(commitment.root)?;
+        #[cfg(test)]
+        root_binding.complete();
         Ok((
             StreamingRowCommitmentResultV1 {
                 commitment,

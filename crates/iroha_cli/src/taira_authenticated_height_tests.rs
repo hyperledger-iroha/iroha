@@ -40,12 +40,13 @@ impl Fixture {
         config.chain_id = "fc56984b-2be7-431d-840e-21514d1883f0".into();
         config.consensus_mode = iroha_data_model::parameter::system::SumeragiConsensusMode::Npos;
         let npos = SumeragiNposParameters::default();
-        config.genesis_parameters = vec![
+        // Preserve the original staking policy authored by TestChainConfig.
+        config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 npos.epoch_length_blocks,
             )),
             Parameter::Custom(npos.into_custom_parameter()),
-        ];
+        ]);
         CertifiedTestChain::start(config).expect("real NPoS fixture chain")
     }
 

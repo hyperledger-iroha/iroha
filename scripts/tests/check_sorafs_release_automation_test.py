@@ -1211,7 +1211,7 @@ def test_csharp_ci_requires_native_sorafs_governance_validation() -> None:
     )
     assert "package_csharp_native_artifacts.py stage" in workflow
     assert "package_csharp_native_artifacts.py verify-package" in workflow
-    assert "dotnet test Hyperledger.Iroha.Sdk.sln" in workflow
+    assert "dotnet test --solution Hyperledger.Iroha.Sdk.sln" in workflow
     assert "IROHA_REQUIRE_SORAFS_NATIVE_VALIDATION" not in validator_tests
     assert "WhenAvailable" not in validator_tests
     assert "Assert.True(" in validator_tests
@@ -1533,7 +1533,7 @@ def test_native_governance_sdk_contract_rejects_unconditional_skip(
         ),
         (
             ".github/workflows/sorafs-orchestrator-sdk.yml",
-            "dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build",
+            "dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build",
         ),
     ],
 )

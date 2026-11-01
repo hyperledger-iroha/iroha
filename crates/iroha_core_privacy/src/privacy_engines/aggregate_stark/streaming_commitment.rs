@@ -224,12 +224,17 @@ pub(super) fn finish_rows_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     streams: &mut [PrivacyOuterLastFieldStreamV1],
 ) -> Result<(), AggregateStarkErrorV1> {
-    finish_rows_with_v1(accumulator, streams, |_, stream| {
-        stream
-            .finalize_in_place_v1()
-            .map_err(map_digest_stream_error_v1)
-            .map_err(map_transparent_error_v1)
-    })
+    finish_rows_with_v1(
+        accumulator,
+        streams,
+        |_, stream| {
+            stream
+                .finalize_in_place_v1()
+                .map_err(map_digest_stream_error_v1)
+                .map_err(map_transparent_error_v1)
+        },
+        &commitment_observation::ContextV1::default(),
+    )
 }
 
 #[cfg(test)]
@@ -241,21 +246,30 @@ fn finish_rows_with_v1(
         &mut PrivacyOuterLastFieldStreamV1,
     ) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1>
     + Sync,
+    observation: &commitment_observation::ContextV1,
 ) -> Result<(), AggregateStarkErrorV1> {
-    finish_rows_with_cut_v1(accumulator, streams, None, finalize)
+    finish_rows_with_cut_v1(accumulator, streams, None, finalize, observation)
 }
 
 pub(super) fn finish_rows_retaining_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     streams: &mut [PrivacyOuterLastFieldStreamV1],
     cut: &mut retained_commitment::RetainedMerkleCutV1,
+    #[cfg(test)] observation: &commitment_observation::ContextV1,
 ) -> Result<(), AggregateStarkErrorV1> {
-    finish_rows_with_cut_v1(accumulator, streams, Some(cut), |_, stream| {
-        stream
-            .finalize_in_place_v1()
-            .map_err(map_digest_stream_error_v1)
-            .map_err(map_transparent_error_v1)
-    })
+    finish_rows_with_cut_v1(
+        accumulator,
+        streams,
+        Some(cut),
+        |_, stream| {
+            stream
+                .finalize_in_place_v1()
+                .map_err(map_digest_stream_error_v1)
+                .map_err(map_transparent_error_v1)
+        },
+        #[cfg(test)]
+        observation,
+    )
 }
 
 fn finish_rows_with_cut_v1(
@@ -267,6 +281,7 @@ fn finish_rows_with_cut_v1(
         &mut PrivacyOuterLastFieldStreamV1,
     ) -> Result<PrivacyOuterDigestV1, AggregateStarkErrorV1>
     + Sync,
+    #[cfg(test)] observation: &commitment_observation::ContextV1,
 ) -> Result<(), AggregateStarkErrorV1> {
     if streams.len() != accumulator.leaf_count || accumulator.next_leaf != 0 {
         return Err(AggregateStarkErrorV1::InvalidProofShape);
@@ -278,6 +293,8 @@ fn finish_rows_with_cut_v1(
             return Err(AggregateStarkErrorV1::InvalidProofShape);
         }
         let first = accumulator.next_leaf;
+        #[cfg(test)]
+        let leaves = observation.enter(commitment_observation::OperationV1::LeafFinalization);
         let failure = batch
             .par_iter_mut()
             .zip(tile.0.par_iter_mut())
@@ -295,7 +312,13 @@ fn finish_rows_with_cut_v1(
         if let Some((_, error)) = failure {
             return Err(error);
         }
+        #[cfg(test)]
+        leaves.complete();
+        #[cfg(test)]
+        let merkle = observation.enter(commitment_observation::OperationV1::MerkleReduction);
         append_tile_with_cut_v1(accumulator, &mut tile.0, cut.as_deref_mut())?;
+        #[cfg(test)]
+        merkle.complete();
         tile.clear_v1();
     }
     Ok(())

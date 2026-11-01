@@ -214,7 +214,8 @@ fn pending_sampling_columns_clear_after_success_entropy_error_and_unwind() {
 #[test]
 fn canonical_sha_sampling_work_is_batched_inside_existing_replay_allowance() {
     assert_eq!(aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1, 8);
-    assert_eq!(main_diagnostic_transform_columns_v1().unwrap(), 11_622);
+    // Initial and replay commitments each cover 3,213 base and 2,618 auxiliary columns.
+    assert_eq!(main_diagnostic_transform_columns_v1().unwrap(), 11_662);
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let native = 1_usize << layout.trace_groups[5].native_trace_log2;

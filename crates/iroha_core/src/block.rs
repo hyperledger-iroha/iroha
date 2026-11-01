@@ -10426,12 +10426,23 @@ pub(crate) mod tests {
         assert_eq!(state_block.gas_used_in_block, expected_gas);
     }
     fn add_pipeline_metadata_trigger(
-        world: &mut World,
+        state: &State,
         authority: &AccountId,
         trigger_id: &str,
         key: Name,
         filter: PipelineEventFilterBox,
     ) {
+        let header = state
+            .view()
+            .latest_block()
+            .expect("original fixture parent read")
+            .expect("retained signed genesis")
+            .header();
+        let height = header.height().get();
+        // This isolated setup authors only World state. Actual callback execution
+        // below still acquires its original recorder through the block producer.
+        let mut block = state.block(header);
+        let mut transaction = block.transaction_for_callback_testing();
         let mut action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 authority.clone(),
@@ -10443,17 +10454,31 @@ pub(crate) mod tests {
             filter,
         )
         .expect("test pipeline-trigger action satisfies its authority invariant");
-        // These component actions become active after original genesis. They cannot
-        // consume their one-shot invocation during genesis execution itself.
+        // The negative matching fixtures deliberately include a filter that public
+        // registration rejects. Author their consent from this founded State's
+        // actual runtime before inserting them below the registration boundary.
+        let expectation =
+            crate::runtime::expectation::capture_executable(&action.executable, &transaction.world)
+                .expect("fixture executable runtime closure");
+        crate::runtime::expectation::check(&expectation, &transaction.world, height)
+            .expect("fixture runtime closure is executable at its parent height");
+        let digest = crate::runtime::expectation::digest_owned(&expectation, &transaction.world)
+            .expect("fixture execution-consent digest");
+        action.metadata.insert(
+            crate::smartcontracts::isi::triggers::TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY
+                .parse()
+                .expect("valid runtime expectation metadata key"),
+            Json::new(digest),
+        );
         action.metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse()
                 .expect("valid trigger lifecycle metadata key"),
-            Json::from(1_u64),
+            Json::from(height),
         );
-        let mut trigger_block = world.triggers.block();
-        let mut trigger_transaction = trigger_block.transaction();
-        trigger_transaction
+        transaction
+            .world
+            .triggers
             .add_pipeline_trigger(
                 crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
                     trigger_id.parse().expect("trigger id"),
@@ -10461,8 +10486,10 @@ pub(crate) mod tests {
                 ),
             )
             .expect("add pipeline trigger");
-        trigger_transaction.apply();
-        trigger_block.commit();
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("retain fixture triggers without replacing signed history");
     }
     pub(super) fn previous_block_at_height(height: u64) -> SignedBlock {
         let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -11541,7 +11568,7 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = Domain::new(domain_id).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let mut world = World::with([domain], [account], []);
+        let world = World::with([domain], [account], []);
         let block_key = Name::from_str("sealed_only_block_pipeline_trigger").expect("metadata key");
         let wrong_block_height_key =
             Name::from_str("sealed_only_wrong_height_block_pipeline_trigger")
@@ -11556,44 +11583,6 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         )
         .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
         .sign(keypair.private_key());
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_block_approved",
-            block_key.clone(),
-            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_wrong_height_block_approved",
-            wrong_block_height_key.clone(),
-            PipelineEventFilterBox::from(
-                BlockEventFilter::new()
-                    .for_height(nonzero!(9999_u64))
-                    .for_status(BlockStatus::Approved),
-            ),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_dummy_tx_approved",
-            tx_key.clone(),
-            PipelineEventFilterBox::from(
-                TransactionEventFilter::new()
-                    .for_hash(dummy_signed.hash())
-                    .for_status(TransactionStatus::Approved),
-            ),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_any_tx_approved",
-            any_tx_key.clone(),
-            PipelineEventFilterBox::from(
-                TransactionEventFilter::new().for_status(TransactionStatus::Approved),
-            ),
-        );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain_and_network_id_for_testing(
@@ -11605,6 +11594,44 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         );
         let native_chain = component_chain(state);
         let state = native_chain.state();
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_wrong_height_block_approved",
+            wrong_block_height_key.clone(),
+            PipelineEventFilterBox::from(
+                BlockEventFilter::new()
+                    .for_height(nonzero!(9999_u64))
+                    .for_status(BlockStatus::Approved),
+            ),
+        );
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_dummy_tx_approved",
+            tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(dummy_signed.hash())
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_any_tx_approved",
+            any_tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new().for_status(TransactionStatus::Approved),
+            ),
+        );
         let metadata_key = Name::from_str("sealed_only_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 3, 4, metadata_key);
