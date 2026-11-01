@@ -1656,6 +1656,94 @@ pub async fn handle_runtime_propose_upgrade(
         request.provenance,
     )
 }
+#[derive(
+    Debug,
+    Clone,
+    JsonSerialize,
+    JsonDeserialize,
+    NoritoSerialize,
+    NoritoDeserialize,
+    norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeDraftUpgradeRequest")]
+/// Body of POST /v1/runtime/upgrades/draft: the addition of this node's release to activate, and
+/// from which height (`specs/live_runtime_upgrades.md` §4, §6).
+pub struct RuntimeDraftUpgradeRequest {
+    /// Native module of the addition.
+    pub addition: String,
+    /// First height executed under the successor selection.
+    pub effective_height: u64,
+    /// Digest of the qualification evidence for the successor composition, 32-byte hex.
+    pub qualification_hex: String,
+}
+#[derive(
+    Debug, JsonSerialize, JsonDeserialize, NoritoSerialize, NoritoDeserialize, norito::NoritoSchema,
+)]
+#[norito_schema(name = "iroha_torii::runtime::RuntimeDraftUpgradeResponse")]
+/// The change set that activates one addition of this node's release.
+pub struct RuntimeDraftUpgradeResponse {
+    /// Change-set identity, 32-byte lowercase hex: what release signers endorse and validators
+    /// attest.
+    pub id_hex: String,
+    /// The change set to endorse and propose.
+    pub change_set: iroha_data_model::runtime::lifecycle::ChangeSetV1,
+}
+/// POST /v1/runtime/upgrades/draft — draft, from this node's release catalog and the committed
+/// selection, the change set that activates the addition in the body at its effective height
+/// (`specs/live_runtime_upgrades.md` §4, §6). It publishes the addition's definitions the root
+/// lacks, installs its storage, activates its interfaces and implementation and binds its wire
+/// IDs. Release signers endorse its identity, `POST /v1/runtime/upgrades/propose` drafts the
+/// proposal that schedules it, and every validator attests it; admission checks notice and
+/// provenance when the signed proposal executes.
+///
+/// # Errors
+/// Returns an error when the qualification is not 32 bytes of hex, the addition is not one of this
+/// release, or its activation does not apply to the committed selection (an earlier addition is
+/// not active yet, or this one already is).
+#[expect(
+    clippy::unused_async,
+    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
+)]
+pub async fn handle_runtime_draft_upgrade(
+    state: Arc<iroha_core::state::State>,
+    NoritoJson(request): NoritoJson<RuntimeDraftUpgradeRequest>,
+) -> Result<RuntimeDraftUpgradeResponse, crate::Error> {
+    let qualification = hex_32("qualification", &request.qualification_hex)?;
+    let catalog = iroha_core::runtime::release_catalog()
+        .map_err(|error| runtime_conversion_error(format!("release catalog: {error}")))?;
+    if !catalog
+        .additions
+        .iter()
+        .any(|addition| addition.module == request.addition)
+    {
+        let modules: Vec<&str> = catalog
+            .additions
+            .iter()
+            .map(|addition| addition.module)
+            .collect();
+        return Err(runtime_conversion_error(format!(
+            "{} is not an addition of this release, which adds: {}",
+            request.addition,
+            modules.join(", ")
+        )));
+    }
+    let view = state.view();
+    let change_set = iroha_core::runtime::draft_addition(
+        view.world(),
+        *view.network_id(),
+        &request.addition,
+        request.effective_height,
+        qualification,
+    )
+    .map_err(|error| runtime_conversion_error(error.to_string()))?;
+    let id = change_set
+        .id()
+        .map_err(|error| runtime_conversion_error(format!("change-set identity: {error}")))?;
+    Ok(RuntimeDraftUpgradeResponse {
+        id_hex: hex::encode(id.0),
+        change_set,
+    })
+}
 /// POST /v1/runtime/upgrades/cancel/{id} — draft the SORA Parliament proposal that withdraws
 /// a scheduled change set.
 ///
@@ -1673,12 +1761,17 @@ pub async fn handle_runtime_cancel_upgrade(
 fn change_set_id(
     id: &str,
 ) -> Result<iroha_data_model::runtime::lifecycle::ChangeSetId, crate::Error> {
-    let bytes = hex::decode(id.trim_start_matches("0x"))
-        .map_err(|_| runtime_conversion_error("invalid id".into()))?;
-    let id: [u8; 32] = bytes
+    Ok(iroha_data_model::runtime::lifecycle::ChangeSetId(hex_32(
+        "id", id,
+    )?))
+}
+/// 32 bytes from their hex form, with or without a `0x` prefix.
+fn hex_32(what: &str, value: &str) -> Result<[u8; 32], crate::Error> {
+    let bytes = hex::decode(value.trim_start_matches("0x"))
+        .map_err(|_| runtime_conversion_error(format!("invalid {what}")))?;
+    bytes
         .try_into()
-        .map_err(|_| runtime_conversion_error("invalid id length".into()))?;
-    Ok(iroha_data_model::runtime::lifecycle::ChangeSetId(id))
+        .map_err(|_| runtime_conversion_error(format!("invalid {what} length")))
 }
 /// The release digest of `build` and this release's catalog.
 fn runtime_release(
@@ -2603,6 +2696,78 @@ mod tests {
             .await
             .expect("list");
         assert!(response.items.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_node_drafts_the_activation_of_an_addition_of_its_release() {
+        use iroha_data_model::runtime::lifecycle::SelectionTransitionV1;
+        let state = std::sync::Arc::new(State::new_for_testing(
+            iroha_core::state::World::default(),
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let catalog = iroha_core::runtime::release_catalog().expect("release catalog");
+        let addition = catalog
+            .additions
+            .first()
+            .expect("this release adds after its baseline");
+        let body = format!(
+            r#"{{"addition":"{}","effective_height":40,"qualification_hex":"{}"}}"#,
+            addition.module,
+            hex::encode([0x07; 32])
+        );
+        let request: RuntimeDraftUpgradeRequest =
+            norito::json::from_str(&body).expect("the documented body decodes");
+
+        let response = handle_runtime_draft_upgrade(state.clone(), NoritoJson(request.clone()))
+            .await
+            .expect("draft");
+        let change_set = &response.change_set;
+        assert_eq!(
+            response.id_hex,
+            hex::encode(change_set.id().expect("change-set identity").0)
+        );
+        assert_eq!(change_set.network, *state.view().network_id());
+        assert_eq!(change_set.predecessor, catalog.baseline_id);
+        assert_eq!(change_set.effective_height, 40);
+        assert_eq!(change_set.qualification, [0x07; 32]);
+        assert!(
+            change_set
+                .transitions
+                .contains(&SelectionTransitionV1::Activate(addition.implementation)),
+            "the change set activates the addition's implementation"
+        );
+
+        let refusal = |result: Result<RuntimeDraftUpgradeResponse, crate::Error>| match result {
+            Err(crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            ))) => message,
+            other => panic!("expected a refused draft, got {other:?}"),
+        };
+        let unknown = refusal(
+            handle_runtime_draft_upgrade(
+                state.clone(),
+                NoritoJson(RuntimeDraftUpgradeRequest {
+                    addition: "iroha.test.unknown".to_owned(),
+                    ..request.clone()
+                }),
+            )
+            .await,
+        );
+        assert!(
+            unknown.contains(addition.module),
+            "the refusal names what the release adds: {unknown}"
+        );
+        refusal(
+            handle_runtime_draft_upgrade(
+                state,
+                NoritoJson(RuntimeDraftUpgradeRequest {
+                    qualification_hex: "07".to_owned(),
+                    ..request
+                }),
+            )
+            .await,
+        );
     }
 
     /// A change set that only deprecates the baseline's native bundle, so this release

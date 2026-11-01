@@ -431,12 +431,19 @@ impl StateBlock<'_> {
                 })?;
                 CapturedExecution::Boundary(frozen)
             } else if let Some(original) = successor {
-                CapturedExecution::Retained(original.lend_continuation(
-                    self,
-                    &self._curr_block,
-                    root_scope,
-                    &pulse,
-                )?)
+                // The bank was prepared for the original proposal; certified lane expansion
+                // recomputes this execution header's roots (`specs/sumeragi_lanes.md` §4.3).
+                let proposal =
+                    norito::core::classify_decode_attempt(|| source.canonical_resultless_header())
+                        .map_err(|error| {
+                            crate::execution_attempt::canonical_decode_attempt_error(
+                                error,
+                                |error| ScheduleError::Epoch(error.to_string()),
+                            )
+                        })?;
+                CapturedExecution::Retained(
+                    original.lend_continuation(self, &proposal, root_scope, &pulse)?,
+                )
             } else {
                 CapturedExecution::Ordinary(
                     epoch_election::capture_continuation(

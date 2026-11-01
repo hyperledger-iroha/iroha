@@ -180,6 +180,10 @@ pub enum CarPlanError {
         estimated: usize,
         limit: usize,
     },
+    /// Every fetched chunk matched its plan digest, yet the assembled payload does not match
+    /// the plan's whole-payload digest: the plan contradicts its own chunk inventory.
+    #[error("assembled payload digest does not match the plan payload digest")]
+    PayloadDigestMismatch,
     #[error("generated CAR plan is invalid: {0}")]
     InvalidPlan(#[from] CarPlanValidationError),
 }

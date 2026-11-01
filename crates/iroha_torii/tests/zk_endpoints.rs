@@ -10,7 +10,7 @@ use iroha_core::{
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use nonzero_ext::nonzero;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -76,21 +76,17 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     (state, height, hash)
 }
 fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = CoreState::new_for_testing(World::new(), kura, query);
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut transaction = block.transaction();
-    for instruction in [
+    // Registration executes only under the authenticated signed-genesis source.
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
+    config.genesis_instructions = vec![
         Register::domain(Domain::new(domain_id)).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new(owner)).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id.clone(),
             "rose".to_owned(),
@@ -98,22 +94,10 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
             None,
         ))
         .into(),
-    ] {
-        transaction
-            .world
-            .executor()
-            .clone()
-            .execute_instruction(&mut transaction, &owner, &instruction)
-            .expect("seed instruction must succeed");
-    }
-    transaction.apply();
-    block.transactions.insert_block(
-        BTreeSet::<iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>>::new(
-        ),
-        nonzero!(1_usize),
-    );
-    let _ = block.commit();
-    (Arc::new(state), asset_definition_id.to_string())
+    ];
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("signed genesis registers the asset definition");
+    (chain.state().clone(), asset_definition_id.to_string())
 }
 #[tokio::test]
 async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_state() {
@@ -439,11 +423,8 @@ async fn zk_vote_tally_endpoint_preserves_exact_u128_and_committed_identity() {
 #[tokio::test]
 async fn zk_vote_tally_endpoint_rejects_malformed_or_partial_retained_results() {
     for election in [
-        ElectionState {
-            options: 1,
-            tally: vec![0],
-            ..ElectionState::default()
-        },
+        // A single-option election is refused by State publication itself and can
+        // never be retained; the retained malformed shapes below remain reachable.
         ElectionState {
             options: 2,
             tally: vec![0],

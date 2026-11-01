@@ -5453,9 +5453,14 @@ export interface ToriiConfigurationTransportNoritoRpc {
   canaryAllowlistSize: number;
 }
 
-/** The SORA Parliament proposal instruction Torii drafts for local signing. */
+/**
+ * The SORA Parliament proposal instruction Torii drafts for local signing: the baseline proposal,
+ * or the release addition's endorsed proposal when the request carried endorsements.
+ */
 export interface ToriiRuntimeUpgradeInstruction {
-  wire_id: "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+  wire_id:
+    | "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"
+    | "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal";
   /** Canonical framed instruction bytes, lowercase hex. */
   payload_hex: string;
 }

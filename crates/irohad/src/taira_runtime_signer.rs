@@ -52,10 +52,20 @@ mod disposable_broker;
 #[cfg(feature = "test-network-disposable-broker")]
 pub use disposable_broker::load_disposable_runtime_provider_broker_v1;
 
+/// Whether `argument` selects an offline command: configuration, storage and replay checks, help
+/// and version introspection never start a node, so they never read the inherited descriptors.
 fn invocation_does_not_start_a_node(argument: &OsStr) -> bool {
     matches!(
         argument.to_str(),
-        Some("--check-config" | "--help" | "-h" | "--version" | "-V")
+        Some(
+            "--check-config"
+                | "--check-storage"
+                | "--check-replay"
+                | "--help"
+                | "-h"
+                | "--version"
+                | "-V"
+        )
     )
 }
 
@@ -716,8 +726,8 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 
 /// Run Taira with consumed signer descriptor 198 and optional beacon credential 200.
 ///
-/// Config validation, help, and version introspection remain offline and do not
-/// read the descriptors. Every node-starting invocation resolves exactly the
+/// Config validation, the storage and replay checks, help, and version introspection
+/// remain offline and do not read the descriptors. Every node-starting invocation resolves exactly the
 /// Soracloud signer and any explicitly configured global-beacon signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry(build: iroha_core::release_identity::CompiledBuildMetadata) {
     if crate::external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
@@ -816,7 +826,15 @@ mod tests {
 
     #[test]
     fn offline_introspection_never_requires_the_runtime_signer() {
-        for argument in ["--check-config", "--help", "-h", "--version", "-V"] {
+        for argument in [
+            "--check-config",
+            "--check-storage",
+            "--check-replay",
+            "--help",
+            "-h",
+            "--version",
+            "-V",
+        ] {
             assert!(invocation_does_not_start_a_node(OsStr::new(argument)));
         }
         for argument in ["--config", "--sora", "--genesis-manifest-json"] {

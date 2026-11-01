@@ -89,7 +89,8 @@ fn executor_upgrade_refuses_every_live_custody_state_before_migration() {
                 .iter()
                 .map(|(id, value)| (*id, value.clone()))
                 .collect();
-            let before = norito::to_bytes(tx.world.executor.get()).expect("executor encodes");
+            let before = crate::executor::executor_norito::to_bytes(tx.world.executor.get())
+                .expect("executor encodes");
             let error = iroha_data_model::isi::Upgrade::new(replacement())
                 .execute(&ALICE_ID, tx)
                 .unwrap_err();
@@ -98,7 +99,8 @@ fn executor_upgrade_refuses_every_live_custody_state_before_migration() {
                 "{status:?}: {error:?}"
             );
             assert_eq!(
-                norito::to_bytes(tx.world.executor.get()).expect("executor encodes"),
+                crate::executor::executor_norito::to_bytes(tx.world.executor.get())
+                    .expect("executor encodes"),
                 before
             );
             assert_eq!(tx.world.executor_data_model.get(), &model);
@@ -150,14 +152,15 @@ fn direct_and_identical_code_executor_migrations_cannot_bypass_live_custody() {
     with_escrow(AssetEscrowStatus::Locked, |tx| {
         let raw = replacement();
         let mut executor = Executor::UserProvided(LoadedExecutor::load(raw.clone()).unwrap());
-        let before = norito::to_bytes(&executor).expect("executor encodes");
+        let before =
+            crate::executor::executor_norito::to_bytes(&executor).expect("executor encodes");
         let model = tx.world.executor_data_model.get().clone();
         assert!(matches!(
             executor.migrate(raw, tx, &ALICE_ID),
             Err(ExecutorMigrationError::LiveCustody)
         ));
         assert_eq!(
-            norito::to_bytes(&executor).expect("executor encodes"),
+            crate::executor::executor_norito::to_bytes(&executor).expect("executor encodes"),
             before
         );
         assert_eq!(tx.world.executor_data_model.get(), &model);

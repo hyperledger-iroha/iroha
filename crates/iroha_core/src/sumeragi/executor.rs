@@ -2637,6 +2637,8 @@ impl<'s> Worker<'s> {
     fn rollback_stale_finishing(&mut self) -> Result<(), PublicationError> {
         let original = self.finishing.take().expect("stale completed original");
         let mut decoder = original.signature_decode;
+        // The abandoned execution consumed its schedule capture; re-execution prepares anew.
+        decoder.successor_context.retire_consumed_continuation();
         let returned = decoder
             .retain_validation_return(original.valid.into(), &self.state.ivm_execution_budget());
         self.signature_decode = Some(decoder);
@@ -2664,6 +2666,8 @@ impl<'s> Worker<'s> {
             unreachable!()
         };
         let mut decoder = original.signature_decode;
+        // The abandoned execution consumed its schedule capture; re-execution prepares anew.
+        decoder.successor_context.retire_consumed_continuation();
         let returned =
             decoder.retain_validation_return(valid.into(), &self.state.ivm_execution_budget());
         self.signature_decode = Some(decoder);

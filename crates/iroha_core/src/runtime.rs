@@ -43,6 +43,36 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
     Ok(release_catalog()?.baseline.clone())
 }
 
+/// The top-level World members whose storage `selection` does not install, by snapshot member
+/// name (`specs/live_runtime_upgrades.md` §5.5).
+///
+/// A World field a release addition adds stays out of snapshots until a change set installs its
+/// storage, and a restore gives it its empty default, so the release before the addition keeps
+/// reading this release's snapshots until activation.
+///
+/// # Errors
+/// The release catalog cannot be built (a build defect), or an uninstalled field is not a
+/// top-level World member.
+pub(crate) fn uninstalled_world_members(
+    selection: &RootSelectionV1,
+) -> Result<Vec<&'static str>, String> {
+    let catalog = release_catalog().map_err(|error| error.to_string())?;
+    let members =
+        <crate::state::World as norito::json::FastJsonWrite>::json_object_field_order()
+            .unwrap_or_default();
+    catalog
+        .world_storage
+        .iter()
+        .filter(|(_, storage)| selection.installed_storage.binary_search(storage).is_err())
+        .map(|(field, _)| {
+            field
+                .strip_prefix("world.")
+                .and_then(|name| members.iter().find(|member| **member == name).copied())
+                .ok_or_else(|| format!("uninstalled World field {field} is not a top-level member"))
+        })
+        .collect()
+}
+
 /// The change set that moves the universal root of `world`, on `network`, from its committed
 /// selection to the addition `module` of this release, effective at `effective_height`
 /// ([`ReleaseCatalog::activation`]); an operator endorses and proposes it.

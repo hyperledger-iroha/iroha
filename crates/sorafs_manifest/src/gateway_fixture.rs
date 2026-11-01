@@ -12,16 +12,16 @@ pub const SORAFS_GATEWAY_PROFILE_VERSION: &str = "sf1";
 pub const SORAFS_GATEWAY_FIXTURE_RELEASE_UNIX: u64 = 1_770_854_400;
 /// Aggregated BLAKE3 digest (hex) covering the canonical fixture bundle.
 pub const SORAFS_GATEWAY_FIXTURE_DIGEST_HEX: &str =
-    "72cca987eed784529d8994ddbe5b8a8388b61c478afb4779267eb5b3b86c0edf";
+    "57c6cd930cadd80b39da8504cc1ae8a539e708620aeb2310058716a20f7cfd2c";
 /// Canonical manifest payload digest (hex).
 pub const SORAFS_GATEWAY_MANIFEST_DIGEST_HEX: &str =
-    "ffba180af64c6bf2004d4bfa09b48a8150d4051d31c3152b4377ad60765e2fcb";
+    "e02dba26c9c2efd39d9f92660d3440e680e8ffb651e8d7be34d1c70c3015da39";
 /// Canonical chunk-plan SHA3-256 digest (hex).
 pub const SORAFS_GATEWAY_CHUNK_DIGEST_SHA3_256_HEX: &str =
     "8691566595375437a5bb0dfa28c135ee48a7237e7ef915ef999771a10b75431c";
 /// Canonical detached council-envelope BLAKE3 digest (hex).
 pub const SORAFS_GATEWAY_COUNCIL_ENVELOPE_DIGEST_HEX: &str =
-    "1275b4f17440c8d29791b0bfca1d3b2292fd773351128dac05a7836eafc58e39";
+    "64a286fb3eff2d35ee7d0467bba1eb8b11d29064317e73e74d44709f18a4a226";
 /// Canonical deterministic payload digest (hex).
 pub const SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX: &str =
     "91275991d58858bdc7ce3eb4472b61c5289dec3ecc6cf43c6411db772c1888a8";
@@ -107,5 +107,48 @@ mod tests {
             SORAFS_GATEWAY_PAYLOAD_DIGEST_HEX
         );
         assert_eq!(metadata.car_blake3_hex, SORAFS_GATEWAY_CAR_DIGEST_HEX);
+    }
+
+    #[test]
+    fn metadata_matches_the_published_bundle() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/sorafs_gateway")
+            .join(SORAFS_GATEWAY_FIXTURE_VERSION)
+            .join("metadata.json");
+        let published: norito::json::Value =
+            norito::json::from_slice(&std::fs::read(path).expect("read published metadata"))
+                .expect("parse published metadata");
+        let metadata = gateway_fixture_metadata();
+        for (field, expected) in [
+            ("version", metadata.version),
+            ("profile_version", metadata.profile_version),
+            (
+                "fixtures_digest_blake3_hex",
+                metadata.fixtures_digest_blake3_hex,
+            ),
+            ("manifest_blake3_hex", metadata.manifest_blake3_hex),
+            (
+                "chunk_digest_sha3_256_hex",
+                metadata.chunk_digest_sha3_256_hex,
+            ),
+            (
+                "council_envelope_blake3_hex",
+                metadata.council_envelope_blake3_hex,
+            ),
+            ("payload_blake3_hex", metadata.payload_blake3_hex),
+            ("car_blake3_hex", metadata.car_blake3_hex),
+        ] {
+            assert_eq!(
+                published.get(field).and_then(norito::json::Value::as_str),
+                Some(expected),
+                "{field}"
+            );
+        }
+        assert_eq!(
+            published
+                .get("released_at_unix")
+                .and_then(norito::json::Value::as_u64),
+            Some(metadata.released_at_unix)
+        );
     }
 }

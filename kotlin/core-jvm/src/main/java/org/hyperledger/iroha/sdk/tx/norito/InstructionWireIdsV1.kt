@@ -101,6 +101,7 @@ internal object InstructionWireIdsV1 {
         "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
         "iroha.instruction.v1::governance::ProposeContractLifecycleGovernance",
         "iroha.instruction.v1::governance::ProposeDeployContract",
+        "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
         "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance",
         "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
         "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",

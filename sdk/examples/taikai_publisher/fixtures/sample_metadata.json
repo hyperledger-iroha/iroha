@@ -1,37 +1,62 @@
 {
   "items": [
     {
+      "encryption": {
+        "cipher": "None",
+        "params": null
+      },
       "key": "taikai.encoder_profile",
       "value": "ZmZtcGVnLWF2MS1tYWlu",
       "visibility": {
+        "value": null,
         "visibility": "Public"
       }
     },
     {
+      "encryption": {
+        "cipher": "None",
+        "params": null
+      },
       "key": "taikai.pipeline_version",
       "value": "c2FtcGxlLTIwMjYwMzI0",
       "visibility": {
+        "value": null,
         "visibility": "Public"
       }
     },
     {
+      "encryption": {
+        "cipher": "None",
+        "params": null
+      },
       "key": "taikai.rendition.notes",
       "value": "U3ludGhldGljIHBheWxvYWQgZm9yIFNOMTMtRiBzYW1wbGU=",
       "visibility": {
+        "value": null,
         "visibility": "Public"
       }
     },
     {
+      "encryption": {
+        "cipher": "None",
+        "params": null
+      },
       "key": "taikai.telemetry.region",
       "value": "Z2NwLXVzLXdlc3Qy",
       "visibility": {
+        "value": null,
         "visibility": "Public"
       }
     },
     {
+      "encryption": {
+        "cipher": "None",
+        "params": null
+      },
       "key": "taikai.operator.contact",
       "value": "bWVkaWEtb3BzQGV4YW1wbGUub3Jn",
       "visibility": {
+        "value": null,
         "visibility": "Public"
       }
     }

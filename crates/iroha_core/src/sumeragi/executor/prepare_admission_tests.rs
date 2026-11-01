@@ -299,9 +299,10 @@ fn ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source() {
         );
         assert!(worker.live.is_none() && worker.signature_decode.is_some());
         assert!(!worker.results.contains_key(&hash));
+        let certified = worker.execute(&block, hash, true);
         assert!(
-            matches!(worker.execute(&block, hash, true), Ok(Some(ExecOutcome::Valid { result: same, .. })) if same == result),
-            "certified re-execution preserves the identical ledger-time verdict"
+            matches!(certified, Ok(Some(ExecOutcome::Valid { result: same, .. })) if same == result),
+            "certified re-execution preserves the identical ledger-time verdict: {certified:?}"
         );
     });
 }

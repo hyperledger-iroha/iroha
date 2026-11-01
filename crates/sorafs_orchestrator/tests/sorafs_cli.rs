@@ -201,18 +201,66 @@ fn mock_publication_fee_quote<'a>(server: &'a MockServer, payer: &AccountId) -> 
             .body(body);
     })
 }
-fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
+/// The tracked native finality fixture (`fixtures/sumeragi/native-finality`): a canonical
+/// checkpoint and the chain and network it certifies. Deploy trusts only an independently
+/// selected checkpoint for its configured network and chain.
+struct TrustedFinalityCheckpoint {
+    path: PathBuf,
+    chain_id: String,
+    network_id: String,
+}
+fn trusted_finality_checkpoint() -> TrustedFinalityCheckpoint {
+    // The CLI retains the checkpoint file without following symlinks or parent components.
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/sumeragi/native-finality")
+        .canonicalize()
+        .expect("native finality fixture directory");
+    let capture: Value = norito::json::from_str(
+        &fs::read_to_string(directory.join("capture.json")).expect("read checkpoint capture"),
+    )
+    .expect("parse checkpoint capture");
+    let field = |name: &str| {
+        capture
+            .get(name)
+            .and_then(Value::as_str)
+            .unwrap_or_else(|| panic!("checkpoint capture lacks `{name}`"))
+            .to_owned()
+    };
+    TrustedFinalityCheckpoint {
+        path: directory.join("genesis-checkpoint.nrt"),
+        chain_id: field("chain_id"),
+        network_id: field("network_id"),
+    }
+}
+/// Torii refuses publication preparation outright, so qualification fails at once (the
+/// gateway readback is still checked) instead of polling an absent route until its deadline.
+fn mock_publication_preparation_refused(server: &MockServer) -> httpmock::Mock<'_> {
+    server.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.status(503).body("publication preparation unavailable");
+    })
+}
+fn write_deploy_client_config(
+    dir: &Path,
+    torii_url: &str,
+    finality: &TrustedFinalityCheckpoint,
+) -> (PathBuf, String) {
     let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     let path = dir.join("client.toml");
+    let TrustedFinalityCheckpoint {
+        chain_id,
+        network_id,
+        ..
+    } = finality;
     fs::write(
         &path,
         format!(
             r#"
-chain = "fc56984b-2be7-431d-840e-21514d1883f0"
+chain = "{chain_id}"
 torii_url = "{torii_url}"
-network_id = "{TEST_NETWORK_ID_LITERAL}"
+network_id = "{network_id}"
 [account]
 public_key = "{public_key}"
 private_key = "{private_key}"
@@ -223,22 +271,27 @@ chain_discriminant = 369
     .expect("write deploy client config");
     (path, private_key)
 }
-fn write_deploy_client_config_with_chain(
+fn write_profile_deploy_client_config(
     dir: &Path,
     torii_url: &str,
-    chain: &str,
+    finality: &TrustedFinalityCheckpoint,
 ) -> (PathBuf, String) {
     let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
-    let path = dir.join("client-known-chain.toml");
+    let path = dir.join("client-profile.toml");
+    let TrustedFinalityCheckpoint {
+        chain_id,
+        network_id,
+        ..
+    } = finality;
     fs::write(
         &path,
         format!(
             r#"
-chain = "{chain}"
+chain = "{chain_id}"
 torii_url = "{torii_url}"
-network_id = "{TEST_NETWORK_ID_LITERAL}"
+network_id = "{network_id}"
 [account]
 public_key = "{public_key}"
 private_key = "{private_key}"
@@ -246,7 +299,7 @@ profile = "taira"
 "#
         ),
     )
-    .expect("write deploy client config with chain");
+    .expect("write profile deploy client config");
     (path, private_key)
 }
 fn make_stream_token_b64(
@@ -1299,8 +1352,9 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     let payload = b"sorafs deploy payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
+    let finality = trusted_finality_checkpoint();
     let (client_config, private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url());
+        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
     let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -1331,12 +1385,14 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
+    let prepare = mock_publication_preparation_refused(&primary);
     let summary_path = tempdir.path().join("deploy.summary.json");
     let out_dir = tempdir.path().join("deploy-out");
     let assert = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
+        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg(format!("--out-dir={}", out_dir.display()))
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
@@ -1344,6 +1400,7 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
+    prepare.assert_calls(1);
     gateway.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     assert!(
@@ -1383,19 +1440,18 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .and_then(Value::as_str),
         Some("unverified")
     );
-    assert_eq!(
+    // A matching gateway readback is not publication: only finality-qualified provider
+    // completion is, and Torii refused to prepare it.
+    assert!(
         summary
             .get("provider_ingest")
             .and_then(Value::as_object)
-            .and_then(|ingest| ingest.get("completion_finalized")),
-        Some(&Value::Null)
+            .and_then(|ingest| ingest.get("error"))
+            .and_then(Value::as_str)
+            .is_some_and(|error| error.contains("publication preparation rejected"))
     );
     assert_eq!(
-        summary
-            .get("provider_ingest")
-            .and_then(Value::as_object)
-            .and_then(|ingest| ingest.get("direct_http_ingest"))
-            .and_then(Value::as_bool),
+        summary.get("publication_verified").and_then(Value::as_bool),
         Some(false)
     );
     assert!(out_dir.join("site.bin.car").exists());
@@ -1421,11 +1477,9 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     let payload = b"sorafs deploy known chain payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let (client_config, _private_key) = write_deploy_client_config_with_chain(
-        tempdir.path(),
-        &primary.base_url(),
-        "fc56984b-2be7-431d-840e-21514d1883f0",
-    );
+    let finality = trusted_finality_checkpoint();
+    let (client_config, _private_key) =
+        write_profile_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
     mock_publication_fee_quote(&primary, &deploy_account());
     let register = primary.mock(|when, then| {
         when.method(POST)
@@ -1439,10 +1493,12 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
+    let prepare = mock_publication_preparation_refused(&primary);
     let assert = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
+        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg("--no-peer-discovery")
         .arg(format!(
             "--out-dir={}",
@@ -1451,6 +1507,7 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
         .assert()
         .failure();
     register.assert_calls(1);
+    prepare.assert_calls(1);
     gateway.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
@@ -1463,8 +1520,9 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     let payload = b"fallback deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
+    let finality = trusted_finality_checkpoint();
     let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url());
+        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
     let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
@@ -1486,10 +1544,12 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
+    let prepare = mock_publication_preparation_refused(&primary);
     let assert = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
+        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("out").display()
@@ -1499,6 +1559,8 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
+    // Publication falls back to the primary Torii, which is the only provider source left.
+    prepare.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
@@ -1518,8 +1580,9 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     let payload = b"fallback transaction deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
+    let finality = trusted_finality_checkpoint();
     let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url());
+        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
     let register = primary.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(405).body("method not allowed");
@@ -1549,10 +1612,12 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
+    let prepare = mock_publication_preparation_refused(&primary);
     let output = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
+        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("fallback-out").display()
@@ -1561,6 +1626,8 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
         .expect("command executes");
     assert!(!output.status.success());
     register.assert_calls(1);
+    // A refused registration is never followed by a publication attempt.
+    prepare.assert_calls(0);
     registry.assert_calls(0);
     transaction.assert_calls(0);
     pipeline.assert_calls(0);
@@ -1590,8 +1657,9 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     let payload_path = tempdir.path().join("payload.bin");
     fs::write(&payload_path, b"abc").expect("write payload");
     let primary = MockServer::start();
+    let finality = trusted_finality_checkpoint();
     let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url());
+        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
     mock_publication_fee_quote(&primary, &deploy_account());
     primary.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
@@ -1603,10 +1671,12 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body("xyz");
     });
+    mock_publication_preparation_refused(&primary);
     let output = sorafs_cli_cmd()
         .arg("deploy")
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
+        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg("--no-peer-discovery")
         .arg(format!(
             "--out-dir={}",

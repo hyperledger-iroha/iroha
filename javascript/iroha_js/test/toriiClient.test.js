@@ -11764,6 +11764,8 @@ test("getRuntimeAbiHash enforces AbortSignal option type", async () => {
 
 const RUNTIME_UPGRADE_PROPOSAL_WIRE_ID =
   "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+const RUNTIME_ENDORSED_UPGRADE_PROPOSAL_WIRE_ID =
+  "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal";
 
 function runtimeChangeSetFixture(overrides = {}) {
   return {
@@ -11819,10 +11821,13 @@ function runtimeSnapshotResponse(snapshot) {
   });
 }
 
-function runtimeDraftResponseFixture(payloadHex = "0a0b0c0d") {
+function runtimeDraftResponseFixture(
+  payloadHex = "0a0b0c0d",
+  wireId = RUNTIME_UPGRADE_PROPOSAL_WIRE_ID,
+) {
   return {
     ok: true,
-    tx_instructions: [{ wire_id: RUNTIME_UPGRADE_PROPOSAL_WIRE_ID, payload_hex: payloadHex }],
+    tx_instructions: [{ wire_id: wireId, payload_hex: payloadHex }],
   };
 }
 
@@ -12084,12 +12089,13 @@ test("proposeRuntimeUpgrade posts the exact change set and admits the drafted pr
 
 test("proposeRuntimeUpgrade carries the release signers' endorsements", async () => {
   let captured;
+  let draft = runtimeDraftResponseFixture("0a0b0c0d", RUNTIME_ENDORSED_UPGRADE_PROPOSAL_WIRE_ID);
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async (url, init) => {
       captured = { url, init };
       return createResponse({
         status: 200,
-        jsonData: runtimeDraftResponseFixture(),
+        jsonData: draft,
         headers: { "content-type": "application/json" },
       });
     },
@@ -12100,11 +12106,18 @@ test("proposeRuntimeUpgrade carries the release signers' endorsements", async ()
     signer: `ed0120${"AB".repeat(32)}`,
     signature: "CD".repeat(64),
   };
-  await client.proposeRuntimeUpgrade(changeSet, { provenance: [endorsement] });
+  // Endorsements travel only in the release addition's endorsed proposal.
+  const result = await client.proposeRuntimeUpgrade(changeSet, { provenance: [endorsement] });
   assert.deepEqual(JSON.parse(captured.init.body), {
     change_set: changeSet,
     provenance: [endorsement],
   });
+  assert.deepEqual(result, draft);
+  draft = runtimeDraftResponseFixture();
+  await assert.rejects(
+    client.proposeRuntimeUpgrade(changeSet, { provenance: [endorsement] }),
+    /wire_id must be iroha\.instruction\.v1::governance::ProposeEndorsedRuntimeUpgradeProposal/u,
+  );
 
   let calls = 0;
   const offline = new ToriiClient(BASE_URL, {

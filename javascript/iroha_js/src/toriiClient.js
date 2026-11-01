@@ -5977,10 +5977,12 @@ export class ToriiClient {
    * (`POST /v1/runtime/upgrades/propose`). The body carries the exact `ChangeSetV1` JSON object
    * of the universal root as `change_set`, and as `provenance` the `ChangeSetEndorsementV1`
    * objects of the trusted release signers the committed provenance policy requires (none for a
-   * root without that policy). Torii returns the `ProposeRuntimeUpgradeProposal` instruction to
-   * sign and submit. Admission, including the provenance check, happens when the signed proposal
-   * executes, and an approved change set activates on its own at the start of its effective
-   * block. Operator-only.
+   * root without that policy). Torii returns the instruction to sign and submit: the baseline
+   * `ProposeRuntimeUpgradeProposal` without endorsements, or with them the release addition's
+   * `ProposeEndorsedRuntimeUpgradeProposal`, which a root executes once a change set activates
+   * it. Admission, including the provenance check, happens when the signed proposal executes, and
+   * an approved change set activates on its own at the start of its effective block.
+   * Operator-only.
    * @param {ToriiRuntimeChangeSet} changeSet
    * @param {{signal?: AbortSignal, provenance?: ReadonlyArray<ToriiRuntimeChangeSetEndorsement>}} [options]
    * @returns {Promise<ToriiRuntimeUpgradeTxResponse>}
@@ -6022,7 +6024,13 @@ export class ToriiClient {
       "runtime upgrade propose response",
       { signal },
     );
-    return normalizeRuntimeUpgradeTxResponse(payload, "runtime upgrade propose response");
+    return normalizeRuntimeUpgradeTxResponse(
+      payload,
+      "runtime upgrade propose response",
+      body.provenance.length > 0
+        ? RUNTIME_ENDORSED_UPGRADE_PROPOSAL_WIRE_ID
+        : RUNTIME_UPGRADE_PROPOSAL_WIRE_ID,
+    );
   }
 
   /**
@@ -15067,6 +15075,10 @@ function normalizeExplorerBlockRecord(payload, context) {
 // Wire identity of the instruction Torii drafts for a runtime change-set proposal.
 const RUNTIME_UPGRADE_PROPOSAL_WIRE_ID =
   "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal";
+// Wire identity of the release addition's endorsed proposal, which Torii drafts instead when the
+// request carries endorsements.
+const RUNTIME_ENDORSED_UPGRADE_PROPOSAL_WIRE_ID =
+  "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal";
 // Wire identity of the node-signed support attestation Torii drafts.
 const RUNTIME_SUPPORT_ATTESTATION_WIRE_ID = "iroha.runtime.support.attest.v1";
 // `ChangeSetStatusV1` variants that record the height at which they took hold.
@@ -15190,7 +15202,8 @@ function normalizeRuntimeNotice(value, context) {
 
 /**
  * Admit the one drafted instruction of a runtime draft: the `ProposeRuntimeUpgradeProposal` of a
- * propose/cancel draft, or the `AttestRuntimeSupportV1` of an attest draft.
+ * propose/cancel draft (the `ProposeEndorsedRuntimeUpgradeProposal` of a propose draft with
+ * endorsements), or the `AttestRuntimeSupportV1` of an attest draft.
  */
 function normalizeRuntimeUpgradeTxResponse(
   payload,

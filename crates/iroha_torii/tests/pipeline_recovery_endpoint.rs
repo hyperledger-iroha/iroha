@@ -3,8 +3,7 @@ use axum::{Router, routing::get};
 use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::kura::{FastpqProofSnapshot, Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
+use iroha_crypto::Hash;
 use tower::ServiceExt as _; // for Router::oneshot
 #[tokio::test]
 async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
@@ -117,7 +116,18 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
     // Prepare a sidecar for height=1
     let mut fingerprint = [0u8; 32];
     fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
-    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
+    // A recovery sidecar is served only for the exact persisted canonical block at its height.
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(
+            iroha_core::state::World::new(),
+            1_000,
+        ),
+    )
+    .expect("original signed genesis");
+    let genesis = chain.committed(1).block().clone();
+    let block_hash = genesis.hash();
+    kura.store_block(genesis)
+        .expect("persist the canonical genesis block");
     let block_hash_str = block_hash.to_string();
     let sidecar = PipelineRecoverySidecar::new(
         1,

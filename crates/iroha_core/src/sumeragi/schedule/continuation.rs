@@ -201,6 +201,19 @@ impl ContinuationPreparation {
         })
     }
 
+    /// Retire a capture consumed by a completed execution that a local freshness rollback
+    /// abandoned. The graph left with that execution, so the re-execution prepares a fresh
+    /// capture; an available or lent graph stays with its bank.
+    pub(crate) fn retire_consumed(&mut self) {
+        if self
+            .bank
+            .as_ref()
+            .is_some_and(|bank| matches!(bank.contents.lock().value, Value::Consumed))
+        {
+            self.bank = None;
+        }
+    }
+
     /// Lend the sole prepared graph after the caller's independent successor authentication and
     /// fresh pulse verification. A concurrent/reentrant lend or an unprepared owner fails closed.
     pub(crate) fn lend(

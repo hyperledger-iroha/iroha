@@ -3708,6 +3708,12 @@ fn beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response()
                 STANDARD_DECODE_POLICY_V1,
             )
             .unwrap();
+            eprintln!(
+                "TEMP-DEBUG n{committee} actual={} dedicated={} generic={}",
+                actual_work.total_allocated_bytes(),
+                budget.max_total_allocated_bytes,
+                retired_generic_budget.max_total_allocated_bytes
+            );
             if committee == 31 {
                 assert!(
                     actual_work.total_allocated_bytes()

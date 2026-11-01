@@ -21,10 +21,13 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
+    // Core carries the same genesis-derived network identity Torii is given.
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
         query,
+        ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
     ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -59,6 +62,7 @@ fn build_torii(profile: TelemetryProfile) -> Torii {
 }
 #[tokio::test]
 async fn status_sse_allowed_under_extended_profile() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let torii = build_torii(TelemetryProfile::Extended);
     let runtime = torii
         .api_router_for_tests()
@@ -84,6 +88,7 @@ async fn status_sse_allowed_under_extended_profile() {
 }
 #[tokio::test]
 async fn status_sse_restricted_under_operator_profile() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let torii = build_torii(TelemetryProfile::Operator);
     let runtime = torii
         .api_router_for_tests()

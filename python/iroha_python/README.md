@@ -2105,7 +2105,9 @@ attestation = client.attest_runtime_upgrade_typed(snapshot.items[0].id_hex)
 ```
 
 Both proposal drafts return the `ProposeRuntimeUpgradeProposal` instruction for
-local signing and submission. There is no activation call: at the start of its
+local signing and submission; a proposal with endorsements returns the release
+addition's `ProposeEndorsedRuntimeUpgradeProposal` instead, which a root executes
+once a change set activates it. There is no activation call: at the start of its
 effective height a scheduled change set activates when every committee member
 has attested support for it, its frozen notice has elapsed and it still applies
 to the committed selection; otherwise it lapses. The node, not its operator,

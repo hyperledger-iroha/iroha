@@ -111,7 +111,7 @@ async fn signed_get_configuration(harness: &ToriiTestHarness) -> axum::response:
             .unwrap(),
         &[],
     );
-    harness.app.clone().oneshot(req).await.unwrap()
+    fixtures::temp_debug_response(harness.app.clone().oneshot(req).await.unwrap()).await
 }
 #[cfg(feature = "telemetry")]
 async fn get_sumeragi_params(
@@ -127,7 +127,9 @@ async fn get_sumeragi_params(
         .clone()
         .oneshot(builder.body(Body::empty()).unwrap())
         .await
+        .map(fixtures::temp_debug_response)
         .unwrap()
+        .await
 }
 #[cfg(feature = "telemetry")]
 fn assert_content_type_starts_with(response: &axum::response::Response, expected: &str) {
@@ -216,6 +218,7 @@ fn signed_post_configuration(
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_shape() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(&harness, None).await;
@@ -239,6 +242,7 @@ async fn sumeragi_params_endpoint_shape() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_honors_norito_accept_header() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(&harness, Some("application/x-norito")).await;
@@ -254,6 +258,7 @@ async fn sumeragi_params_endpoint_honors_norito_accept_header() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_prefers_json_when_quality_is_higher() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(
@@ -271,6 +276,7 @@ async fn sumeragi_params_endpoint_prefers_json_when_quality_is_higher() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_prefers_norito_on_equal_quality() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(
@@ -290,6 +296,7 @@ async fn sumeragi_params_endpoint_prefers_norito_on_equal_quality() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_treats_wildcard_accept_as_json() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(&harness, Some("*/*")).await;
@@ -303,6 +310,7 @@ async fn sumeragi_params_endpoint_treats_wildcard_accept_as_json() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_rejects_zero_quality_supported_formats() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(
@@ -319,6 +327,7 @@ async fn sumeragi_params_endpoint_rejects_zero_quality_supported_formats() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_rejects_invalid_accept_quality() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(&harness, Some("application/json;q=bogus")).await;
@@ -331,6 +340,7 @@ async fn sumeragi_params_endpoint_rejects_invalid_accept_quality() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn sumeragi_params_endpoint_rejects_unsupported_accept_header() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = get_sumeragi_params(&harness, Some("text/plain")).await;
@@ -343,6 +353,7 @@ async fn sumeragi_params_endpoint_rejects_unsupported_accept_header() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_includes_confidential_gas() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = signed_get_configuration(&harness).await;
@@ -367,6 +378,7 @@ async fn configuration_endpoint_includes_confidential_gas() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_unsigned_requests() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let resp = harness
@@ -392,6 +404,7 @@ async fn configuration_endpoint_rejects_unsigned_requests() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_replayed_operator_signature() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let signed = fixtures::operator_signed_request(
@@ -423,6 +436,7 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_non_node_operator_key() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let outsider = checked_configuration_outsider_fixture();
@@ -447,6 +461,7 @@ async fn configuration_endpoint_rejects_non_node_operator_key() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let mut req = fixtures::operator_signed_request(
@@ -474,6 +489,7 @@ async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let req = fixtures::operator_signed_request(
@@ -494,6 +510,7 @@ async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let signed = fixtures::operator_signed_request(
@@ -522,6 +539,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let signed = fixtures::operator_signed_request(
@@ -552,6 +570,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_unversioned_path_is_not_registered() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let req = fixtures::operator_signed_request(
@@ -571,6 +590,7 @@ async fn configuration_endpoint_unversioned_path_is_not_registered() {
 async fn configuration_endpoint_reports_the_committed_confidential_gas_schedule() {
     // The schedule a node reports is the one State charges: the committed ZK
     // validity policy, not a value of the node configuration.
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let mut policy = iroha_core::zk_validity_policy::ZkValidityPolicyV1::protocol_default();
     policy.gas.proof_base = 11;
@@ -597,6 +617,7 @@ async fn configuration_endpoint_reports_the_committed_confidential_gas_schedule(
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = protocol_default_gas();
     let harness = torii_test_harness(cfg);
@@ -626,6 +647,7 @@ async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_accepts_vendor_json_content_type() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let body_bytes = configuration_update_with_logger_level_body("DEBUG");
@@ -647,6 +669,7 @@ async fn configuration_endpoint_accepts_vendor_json_content_type() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_accepts_json_update_without_content_type() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let body_bytes = configuration_update_with_logger_level_body("DEBUG");
@@ -671,6 +694,7 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_post_body_tampering() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let signed = configuration_update_with_logger_level_body("INFO");
@@ -689,6 +713,7 @@ async fn configuration_endpoint_rejects_post_body_tampering() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_signed_non_json_content_type() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let harness = torii_test_harness(cfg);
     let body_bytes = configuration_update_with_logger_level_body("INFO");
@@ -700,6 +725,7 @@ async fn configuration_endpoint_rejects_signed_non_json_content_type() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_update_without_required_logger() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = protocol_default_gas();
     let harness = torii_test_harness(cfg);
@@ -722,6 +748,7 @@ async fn configuration_endpoint_rejects_update_without_required_logger() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = protocol_default_gas();
     let harness = torii_test_harness(cfg);
@@ -744,6 +771,7 @@ async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas()
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_incomplete_confidential_gas_and_preserves_state() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = protocol_default_gas();
     let harness = torii_test_harness(cfg);
@@ -772,6 +800,7 @@ async fn configuration_endpoint_rejects_incomplete_confidential_gas_and_preserve
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn configuration_endpoint_rejects_malformed_json_update() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let initial_gas = protocol_default_gas();
     let harness = torii_test_harness(cfg);

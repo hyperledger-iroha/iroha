@@ -58,22 +58,11 @@ signatories remain unsupported, and unreachable automatic relay state is removed
 
 ## Deferred runtime consent
 
-Each pending occurrence owns a kernel-written `multisig/proposal-expectation/<account-hash>/<id>`
-record alongside its proposal. The canonical hash commits the resolved transitive instruction
-bindings, immutable dependencies, host profiles, root execution profiles and the exact installed
-executor bytecode at proposal admission. Executor caches never enter the commitment.
-Adding an unrelated interface leaves a native call's closure unchanged; the conservative baseline
-bundle captures all of its declared native callees. Custom instructions and opaque contract code
-capture the entire callable surface until they carry a bounded authenticated call manifest.
-
-Admission refuses a new proposal while any captured dependency is admission-closed,
-completion-only or disabled, before creating its pending record or initial approval.
-Approval checks the original commitment before adding a signer or executing any instruction.
-A changed closure returns the stable `expectation_mismatch` rejection; restrictions on a retained
-dependency also prevent execution. Fresh consent requires a fresh proposal nonce and fresh
-approvals. The old occurrence remains cancellable or expirable. Completion, cancellation, expiry
-and controller invalidation remove its expectation with its pending record. A missing or malformed
-capture never silently adopts the current selection, including during snapshot restoration.
+Not built. A pending occurrence executes through the current executor and bindings when its
+quorum is reached (`specs/live_runtime_upgrades.md` §8.2). Capturing the resolved closure at
+proposal admission would change what the baseline's proposal and approval write and decide, so it
+ships as a release addition that rebinds those interfaces, never inside the baseline (TODO, §14).
+Native multisig state under `multisig/` stays out of reach of contract durable-state artifacts.
 
 ## Transport and durable application custody
 

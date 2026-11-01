@@ -311,6 +311,10 @@ committed, Parliament admits a proposal that schedules a change set only with va
 by the change-set identity, which binds the network) from its threshold of distinct trusted
 signers. A proposal carries at most one endorsement per trusted signer, and none to cancel a
 change set or under a root without the policy; admission checks them when the proposal executes.
+Endorsements travel in the endorsed proposal (`ProposeEndorsedRuntimeUpgradeProposal`), a release
+addition: the baseline `ProposeRuntimeUpgradeProposal` keeps its frozen layout and semantics and
+checks none, so the policy binds a root once a change set activates that addition and restricts
+the baseline proposal.
 The manifest provenance check and the node configuration it read
 (`governance.runtime_upgrade_provenance`) are deleted; its terms stay frozen in the
 genesis-signed execution policy and the governance authority.
@@ -597,9 +601,10 @@ functionality is retired, not executed forever. Recommended committed defaults:
    restart halts the chain.
 4. Attestations are collected from every validator, then the change set activates (section 6).
 
-Taira tooling runs this sequence per validator, with `--check-storage` available through the Taira
-launcher (`irohad/src/taira_runtime_signer.rs`) and a rollback before activation that is a binary
-swap. This is S1-B of `network_deployment.md`.
+Taira tooling runs this sequence per validator, with `--check-storage` and `--check-replay`
+available offline through the Taira launcher (`irohad/src/taira_runtime_signer.rs`), which reads
+no runtime-signer descriptor for them, and a rollback before activation that is a binary swap.
+This is S1-B of `network_deployment.md`.
 
 ## 10. On-chain business logic
 
@@ -771,9 +776,11 @@ not a date: it happens once everything its first selection needs is implemented 
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the
    candidate from its newest authenticated snapshot (or signed genesis) and names the first
-   differing commitment component or the first missing body. Still open: the operator route that
-   drafts an addition's activation, the Taira launcher treating `--check-replay` as offline, and
-   the rest of this step.
+   differing commitment component or the first missing body; and the operator route
+   (`POST /v1/runtime/upgrades/draft`, `iroha runtime upgrade draft`) that drafts an addition's
+   activation from the node's release catalog; and the Taira launcher running `--check-replay`
+   and `--check-storage` offline, without reading its runtime-signer descriptors. Still open: the
+   rest of this step.
 7. **Taira** adopted the foundation at its upgrade checkpoint with a660d601da (section 13) before
    the gates of steps 2 to 6 passed. What those steps still lack reaches Taira through later
    releases and, where it changes execution, governed change sets. Then the acceptance journey

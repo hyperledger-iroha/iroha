@@ -402,6 +402,51 @@ fn ordinary_continuation_native_world_request_and_done_drop_return_original_cust
 }
 
 #[test]
+fn consumed_continuation_is_retired_before_abandoned_execution_reexecutes() {
+    let _retirement = crossbeam_epoch::pin();
+    let chain = chain();
+    let proposal = chain.proposal(Some(2_000), Vec::new());
+    let header = proposal.header();
+    let expected = expected(&chain, &header);
+    let prepare = |original: &mut SuccessorContextPreparation| {
+        let view = chain.state().view();
+        original.authenticate(&view, &header, &expected)?;
+        original.prepare_continuation(&view, &header, None, expected)
+    };
+    let execute = |original: &SuccessorContextPreparation| {
+        let mut block = chain
+            .state()
+            .block_with_pristine_carrier_stage(&proposal, |block| {
+                block.request_sumeragi_schedule_with_preparation(
+                    1,
+                    &proposal,
+                    None,
+                    Some(expected),
+                    Some(original),
+                )
+            })
+            .unwrap();
+        block.advance_requested_sumeragi_schedule().unwrap();
+        block.take_sumeragi_execution_inputs().unwrap()
+    };
+    let mut original = SuccessorContextPreparation::default();
+    prepare(&mut original).unwrap();
+    // A completed execution consumes the capture; a CT5 rollback then abandons that execution.
+    drop(execute(&original));
+    assert!(
+        matches!(
+            prepare(&mut original),
+            Err(ExecutionAttemptError::Deferred(_))
+        ),
+        "a consumed capture is never lent again"
+    );
+    original.retire_consumed_continuation();
+    prepare(&mut original).unwrap();
+    let reexecuted = execute(&original);
+    assert!(reexecuted.belongs_to(&chain.state().ivm_execution_budget()));
+}
+
+#[test]
 fn ordinary_continuation_refuses_changed_source_cut_params_root_pulse_and_foreign_shell() {
     let _retirement = crossbeam_epoch::pin();
     let mut chain = chain();

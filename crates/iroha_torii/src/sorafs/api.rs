@@ -38566,7 +38566,7 @@ mod advert_tests {
             make_signed_advert_with_host_and_provider("a.storage.example.test", [0x11; 32]);
         let fixture_b =
             make_signed_advert_with_host_and_provider("b.storage.example.test", [0x22; 32]);
-        let app = app_state_with_seeded_cache_for_fixtures(&[fixture_a, fixture_b]);
+        let (app, _storage) = app_state_with_seeded_cache_for_fixtures(&[fixture_a, fixture_b]);
         let response = handle_get_sorafs_providers(
             State(app),
             axum::extract::RawQuery(Some("limit=1".to_owned())),
@@ -38578,7 +38578,7 @@ mod advert_tests {
     #[tokio::test]
     async fn post_provider_advert_accepts_valid_payload() {
         let fixture = make_signed_advert();
-        let app = app_state_with_cache(&fixture);
+        let (app, _storage) = app_state_with_cache(&fixture);
         let bytes = Bytes::from(norito::to_bytes(fixture.advert()).expect("encode advert"));
         let response = handle_post_sorafs_provider_advert(State(app.clone()), bytes).await;
         let status = response.status();
@@ -38607,7 +38607,7 @@ mod advert_tests {
     #[tokio::test]
     async fn post_provider_advert_rejects_invalid_payload() {
         let fixture = make_signed_advert();
-        let app = app_state_with_cache(&fixture);
+        let (app, _storage) = app_state_with_cache(&fixture);
         let response = handle_post_sorafs_provider_advert(
             State(app.clone()),
             Bytes::from_static(b"not a valid advert payload"),
@@ -38625,7 +38625,7 @@ mod advert_tests {
     #[tokio::test]
     async fn provider_advert_signature_validation_does_not_hold_the_cache_lock() {
         let fixture = make_signed_advert();
-        let app = app_state_with_cache(&fixture);
+        let (app, _storage) = app_state_with_cache(&fixture);
         let cache = app.sorafs_cache.as_ref().expect("cache enabled");
         let policy = {
             let guard = cache.read().await;
@@ -39937,7 +39937,7 @@ mod advert_tests {
         let manifest_digest: [u8; 32] = manifest.digest().expect("compute manifest digest").into();
         let content_cid = encode_content_cid(&manifest.root_cid);
         let fixture = make_signed_advert_with_host("https://provider.invalid");
-        let app = app_state_with_seeded_cache(&fixture);
+        let (app, _storage) = app_state_with_seeded_cache(&fixture);
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
         assert!(
@@ -40047,7 +40047,7 @@ mod advert_tests {
                 .expect("serve remote storage routes");
         });
         let fixture = make_signed_advert_with_host(&remote_origin);
-        let app = app_state_with_seeded_cache(&fixture);
+        let (app, _storage) = app_state_with_seeded_cache(&fixture);
         let inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
         seed_registry_manifest_for_gateway(&inner.state, &manifest, fixture.provider_id());
         assert!(
@@ -41505,7 +41505,7 @@ mod advert_tests {
     #[tokio::test]
     async fn provider_advert_updates_range_capability_gauge() {
         let fixture = make_signed_advert();
-        let app = app_state_with_cache(&fixture);
+        let (app, _storage) = app_state_with_cache(&fixture);
         let advert_bytes =
             Bytes::from(norito::to_bytes(fixture.advert()).expect("serialize provider advert"));
         let response = handle_post_sorafs_provider_advert(State(app.clone()), advert_bytes).await;
@@ -41708,13 +41708,17 @@ mod advert_tests {
         AdmissionRegistry::from_envelopes(network_id, policy, envelopes)
             .expect("fixture envelopes validate")
     }
-    fn app_state_with_cache(fixture: &ProviderFixture) -> SharedAppState {
+    // Each helper returns the node's storage directory: dropping it while the node is
+    // still serving would delete the storage the requests read.
+    fn app_state_with_cache(fixture: &ProviderFixture) -> (SharedAppState, TempDir) {
         app_state_with_cache_inner(fixture, false)
     }
-    fn app_state_with_seeded_cache(fixture: &ProviderFixture) -> SharedAppState {
+    fn app_state_with_seeded_cache(fixture: &ProviderFixture) -> (SharedAppState, TempDir) {
         app_state_with_cache_inner(fixture, true)
     }
-    fn app_state_with_seeded_cache_for_fixtures(fixtures: &[ProviderFixture]) -> SharedAppState {
+    fn app_state_with_seeded_cache_for_fixtures(
+        fixtures: &[ProviderFixture],
+    ) -> (SharedAppState, TempDir) {
         assert!(
             !fixtures.is_empty(),
             "at least one provider fixture required"
@@ -41740,7 +41744,7 @@ mod advert_tests {
         let mut app = Arc::try_unwrap(mk_app_state_for_tests())
             .unwrap_or_else(|_| panic!("unique app state"));
         app.sorafs_cache = Some(Arc::new(RwLock::new(cache)));
-        let (node, _dir) = sorafs_node_with_temp_storage();
+        let (node, storage) = sorafs_node_with_temp_storage();
         for fixture in fixtures {
             seed_capacity_declaration(
                 &node,
@@ -41749,9 +41753,12 @@ mod advert_tests {
             );
         }
         app.sorafs_node = node;
-        Arc::new(app)
+        (Arc::new(app), storage)
     }
-    fn app_state_with_cache_inner(fixture: &ProviderFixture, seed_fixture: bool) -> SharedAppState {
+    fn app_state_with_cache_inner(
+        fixture: &ProviderFixture,
+        seed_fixture: bool,
+    ) -> (SharedAppState, TempDir) {
         let admission = fixture_admission_registry([&fixture.envelope]);
         let mut cache = ProviderAdvertCache::new(
             vec![
@@ -41773,14 +41780,14 @@ mod advert_tests {
             .unwrap_or_else(|_| panic!("unique app state"));
         let cache_arc = Arc::new(RwLock::new(cache));
         app.sorafs_cache = Some(cache_arc);
-        let (node, _dir) = sorafs_node_with_temp_storage();
+        let (node, storage) = sorafs_node_with_temp_storage();
         seed_capacity_declaration(
             &node,
             fixture.provider_id(),
             &fixture.advert.body.profile_id,
         );
         app.sorafs_node = node;
-        Arc::new(app)
+        (Arc::new(app), storage)
     }
     fn make_signed_advert() -> ProviderFixture {
         make_signed_advert_with_host("storage.example.test")

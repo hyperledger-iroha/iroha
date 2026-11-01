@@ -104,6 +104,9 @@ pub(crate) enum SnapshotCaptureError {
     /// A stable runtime/World projection is malformed.
     #[error("invalid State snapshot runtime projection: {0}")]
     Runtime(#[source] Box<crate::state::LaneLifecycleError>),
+    /// The World cannot be written through its runtime selection.
+    #[error("cannot write the World through its runtime selection: {0}")]
+    Selection(String),
     /// Canonical snapshot encoding or projection was rejected.
     #[error("invalid canonical State snapshot encoding: {0}")]
     #[cfg(test)]
@@ -127,6 +130,9 @@ impl From<SnapshotCaptureError> for crate::state::MergeLedgerCommitError {
             }
             SnapshotCaptureError::Runtime(error) => {
                 Self::StateView(crate::state::StateViewError::Runtime(*error))
+            }
+            error @ SnapshotCaptureError::Selection(_) => {
+                Self::ExecutionStatePublication(error.to_string())
             }
             #[cfg(test)]
             error @ SnapshotCaptureError::Encoding(_) => {
@@ -228,7 +234,7 @@ impl CapturedStateSnapshot {
         // TODO: Bound the serializer's allocation while preserving the exact JSON
         // encoding. The existing writer resource limits run after this allocation.
         let mut json = String::new();
-        serialize_state_snapshot(state, &view, &mut json);
+        serialize_state_snapshot(state, &view, &mut json)?;
         after_serialization();
         let after = state.state_view_generation();
         if generation != after || !after.is_multiple_of(2) {
@@ -285,7 +291,49 @@ fn serialize_runtime_predecessor(undo: &Option<SnapshotNexusRuntime>, out: &mut 
     mv::json::json_serialize_undo(undo, out);
 }
 
-fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, out: &mut String) {
+/// Write `world` as the snapshot's `world` member: every top-level member, less those whose
+/// storage `selection` does not install (`specs/live_runtime_upgrades.md` §5.5).
+///
+/// # Errors
+/// The uninstalled members cannot be resolved, or the written World is not one JSON object.
+fn serialize_world_through_selection(
+    world: &impl JsonSerialize,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+    out: &mut String,
+) -> Result<(), SnapshotCaptureError> {
+    let omitted = crate::runtime::uninstalled_world_members(selection)
+        .map_err(SnapshotCaptureError::Selection)?;
+    if omitted.is_empty() {
+        world.json_serialize(out);
+        return Ok(());
+    }
+    let mut full = String::new();
+    world.json_serialize(&mut full);
+    let members = crate::state::deserialize::json_object_members(&full)
+        .map_err(|error| SnapshotCaptureError::Selection(error.to_string()))?;
+    out.push('{');
+    let mut first = true;
+    for (key, raw) in members {
+        if omitted.iter().any(|member| *member == key) {
+            continue;
+        }
+        if !first {
+            out.push(',');
+        }
+        first = false;
+        json::write_json_string(key, out);
+        out.push(':');
+        out.push_str(raw);
+    }
+    out.push('}');
+    Ok(())
+}
+
+fn serialize_state_snapshot(
+    state: &State,
+    view: &crate::state::StateView<'_>,
+    out: &mut String,
+) -> Result<(), SnapshotCaptureError> {
     let block_hashes = &view.block_hashes;
     out.push('{');
     json::write_json_string("chain_id", out);
@@ -298,7 +346,11 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(',');
     json::write_json_string("world", out);
     out.push(':');
-    state.world.json_serialize(out);
+    serialize_world_through_selection(
+        &state.world,
+        crate::state::WorldReadOnly::runtime_selection(&view.world),
+        out,
+    )?;
     out.push(',');
     json::write_json_string("nexus_runtime", out);
     out.push(':');
@@ -356,6 +408,7 @@ fn serialize_state_snapshot(state: &State, view: &crate::state::StateView<'_>, o
     out.push(':');
     state.prev_commit_topology.json_serialize(out);
     out.push('}');
+    Ok(())
 }
 #[cfg(test)]
 fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
@@ -372,7 +425,12 @@ fn serialize_staged_state_snapshot(state: &StateBlock<'_>, out: &mut String) {
     out.push(',');
     json::write_json_string("world", out);
     out.push(':');
-    world.json_serialize(out);
+    serialize_world_through_selection(
+        world,
+        crate::state::WorldReadOnly::runtime_selection(world),
+        out,
+    )
+    .expect("a staged World is written through its runtime selection");
     out.push(',');
     json::write_json_string("nexus_runtime", out);
     out.push(':');

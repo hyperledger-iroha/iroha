@@ -4648,8 +4648,10 @@ require an immutable `OperatorSigningContext` and sign every request.
 
 Each propose or cancel draft contains exactly one
 `iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal` instruction (`wire_id` and the
-framed `payload_hex`) for your wallet or key store to sign and submit; admission happens when the
-signed proposal executes. There is no activation call: an approved change set activates at the
+framed `payload_hex`) for your wallet or key store to sign and submit; a propose draft with
+endorsements contains the release addition's
+`iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal` instead, which a root
+executes once a change set activates it. Admission happens when the signed proposal executes. There is no activation call: an approved change set activates at the
 start of its effective block once the validator committee has attested support and the frozen
 notice has elapsed, and otherwise lapses.
 

@@ -13299,6 +13299,29 @@ async fn handler_runtime_propose_upgrade(
     let payload = crate::runtime::handle_runtime_propose_upgrade(body).await;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
+async fn handler_runtime_draft_upgrade(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    accept: Option<crate::utils::extractors::ExtractAccept>,
+    body: crate::utils::extractors::NoritoJson<crate::runtime::RuntimeDraftUpgradeRequest>,
+) -> Result<Response, Error> {
+    let remote_ip = remote.ip();
+    check_access_enforced(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/runtime/upgrades/draft",
+        true,
+    )
+    .await?;
+    let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
+        Ok(fmt) => fmt,
+        Err(resp) => return Ok(resp),
+    };
+    let payload = crate::runtime::handle_runtime_draft_upgrade(app.state.clone(), body).await?;
+    Ok(crate::utils::respond_with_format(&payload, format))
+}
 async fn handler_runtime_cancel_upgrade(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -38958,6 +38981,7 @@ impl Torii {
             NODE_PROJECTION_CHECKPOINT => canonical_account_get(handler_node_query_projection_checkpoint, app_state, 0);
             RUNTIME_UPGRADES => operator_get(handler_runtime_upgrades_list, app_state);
             RUNTIME_UPGRADE_PROPOSE => operator_post(handler_runtime_propose_upgrade, app_state);
+            RUNTIME_UPGRADE_DRAFT => operator_post(handler_runtime_draft_upgrade, app_state);
             RUNTIME_UPGRADE_CANCEL => operator_post(handler_runtime_cancel_upgrade, app_state);
             RUNTIME_UPGRADE_ATTEST => operator_post(handler_runtime_attest_upgrade, app_state);
             RUNTIME_RELEASE => operator_get(handler_runtime_release, app_state);

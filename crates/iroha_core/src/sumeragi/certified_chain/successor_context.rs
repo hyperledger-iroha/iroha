@@ -271,6 +271,11 @@ impl SuccessorContextPreparation {
         self.continuation.lend(state, header, scope, pulse)
     }
 
+    /// Retire the continuation consumed by a completed execution that a CT5 rollback abandoned.
+    pub(crate) fn retire_consumed_continuation(&mut self) {
+        self.continuation.retire_consumed();
+    }
+
     /// Lend completed original history only after the current State and physical slots recheck.
     /// This repeats current epoch/context comparisons without allocating replacement frames.
     pub(crate) fn recheck(

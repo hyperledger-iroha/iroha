@@ -273,7 +273,7 @@ mod startup_preparation_tests {
         )
         .unpack(|_| {})
         .unwrap_or_else(|(_, error)| {
-            panic!("fixture must genuinely execute before sealing: {error}")
+            panic!("fixture must genuinely execute before sealing: {error:?}")
         });
         if let Some(account) = source_only_account {
             assert!(staged.world().accounts().get(account).is_none());

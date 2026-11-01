@@ -2874,13 +2874,52 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
         }
     }
 
+    /// Run a fixed-descriptor control alone in a fresh test process.
+    ///
+    /// Concurrent custody fixtures may occupy the child's fixed descriptor slots in this
+    /// process; the production owner must refuse an occupied slot, never overwrite it.
+    /// Returns whether the control already ran in the isolated child.
+    fn ran_isolated_descriptor_control(test: &str) -> bool {
+        const CHILD: &str = "IROHA_ROTATION_DESCRIPTOR_FIXTURE_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return false;
+        }
+        let module = module_path!().split_once("::").unwrap().1;
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", &format!("{module}::{test}"), "--nocapture"])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            stdout.contains("1 passed; 0 failed"),
+            "the exact descriptor control must execute one test"
+        );
+        true
+    }
+
     #[tokio::test(flavor = "current_thread")]
     async fn native_rotation_peer_seat_hands_read_only_phases_to_owned_child() {
+        if ran_isolated_descriptor_control(
+            "native_rotation_peer_seat_hands_read_only_phases_to_owned_child",
+        ) {
+            return;
+        }
         observe_native_peer_phase_handoff(false).await;
     }
 
     #[tokio::test(flavor = "current_thread")]
     async fn native_genesis_peer_seat_hands_read_only_phases_to_owned_child() {
+        if ran_isolated_descriptor_control(
+            "native_genesis_peer_seat_hands_read_only_phases_to_owned_child",
+        ) {
+            return;
+        }
         observe_native_peer_phase_handoff(true).await;
     }
 

@@ -39133,6 +39133,36 @@
         ],
         "type": "object"
       },
+      "RuntimeDraftUpgradeRequest": {
+        "additionalProperties": false,
+        "description": "The addition of this node's release to activate (its native module) and the first height executed under the successor selection. qualification_hex is the digest of the qualification evidence for the successor composition.",
+        "properties": {
+          "addition": {
+            "description": "Native module of the addition.",
+            "type": "string"
+          },
+          "effective_height": {
+            "description": "First height executed under the successor selection.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "qualification_hex": {
+            "description": "Digest of the qualification evidence, 32-byte lowercase hex.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "addition",
+          "effective_height",
+          "qualification_hex"
+        ],
+        "type": "object"
+      },
       "RuntimeProposeUpgradeRequest": {
         "additionalProperties": false,
         "description": "The change set to schedule and the endorsements the committed runtime provenance policy requires: at most one from each trusted release signer. provenance is empty when the universal root commits no provenance policy.",
@@ -94092,6 +94122,62 @@
           "authentication": "operator_signature",
           "schemaVersion": 1,
           "stableRouteId": "operator.runtime.upgrade.cancel"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/upgrades/draft": {
+      "post": {
+        "description": "Draft, from this node's release catalog and the committed runtime selection, the change set that activates an addition of its release from the effective height in the body. It publishes the addition's definitions the root lacks, installs its storage, activates its interfaces and implementation and binds their wire IDs. Release signers endorse the change set's identity, /v1/runtime/upgrades/propose drafts the proposal that schedules it, and every validator attests it.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeDraftUpgradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Draft the change set that activates a release addition.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.upgrade.draft"
         },
         "x-iroha-tool-effect": "operator"
       }

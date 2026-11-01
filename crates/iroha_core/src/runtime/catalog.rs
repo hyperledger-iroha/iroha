@@ -605,6 +605,12 @@ impl ReleaseCatalog {
                     "{field} is not a canonical World table or cell"
                 )));
             };
+            // Snapshots leave out an uninstalled field as a whole top-level World member (§5.5).
+            // TODO(`specs/live_runtime_upgrades.md` §5.5): leave out a nested field inside its
+            // owner's member before an addition adds one.
+            if !WORLD_FIELDS.iter().any(|top| top.id == field) {
+                return Err(fail(format!("{field} is not a top-level World field")));
+            }
             let mut descriptor = descriptor.clone();
             descriptor.invariants = addition_digest(module, &[b"storage", field.as_bytes()]);
             match (entry, &descriptor.shape) {

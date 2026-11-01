@@ -251,8 +251,11 @@ internal object SignedAttachmentPayloadAssertions {
     }
 
     fun nativeRegistryMatches() {
+        // The inventory ends where the Rust unit tests, which register their own test wire IDs,
+        // begin.
         val source = String(Files.readAllBytes(findVectors().parent.parent.parent.parent
             .resolve("crates/iroha_data_model/src/isi/registry/wire_ids.rs")), StandardCharsets.UTF_8)
+            .substringBefore("\n#[cfg(test)]\nmod tests {")
         val wireIds = Regex("\\b(?:built_in_wire_id|governance_wire_id)!\\(\\s*[A-Za-z_][A-Za-z0-9_:]*\\s*=>\\s*\"([^\"]+)\"")
             .findAll(source).map { it.groupValues[1] }.toList()
         val entryCount = Regex("\\b(?:built_in_wire_id|governance_wire_id)\\s*!\\s*\\(").findAll(source).count()

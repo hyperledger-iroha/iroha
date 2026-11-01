@@ -10033,7 +10033,8 @@ final class ToriiClientHeaderTests: XCTestCase {
             "change_set": changeSet.json,
             "provenance": .array([endorsement.json]),
         ]).encodedData()
-        let wireId = ToriiRuntimeUpgradeActionResponse.proposalInstructionWireId
+        // Endorsements travel only in the release addition's endorsed proposal.
+        let wireId = ToriiRuntimeUpgradeActionResponse.endorsedProposalInstructionWireId
         let expectedResponse = Data("""
         {"ok":true,"tx_instructions":[{"wire_id":"\(wireId)","payload_hex":"0a0b"}]}
         """.utf8)

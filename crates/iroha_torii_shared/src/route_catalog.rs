@@ -2918,6 +2918,11 @@ pub mod runtime_governance {
         "operator.runtime.upgrade.propose",
         "/v1/runtime/upgrades/propose",
     );
+    /// Draft the runtime change set that activates an addition of this node's release.
+    pub const RUNTIME_UPGRADE_DRAFT: RouteDescriptor = operator_post(
+        "operator.runtime.upgrade.draft",
+        "/v1/runtime/upgrades/draft",
+    );
     /// Draft the Parliament proposal that withdraws a scheduled runtime change set.
     pub const RUNTIME_UPGRADE_CANCEL: RouteDescriptor = operator_post(
         "operator.runtime.upgrade.cancel",
@@ -3131,6 +3136,7 @@ pub mod runtime_governance {
         NODE_PROJECTION_SHARD_EXPORT,
         RUNTIME_UPGRADES,
         RUNTIME_UPGRADE_PROPOSE,
+        RUNTIME_UPGRADE_DRAFT,
         RUNTIME_UPGRADE_CANCEL,
         RUNTIME_UPGRADE_ATTEST,
         RUNTIME_RELEASE,

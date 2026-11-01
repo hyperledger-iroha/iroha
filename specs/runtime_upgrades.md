@@ -83,8 +83,17 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   until it is declared. Every baseline instruction's payload layout is pinned too
   (`runtime_baseline_instruction_layouts.tsv`, checked by `iroha_data_model`'s
   `baseline_instruction_layouts_stay_frozen`), because an interface descriptor names only the
-  payload's nominal type: a changed layout under an unchanged wire ID fails that pin. This release
-  declares one addition, `iroha.runtime.endorsed_change_set_proposal.v1`.
+  payload's nominal type: a changed layout under an unchanged wire ID fails that pin. The pin holds
+  the baseline layouts this release brings to Taira. They match a660d601da, which founded Taira's
+  selection, except `iroha.register` and `RegisterSmartContractCode`. Those reach trigger filters,
+  which gained `RuntimeRejectionV1::MalformedPayload` and the `ContainmentReviewed` and
+  `ContainmentResolved` bits of `RuntimeUpgradeEventSet`. Both additions are appended, so every
+  payload a660d601da wrote still decodes. a660d601da cannot decode a payload that uses them, and
+  its peers fail this release's handshake (`ConsensusConfigCaps`), so Taira's validators switch to
+  this release together. A storage descriptor likewise names only its
+  value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
+  field registry the same way). This release declares one addition,
+  `iroha.runtime.endorsed_change_set_proposal.v1`.
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition
@@ -296,6 +305,7 @@ the addition and governance restricts the baseline proposal.
 | `GET /v1/runtime/abi/hash` | `{ policy: "V1", abi_hash_hex }` |
 | `GET /v1/runtime/metrics` | ABI version and change sets by status (`scheduled`, `activated`, `lapsed`, `canceled`) |
 | `GET /v1/runtime/upgrades` | Committed selection and its identity, committee keys and digest, every change-set record |
+| `POST /v1/runtime/upgrades/draft` | Body: `{ addition, effective_height, qualification_hex }`. Drafts, from the node's release catalog and the committed selection, the `ChangeSetV1` that activates that addition from `effective_height` (`iroha_core::runtime::draft_addition`), with its identity as `id_hex`; refused for a module the release does not add, naming those it adds, and for an activation that does not apply to the committed selection |
 | `POST /v1/runtime/upgrades/propose` | Body: `{ change_set, provenance }`, the `ChangeSetV1` and its `ChangeSetEndorsementV1`s (empty without a provenance policy). Drafts the `Schedule` proposal for local signing: the baseline proposal without endorsements, the endorsed proposal (a release addition) with them |
 | `POST /v1/runtime/upgrades/cancel/{id}` | Drafts the `Cancel` proposal for local signing |
 | `POST /v1/runtime/upgrades/attest/{id}` | The node signs its support with its validator key and drafts the `AttestRuntimeSupportV1` instruction; refused unless its release executes the successor and its key is a committee member |
@@ -309,6 +319,9 @@ The list, propose and cancel routes back the `iroha.runtime.upgrades.*` MCP tool
 
 - `iroha runtime abi active|active-query|hash`, `iroha runtime status`, `iroha runtime capabilities`
 - `iroha runtime upgrade list`
+- `iroha runtime upgrade draft --addition <module> --effective-height <height> --qualification <hex>`
+  prints the change set the node drafts to activate one of its release's additions, after checking
+  it against the identity the node reported; it is the `--file` input of `endorse` and `propose`.
 - `iroha runtime upgrade endorse --file <change_set.json> --signer-key-file <path>` prints a
   release signer's `ChangeSetEndorsementV1`; the key is read at run time and never printed.
 - `iroha runtime upgrade propose --file <change_set.json> [--endorsement <file>...]` submits the
@@ -336,7 +349,9 @@ refreshes it after every `RuntimeUpgradeEvent::Activated`. The compatibility pro
 
 `iroha3d --check-replay` replays a stopped validator's store, or an immutable copy of it, with a
 candidate release before it is installed ([`live_runtime_upgrades.md`](live_runtime_upgrades.md)
-§9.2; `crates/irohad/src/replay_check.rs`, `iroha_core::sumeragi::node::replay_check`).
+§9.2; `crates/irohad/src/replay_check.rs`, `iroha_core::sumeragi::node::replay_check`). The
+Taira launcher `iroha3d_taira` runs it offline, as it runs `--check-config` and `--check-storage`,
+without reading its runtime-signer descriptors.
 
 - The store is opened read-only under its store-root lock, as `--check-storage` opens it, and is
   never written; nor are the snapshot and tiered-state directories. Signed genesis is
@@ -377,9 +392,6 @@ Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `road
   and a reader defaults every field the snapshot's selection does not install), so a previous
   release reads this release's snapshots until activation; a catalog test refuses such an
   addition until then.
-- **Operations:** the operator route that drafts an addition's activation from the node's catalog
-  (`iroha_core::runtime::draft_addition` is implemented; its Torii route, client and CLI command
-  are not), and the Taira launcher treating `--check-replay` as an offline command.
 - **Obligations:** kernel registration of contract-created obligations and migration cursors,
   completion capabilities retained across rebinding, explicit current-binding consent and
   narrower authenticated dynamic-call manifests.

@@ -45,17 +45,24 @@ fn kotodama_unregister_domain() {
 }
 #[test]
 fn kotodama_transfer_domain() {
+    let bob = AccountId::new(
+        "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
+            .parse()
+            .expect("public key"),
+    );
     // Program transfers a domain from the execution authority to bob.
-    let src = r#"
-        seiyaku TransferDomain { permission FixtureAccess;
-        kotoage fn main() authorize(FixtureAccess) {
-          ledger::domain::transfer(source: context::authority(), domain: DomainId::parse("wonderland.universal"), destination: AccountId::parse("sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV"));
-        }
-        }
-    "#;
+    let src = format!(
+        r#"
+        seiyaku TransferDomain {{ permission FixtureAccess;
+        kotoage fn main() authorize(FixtureAccess) {{
+          ledger::domain::transfer(source: context::authority(), domain: DomainId::parse("wonderland.universal"), destination: AccountId::parse("{bob}"));
+        }}
+        }}
+    "#
+    );
     unsafe { std::env::set_var("IVM_COMPILER_DEBUG", "1") };
     let compiler = KotodamaCompiler::new();
-    let prog = compiler.compile_source(src).expect("compile kotodama");
+    let prog = compiler.compile_source(&src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
     let wonderland: DomainId =
         iroha_model_base::domain::DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -64,10 +71,6 @@ fn kotodama_transfer_domain() {
             .parse()
             .expect("public key"),
     );
-    let bob = iroha_data_model::account::AccountId::parse_encoded(
-        "sorauﾛ1PﾉｳﾇmEｴWｵebHﾑ6ﾔﾙｲヰiwuCWErJ7uｽoPGｱﾔnjﾑKﾋTCW2PV",
-    )
-    .expect("parse destination account literal");
     wsv.add_account_unchecked(alice.clone());
     // Only the current owner may transfer a domain, so the authority owns it first.
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);

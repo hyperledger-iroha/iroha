@@ -353,7 +353,27 @@ pub async fn request(
     app: &axum::Router,
     request: Request<Body>,
 ) -> Result<axum::response::Response, std::convert::Infallible> {
-    app.clone().oneshot(request).await
+    let response = app.clone().oneshot(request).await?;
+    Ok(temp_debug_response(response).await)
+}
+/// TEMP-DEBUG: print every non-success response body (diagnostic only; to be removed).
+#[allow(dead_code)]
+pub async fn temp_debug_response(response: axum::response::Response) -> axum::response::Response {
+    if response.status().is_success() {
+        return response;
+    }
+    let (parts, body) = response.into_parts();
+    let bytes = http_body_util::BodyExt::collect(body)
+        .await
+        .expect("TEMP-DEBUG body")
+        .to_bytes();
+    eprintln!(
+        "TEMP-DEBUG {} {:?} {}",
+        parts.status,
+        parts.headers.get("content-type"),
+        String::from_utf8_lossy(&bytes)
+    );
+    axum::response::Response::from_parts(parts, Body::from(bytes))
 }
 /// Send a bodyless GET request while preserving the router result for caller-specific errors.
 #[allow(dead_code)]

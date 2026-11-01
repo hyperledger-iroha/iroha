@@ -29,15 +29,19 @@ fn signed_loopback_get(
 }
 #[tokio::test]
 async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
-    // Minimal Torii setup with telemetry enabled
+    // Minimal Torii setup with telemetry enabled, isolated from other fixtures' storage.
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
+    // Core carries the same genesis-derived network identity Torii is given.
+    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
         World::default(),
         kura.clone(),
         query,
+        iroha_model_base::chain::ChainId::from("test-chain"),
+        iroha_torii::test_utils::signed_query_network_id(),
     ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;

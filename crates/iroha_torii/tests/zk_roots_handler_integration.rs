@@ -2,18 +2,13 @@
 #![allow(clippy::too_many_lines)]
 use axum::{Router, routing::post};
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
-};
+use iroha_core::state::{State, World, WorldReadOnly};
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
-use std::{collections::BTreeSet, num::NonZeroUsize, sync::Arc};
+use std::{num::NonZeroUsize, sync::Arc};
 use tower::ServiceExt as _;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -113,14 +108,6 @@ fn seeded_zk_roots_state(
     tree_roots_history_len: NonZeroUsize,
     commitment_count: u8,
 ) -> (Arc<State>, AssetDefinitionId, String, Vec<[u8; 32]>) {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(World::new(), kura, query);
-    state
-        .set_zk(zk_config_with_tree_roots_history_len(
-            tree_roots_history_len,
-        ))
-        .expect("empty state accepts roots test configuration");
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("zkd", "universal").expect("domain id"),
@@ -128,38 +115,35 @@ fn seeded_zk_roots_state(
     );
     let asset_alias = "rose#centralbank";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
-    {
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
-        let definition = AssetDefinition::numeric(
+    // Registration, issuance and alias binding execute only under the authenticated
+    // signed-genesis source, which also installs the configured roots history length.
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
+    config.zk = Some(zk_config_with_tree_roots_history_len(
+        tree_roots_history_len,
+    ));
+    config.genesis_instructions = vec![
+        Register::domain(Domain::new(domain_id)).into(),
+        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::asset_definition(AssetDefinition::numeric(
             asset_def_id.clone(),
             "rose".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
             None,
-        );
-        let init_instrs: [InstructionBox; 5] = [
-            Register::domain(Domain::new(domain_id.clone())).into(),
-            Register::account(NewAccount::new(owner.clone())).into(),
-            Register::asset_definition(definition).into(),
-            Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone()))
-                .into(),
-            iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
-        ];
-        for instr in init_instrs {
-            stx.world
-                .executor()
-                .clone()
-                .execute_instruction(&mut stx, &owner, &instr)
-                .unwrap();
-        }
+        ))
+        .into(),
+        Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner)).into(),
+        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
         iroha_data_model::isi::SetAssetDefinitionAlias::bind(
             asset_def_id.clone(),
             asset_alias.parse().expect("asset alias literal"),
             None,
         )
-        .execute(&owner, &mut stx)
-        .expect("bind asset alias");
+        .into(),
+    ];
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("signed genesis registers the confidential asset");
+    // Commitment roots are seeded fixture state, not admitted shielded transfers.
+    chain.setup_world_at(2_000, |stx| {
         let mut zk_state = stx
             .world
             .zk_assets()
@@ -176,16 +160,8 @@ fn seeded_zk_roots_state(
         let zk_assets = stx.world_mut_for_testing().zk_assets_mut_for_testing();
         zk_assets.remove(asset_def_id.clone());
         zk_assets.insert(asset_def_id.clone(), zk_state);
-        stx.apply();
-        block.transactions.insert_block(
-            BTreeSet::<
-                iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>,
-            >::new(),
-            nonzero!(1_usize),
-        );
-        let _ = block.commit();
-    }
-    let state = Arc::new(state);
+    });
+    let state = chain.state().clone();
     let roots_all = state
         .view()
         .world

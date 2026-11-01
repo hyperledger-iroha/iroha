@@ -54,7 +54,7 @@ macro_rules! built_in_wire_id_with_scope {
     not(test),
     allow(
         unused_macro_rules,
-        reason = "no instruction is added after the frozen baseline yet; the first addition uses the tolerant forms"
+        reason = "the only instruction added after the frozen baseline is a governance one; the first other addition uses the tolerant forms"
     )
 )]
 macro_rules! built_in_wire_id {
@@ -583,20 +583,29 @@ mod tests {
     }
 
     #[test]
-    fn the_baseline_inventory_is_strict_and_well_formed() {
-        // Every current entry belongs to the frozen baseline; a later addition registers
-        // tolerantly. Every wire ID satisfies the envelope wire-ID rule, so the release-independent
-        // framing check never refuses a registered instruction.
+    fn the_inventory_registers_as_declared_and_is_well_formed() {
+        // A baseline entry registers strictly and an addition's entry tolerantly
+        // (`instruction_wire_ids_match_v1_golden_inventory_hash` names the additions). Every wire
+        // ID satisfies the envelope wire-ID rule, so the release-independent framing check never
+        // refuses a registered instruction.
         let registry = register_all();
         for entry in ALL {
-            assert!(!entry.tolerant, "{}", entry.wire_id);
-            assert!(!registry.is_tolerant(entry.wire_id), "{}", entry.wire_id);
+            assert_eq!(
+                registry.is_tolerant(entry.wire_id),
+                entry.tolerant,
+                "{}",
+                entry.wire_id
+            );
             assert!(
                 crate::isi::is_well_formed_wire_id(entry.wire_id),
                 "{}",
                 entry.wire_id
             );
         }
-        assert!(super::super::built_in_instruction_schemas().all(|schema| !schema.tolerant));
+        assert!(
+            super::super::built_in_instruction_schemas()
+                .zip(ALL)
+                .all(|(schema, entry)| schema.tolerant == entry.tolerant)
+        );
     }
 }

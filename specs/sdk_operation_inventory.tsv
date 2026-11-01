@@ -514,6 +514,7 @@ operator.runtime.containment.list	GET	/v1/runtime/containments	operator	operator
 operator.runtime.release	GET	/v1/runtime/release	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.upgrade.attest	POST	/v1/runtime/upgrades/attest/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.upgrade.cancel	POST	/v1/runtime/upgrades/cancel/{id}	operator	operator_signature	operator	mutation	http	always	false	true	false	true
+operator.runtime.upgrade.draft	POST	/v1/runtime/upgrades/draft	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 operator.runtime.upgrade.list	GET	/v1/runtime/upgrades	operator	operator_signature	operator	read	http	always	false	true	false	true
 operator.runtime.upgrade.propose	POST	/v1/runtime/upgrades/propose	operator	operator_signature	operator	mutation	http	always	false	true	false	true
 pipeline.preflight	GET	/v1/pipeline/preflight	operator	operator_signature	operator	read	http	always	true	true	false	true

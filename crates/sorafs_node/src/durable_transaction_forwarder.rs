@@ -688,6 +688,15 @@ impl CheckpointWriterGuard {
             .map_err(|_| CheckpointStoreError::Io)
     }
 }
+impl Drop for CheckpointWriterGuard {
+    fn drop(&mut self) {
+        // The operating-system lock belongs to the open file description, which a child spawned
+        // concurrently by any thread shares until its exec closes inherited descriptors. Release
+        // exclusion with this guard, before its process registration, not with the last
+        // duplicate descriptor. Closing the file afterwards releases it even if this fails.
+        let _ = self._file.unlock();
+    }
+}
 struct CheckpointProcessGuard {
     path: PathBuf,
 }
@@ -1410,6 +1419,23 @@ mod tests {
         drop(first);
         drop(CheckpointWriterGuard::acquire(&alias).expect("released alias is reusable"));
         drop(CheckpointWriterGuard::acquire(&first_path).expect("released path is reusable"));
+    }
+    #[cfg(unix)]
+    #[test]
+    fn checkpoint_writer_exclusion_ends_with_its_guard_not_a_surviving_duplicate() {
+        let directory = state_tempdir().expect("temporary directory");
+        private_directory(directory.path());
+        let lock_path = directory.path().join("checkpoint.lock");
+        let guard = CheckpointWriterGuard::acquire(&lock_path).expect("first writer");
+        // A child spawned concurrently holds a duplicate of every descriptor until its exec
+        // closes them; this duplicate of the guard's own descriptor stands in for that child.
+        let duplicate = guard._file.try_clone().expect("duplicate lock descriptor");
+        drop(guard);
+        drop(
+            CheckpointWriterGuard::acquire(&lock_path)
+                .expect("writer exclusion ends with its guard, not with its last duplicate"),
+        );
+        drop(duplicate);
     }
     #[cfg(any(unix, windows))]
     #[test]

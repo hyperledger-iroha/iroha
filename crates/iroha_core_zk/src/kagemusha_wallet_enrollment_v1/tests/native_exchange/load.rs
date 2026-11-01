@@ -970,17 +970,23 @@ fn event_path_refuses_out_of_range_missing_and_noncanonical_padding() {
     odd[0] = *Hash::new(b"absent odd sibling").as_ref();
     assert!(event_path(3, 2, &odd).is_err());
 }
-#[test]
-fn exact_output_publication_replays_and_refuses_substitution() {
-    let root = qualification_root().join("genuine-load-output-tests");
-    fs::create_dir_all(&root).unwrap();
-    let temp = tempfile::tempdir_in(&root).unwrap();
+/// A fresh owner-only directory for one test. It shares no ancestor that another test
+/// creates or removes, and it does not require a prepared qualification output tree.
+fn private_test_root() -> (tempfile::TempDir, PathBuf) {
+    let temp = tempfile::tempdir().unwrap();
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
         fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
     }
-    let directory = PrivateDirectory::open_exact(temp.path()).unwrap();
+    // Private custody refuses symlinked ancestry such as the macOS `/var` alias.
+    let root = temp.path().canonicalize().unwrap();
+    (temp, root)
+}
+#[test]
+fn exact_output_publication_replays_and_refuses_substitution() {
+    let (_temp, root) = private_test_root();
+    let directory = PrivateDirectory::open_exact(&root).unwrap();
     put_exact(&directory, "receipt.norito", b"exact bounded DATA", 64);
     put_exact(&directory, "receipt.norito", b"exact bounded DATA", 64);
     assert!(
@@ -1000,21 +1006,14 @@ fn exact_output_publication_replays_and_refuses_substitution() {
 
 #[test]
 fn original_manifest_refuses_role_length_pin_and_duplicate_changes() {
-    let root = qualification_root().join("genuine-load-manifest-tests");
-    fs::create_dir_all(&root).unwrap();
-    let temp = tempfile::tempdir_in(&root).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(temp.path(), fs::Permissions::from_mode(0o700)).unwrap();
-    }
-    let directory = PrivateDirectory::open_exact(temp.path()).unwrap();
+    let (_temp, root) = private_test_root();
+    let directory = PrivateDirectory::open_exact(&root).unwrap();
     put_exact(&directory, "receipt.norito", b"exact", 64);
     let row = norito::json!({"name":"receipt.norito","bytes":5,"sha256":(sha(b"exact"))});
     let manifest = norito::json!({"originals":(vec![row.clone()])});
     let names = shape(&[("receipt.norito", 64)]);
     assert_eq!(
-        originals(temp.path(), &manifest, "originals", &names)["receipt.norito"],
+        originals(&root, &manifest, "originals", &names)["receipt.norito"],
         b"exact"
     );
     for (field, value) in [
@@ -1027,14 +1026,12 @@ fn original_manifest_refuses_role_length_pin_and_duplicate_changes() {
         altered.as_object_mut().unwrap().insert(field.into(), value);
         let value = norito::json!({"originals":(vec![altered])});
         assert!(
-            std::panic::catch_unwind(|| originals(temp.path(), &value, "originals", &names))
-                .is_err()
+            std::panic::catch_unwind(|| originals(&root, &value, "originals", &names)).is_err()
         );
     }
     let duplicate = norito::json!({"originals":(vec![row.clone(),row])});
     let twice = shape(&[("receipt.norito", 64), ("other.norito", 64)]);
     assert!(
-        std::panic::catch_unwind(|| originals(temp.path(), &duplicate, "originals", &twice))
-            .is_err()
+        std::panic::catch_unwind(|| originals(&root, &duplicate, "originals", &twice)).is_err()
     );
 }
