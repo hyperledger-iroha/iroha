@@ -592,7 +592,8 @@ install both verifying keys in genesis and select them in its `zk_validity_polic
 default executor refuses post-genesis key registration, even with `CanManageVerifyingKeys`.
 A private action proves against the call's current roster, so if the call changes first the
 CLI proves again. A proof that goes stale before it is submitted costs nothing. A submission
-the ledger rejects as stale is still charged its full fee, and the CLI stops after three.
+the ledger rejects as stale is still charged its full fee, and the CLI stops after three and
+says so. The action has then not taken effect, and running the same command tries it again.
 
 See `scripts/kaigi_demo.sh` for a complete call against a disposable local network.
 
