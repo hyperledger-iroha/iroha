@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **1149** · Unique variables: **285**
+Total references: **1155** · Unique variables: **285**
 
 ## ADVICE_SCHEDULE (test: 1)
 
@@ -1090,18 +1090,22 @@ Total references: **1149** · Unique variables: **285**
 
 - test: crates/iroha_plonk_gadgets/src/p256/tests.rs — `let root = std::env::var_os("IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT").map_or_else(`
 
-## IROHA_LISTENER_TEST_DIRECTORY (test: 2)
+## IROHA_LISTENER_TEST_DIRECTORY (test: 4)
 
 - test: crates/iroha_deploy/src/managed/listeners.rs — `let path = std::env::var_os("IROHA_LISTENER_TEST_DIRECTORY").unwrap();`
 - test: crates/iroha_deploy/src/managed/listeners.rs — `let directory = std::env::var_os("IROHA_LISTENER_TEST_DIRECTORY").unwrap();`
+- test: crates/iroha_managed_ipc/src/listeners.rs — `let path = std::env::var_os("IROHA_LISTENER_TEST_DIRECTORY").unwrap();`
+- test: crates/iroha_managed_ipc/src/listeners.rs — `let directory = std::env::var_os("IROHA_LISTENER_TEST_DIRECTORY").unwrap();`
 
-## IROHA_LISTENER_TEST_P2P (test: 1)
+## IROHA_LISTENER_TEST_P2P (test: 2)
 
 - test: crates/iroha_deploy/src/managed/listeners.rs — `let p2p = std::env::var("IROHA_LISTENER_TEST_P2P")`
+- test: crates/iroha_managed_ipc/src/listeners.rs — `let p2p = std::env::var("IROHA_LISTENER_TEST_P2P")`
 
-## IROHA_LISTENER_TEST_TORII (test: 1)
+## IROHA_LISTENER_TEST_TORII (test: 2)
 
 - test: crates/iroha_deploy/src/managed/listeners.rs — `let torii = std::env::var("IROHA_LISTENER_TEST_TORII")`
+- test: crates/iroha_managed_ipc/src/listeners.rs — `let torii = std::env::var("IROHA_LISTENER_TEST_TORII")`
 
 ## IROHA_METRICS_PANIC_ON_DUPLICATE (debug: 1, test: 1)
 
@@ -1251,11 +1255,12 @@ Total references: **1149** · Unique variables: **285**
 
 - test: crates/iroha_deploy/src/managed/attachment_installed_tests.rs — `std::env::var("IROHA_TEST_INGRESS_LIFETIME_CHILD").as_deref(),`
 
-## IROHA_TEST_NETWORK_PARALLELISM (test: 3)
+## IROHA_TEST_NETWORK_PARALLELISM (test: 4)
 
 - test: integration_tests/tests/address_canonicalisation.rs — `if let Ok(raw) = env::var("IROHA_TEST_NETWORK_PARALLELISM")`
 - test: integration_tests/tests/native_amx_network/rotation.rs — `std::env::var("IROHA_TEST_NETWORK_PARALLELISM")`
 - test: integration_tests/tests/support/native_amx_harness.rs — `let permits = std::env::var("IROHA_TEST_NETWORK_PARALLELISM")`
+- test: integration_tests/tests/tides_independent_roots.rs — `let permits = std::env::var("IROHA_TEST_NETWORK_PARALLELISM")`
 
 ## IROHA_TEST_PREBUILD_DEFAULT_EXECUTOR (build: 1, test: 1)
 
@@ -1285,12 +1290,13 @@ Total references: **1149** · Unique variables: **285**
 - test: crates/iroha_deploy/src/managed/installed_tests.rs — `std::env::var_os("IROHA_TEST_RUNTIME_DIRECTORY")`
 - test: crates/iroha_deploy/src/managed/installed_tests.rs — `std::env::var_os("IROHA_TEST_RUNTIME_DIRECTORY")`
 
-## IROHA_TEST_SERIALIZE_NETWORKS (test: 4)
+## IROHA_TEST_SERIALIZE_NETWORKS (test: 5)
 
 - test: integration_tests/tests/address_canonicalisation.rs — `if let Ok(raw) = env::var("IROHA_TEST_SERIALIZE_NETWORKS")`
 - test: integration_tests/tests/asset.rs — `if std::env::var_os("IROHA_TEST_SERIALIZE_NETWORKS").is_none() {`
 - test: integration_tests/tests/native_amx_network/rotation.rs — `&& std::env::var_os("IROHA_TEST_SERIALIZE_NETWORKS").is_none(),`
 - test: integration_tests/tests/support/native_amx_harness.rs — `permits >= 3 && std::env::var_os("IROHA_TEST_SERIALIZE_NETWORKS").is_none(),`
+- test: integration_tests/tests/tides_independent_roots.rs — `permits >= 2 && std::env::var_os("IROHA_TEST_SERIALIZE_NETWORKS").is_none(),`
 
 ## IROHA_TEST_SKIP_BUILD (test: 2)
 

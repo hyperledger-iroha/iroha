@@ -9,12 +9,17 @@ impl Connection {
                 .map_err(std::io::Error::from)?
                 .pid
                 .as_raw_nonzero()
-                .get() as u32)
+                .get()
+                .cast_unsigned())
         }
         #[cfg(target_os = "macos")]
         {
             use std::os::fd::AsRawFd as _;
             let mut pid: libc::pid_t = 0;
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "the four bytes of pid_t always fit socklen_t"
+            )]
             let mut length = std::mem::size_of_val(&pid) as libc::socklen_t;
             #[allow(
                 unsafe_code,
@@ -35,7 +40,7 @@ impl Connection {
             if length as usize != std::mem::size_of_val(&pid) || pid <= 0 {
                 return Err(Error::Invalid("managed Unix peer PID is invalid".into()));
             }
-            Ok(pid as u32)
+            Ok(pid.cast_unsigned())
         }
         #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
         Err(Error::Invalid(
@@ -190,6 +195,10 @@ fn validate_tcp_listener(listener: &std::net::TcpListener) -> Result<()> {
         // Only the first u_int8_t, tcpi_state, is needed. Read its documented prefix
         // directly: libc's full record expands C bitfields and differs from Darwin's ABI.
         let mut state = 0_u8;
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the one byte of the TCP state prefix always fits socklen_t"
+        )]
         let mut length = std::mem::size_of_val(&state) as libc::socklen_t;
         #[allow(
             unsafe_code,
@@ -376,7 +385,6 @@ mod listener_handoff_tests {
             .unwrap(),
             1
         );
-        drop(ancillary);
         drop(descriptors);
         drop(originals);
         assert!(receiver.receive_tcp_listeners(8).is_err());

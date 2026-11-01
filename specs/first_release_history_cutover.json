@@ -850,7 +850,7 @@
           "mention": "capture_native_checkpoint_fixtures",
           "checked_by": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
           "check_mention": "tracked_native_checkpoint_fixtures_are_the_current_exporter_output",
-          "note": "The check compares the two tracked frames with the exporter's output of the current tree and with the sizes and digests `capture.json` lists for them. The `generator` block of `capture.json` describes the 2026-10-12 capture of the sole CertifiedResultV1 X || body envelope and SHA-256 allowlisted-preimage/DST_SIG consensus suite: its source and executable digests identify that capture, not subsequent source edits. Two explicit exporter invocations produced identical fixture bytes; this execution-root and consensus-suite change requires fresh genesis."
+          "note": "The check compares the two tracked frames with the exporter's output of the current tree and with the sizes and digests `capture.json` lists for them. The `generator` block of `capture.json` describes the capture that produced those frames: its source and executable digests identify that capture, not subsequent source edits. Two explicit exporter invocations produced identical fixture bytes; this execution-root and consensus-suite change requires fresh genesis."
         },
         {
           "artifact": "specs/sumeragi.md",

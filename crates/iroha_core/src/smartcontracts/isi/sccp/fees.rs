@@ -72,7 +72,9 @@ pub(crate) fn exempt_class_from(
         return payload
             .creation_time_ms
             .checked_add(1)
-            .filter(|time| super::keepalive::due_from(source, 0, *time) == Ok(true))
+            .filter(|time| {
+                super::keepalive::due_from(source, committed_time_ms, 0, *time) == Ok(true)
+            })
             .map(|_| SccpExemptClassV1::Keepalive);
     }
     source.parameters()?;

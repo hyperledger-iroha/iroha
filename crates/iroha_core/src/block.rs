@@ -5878,7 +5878,14 @@ pub(crate) mod valid {
             if keepalives != 0 {
                 let time_ms = u64::try_from(block.header().creation_time().as_millis())
                     .map_err(|_| Self::execution_context_error("Keepalive block time overflow"))?;
-                match keepalive::due_from(&parent, block.header().height().get(), time_ms) {
+                match keepalive::due_from(
+                    &parent,
+                    state_block
+                        .native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
+                    block.header().height().get(),
+                    time_ms,
+                ) {
                     Ok(true) => {}
                     Ok(false) => {
                         return Err(Self::execution_context_error("KeepaliveNotDue"));

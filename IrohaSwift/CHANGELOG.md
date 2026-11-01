@@ -4,6 +4,16 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-31: The privacy capability manifest decoder follows the current Core layout:
+  `PrivacyConsensusLimitsV1.privateSettlement` carries the new `PrivateSettlementValidityLimitsV1`
+  admission contract and `PrivacyProtocolLimitsUpdateV1.privateSettlementDrainBlocks` the pending
+  relation-closure horizon. A pending consensus update may change only that contract, and the
+  retired ten-field limit record is rejected.
+
+- 2026-10-31: `ToriiParliamentAPIV1` layout tables state Core's actual Norito and event-kind
+  indices: the rows after `EndorsePublicFinding` keep the sparse numbers that the retired timed-OVN
+  transitions and no-result kinds still occupy in the codec.
+
 - 2026-10-30: `proposeRuntimeUpgrade(changeSet:provenance:)` posts `{change_set, provenance}`:
   the change set and the trusted release signers' `ToriiRuntimeChangeSetEndorsement`s the
   committed `runtime_provenance_policy_v1` requires (none for a root without that policy).

@@ -1,0 +1,206 @@
+// Native prototype fixture, not the complete Tides ruleset.
+// All gameplay arithmetic executes as compiled IVM bytecode.
+seiyaku TidesTwoPartitionFixture {
+    import permission "CanEnactGovernance" as CanEnactGovernance;
+    error enum Failure { AlreadyTransferred = 1, MissingSource = 2, OccupiedDestination = 3, ForcedRollback = 4 }
+    state int a_tick;
+    state int a_stock;
+    state int a_deposit;
+    state int a_cargo;
+    state int a_upkeep_spent;
+    state int a_budget;
+    state int a_worker_phase;
+    state int a_unit_hp;
+    state int a_unit_x;
+    state int a_guard_hp;
+    state int a_base_hp;
+    state int a_capture_hold;
+    state int a_owner;
+    state int a_bond;
+    state int a_capture_paid;
+    state int a_unit_present;
+    state int b_tick;
+    state int b_stock;
+    state int b_deposit;
+    state int b_cargo;
+    state int b_upkeep_spent;
+    state int b_budget;
+    state int b_worker_phase;
+    state int b_unit_hp;
+    state int b_unit_x;
+    state int b_guard_hp;
+    state int b_base_hp;
+    state int b_capture_hold;
+    state int b_owner;
+    state int b_bond;
+    state int b_capture_paid;
+    state int b_unit_present;
+    state int transfer_nonce;
+
+    hajimari() {
+        a_tick = 0;
+        a_stock = 100;
+        a_deposit = 1000;
+        a_cargo = 0;
+        a_upkeep_spent = 0;
+        a_budget = 128;
+        a_worker_phase = 0;
+        a_unit_hp = 100;
+        a_unit_x = 0;
+        a_guard_hp = 12;
+        a_base_hp = 16;
+        a_capture_hold = 0;
+        a_owner = 0;
+        a_bond = 100;
+        a_capture_paid = 0;
+        a_unit_present = 1;
+        b_tick = 0;
+        b_stock = 100;
+        b_deposit = 1000;
+        b_cargo = 0;
+        b_upkeep_spent = 0;
+        b_budget = 128;
+        b_worker_phase = 0;
+        b_unit_hp = 0;
+        b_unit_x = 0;
+        b_guard_hp = 12;
+        b_base_hp = 16;
+        b_capture_hold = 0;
+        b_owner = 0;
+        b_bond = 100;
+        b_capture_paid = 0;
+        b_unit_present = 0;
+        transfer_nonce = 0;
+    }
+
+    kotoage fn advance_a() authorize(CanEnactGovernance) {
+        if a_budget > 0 {
+            a_budget = a_budget - 1;
+            a_tick = a_tick + 1;
+            a_worker_phase = (a_worker_phase + 1) % 4;
+            if a_worker_phase == 2 {
+                let load = if a_deposit < 4 { a_deposit } else { 4 };
+                a_deposit = a_deposit - load;
+                a_cargo = a_cargo + load;
+            }
+            if a_worker_phase == 0 {
+                let space = 1000 - a_stock;
+                let delivered = if a_cargo < space { a_cargo } else { space };
+                a_stock = a_stock + delivered;
+                a_cargo = a_cargo - delivered;
+            }
+            if a_stock > 0 {
+                a_stock = a_stock - 1;
+                a_upkeep_spent = a_upkeep_spent + 1;
+            }
+            if a_unit_present == 1 && a_unit_hp > 0 {
+                if a_unit_x < 16 { a_unit_x = a_unit_x + 2; }
+                if a_unit_x >= 16 {
+                    let old_guard = a_guard_hp;
+                    let old_unit = a_unit_hp;
+                    if old_guard > 0 && old_unit > 0 {
+                        a_guard_hp = if old_guard > 4 { old_guard - 4 } else { 0 };
+                        a_unit_hp = old_unit - 1;
+                    }
+                    if old_guard == 0 && old_unit > 0 {
+                        a_base_hp = if a_base_hp > 4 { a_base_hp - 4 } else { 0 };
+                    }
+                }
+            }
+            if a_unit_present == 1 && a_unit_hp > 0 && a_guard_hp == 0 && a_base_hp == 0 && a_stock > 0 && a_owner == 0 {
+                a_capture_hold = a_capture_hold + 2;
+                if a_capture_hold >= 60 {
+                    let captured = a_bond / 5;
+                    a_bond = a_bond - captured;
+                    a_capture_paid = a_capture_paid + captured;
+                    a_owner = 1;
+                }
+            } else {
+                if a_owner == 0 { a_capture_hold = 0; }
+            }
+        }
+    }
+
+    kotoage fn advance_b() authorize(CanEnactGovernance) {
+        if b_budget > 0 {
+            b_budget = b_budget - 1;
+            b_tick = b_tick + 1;
+            b_worker_phase = (b_worker_phase + 1) % 4;
+            if b_worker_phase == 2 {
+                let load = if b_deposit < 4 { b_deposit } else { 4 };
+                b_deposit = b_deposit - load;
+                b_cargo = b_cargo + load;
+            }
+            if b_worker_phase == 0 {
+                let space = 1000 - b_stock;
+                let delivered = if b_cargo < space { b_cargo } else { space };
+                b_stock = b_stock + delivered;
+                b_cargo = b_cargo - delivered;
+            }
+            if b_stock > 0 {
+                b_stock = b_stock - 1;
+                b_upkeep_spent = b_upkeep_spent + 1;
+            }
+            if b_unit_present == 1 && b_unit_hp > 0 {
+                if b_unit_x < 16 { b_unit_x = b_unit_x + 2; }
+                if b_unit_x >= 16 {
+                    let old_guard = b_guard_hp;
+                    let old_unit = b_unit_hp;
+                    if old_guard > 0 && old_unit > 0 {
+                        b_guard_hp = if old_guard > 4 { old_guard - 4 } else { 0 };
+                        b_unit_hp = old_unit - 1;
+                    }
+                    if old_guard == 0 && old_unit > 0 {
+                        b_base_hp = if b_base_hp > 4 { b_base_hp - 4 } else { 0 };
+                    }
+                }
+            }
+            if b_unit_present == 1 && b_unit_hp > 0 && b_guard_hp == 0 && b_base_hp == 0 && b_stock > 0 && b_owner == 0 {
+                b_capture_hold = b_capture_hold + 2;
+                if b_capture_hold >= 60 {
+                    let captured = b_bond / 5;
+                    b_bond = b_bond - captured;
+                    b_capture_paid = b_capture_paid + captured;
+                    b_owner = 1;
+                }
+            } else {
+                if b_owner == 0 { b_capture_hold = 0; }
+            }
+        }
+    }
+
+    // Both legs are one IVM invocation: no standalone import can mint a unit.
+    kotoage fn transfer_a_to_b() authorize(CanEnactGovernance) {
+        require(transfer_nonce == 0, Failure::AlreadyTransferred);
+        require(a_unit_present == 1 && a_unit_hp > 0, Failure::MissingSource);
+        a_unit_present = 0;
+        require(b_unit_present == 0, Failure::OccupiedDestination);
+        b_unit_present = 1;
+        b_unit_hp = a_unit_hp;
+        b_unit_x = 0;
+        a_unit_hp = 0;
+        transfer_nonce = 1;
+    }
+
+    // An intentional post-debit fault exercises native transaction rollback.
+    kotoage fn reject_transfer_a_to_b() authorize(CanEnactGovernance) {
+        require(a_unit_present == 1, Failure::MissingSource);
+        a_unit_present = 0;
+        require(transfer_nonce == -1, Failure::ForcedRollback);
+        b_unit_present = 1;
+    }
+
+    view fn a_tick_value() authorize(anyone) -> int { return a_tick; }
+    view fn b_tick_value() authorize(anyone) -> int { return b_tick; }
+    view fn a_stock_value() authorize(anyone) -> int { return a_stock; }
+    view fn b_stock_value() authorize(anyone) -> int { return b_stock; }
+    view fn a_budget_value() authorize(anyone) -> int { return a_budget; }
+    view fn b_budget_value() authorize(anyone) -> int { return b_budget; }
+    view fn a_unit_present_value() authorize(anyone) -> int { return a_unit_present; }
+    view fn b_unit_present_value() authorize(anyone) -> int { return b_unit_present; }
+    view fn a_owner_value() authorize(anyone) -> int { return a_owner; }
+    view fn b_owner_value() authorize(anyone) -> int { return b_owner; }
+    view fn a_capture_paid_value() authorize(anyone) -> int { return a_capture_paid; }
+    view fn b_capture_paid_value() authorize(anyone) -> int { return b_capture_paid; }
+    view fn transfer_nonce_value() authorize(anyone) -> int { return transfer_nonce; }
+}

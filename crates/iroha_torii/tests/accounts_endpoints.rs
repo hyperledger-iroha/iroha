@@ -12,6 +12,7 @@ mod fixtures;
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // test builds complex state; splitting would reduce clarity
 async fn accounts_endpoints_exist() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let domain_id: iroha_model_base::domain::DomainId =
         DomainId::try_new("wonderland", "universal").expect("domain id");
@@ -26,7 +27,7 @@ async fn accounts_endpoints_exist() {
     let resp = fixtures::request(
         &app,
         Request::builder()
-            .uri("/v1/accounts?offset=0")
+            .uri("/v1/accounts?limit=10")
             .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
             .body(axum::body::Body::empty())
             .unwrap(),
@@ -60,7 +61,7 @@ async fn accounts_endpoints_exist() {
         &app,
         Request::builder()
             .uri(format!(
-                "/v1/accounts/{canonical_account}/permissions?offset=0"
+                "/v1/accounts/{canonical_account}/permissions?limit=10"
             ))
             .extension(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))))
             .body(axum::body::Body::empty())

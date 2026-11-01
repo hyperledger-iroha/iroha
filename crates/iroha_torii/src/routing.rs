@@ -30299,8 +30299,15 @@ fn por_coordinator_error(err: PorCoordinatorError) -> Error {
         PorCoordinatorError::UnknownChallenge { .. } => Error::Query(
             iroha_data_model::ValidationFail::QueryFailed(QueryExecutionFail::NotFound),
         ),
-        internal @ (PorCoordinatorError::AuthoritativeProjectionUnavailable
-        | PorCoordinatorError::InvalidAuthoritativeProjection(_)
+        // PoR being disabled, or a projection awaiting restart reconciliation, is a node state
+        // rather than a server fault. Reads stay closed either way.
+        unavailable @ PorCoordinatorError::AuthoritativeProjectionUnavailable => {
+            Error::AppServiceUnavailable {
+                code: "sorafs_por_authority_unavailable",
+                message: unavailable.to_string(),
+            }
+        }
+        internal @ (PorCoordinatorError::InvalidAuthoritativeProjection(_)
         | PorCoordinatorError::RetentionExhausted { .. }
         | PorCoordinatorError::StatusGenerationExhausted
         | PorCoordinatorError::StatusIndexCorrupt { .. }
@@ -32036,6 +32043,15 @@ mod sorafs_capacity_tests {
                 "internal error omitted persistence context: {message}"
             );
         }
+    }
+    routing_test! { sync por_absent_authority_is_service_unavailable
+        let Error::AppServiceUnavailable { code, message } =
+            por_coordinator_error(PorCoordinatorError::AuthoritativeProjectionUnavailable)
+        else {
+            panic!("absent PoR authority must use the service-unavailable response");
+        };
+        assert_eq!(code, "sorafs_por_authority_unavailable");
+        assert_eq!(message, "authoritative PoR status projection is unavailable");
     }
     #[test]
     #[cfg(feature = "app_api")]

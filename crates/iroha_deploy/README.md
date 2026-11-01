@@ -51,6 +51,8 @@ What exists so far:
   transferring each pair only to its owned child after kernel process-identity checks.
   Receivers verify the exact configured addresses before acknowledging adoption. Starting
   a stopped generation reacquires its original endpoints and fails if they are occupied.
+  `iroha_managed_ipc` owns this handoff and its local transport, so a validator adopts its
+  sockets without linking this crate.
   Binary verification, worker loading, activation and Ready publication share the original
   startup budget. A same-boot continuous deadline includes suspend across the handoff;
   clock failures refuse startup. Selection preparation, including fresh generation validation,

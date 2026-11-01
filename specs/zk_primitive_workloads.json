@@ -6521,6 +6521,7 @@
    "crates/iroha_js_codec#other": ["blake2b", "iroha-hash", "sha2-256"],
    "crates/iroha_js_host#other": ["blake2b", "iroha-hash"],
    "crates/iroha_kagami#other": ["blake3", "iroha-hash", "sha2-256"],
+   "crates/iroha_managed_ipc#other": ["blake3"],
    "crates/iroha_measurement#other": ["sha2-256"],
    "crates/iroha_model_base#other": ["iroha-hash", "sha2-256"],
    "crates/iroha_musubi_service#other": ["blake3", "iroha-hash", "sha2-256"],

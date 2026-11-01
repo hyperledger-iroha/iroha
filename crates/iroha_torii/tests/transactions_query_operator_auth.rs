@@ -27,6 +27,7 @@ fn query_request(path: &'static str, body: Vec<u8>) -> Request<Body> {
 
 #[tokio::test]
 async fn dataspace_transaction_query_accepts_signed_and_anonymous_public_readers() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id).build(&ALICE_ID);

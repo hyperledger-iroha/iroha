@@ -30,6 +30,9 @@ private val CONSENSUS_LIMIT_MAXIMA_V1 = linkedMapOf(
     "max_commitments_per_action" to 8,
     "retained_root_count" to 2048,
 )
+private val PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1 = BigInteger.valueOf(8L * 1024 * 1024)
+private val PRIVATE_SETTLEMENT_MAX_CAPSULE_BYTES_V1 = BigInteger.valueOf(16L * 1024 * 1024)
+private val PRIVATE_SETTLEMENT_MAX_CARRIER_BYTES_V1 = BigInteger.valueOf(4L * 1024 * 1024)
 
 internal data class PrivacyProtocolLimitRuleV1(
     val name: String,
@@ -86,6 +89,74 @@ class PrivacyFixed32V1(bytes: ByteArray) {
     override fun toString(): String = value.joinToString("") { "%02x".format(it.toInt() and 0xff) }
 }
 
+/**
+ * Committed admission contract for the fixed native private-payment relation.
+ *
+ * This checks the contract's own bounds. The native validator that runs first also decides whether
+ * each selected padding class can hold its complete minimum-auditor capsule.
+ */
+class PrivateSettlementValidityLimitsV1(
+    @JvmField val maxParticipants: Int,
+    @JvmField val maxExpiryBlocks: BigInteger,
+    @JvmField val auditTimeoutBlocks: BigInteger,
+    @JvmField val prepareTimeoutBlocks: BigInteger,
+    @JvmField val commitTimeoutBlocks: BigInteger,
+    @JvmField val capsulePaddingClasses: Int,
+    @JvmField val maxProofBytes: BigInteger,
+    @JvmField val maxCapsuleBytes: BigInteger,
+    @JvmField val maxCarrierBytes: BigInteger,
+    @JvmField val sidecarRetentionBlocks: BigInteger,
+    @JvmField val minAuditorApprovals: Int,
+) {
+    init {
+        require(maxParticipants in 2..255) { "private-settlement max participants is outside 2..255" }
+        require(capsulePaddingClasses in 1..0b1111) { "private-settlement padding selection is invalid" }
+        require(minAuditorApprovals in 1..32) { "private-settlement min auditor approvals is outside 1..32" }
+        requirePrivateSettlementLimitV1(maxExpiryBlocks, U64_MAX, "max expiry blocks")
+        requirePrivateSettlementLimitV1(auditTimeoutBlocks, U64_MAX, "audit timeout blocks")
+        requirePrivateSettlementLimitV1(prepareTimeoutBlocks, U64_MAX, "prepare timeout blocks")
+        requirePrivateSettlementLimitV1(commitTimeoutBlocks, U64_MAX, "commit timeout blocks")
+        requirePrivateSettlementLimitV1(maxProofBytes, PRIVATE_SETTLEMENT_MAX_PROOF_BYTES_V1, "max proof bytes")
+        requirePrivateSettlementLimitV1(maxCapsuleBytes, PRIVATE_SETTLEMENT_MAX_CAPSULE_BYTES_V1, "max capsule bytes")
+        requirePrivateSettlementLimitV1(maxCarrierBytes, PRIVATE_SETTLEMENT_MAX_CARRIER_BYTES_V1, "max carrier bytes")
+        requirePrivateSettlementLimitV1(sidecarRetentionBlocks, U64_MAX, "sidecar retention blocks")
+        require(auditTimeoutBlocks.add(prepareTimeoutBlocks).add(commitTimeoutBlocks) <= maxExpiryBlocks) {
+            "private-settlement phase durations exceed the expiry span"
+        }
+        require(sidecarRetentionBlocks >= maxExpiryBlocks) {
+            "private-settlement retention is shorter than its expiry span"
+        }
+    }
+
+    override fun equals(other: Any?): Boolean =
+        other is PrivateSettlementValidityLimitsV1 &&
+            maxParticipants == other.maxParticipants &&
+            maxExpiryBlocks == other.maxExpiryBlocks &&
+            auditTimeoutBlocks == other.auditTimeoutBlocks &&
+            prepareTimeoutBlocks == other.prepareTimeoutBlocks &&
+            commitTimeoutBlocks == other.commitTimeoutBlocks &&
+            capsulePaddingClasses == other.capsulePaddingClasses &&
+            maxProofBytes == other.maxProofBytes &&
+            maxCapsuleBytes == other.maxCapsuleBytes &&
+            maxCarrierBytes == other.maxCarrierBytes &&
+            sidecarRetentionBlocks == other.sidecarRetentionBlocks &&
+            minAuditorApprovals == other.minAuditorApprovals
+
+    override fun hashCode(): Int {
+        var result = maxParticipants
+        result = 31 * result + maxExpiryBlocks.hashCode()
+        result = 31 * result + auditTimeoutBlocks.hashCode()
+        result = 31 * result + prepareTimeoutBlocks.hashCode()
+        result = 31 * result + commitTimeoutBlocks.hashCode()
+        result = 31 * result + capsulePaddingClasses
+        result = 31 * result + maxProofBytes.hashCode()
+        result = 31 * result + maxCapsuleBytes.hashCode()
+        result = 31 * result + maxCarrierBytes.hashCode()
+        result = 31 * result + sidecarRetentionBlocks.hashCode()
+        return 31 * result + minAuditorApprovals
+    }
+}
+
 /** Chain-wide first-release admission limits. */
 class PrivacyConsensusLimitsV1(
     @JvmField val maxActionsPerTransaction: Int,
@@ -98,6 +169,7 @@ class PrivacyConsensusLimitsV1(
     @JvmField val maxNullifiersPerAction: Int,
     @JvmField val maxCommitmentsPerAction: Int,
     @JvmField val retainedRootCount: Int,
+    @JvmField val privateSettlement: PrivateSettlementValidityLimitsV1,
 ) {
     init {
         requireValidPrivacyConsensusLimitsV1(this)
@@ -115,7 +187,8 @@ class PrivacyConsensusLimitsV1(
             other.maxStatementAndEncryptedOutputBytesPerTransaction &&
             maxNullifiersPerAction == other.maxNullifiersPerAction &&
             maxCommitmentsPerAction == other.maxCommitmentsPerAction &&
-            retainedRootCount == other.retainedRootCount
+            retainedRootCount == other.retainedRootCount &&
+            privateSettlement == other.privateSettlement
 
     override fun hashCode(): Int {
         var result = maxActionsPerTransaction
@@ -127,7 +200,8 @@ class PrivacyConsensusLimitsV1(
         result = 31 * result + maxStatementAndEncryptedOutputBytesPerTransaction
         result = 31 * result + maxNullifiersPerAction
         result = 31 * result + maxCommitmentsPerAction
-        return 31 * result + retainedRootCount
+        result = 31 * result + retainedRootCount
+        return 31 * result + privateSettlement.hashCode()
     }
 }
 
@@ -416,6 +490,8 @@ class PrivacyProtocolLimitsUpdateV1(
     @JvmField val scheduledAtHeight: BigInteger,
     @JvmField val effectiveAtHeight: BigInteger,
     @JvmField val nextLimits: PrivacyProtocolLimitsV1,
+    /** Original private-payment expiry horizon when this schedule closes the native relation. */
+    @JvmField val privateSettlementDrainBlocks: BigInteger?,
 ) {
     init {
         requireValidPrivacyPolicyScheduleV1(
@@ -423,18 +499,23 @@ class PrivacyProtocolLimitsUpdateV1(
             effectiveAtHeight,
             "privacy protocol-limit update",
         )
+        privateSettlementDrainBlocks?.let {
+            requirePrivateSettlementLimitV1(it, U64_MAX, "relation-closure drain blocks")
+        }
     }
 
     override fun equals(other: Any?): Boolean =
         other is PrivacyProtocolLimitsUpdateV1 &&
             scheduledAtHeight == other.scheduledAtHeight &&
             effectiveAtHeight == other.effectiveAtHeight &&
-            nextLimits == other.nextLimits
+            nextLimits == other.nextLimits &&
+            privateSettlementDrainBlocks == other.privateSettlementDrainBlocks
 
     override fun hashCode(): Int {
         var result = scheduledAtHeight.hashCode()
         result = 31 * result + effectiveAtHeight.hashCode()
-        return 31 * result + nextLimits.hashCode()
+        result = 31 * result + nextLimits.hashCode()
+        return 31 * result + (privateSettlementDrainBlocks?.hashCode() ?: 0)
     }
 }
 
@@ -463,6 +544,12 @@ class PrivacyProtocolPolicyV1(
         var result = protocolId.hashCode()
         result = 31 * result + currentLimits.hashCode()
         return 31 * result + (pendingUpdate?.hashCode() ?: 0)
+    }
+}
+
+private fun requirePrivateSettlementLimitV1(value: BigInteger, maximum: BigInteger, name: String) {
+    require(value.signum() > 0 && value <= maximum) {
+        "private-settlement $name is outside its native range"
     }
 }
 

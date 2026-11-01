@@ -516,7 +516,10 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
                 "$path.execution_mode",
             ),
         )
-        val featureMask = uint32(row["privacy_feature_mask"], "$path.privacy_feature_mask")
+        val featureMask = uint32(
+            tupleField(row["privacy_feature_mask"], "$path.privacy_feature_mask"),
+            "$path.privacy_feature_mask",
+        )
         require(featureMask <= 0xff) { "$path.privacy_feature_mask must fit uint8" }
         val compiled = parseCompiledProfile(row["compiled_profile"], protocol, "$path.compiled_profile")
         val readiness = parseReadiness(row["readiness"], "$path.readiness")
@@ -737,6 +740,29 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
             field("max_nullifiers_per_action"),
             field("max_commitments_per_action"),
             field("retained_root_count"),
+            parsePrivateSettlementLimits(limits["private_settlement"], "$path.private_settlement"),
+        )
+    }
+
+    private fun parsePrivateSettlementLimits(
+        value: Any?,
+        path: String,
+    ): PrivateSettlementValidityLimitsV1 {
+        val limits = exactObject(value, PRIVATE_SETTLEMENT_LIMIT_KEYS, path)
+        fun narrow(name: String): Int = uint32(limits[name], "$path.$name")
+        fun wide(name: String): BigInteger = uint64(limits[name], "$path.$name")
+        return PrivateSettlementValidityLimitsV1(
+            narrow("max_participants"),
+            wide("max_expiry_blocks"),
+            wide("audit_timeout_blocks"),
+            wide("prepare_timeout_blocks"),
+            wide("commit_timeout_blocks"),
+            narrow("capsule_padding_classes"),
+            wide("max_proof_bytes"),
+            wide("max_capsule_bytes"),
+            wide("max_carrier_bytes"),
+            wide("sidecar_retention_blocks"),
+            narrow("min_auditor_approvals"),
         )
     }
 
@@ -754,7 +780,14 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         val pending = policy["pending_update"]?.let { candidate ->
             val pendingPath = "$path.pending_update"
             val update = exactObject(
-                candidate, setOf("scheduled_at_height", "effective_at_height", "next_limits"), pendingPath,
+                candidate,
+                setOf(
+                    "scheduled_at_height",
+                    "effective_at_height",
+                    "next_limits",
+                    "private_settlement_drain_blocks",
+                ),
+                pendingPath,
             )
             val scheduled = integer(update["scheduled_at_height"], "$pendingPath.scheduled_at_height")
             val effective = integer(update["effective_at_height"], "$pendingPath.effective_at_height")
@@ -762,6 +795,9 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
             PrivacyProtocolLimitsUpdateV1(
                 scheduled, effective,
                 parseProtocolLimits(update["next_limits"], protocol, "$pendingPath.next_limits"),
+                update["private_settlement_drain_blocks"]?.let {
+                    positiveUint64(it, "$pendingPath.private_settlement_drain_blocks")
+                },
             )
         }
         return PrivacyProtocolPolicyV1(protocol, current, pending)
@@ -790,7 +826,17 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
     }
 
     private fun fixed32(value: Any?, path: String): PrivacyFixed32V1 {
-        return PrivacyFixed32V1(fixedBytes(value, 32, path))
+        return PrivacyFixed32V1(fixedBytes(tupleField(value, path), 32, path))
+    }
+
+    /**
+     * Core's Norito JSON writes a one-field tuple struct as a one-element array, so digests and the
+     * feature mask arrive as `[value]`. The parsed model exposes the inner value.
+     */
+    private fun tupleField(value: Any?, path: String): Any? {
+        val fields = list(value, path)
+        require(fields.size == 1) { "$path must be a one-element tuple-struct array" }
+        return fields[0]
     }
 
     private fun fixedBytes(value: Any?, size: Int, path: String): ByteArray {
@@ -866,6 +912,20 @@ internal object PrivacyExact12CapabilityManifestInspectionV1 {
         "max_nullifiers_per_action",
         "max_commitments_per_action",
         "retained_root_count",
+        "private_settlement",
+    )
+    private val PRIVATE_SETTLEMENT_LIMIT_KEYS = setOf(
+        "max_participants",
+        "max_expiry_blocks",
+        "audit_timeout_blocks",
+        "prepare_timeout_blocks",
+        "commit_timeout_blocks",
+        "capsule_padding_classes",
+        "max_proof_bytes",
+        "max_capsule_bytes",
+        "max_carrier_bytes",
+        "sidecar_retention_blocks",
+        "min_auditor_approvals",
     )
 
 }

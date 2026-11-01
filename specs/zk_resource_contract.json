@@ -15720,7 +15720,7 @@
       },
       {
         "path": "crates/iroha_p2p/src/lib.rs",
-        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md §6, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
+        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md \u00a76, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
         "symbols": [
           "MAX_HANDSHAKE_HOST_PROFILES"
         ],

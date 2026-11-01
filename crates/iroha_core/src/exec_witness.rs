@@ -770,6 +770,17 @@ pub(crate) fn record_write_amx_record(
     });
     Ok(())
 }
+/// Commit an irreversible native game export in the same transaction witness as its State removal.
+pub(crate) fn record_write_game_unit_export(
+    record: &iroha_data_model::game_partition::GameUnitExportV1,
+) -> Result<(), norito::Error> {
+    let key = record.witness_key();
+    let value = norito::encode_canonical(record)?;
+    with_active_slot(|witness| {
+        witness.writes.insert(key, value);
+    });
+    Ok(())
+}
 /// Commit a public private-root registration/cursor under its domain-separated proof key.
 pub(crate) fn record_write_private_dataspace(
     record: &iroha_data_model::private_dataspace::PrivateDataspaceRecord,

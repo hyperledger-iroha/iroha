@@ -912,9 +912,8 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
     private static void ValidateConsensusPolicy(ReadOnlySpan<byte> encoded, ulong committedHeight)
     {
         var reader = new FrameReader(encoded);
-        var current = ParseConsensusLimits(
-            reader.ReadField("manifest.consensus_policy.current_limits", out _),
-            "manifest.consensus_policy.current_limits");
+        var current = reader.ReadField("manifest.consensus_policy.current_limits", out _);
+        ValidateConsensusLimits(current, "manifest.consensus_policy.current_limits");
         var pending = reader.ReadField("manifest.consensus_policy.pending_update", out _);
         reader.RequireEnd("manifest.consensus_policy");
         var option = new FrameReader(pending);
@@ -933,18 +932,18 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         var update = new FrameReader(value);
         var scheduled = ReadUInt64Field(ref update, "privacy policy scheduled_at_height");
         var effective = ReadUInt64Field(ref update, "privacy policy effective_at_height");
-        var next = ParseConsensusLimits(
-            update.ReadField("privacy policy next_limits", out _),
-            "privacy policy next_limits");
+        var next = update.ReadField("privacy policy next_limits", out _);
+        ValidateConsensusLimits(next, "privacy policy next_limits");
         update.RequireEnd("privacy policy update");
         RequireSchedule(scheduled, effective, committedHeight, "privacy policy update");
-        if (next.Values.SequenceEqual(current.Values))
+        // Both records are canonical, so equal bytes are equal limits, the settlement contract included.
+        if (next.SequenceEqual(current))
         {
             throw Invalid("Privacy policy update must not be a no-op.");
         }
     }
 
-    private static LimitSet ParseConsensusLimits(ReadOnlySpan<byte> encoded, string context)
+    private static void ValidateConsensusLimits(ReadOnlySpan<byte> encoded, string context)
     {
         var reader = new FrameReader(encoded);
         var values = new uint[10];
@@ -952,6 +951,9 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         {
             values[index] = ReadUInt32Field(ref reader, $"{context}.field[{index}]");
         }
+        ValidatePrivateSettlementLimits(
+            reader.ReadField($"{context}.private_settlement", out _),
+            $"{context}.private_settlement");
         reader.RequireEnd(context);
         uint[] maxima =
         [
@@ -981,7 +983,49 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
         {
             throw Invalid($"{context} has inconsistent containing-scope limits.");
         }
-        return new LimitSet(uint.MaxValue, values);
+    }
+
+    /// <summary>
+    /// Checks the contract's own bounds. The native validator that runs first also decides whether
+    /// each selected padding class can hold its complete minimum-auditor capsule.
+    /// </summary>
+    private static void ValidatePrivateSettlementLimits(ReadOnlySpan<byte> encoded, string context)
+    {
+        var reader = new FrameReader(encoded);
+        var maxParticipants = ReadUInt16Field(ref reader, $"{context}.max_participants");
+        var maxExpiryBlocks = ReadUInt64Field(ref reader, $"{context}.max_expiry_blocks");
+        var auditTimeoutBlocks = ReadUInt64Field(ref reader, $"{context}.audit_timeout_blocks");
+        var prepareTimeoutBlocks = ReadUInt64Field(ref reader, $"{context}.prepare_timeout_blocks");
+        var commitTimeoutBlocks = ReadUInt64Field(ref reader, $"{context}.commit_timeout_blocks");
+        var padding = reader.ReadField($"{context}.capsule_padding_classes", out _);
+        var maxProofBytes = ReadUInt64Field(ref reader, $"{context}.max_proof_bytes");
+        var maxCapsuleBytes = ReadUInt64Field(ref reader, $"{context}.max_capsule_bytes");
+        var maxCarrierBytes = ReadUInt64Field(ref reader, $"{context}.max_carrier_bytes");
+        var sidecarRetentionBlocks = ReadUInt64Field(ref reader, $"{context}.sidecar_retention_blocks");
+        var minAuditorApprovals = ReadUInt16Field(ref reader, $"{context}.min_auditor_approvals");
+        reader.RequireEnd(context);
+        if (padding.Length != 1 || padding[0] is 0 or > 0b1111)
+        {
+            throw Invalid($"{context}.capsule_padding_classes is not a nonzero native class mask.");
+        }
+        if (maxParticipants is < 2 or > 255
+            || maxExpiryBlocks == 0
+            || auditTimeoutBlocks == 0
+            || prepareTimeoutBlocks == 0
+            || commitTimeoutBlocks == 0
+            || maxProofBytes is 0 or > 8 * 1024 * 1024
+            || maxCapsuleBytes is 0 or > 16 * 1024 * 1024
+            || maxCarrierBytes is 0 or > 4 * 1024 * 1024
+            || sidecarRetentionBlocks == 0
+            || minAuditorApprovals is 0 or > 32)
+        {
+            throw Invalid($"{context} is outside its native first-release bounds.");
+        }
+        var phases = (UInt128)auditTimeoutBlocks + prepareTimeoutBlocks + commitTimeoutBlocks;
+        if (phases > maxExpiryBlocks || sidecarRetentionBlocks < maxExpiryBlocks)
+        {
+            throw Invalid($"{context} phases or retention violate the expiry span.");
+        }
     }
 
     private static LimitSet ParseProtocolLimits(
@@ -1073,12 +1117,30 @@ internal static class PrivacyExact12CapabilityManifestCodecV1
             reader.ReadField($"row[{index}].pending_update.next_limits", out _),
             protocol,
             $"row[{index}].pending_update.next_limits");
+        ValidatePrivateSettlementDrain(
+            reader.ReadField($"row[{index}].pending_update.private_settlement_drain_blocks", out _),
+            $"row[{index}].pending_update.private_settlement_drain_blocks");
         reader.RequireEnd($"row[{index}].pending_update");
         RequireSchedule(scheduled, effective, committedHeight, $"row[{index}].pending_update");
         if (next.Values.SequenceEqual(current.Values))
         {
             throw Invalid($"Exact12 row {index} pending protocol limits are a no-op.");
         }
+    }
+
+    private static void ValidatePrivateSettlementDrain(ReadOnlySpan<byte> encoded, string context)
+    {
+        var option = new FrameReader(encoded);
+        var tag = option.ReadByteRaw($"{context}.option");
+        if (tag == 1 && ReadUInt64Field(ref option, $"{context}.value") == 0)
+        {
+            throw Invalid($"{context} must be non-zero when present.");
+        }
+        if (tag > 1)
+        {
+            throw Invalid($"{context} option tag is unknown.");
+        }
+        option.RequireEnd(context);
     }
 
     private static void RequireSchedule(

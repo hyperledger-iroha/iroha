@@ -1,6 +1,6 @@
 {
   "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-  "total_refs": 1149,
+  "total_refs": 1155,
   "unique_vars": 285,
   "variables": {
     "ADVICE_SCHEDULE": {
@@ -4755,7 +4755,7 @@
     },
     "IROHA_LISTENER_TEST_DIRECTORY": {
       "counts": {
-        "test": 2
+        "test": 4
       },
       "paths": [
         {
@@ -4767,29 +4767,49 @@
           "context": "let directory = std::env::var_os(\"IROHA_LISTENER_TEST_DIRECTORY\").unwrap();",
           "path": "crates/iroha_deploy/src/managed/listeners.rs",
           "scope": "test"
+        },
+        {
+          "context": "let path = std::env::var_os(\"IROHA_LISTENER_TEST_DIRECTORY\").unwrap();",
+          "path": "crates/iroha_managed_ipc/src/listeners.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let directory = std::env::var_os(\"IROHA_LISTENER_TEST_DIRECTORY\").unwrap();",
+          "path": "crates/iroha_managed_ipc/src/listeners.rs",
+          "scope": "test"
         }
       ]
     },
     "IROHA_LISTENER_TEST_P2P": {
       "counts": {
-        "test": 1
+        "test": 2
       },
       "paths": [
         {
           "context": "let p2p = std::env::var(\"IROHA_LISTENER_TEST_P2P\")",
           "path": "crates/iroha_deploy/src/managed/listeners.rs",
           "scope": "test"
+        },
+        {
+          "context": "let p2p = std::env::var(\"IROHA_LISTENER_TEST_P2P\")",
+          "path": "crates/iroha_managed_ipc/src/listeners.rs",
+          "scope": "test"
         }
       ]
     },
     "IROHA_LISTENER_TEST_TORII": {
       "counts": {
-        "test": 1
+        "test": 2
       },
       "paths": [
         {
           "context": "let torii = std::env::var(\"IROHA_LISTENER_TEST_TORII\")",
           "path": "crates/iroha_deploy/src/managed/listeners.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let torii = std::env::var(\"IROHA_LISTENER_TEST_TORII\")",
+          "path": "crates/iroha_managed_ipc/src/listeners.rs",
           "scope": "test"
         }
       ]
@@ -5298,7 +5318,7 @@
     },
     "IROHA_TEST_NETWORK_PARALLELISM": {
       "counts": {
-        "test": 3
+        "test": 4
       },
       "paths": [
         {
@@ -5314,6 +5334,11 @@
         {
           "context": "let permits = std::env::var(\"IROHA_TEST_NETWORK_PARALLELISM\")",
           "path": "integration_tests/tests/support/native_amx_harness.rs",
+          "scope": "test"
+        },
+        {
+          "context": "let permits = std::env::var(\"IROHA_TEST_NETWORK_PARALLELISM\")",
+          "path": "integration_tests/tests/tides_independent_roots.rs",
           "scope": "test"
         }
       ]
@@ -5421,7 +5446,7 @@
     },
     "IROHA_TEST_SERIALIZE_NETWORKS": {
       "counts": {
-        "test": 4
+        "test": 5
       },
       "paths": [
         {
@@ -5442,6 +5467,11 @@
         {
           "context": "permits >= 3 && std::env::var_os(\"IROHA_TEST_SERIALIZE_NETWORKS\").is_none(),",
           "path": "integration_tests/tests/support/native_amx_harness.rs",
+          "scope": "test"
+        },
+        {
+          "context": "permits >= 2 && std::env::var_os(\"IROHA_TEST_SERIALIZE_NETWORKS\").is_none(),",
+          "path": "integration_tests/tests/tides_independent_roots.rs",
           "scope": "test"
         }
       ]

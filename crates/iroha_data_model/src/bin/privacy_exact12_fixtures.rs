@@ -1,8 +1,8 @@
 //! Generate or verify the closed Exact12 privacy conformance publication.
 //!
 //! Write mode accepts only an external absolute staging root. Check mode may
-//! target the repository root. Both outputs are derived from the current typed
-//! V1 transaction model; there is no legacy fixture decoder.
+//! target the repository root. All outputs are derived from the current typed
+//! V1 model; there is no legacy fixture decoder.
 
 use std::{
     env,
@@ -14,11 +14,15 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::privacy::{
-    privacy_exact12_fixture_bundle_bytes_v1, privacy_exact12_matrix_bytes_v1,
+    privacy_exact12_capability_manifest_fixture_v1, privacy_exact12_fixture_bundle_bytes_v1,
+    privacy_exact12_matrix_bytes_v1,
 };
 
 const MATRIX_PATH: &str = "fixtures/privacy/exact12_v1.tsv";
 const BUNDLE_PATH: &str = "fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64";
+const CATALOG_PATH: &str = "fixtures/privacy/exact12_compiled_profile_catalog_v1.norito.b64";
+const MANIFEST_PATH: &str = "fixtures/privacy/exact12_capability_manifest_v1.norito.b64";
+const MANIFEST_JSON_PATH: &str = "fixtures/privacy/exact12_capability_manifest_v1.json";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -30,11 +34,20 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (mode, root) = parse_args(env::args().skip(1))?;
     let root = validate_root(mode, &root)?;
     let matrix = privacy_exact12_matrix_bytes_v1()?;
-    let mut bundle = BASE64
-        .encode(privacy_exact12_fixture_bundle_bytes_v1()?)
-        .into_bytes();
-    bundle.push(b'\n');
-    for (relative, bytes) in [(MATRIX_PATH, matrix), (BUNDLE_PATH, bundle)] {
+    let bundle = base64_line(&privacy_exact12_fixture_bundle_bytes_v1()?);
+    let manifest = privacy_exact12_capability_manifest_fixture_v1()?;
+    let mut manifest_json = manifest.manifest_json.into_bytes();
+    manifest_json.push(b'\n');
+    for (relative, bytes) in [
+        (MATRIX_PATH, matrix),
+        (BUNDLE_PATH, bundle),
+        (
+            CATALOG_PATH,
+            base64_line(&manifest.compiled_profile_catalog_norito),
+        ),
+        (MANIFEST_PATH, base64_line(&manifest.manifest_norito)),
+        (MANIFEST_JSON_PATH, manifest_json),
+    ] {
         let output = root.join(relative);
         match mode {
             Mode::Write => write_new(&root, &output, &bytes)?,
@@ -42,6 +55,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
     Ok(())
+}
+
+fn base64_line(bytes: &[u8]) -> Vec<u8> {
+    let mut line = BASE64.encode(bytes).into_bytes();
+    line.push(b'\n');
+    line
 }
 
 fn parse_args(arguments: impl IntoIterator<Item = String>) -> Result<(Mode, PathBuf), io::Error> {

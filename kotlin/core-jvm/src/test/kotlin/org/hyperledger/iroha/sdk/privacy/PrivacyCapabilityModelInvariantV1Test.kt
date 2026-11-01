@@ -38,6 +38,78 @@ class PrivacyCapabilityModelInvariantV1Test {
     }
 
     @Test
+    fun privateSettlementLimitsRejectEveryValueOutsideTheirNativeContract() {
+        val ceiling = privateSettlementLimits(
+            maxParticipants = 255,
+            maxProofBytes = height(8L * 1024 * 1024),
+            maxCapsuleBytes = height(16L * 1024 * 1024),
+            maxCarrierBytes = height(4L * 1024 * 1024),
+            sidecarRetentionBlocks = U64_MAX_TEST,
+            minAuditorApprovals = 32,
+        )
+        assertEquals(U64_MAX_TEST, ceiling.sidecarRetentionBlocks)
+        assertEquals(privateSettlementLimits(), privateSettlementLimits())
+        assertEquals(privateSettlementLimits().hashCode(), privateSettlementLimits().hashCode())
+        assertTrue(privateSettlementLimits() != ceiling)
+        val hostile = listOf<() -> Unit>(
+            { privateSettlementLimits(maxParticipants = 1) },
+            { privateSettlementLimits(maxParticipants = 256) },
+            { privateSettlementLimits(maxExpiryBlocks = BigInteger.ZERO) },
+            { privateSettlementLimits(maxExpiryBlocks = height(3_599)) },
+            { privateSettlementLimits(auditTimeoutBlocks = BigInteger.ZERO) },
+            { privateSettlementLimits(prepareTimeoutBlocks = BigInteger.ZERO) },
+            { privateSettlementLimits(commitTimeoutBlocks = BigInteger.ZERO) },
+            { privateSettlementLimits(commitTimeoutBlocks = height(4_801)) },
+            { privateSettlementLimits(capsulePaddingClasses = 0) },
+            { privateSettlementLimits(capsulePaddingClasses = 0b1_0000) },
+            { privateSettlementLimits(maxProofBytes = BigInteger.ZERO) },
+            { privateSettlementLimits(maxProofBytes = height(8L * 1024 * 1024 + 1)) },
+            { privateSettlementLimits(maxCapsuleBytes = BigInteger.ZERO) },
+            { privateSettlementLimits(maxCapsuleBytes = height(16L * 1024 * 1024 + 1)) },
+            { privateSettlementLimits(maxCarrierBytes = BigInteger.ZERO) },
+            { privateSettlementLimits(maxCarrierBytes = height(4L * 1024 * 1024 + 1)) },
+            { privateSettlementLimits(sidecarRetentionBlocks = height(7_199)) },
+            { privateSettlementLimits(sidecarRetentionBlocks = U64_MAX_TEST.add(BigInteger.ONE)) },
+            { privateSettlementLimits(minAuditorApprovals = 0) },
+            { privateSettlementLimits(minAuditorApprovals = 33) },
+        )
+        hostile.forEachIndexed { index, construct ->
+            assertFailsWith<IllegalArgumentException>("hostile private-settlement limits $index") {
+                construct()
+            }
+        }
+    }
+
+    @Test
+    fun protocolUpdateDrainMustBeAPositiveUint64WhenPresent() {
+        val next = pgcLimits(32, 4)
+        for (drain in listOf(BigInteger.ONE, U64_MAX_TEST)) {
+            assertEquals(drain, PrivacyProtocolLimitsUpdateV1(height(10), height(11), next, drain).privateSettlementDrainBlocks)
+        }
+        for (drain in listOf(BigInteger.ZERO, height(-1), U64_MAX_TEST.add(BigInteger.ONE))) {
+            assertFailsWith<IllegalArgumentException> {
+                PrivacyProtocolLimitsUpdateV1(height(10), height(11), next, drain)
+            }
+        }
+        assertTrue(
+            PrivacyProtocolLimitsUpdateV1(height(10), height(11), next, null) !=
+                PrivacyProtocolLimitsUpdateV1(height(10), height(11), next, BigInteger.ONE),
+        )
+    }
+
+    @Test
+    fun consensusPolicyAllowsAnUpdateChangingOnlyThePrivateSettlementContract() {
+        val current = consensusLimits()
+        val next = consensusLimits(privateSettlement = privateSettlementLimits(maxExpiryBlocks = height(3_600)))
+        assertTrue(current != next)
+        val policy = PrivacyConsensusPolicyV1(current, PrivacyConsensusPolicyUpdateV1(height(2), height(3), next))
+        assertEquals(height(3_600), policy.pendingUpdate!!.nextLimits.privateSettlement.maxExpiryBlocks)
+        assertFailsWith<IllegalArgumentException> {
+            PrivacyConsensusPolicyV1(current, PrivacyConsensusPolicyUpdateV1(height(2), height(3), consensusLimits()))
+        }
+    }
+
+    @Test
     fun consensusPolicyAllowsBoundedUpdatesAndRejectsMalformedSchedulesAndNoOps() {
         val current = consensusLimits()
         val next = consensusLimits(retainedRootCount = 1024)
@@ -65,29 +137,29 @@ class PrivacyCapabilityModelInvariantV1Test {
         val current = pgcLimits(64, 8)
         val next = pgcLimits(32, 4)
         validPolicySchedules().forEach { (scheduled, effective) ->
-            val update = PrivacyProtocolLimitsUpdateV1(scheduled, effective, next)
+            val update = PrivacyProtocolLimitsUpdateV1(scheduled, effective, next, null)
             val policy = PrivacyProtocolPolicyV1(current.protocolId, current, update)
             assertEquals(update, policy.pendingUpdate)
             assertEquals(policy, PrivacyProtocolPolicyV1(current.protocolId, current, update))
             assertEquals(policy.hashCode(), PrivacyProtocolPolicyV1(current.protocolId, current, update).hashCode())
             assertEquals(current, PrivacyProtocolPolicyV1(current.protocolId, next,
-                PrivacyProtocolLimitsUpdateV1(scheduled, effective, current)).pendingUpdate!!.nextLimits)
+                PrivacyProtocolLimitsUpdateV1(scheduled, effective, current, null)).pendingUpdate!!.nextLimits)
         }
         invalidPolicySchedules().forEach { (scheduled, effective) ->
-            assertFailsWith<IllegalArgumentException> { PrivacyProtocolLimitsUpdateV1(scheduled, effective, next) }
+            assertFailsWith<IllegalArgumentException> { PrivacyProtocolLimitsUpdateV1(scheduled, effective, next, null) }
         }
         assertFailsWith<IllegalArgumentException> { pgcLimits(48, 4) }
         assertFailsWith<IllegalArgumentException> { pgcLimits(64, 9) }
         assertFailsWith<IllegalArgumentException> {
             PrivacyProtocolPolicyV1(current.protocolId, current,
-                PrivacyProtocolLimitsUpdateV1(height(10), height(11), current))
+                PrivacyProtocolLimitsUpdateV1(height(10), height(11), current, null))
         }
         val other = PrivacyProtocolLimitsV1(PrivacyProtocolIdV1.VERANGE_TRANSPARENT_RANGE_V1,
             mapOf("max_aggregation_count" to 4))
         assertFailsWith<IllegalArgumentException> { PrivacyProtocolPolicyV1(other.protocolId, current, null) }
         assertFailsWith<IllegalArgumentException> {
             PrivacyProtocolPolicyV1(current.protocolId, current,
-                PrivacyProtocolLimitsUpdateV1(height(10), height(11), other))
+                PrivacyProtocolLimitsUpdateV1(height(10), height(11), other, null))
         }
     }
 
@@ -199,6 +271,7 @@ class PrivacyCapabilityModelInvariantV1Test {
         maxNullifiersPerAction: Int = 8,
         maxCommitmentsPerAction: Int = 8,
         retainedRootCount: Int = 2048,
+        privateSettlement: PrivateSettlementValidityLimitsV1 = privateSettlementLimits(),
     ): PrivacyConsensusLimitsV1 = PrivacyConsensusLimitsV1(
         maxActionsPerTransaction = maxActionsPerTransaction,
         maxActionsPerBlock = maxActionsPerBlock,
@@ -211,6 +284,33 @@ class PrivacyCapabilityModelInvariantV1Test {
         maxNullifiersPerAction = maxNullifiersPerAction,
         maxCommitmentsPerAction = maxCommitmentsPerAction,
         retainedRootCount = retainedRootCount,
+        privateSettlement = privateSettlement,
+    )
+
+    private fun privateSettlementLimits(
+        maxParticipants: Int = 255,
+        maxExpiryBlocks: BigInteger = height(7_200),
+        auditTimeoutBlocks: BigInteger = height(1_200),
+        prepareTimeoutBlocks: BigInteger = height(1_200),
+        commitTimeoutBlocks: BigInteger = height(1_200),
+        capsulePaddingClasses: Int = 0b1111,
+        maxProofBytes: BigInteger = height(8L * 1024 * 1024),
+        maxCapsuleBytes: BigInteger = height(1024L * 1024),
+        maxCarrierBytes: BigInteger = height(4L * 1024 * 1024),
+        sidecarRetentionBlocks: BigInteger = height(1_000_000),
+        minAuditorApprovals: Int = 1,
+    ): PrivateSettlementValidityLimitsV1 = PrivateSettlementValidityLimitsV1(
+        maxParticipants = maxParticipants,
+        maxExpiryBlocks = maxExpiryBlocks,
+        auditTimeoutBlocks = auditTimeoutBlocks,
+        prepareTimeoutBlocks = prepareTimeoutBlocks,
+        commitTimeoutBlocks = commitTimeoutBlocks,
+        capsulePaddingClasses = capsulePaddingClasses,
+        maxProofBytes = maxProofBytes,
+        maxCapsuleBytes = maxCapsuleBytes,
+        maxCarrierBytes = maxCarrierBytes,
+        sidecarRetentionBlocks = sidecarRetentionBlocks,
+        minAuditorApprovals = minAuditorApprovals,
     )
 
     private fun validPolicySchedules(): List<Pair<BigInteger, BigInteger>> = listOf(

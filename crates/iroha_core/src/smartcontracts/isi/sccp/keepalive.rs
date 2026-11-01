@@ -1,4 +1,4 @@
-//! Shared progress carriers and the SCCP half of the deterministic due-work clock.
+//! Shared progress carriers for committed scheduled Time outputs and SCCP due work.
 //!
 //! Heartbeat eligibility always borrows the original parent. Parliament due-work is an
 //! explicit unavailable dependency until its owner provides the G1–G3 iterator and receipt.
@@ -105,6 +105,7 @@ pub(crate) fn heartbeat_due(source: &(impl EligibilityRead + ?Sized), time_ms: u
 /// Observe the shared due predicate against an original parent.
 pub(crate) fn due_from(
     source: &(impl EligibilityRead + ?Sized),
+    committed_time_ms: Option<u64>,
     next_height: u64,
     time_ms: u64,
 ) -> Result<bool, DueWorkUnavailable> {
@@ -112,6 +113,9 @@ pub(crate) fn due_from(
         || heartbeat_due(source, time_ms)
         || source
             .reconciliation_due_at_ms()
+            .is_some_and(|due| due <= time_ms)
+        || committed_time_ms
+            .and_then(|since| source.scheduled_progress_at_ms(since, next_height))
             .is_some_and(|due| due <= time_ms)
     {
         return Ok(true);
@@ -124,10 +128,11 @@ pub(crate) fn due_from(
 /// Preserves unavailable Parliament work instead of treating it as an empty due set.
 pub fn due(
     world: &(impl WorldReadOnly + ?Sized),
+    committed_time_ms: Option<u64>,
     next_height: u64,
     time_ms: u64,
 ) -> Result<bool, DueWorkUnavailable> {
-    due_from(&Current(world), next_height, time_ms)
+    due_from(&Current(world), committed_time_ms, next_height, time_ms)
 }
 
 /// Original current SCCP heartbeat deadline, when repeated degraded heights permit it.
@@ -147,14 +152,30 @@ pub fn next_reconciliation_at_ms(world: &(impl WorldReadOnly + ?Sized)) -> Optio
     Current(world).reconciliation_due_at_ms()
 }
 
-/// Earliest independently known SCCP progress deadline, even after degraded heartbeats stop.
+/// Earliest committed scheduled Time output; PreCommit callbacks never create carriers.
+/// Missing parent time cannot establish scheduled eligibility.
+#[must_use]
+pub fn next_scheduled_at_ms(
+    world: &(impl WorldReadOnly + ?Sized),
+    committed_time_ms: Option<u64>,
+    next_height: u64,
+) -> Option<u64> {
+    committed_time_ms.and_then(|since| Current(world).scheduled_progress_at_ms(since, next_height))
+}
+
+/// Earliest independently known progress deadline, even after degraded heartbeats stop.
 /// Parliament work remains unavailable until its authoritative iterator is supplied.
 #[must_use]
-pub fn next_progress_at_ms(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64> {
+pub fn next_progress_at_ms(
+    world: &(impl WorldReadOnly + ?Sized),
+    committed_time_ms: Option<u64>,
+    next_height: u64,
+) -> Option<u64> {
     next_heartbeat_at_ms(world)
         .into_iter()
         .chain(next_reconciliation_at_ms(world))
         .chain(Current(world).fast_pause_due().then_some(0))
+        .chain(next_scheduled_at_ms(world, committed_time_ms, next_height))
         .min()
 }
 
@@ -168,6 +189,7 @@ pub fn next_progress_at_ms(world: &(impl WorldReadOnly + ?Sized)) -> Option<u64>
 pub fn admit(
     world: &(impl WorldReadOnly + ?Sized),
     payload: &TransactionPayload,
+    committed_time_ms: Option<u64>,
     next_height: u64,
     wall_ms: u64,
 ) -> Result<Option<super::admission::SccpAdmissionKeysV1>, super::admission::SccpAdmissionRejectV1>
@@ -195,7 +217,7 @@ pub fn admit(
     let due = if cfg!(all(test, sumeragi_core_mutation = "HC314")) {
         Ok(true)
     } else {
-        due(world, next_height, candidate)
+        due(world, committed_time_ms, next_height, candidate)
     };
     match due {
         Ok(true) => Ok(Some(
@@ -221,12 +243,14 @@ pub(crate) fn check_count(count: usize) -> Result<(), &'static str> {
 /// Returns the original unavailable dependency if stale work cannot yet be classified.
 pub fn stale_due_work(
     world: &(impl WorldReadOnly + ?Sized),
+    committed_time_ms: Option<u64>,
     next_height: u64,
     time_ms: u64,
     wall_ms: u64,
     certified: bool,
 ) -> Result<bool, DueWorkUnavailable> {
-    ProgressClock::capture(world, next_height, time_ms)?.is_stale(wall_ms, certified)
+    ProgressClock::capture(world, committed_time_ms, next_height, time_ms)?
+        .is_stale(wall_ms, certified)
 }
 
 /// Fixed-size observation of the original parent used again after execution and on retries.
@@ -241,6 +265,7 @@ pub(crate) struct ProgressClock {
 impl ProgressClock {
     pub(crate) fn capture(
         world: &(impl WorldReadOnly + ?Sized),
+        committed_time_ms: Option<u64>,
         next_height: u64,
         time_ms: u64,
     ) -> Result<Self, DueWorkUnavailable> {
@@ -248,7 +273,7 @@ impl ProgressClock {
         Ok(Self {
             time_ms,
             maximum_lag_ms: clock.due_work_max_lag_ms,
-            due: due(world, next_height, time_ms),
+            due: due(world, committed_time_ms, next_height, time_ms),
         })
     }
 

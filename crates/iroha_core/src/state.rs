@@ -49,6 +49,7 @@ use iroha_crypto::{Algorithm, Hash, HashOf, PublicKey, blake2::Blake2b512};
 use iroha_data_model::events::pipeline::PipelineEventBox;
 use iroha_data_model::execution_proofs::{ExecutionProofProfileV1, ExecutionProofVerificationV1};
 use iroha_data_model::game::GameSessionRecordV1;
+use iroha_data_model::game_partition::GamePartitionStateV1;
 #[cfg(test)]
 use iroha_data_model::nexus::AUTOSCALE_META_CREATED_HEIGHT;
 use iroha_data_model::nft_market::{NftCustodyRecordV1, NftSaleRecordV1};
@@ -1239,6 +1240,7 @@ macro_rules! with_world_overlay_fields {
             execution_proof_profiles,
             execution_proof_verifications,
             game_sessions,
+            game_partitions,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -4234,6 +4236,8 @@ pub struct WorldData {
     pub(crate) execution_proof_verifications: Storage<Hash, ExecutionProofVerificationV1>,
     /// Authoritative generic game session records, including closed custody identities.
     pub(crate) game_sessions: Storage<Hash, GameSessionRecordV1>,
+    /// Independent native game partition records with certified export/import state.
+    pub(crate) game_partitions: Storage<Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: Storage<Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -5253,6 +5257,7 @@ pub struct WorldBlockFields<'world> {
     pub(crate) execution_proof_verifications:
         StorageField<'world, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageField<'world, Hash, GameSessionRecordV1>,
+    pub(crate) game_partitions: StorageField<'world, Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageField<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -6461,6 +6466,7 @@ impl WorldBlock<'_> {
             execution_proof_profiles,
             execution_proof_verifications,
             game_sessions,
+            game_partitions,
             nft_sale_offers,
             nft_custody_records,
             nft_custody_by_nft,
@@ -7009,6 +7015,7 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) execution_proof_verifications:
         StorageTransaction<'block, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageTransaction<'block, Hash, GameSessionRecordV1>,
+    pub(crate) game_partitions: StorageTransaction<'block, Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageTransaction<'block, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -9255,6 +9262,7 @@ pub struct WorldView<'world> {
     pub(crate) execution_proof_verifications:
         StorageView<'world, Hash, ExecutionProofVerificationV1>,
     pub(crate) game_sessions: StorageView<'world, Hash, GameSessionRecordV1>,
+    pub(crate) game_partitions: StorageView<'world, Hash, GamePartitionStateV1>,
     /// Native NFT sale/custody state or derived reservation guard.
     pub(crate) nft_sale_offers: StorageView<'world, Hash, NftSaleRecordV1>,
     /// Native NFT sale/custody state or derived reservation guard.
@@ -21269,6 +21277,8 @@ macro_rules! world_ro_accessors {
             storage execution_proof_verifications: Hash => ExecutionProofVerificationV1;
             /// Generic immutable manifests, certified progress, and settlement receipts.
             storage game_sessions: Hash => GameSessionRecordV1;
+            /// Independent native game partitions and durable transfer receipts.
+            storage game_partitions: Hash => GamePartitionStateV1;
             /// Immutable native NFT sale terms and permanent terminal decisions.
             storage nft_sale_offers: Hash => NftSaleRecordV1;
             /// Permanent non-signing custody records shared by native NFT protocols.
@@ -25058,6 +25068,7 @@ impl WorldTransaction<'_, '_> {
             execution_proof_profiles: _,
             execution_proof_verifications: _,
             game_sessions: _,
+            game_partitions: _,
             nft_sale_offers: _,
             nft_custody_records: _,
             nft_custody_by_nft: _,
@@ -25511,6 +25522,7 @@ impl WorldTransaction<'_, '_> {
         self.execution_proof_profiles.apply();
         self.execution_proof_verifications.apply();
         self.game_sessions.apply();
+        self.game_partitions.apply();
         self.nft_sale_offers.apply();
         self.nft_custody_records.apply();
         self.nft_custody_by_nft.apply();

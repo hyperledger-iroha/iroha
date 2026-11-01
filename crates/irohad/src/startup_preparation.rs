@@ -44,7 +44,7 @@ pub struct PreparedStartup {
     // stacks. Preparation still creates it once; activation or joined cleanup consumes it.
     pub(super) native: Box<PreparedNative>,
     pub(super) lifetime: StartupLifetime,
-    pub(super) listeners: Option<iroha_deploy::managed::RuntimeListeners>,
+    pub(super) listeners: Option<iroha_managed_ipc::RuntimeListeners>,
 }
 
 /// Refuse a build whose linked BLS pairing context cannot verify consensus aggregates.

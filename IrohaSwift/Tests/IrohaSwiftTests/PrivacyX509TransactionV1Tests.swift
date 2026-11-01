@@ -230,7 +230,13 @@ final class PrivacyX509TransactionV1Tests: XCTestCase {
             maxProofBytesPerAction: proofBytes, maxActionBytes: actionBytes,
             maxPrivacyBytesPerTransaction: actionBytes, maxPrivacyBytesPerBlock: 16_711_680,
             maxStatementAndEncryptedOutputBytesPerTransaction: 262_144,
-            maxNullifiersPerAction: 8, maxCommitmentsPerAction: 8, retainedRootCount: 2048)
+            maxNullifiersPerAction: 8, maxCommitmentsPerAction: 8, retainedRootCount: 2048,
+            privateSettlement: PrivateSettlementValidityLimitsV1(
+                maxParticipants: 255, maxExpiryBlocks: 7_200, auditTimeoutBlocks: 1_200,
+                prepareTimeoutBlocks: 1_200, commitTimeoutBlocks: 1_200, capsulePaddingClasses: 0b1111,
+                maxProofBytes: 8 * 1024 * 1024, maxCapsuleBytes: 1024 * 1024,
+                maxCarrierBytes: 4 * 1024 * 1024, sidecarRetentionBlocks: 1_000_000,
+                minAuditorApprovals: 1))
     }
 
     private func planAndProof(_ row: PrivacyExact12TypedFixtureRowV1) throws -> (Wire.DirectPlan, Data) {

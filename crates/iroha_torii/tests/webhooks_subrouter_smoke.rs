@@ -2,13 +2,7 @@
 #![cfg(feature = "app_api")]
 use axum::http::Request;
 use http::StatusCode;
-use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, World},
-};
-use iroha_model_base::peer::PeerId;
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_torii::Torii;
 use std::sync::Arc;
 use tower::ServiceExt as _;
@@ -21,21 +15,8 @@ async fn webhooks_endpoints_exposed_by_default() {
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let chain_id = cfg.common.chain.clone();
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        query,
-        chain_id.clone(),
-        network_id,
-    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -46,15 +27,15 @@ async fn webhooks_endpoints_exposed_by_default() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new_with_handle(
-        chain_id,
-        network_id,
+        cfg.common.chain.clone(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
@@ -66,10 +47,14 @@ async fn webhooks_endpoints_exposed_by_default() {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii webhook fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
+    .expect("valid Torii webhook fixture")
+    .with_local_peer_id(native_chain.validators()[0].0.clone());
+    let runtime = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     let app = runtime.router();
     // Webhook registry routes reject requests before dispatch unless operator
     // authentication succeeds.
@@ -88,16 +73,18 @@ async fn webhooks_endpoints_exposed_by_default() {
     let body = r#"{"url":"https://example.com/webhook","active":true}"#;
     let resp = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .method("POST")
-                .uri("/v1/webhooks")
-                .header(axum::http::header::CONTENT_TYPE, "application/json")
-                .body(axum::body::Body::from(body))
-                .unwrap(),
-            body.as_bytes(),
-        ))
+        .oneshot(
+            runtime.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/webhooks")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from(body))
+                    .unwrap(),
+                body.as_bytes(),
+            ),
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -106,14 +93,16 @@ async fn webhooks_endpoints_exposed_by_default() {
     ));
     // GET /v1/webhooks — list webhooks
     let resp = app
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri("/v1/webhooks")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            runtime.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri("/v1/webhooks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -129,21 +118,8 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     cfg.torii.webhooks_enabled = false;
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let chain_id = cfg.common.chain.clone();
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        query,
-        chain_id.clone(),
-        network_id,
-    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -154,15 +130,15 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = Torii::new_with_handle(
-        chain_id,
-        network_id,
+        cfg.common.chain.clone(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
@@ -174,10 +150,14 @@ async fn webhooks_endpoints_hidden_when_disabled() {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii webhook fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
+    .expect("valid Torii webhook fixture")
+    .with_local_peer_id(native_chain.validators()[0].0.clone());
+    let runtime = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     let app = runtime.router();
     let resp = app
         .clone()
@@ -193,14 +173,16 @@ async fn webhooks_endpoints_hidden_when_disabled() {
     // Authentication precedes the feature-disabled handler, so an authorized
     // request reaches the stable not-found response.
     let resp = app
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri("/v1/webhooks")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            runtime.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri("/v1/webhooks")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);

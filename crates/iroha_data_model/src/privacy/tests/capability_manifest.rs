@@ -386,3 +386,110 @@ fn optional_protocol_policy_is_content_bound_but_never_availability_authority() 
     assert_ne!(retired, json);
     assert!(norito::json::from_json::<PrivacyExact12CapabilityManifestV1>(&retired).is_err());
 }
+#[test]
+fn exact12_capability_manifest_fixture_files_are_what_core_serializes() {
+    use base64::Engine as _;
+    let archive = |encoded: &str| {
+        base64::engine::general_purpose::STANDARD
+            .decode(encoded.strip_suffix('\n').expect("one terminal LF"))
+            .expect("STANDARD base64")
+    };
+    let fixture =
+        privacy_exact12_capability_manifest_fixture_v1().expect("capability manifest fixture");
+    assert_eq!(
+        archive(include_str!(
+            "../../../../../fixtures/privacy/exact12_capability_manifest_v1.norito.b64"
+        )),
+        fixture.manifest_norito,
+        "regenerate the checked-in manifest with privacy_exact12_fixtures"
+    );
+    assert_eq!(
+        archive(include_str!(
+            "../../../../../fixtures/privacy/exact12_compiled_profile_catalog_v1.norito.b64"
+        )),
+        fixture.compiled_profile_catalog_norito,
+        "regenerate the checked-in catalog with privacy_exact12_fixtures"
+    );
+    assert_eq!(
+        include_str!("../../../../../fixtures/privacy/exact12_capability_manifest_v1.json"),
+        format!("{}\n", fixture.manifest_json),
+        "regenerate the checked-in projection with privacy_exact12_fixtures"
+    );
+    assert!(validate_privacy_capability_archive_v1(&fixture.manifest_norito).is_valid());
+    assert_eq!(
+        validate_privacy_compiled_profile_catalog_archive_v1(
+            &fixture.compiled_profile_catalog_norito
+        ),
+        PrivacyCompiledProfileCatalogArchiveValidationStatusV1::Valid
+    );
+    let manifest: PrivacyExact12CapabilityManifestV1 =
+        norito::decode_from_bytes(&fixture.manifest_norito).expect("decode manifest archive");
+    assert_eq!(
+        norito::json::from_json::<PrivacyExact12CapabilityManifestV1>(&fixture.manifest_json)
+            .expect("decode manifest projection"),
+        manifest
+    );
+}
+#[test]
+fn exact12_capability_manifest_fixture_schedules_every_private_settlement_shape() {
+    let fixture =
+        privacy_exact12_capability_manifest_fixture_v1().expect("capability manifest fixture");
+    let manifest: PrivacyExact12CapabilityManifestV1 =
+        norito::decode_from_bytes(&fixture.manifest_norito).expect("decode manifest archive");
+    let current = manifest.consensus_policy.current_limits;
+    assert_eq!(
+        current.private_settlement,
+        PrivateSettlementValidityLimitsV1::protocol_default()
+    );
+    let next = manifest
+        .consensus_policy
+        .pending_update
+        .expect("pending consensus update")
+        .next_limits;
+    assert_ne!(next.private_settlement, current.private_settlement);
+    assert_eq!(
+        PrivacyConsensusLimitsV1 {
+            private_settlement: current.private_settlement,
+            ..next
+        },
+        current,
+        "the pending consensus update changes only the private-settlement contract"
+    );
+    let drain = |protocol_id| {
+        manifest
+            .protocols
+            .iter()
+            .find(|row| row.protocol_id == protocol_id)
+            .and_then(|row| row.policy)
+            .and_then(|policy| policy.pending_update)
+            .expect("pending protocol update")
+            .private_settlement_drain_blocks
+    };
+    assert_eq!(
+        drain(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1),
+        Some(current.private_settlement.max_expiry_blocks)
+    );
+    assert_eq!(drain(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1), None);
+    // Core itself refuses the limit layouts the SDK parsers must also refuse.
+    fn current_limits(projection: &mut norito::json::Value) -> &mut norito::json::Value {
+        projection
+            .get_mut("consensus_policy")
+            .and_then(|policy| policy.get_mut("current_limits"))
+            .expect("current limits")
+    }
+    let projection: norito::json::Value =
+        norito::json::from_json(&fixture.manifest_json).expect("manifest projection");
+    let mut retired = projection.clone();
+    current_limits(&mut retired)
+        .as_object_mut()
+        .expect("limits object")
+        .remove("private_settlement");
+    assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(retired).is_err());
+    let mut unknown = projection;
+    current_limits(&mut unknown)
+        .get_mut("private_settlement")
+        .and_then(norito::json::Value::as_object_mut)
+        .expect("contract object")
+        .insert("retired".to_owned(), norito::json::Value::Null);
+    assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(unknown).is_err());
+}

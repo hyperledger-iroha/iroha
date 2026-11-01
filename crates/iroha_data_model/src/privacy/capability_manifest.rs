@@ -715,5 +715,13 @@ pub enum PrivacyExact12CapabilityManifestValidationErrorV1 {
     },
 }
 
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
+mod conformance_fixture;
+#[cfg(any(test, feature = "privacy-exact12-conformance"))]
+pub use conformance_fixture::{
+    PrivacyExact12CapabilityManifestFixtureErrorV1, PrivacyExact12CapabilityManifestFixtureV1,
+    privacy_exact12_capability_manifest_fixture_v1,
+};
+
 #[cfg(test)]
 mod captured_capability_manifest_schema_tests;

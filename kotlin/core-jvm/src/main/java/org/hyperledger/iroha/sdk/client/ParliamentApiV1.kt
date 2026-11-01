@@ -178,21 +178,21 @@ object ParliamentApiV1 {
         ParliamentTransitionLayoutV1(7, "AdvanceBodyPhase", true, 7),
         ParliamentTransitionLayoutV1(8, "RecordAttemptAbsence", true, 8),
         ParliamentTransitionLayoutV1(9, "EndorsePublicFinding", true, 9),
-        ParliamentTransitionLayoutV1(10, "RecordInvitationResponse", true, 13),
-        ParliamentTransitionLayoutV1(11, "FailPublicFindingNoResult", true, 14),
-        ParliamentTransitionLayoutV1(12, "RegisterInitialSortition", false, 15),
+        ParliamentTransitionLayoutV1(17, "RecordInvitationResponse", true, 20),
+        ParliamentTransitionLayoutV1(20, "FailPublicFindingNoResult", true, 23),
+        ParliamentTransitionLayoutV1(21, "RegisterInitialSortition", false, 24),
     )
 
     @JvmField
     val AUTOMATIC_EXECUTION_OUTCOMES: List<ParliamentAutomaticOutcomeLayoutV1> = listOf(
-        ParliamentAutomaticOutcomeLayoutV1(0, "Enacted", false, "MarkEnacted", 10),
-        ParliamentAutomaticOutcomeLayoutV1(1, "Superseded", true, "MarkSuperseded", 11),
+        ParliamentAutomaticOutcomeLayoutV1(0, "Enacted", false, "MarkEnacted", 17),
+        ParliamentAutomaticOutcomeLayoutV1(1, "Superseded", true, "MarkSuperseded", 18),
         ParliamentAutomaticOutcomeLayoutV1(
             2,
             "ExecutionFailed",
             true,
             "MarkExecutionFailed",
-            12,
+            19,
         ),
     )
 
@@ -200,9 +200,9 @@ object ParliamentApiV1 {
     val NO_RESULT_KINDS: List<ParliamentNoResultKindLayoutV1> = listOf(
         ParliamentNoResultKindLayoutV1(0, "PublicFindingQuorumUnreachable"),
         ParliamentNoResultKindLayoutV1(1, "PublicFindingDeadlineExpired"),
-        ParliamentNoResultKindLayoutV1(2, "SortitionRetriesExhausted"),
-        ParliamentNoResultKindLayoutV1(3, "ConfirmationJuryCapacityUnavailable"),
-        ParliamentNoResultKindLayoutV1(4, "RandomnessRedrawBudgetExhausted"),
+        ParliamentNoResultKindLayoutV1(7, "SortitionRetriesExhausted"),
+        ParliamentNoResultKindLayoutV1(8, "ConfirmationJuryCapacityUnavailable"),
+        ParliamentNoResultKindLayoutV1(9, "RandomnessRedrawBudgetExhausted"),
     )
 
     @JvmField

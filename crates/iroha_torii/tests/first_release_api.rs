@@ -7,13 +7,7 @@ use http::{
     header::{ACCEPT, ALLOW, CONTENT_TYPE, VARY},
 };
 use http_body_util::BodyExt as _;
-use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::{State, World},
-};
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, queue::Queue, state::World};
 use iroha_torii::{OnlinePeersProvider, Torii, test_utils};
 use iroha_torii_shared::ErrorEnvelope;
 use std::{
@@ -21,6 +15,8 @@ use std::{
     sync::Arc,
 };
 use tower::ServiceExt as _;
+#[path = "fixtures.rs"]
+mod fixtures;
 fn local_connect_info() -> axum::extract::connect_info::ConnectInfo<SocketAddr> {
     axum::extract::connect_info::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
 }
@@ -99,6 +95,7 @@ async fn assert_canonical_early_error(
 }
 #[tokio::test]
 async fn unknown_routes_use_negotiated_typed_error_envelopes() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     for accept in ["application/json", "application/x-norito"] {
@@ -123,6 +120,7 @@ async fn unknown_routes_use_negotiated_typed_error_envelopes() {
 }
 #[tokio::test]
 async fn retired_legacy_finality_routes_are_absent() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     for path in [
@@ -151,6 +149,7 @@ async fn retired_legacy_finality_routes_are_absent() {
 }
 #[tokio::test]
 async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     let invalid_path = router
@@ -224,6 +223,7 @@ async fn assembled_router_canonicalizes_early_path_and_accept_failures() {
 }
 #[tokio::test]
 async fn retired_kagemusha_routes_are_absent() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     for (method, path) in [
@@ -255,6 +255,7 @@ async fn retired_kagemusha_routes_are_absent() {
 }
 #[tokio::test]
 async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     for accept in ["application/json", "application/x-norito"] {
@@ -275,7 +276,7 @@ async fn wrong_methods_use_negotiated_typed_errors_and_retain_allow() {
         assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED, "Accept: {accept}");
         assert_eq!(envelope.code(), "method_not_allowed", "Accept: {accept}");
         assert!(header_contains_token(&headers, ALLOW, "GET"));
-        assert!(header_contains_token(&headers, ALLOW, "HEAD"));
+        assert!(!header_contains_token(&headers, ALLOW, "HEAD"));
         assert!(header_contains_token(&headers, VARY, "Accept"));
     }
     runtime.shutdown().await;
@@ -289,20 +290,27 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
                 Request::builder()
                     .uri("/v1/sorafs/por/status?limit=1000&max_bytes=4194304")
                     .extension(local_connect_info())
+                    .header(ACCEPT, "application/json")
                     .body(axum::body::Body::empty())
                     .expect("PoR status request"),
             )
             .await
             .expect("PoR status response");
-        assert_eq!(response.status(), StatusCode::OK);
-        response
+        // This fixture leaves PoR disabled, so its lifecycle reads stay explicitly unavailable.
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = response
             .into_body()
             .collect()
             .await
             .expect("collect PoR status")
             .to_bytes()
-            .to_vec()
+            .to_vec();
+        let envelope: ErrorEnvelope =
+            norito::json::from_slice(&body).expect("decode PoR status error");
+        assert_eq!(envelope.code(), "sorafs_por_authority_unavailable");
+        body
     }
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     let before = por_status_snapshot(&router).await;
@@ -373,6 +381,7 @@ async fn unsupported_por_routes_are_unregistered_and_cannot_mutate_state() {
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
     let runtime = build_router();
     let router = runtime.router();
     for path in ["/v1/sumeragi/bls-keys"] {
@@ -396,16 +405,10 @@ async fn canonical_sumeragi_spellings_reach_their_resource_handlers() {
     }
     runtime.shutdown().await;
 }
-fn build_router() -> iroha_torii::TestApiRouterRuntime {
-    let cfg = test_utils::mk_minimal_root_cfg();
+fn build_router() -> fixtures::CommittedToriiRouterRuntime {
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(Queue::from_config(queue_cfg, events_sender));
@@ -413,14 +416,14 @@ fn build_router() -> iroha_torii::TestApiRouterRuntime {
     let _ = peers_tx;
     let torii = Torii::new_with_handle(
         cfg.common.chain.clone(),
-        iroha_torii::test_utils::signed_query_network_id(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         cfg.common.key_pair.clone(),
         OnlinePeersProvider::new(peers_rx),
         None,
@@ -432,10 +435,14 @@ fn build_router() -> iroha_torii::TestApiRouterRuntime {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid first-release Torii fixture");
-    torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes")
+    .expect("valid first-release Torii fixture")
+    .with_local_peer_id(native_chain.validators()[0].0.clone());
+    fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    )
 }
 
 #[path = "../src/build_identity_test_fixture.rs"]

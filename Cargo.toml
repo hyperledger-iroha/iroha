@@ -39,6 +39,7 @@ iroha_private_settlement = { path = "crates/iroha_private_settlement" }
 iroha_contract_deploy = { path = "crates/iroha_contract_deploy" }
 iroha_deploy = { path = "crates/iroha_deploy" }
 iroha_fs = { path = "crates/iroha_fs" }
+iroha_managed_ipc = { path = "crates/iroha_managed_ipc" }
 iroha_operation_journal = { path = "crates/iroha_operation_journal" }
 iroha_wallet = { path = "crates/iroha_wallet" }
 iroha_storage_client = { path = "crates/iroha_storage_client" }

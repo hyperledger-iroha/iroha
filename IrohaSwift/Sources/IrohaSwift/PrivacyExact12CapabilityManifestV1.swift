@@ -124,6 +124,21 @@ public enum PrivacyCapabilityReadinessV1: Equatable, Sendable {
     case unavailable(PrivacyCapabilityUnavailableReasonV1)
 }
 
+/// Committed admission contract for the fixed native private-payment relation.
+public struct PrivateSettlementValidityLimitsV1: Equatable, Sendable {
+    public let maxParticipants: UInt16
+    public let maxExpiryBlocks: UInt64
+    public let auditTimeoutBlocks: UInt64
+    public let prepareTimeoutBlocks: UInt64
+    public let commitTimeoutBlocks: UInt64
+    public let capsulePaddingClasses: UInt8
+    public let maxProofBytes: UInt64
+    public let maxCapsuleBytes: UInt64
+    public let maxCarrierBytes: UInt64
+    public let sidecarRetentionBlocks: UInt64
+    public let minAuditorApprovals: UInt16
+}
+
 public struct PrivacyConsensusLimitsV1: Equatable, Sendable {
     public let maxActionsPerTransaction: UInt32
     public let maxActionsPerBlock: UInt32
@@ -135,6 +150,7 @@ public struct PrivacyConsensusLimitsV1: Equatable, Sendable {
     public let maxNullifiersPerAction: UInt32
     public let maxCommitmentsPerAction: UInt32
     public let retainedRootCount: UInt32
+    public let privateSettlement: PrivateSettlementValidityLimitsV1
 
     var orderedValues: [UInt32] {
         [
@@ -163,6 +179,8 @@ public struct PrivacyProtocolLimitsUpdateV1: Equatable, Sendable {
     public let scheduledAtHeight: UInt64
     public let effectiveAtHeight: UInt64
     public let nextLimits: PrivacyProtocolLimitsV1
+    /// Original private-payment expiry horizon when this schedule closes the native relation.
+    public let privateSettlementDrainBlocks: UInt64?
 }
 
 /// Ordinary committed protocol limits; absence selects the canonical profile limits.
@@ -455,6 +473,12 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         0xcc, 0xc4, 0x52, 0x12, 0x0d, 0x17, 0x6e, 0xb0,
     ])
     private static let maximumFieldBytes = PrivacyExact12CapabilityManifestV1.maximumArchiveBytes
+    /// Canonical bytes of the private-settlement record inside the fixed consensus limits.
+    private static let privateSettlementLimitsBytes = 80
+    /// Canonical bytes of ten framed `u32` limits and the framed private-settlement record.
+    private static let consensusLimitsBytes = 131
+    /// Canonical option bytes of one pending update: two heights and a complete limit record.
+    private static let pendingConsensusUpdateBytes = 154
     // Whole statement plus fixed metadata/framing; the raw proof ceiling stays 9 MiB.
     private static let maximumActionBytes = 9 * 1024 * 1024 + 256 * 1024 + 512
 
@@ -787,10 +811,10 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
     ) throws -> PrivacyConsensusPolicyV1 {
         var policy = WireReader(bytes)
         let current = try decodeConsensusLimits(
-            policy.readField(maximum: 64, label: "current consensus limits")
+            policy.readField(maximum: consensusLimitsBytes, label: "current consensus limits")
         )
         let pendingBytes = try decodeOption(
-            policy.readField(maximum: 128, label: "pending consensus update"),
+            policy.readField(maximum: pendingConsensusUpdateBytes, label: "pending consensus update"),
             label: "pending consensus update"
         )
         try policy.requireFinished("consensus policy")
@@ -803,11 +827,11 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 update.readField(maximum: 8, label: "effective height"), "effective height"
             )
             let next = try decodeConsensusLimits(
-                update.readField(maximum: 64, label: "next consensus limits")
+                update.readField(maximum: consensusLimitsBytes, label: "next consensus limits")
             )
             try update.requireFinished("pending consensus update")
             try validateSchedule(scheduled, effective, committedHeight: committedHeight)
-            try requireChanged(current.orderedValues, next.orderedValues, label: "consensus")
+            guard next != current else { throw invalid("consensus update is a no-op") }
             return PrivacyConsensusPolicyUpdateV1(
                 scheduledAtHeight: scheduled,
                 effectiveAtHeight: effective,
@@ -830,6 +854,9 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 "consensus limit \(index)"
             ))
         }
+        let privateSettlement = try decodePrivateSettlementLimits(
+            reader.readField(maximum: privateSettlementLimitsBytes, label: "private-settlement limits")
+        )
         try reader.requireFinished("consensus limits")
         let maxima: [UInt32] = [
             1, 2, 9 * 1024 * 1024, UInt32(maximumActionBytes),
@@ -848,7 +875,81 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
             maxPrivacyBytesPerTransaction: values[4], maxPrivacyBytesPerBlock: values[5],
             maxStatementAndEncryptedOutputBytesPerTransaction: values[6],
             maxNullifiersPerAction: values[7], maxCommitmentsPerAction: values[8],
-            retainedRootCount: values[9]
+            retainedRootCount: values[9],
+            privateSettlement: privateSettlement
+        )
+    }
+
+    /// Check the contract's own bounds. The native validator that runs first also decides
+    /// whether each selected padding class can hold its complete minimum-auditor capsule.
+    private static func decodePrivateSettlementLimits(
+        _ bytes: Data
+    ) throws -> PrivateSettlementValidityLimitsV1 {
+        var reader = WireReader(bytes)
+        let maxParticipants = try exactUInt16(
+            reader.readField(maximum: 2, label: "max participants"), "max participants"
+        )
+        let maxExpiryBlocks = try exactUInt64(
+            reader.readField(maximum: 8, label: "max expiry blocks"), "max expiry blocks"
+        )
+        let auditTimeoutBlocks = try exactUInt64(
+            reader.readField(maximum: 8, label: "audit timeout blocks"), "audit timeout blocks"
+        )
+        let prepareTimeoutBlocks = try exactUInt64(
+            reader.readField(maximum: 8, label: "prepare timeout blocks"), "prepare timeout blocks"
+        )
+        let commitTimeoutBlocks = try exactUInt64(
+            reader.readField(maximum: 8, label: "commit timeout blocks"), "commit timeout blocks"
+        )
+        let padding = try reader.readField(maximum: 1, label: "capsule padding classes")
+        guard padding.count == 1, let capsulePaddingClasses = padding.first else {
+            throw invalid("capsule padding classes must contain exactly one byte")
+        }
+        let maxProofBytes = try exactUInt64(
+            reader.readField(maximum: 8, label: "max proof bytes"), "max proof bytes"
+        )
+        let maxCapsuleBytes = try exactUInt64(
+            reader.readField(maximum: 8, label: "max capsule bytes"), "max capsule bytes"
+        )
+        let maxCarrierBytes = try exactUInt64(
+            reader.readField(maximum: 8, label: "max carrier bytes"), "max carrier bytes"
+        )
+        let sidecarRetentionBlocks = try exactUInt64(
+            reader.readField(maximum: 8, label: "sidecar retention blocks"), "sidecar retention blocks"
+        )
+        let minAuditorApprovals = try exactUInt16(
+            reader.readField(maximum: 2, label: "min auditor approvals"), "min auditor approvals"
+        )
+        try reader.requireFinished("private-settlement limits")
+        let bounded: [(UInt64, UInt64)] = [
+            (maxExpiryBlocks, .max), (auditTimeoutBlocks, .max), (prepareTimeoutBlocks, .max),
+            (commitTimeoutBlocks, .max), (maxProofBytes, 8 * 1024 * 1024),
+            (maxCapsuleBytes, 16 * 1024 * 1024), (maxCarrierBytes, 4 * 1024 * 1024),
+            (sidecarRetentionBlocks, .max), (UInt64(minAuditorApprovals), 32),
+        ]
+        guard (2...255).contains(maxParticipants),
+              bounded.allSatisfy({ (1...$0.1).contains($0.0) }),
+              capsulePaddingClasses != 0, capsulePaddingClasses & ~0b1111 == 0 else {
+            throw invalid("private-settlement limits exceed their native bounds")
+        }
+        let (audited, auditOverflow) = auditTimeoutBlocks.addingReportingOverflow(prepareTimeoutBlocks)
+        let (phases, phaseOverflow) = audited.addingReportingOverflow(commitTimeoutBlocks)
+        guard !auditOverflow, !phaseOverflow, phases <= maxExpiryBlocks,
+              sidecarRetentionBlocks >= maxExpiryBlocks else {
+            throw invalid("private-settlement phases or retention violate the expiry span")
+        }
+        return PrivateSettlementValidityLimitsV1(
+            maxParticipants: maxParticipants,
+            maxExpiryBlocks: maxExpiryBlocks,
+            auditTimeoutBlocks: auditTimeoutBlocks,
+            prepareTimeoutBlocks: prepareTimeoutBlocks,
+            commitTimeoutBlocks: commitTimeoutBlocks,
+            capsulePaddingClasses: capsulePaddingClasses,
+            maxProofBytes: maxProofBytes,
+            maxCapsuleBytes: maxCapsuleBytes,
+            maxCarrierBytes: maxCarrierBytes,
+            sidecarRetentionBlocks: sidecarRetentionBlocks,
+            minAuditorApprovals: minAuditorApprovals
         )
     }
 
@@ -884,13 +985,18 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
                 update.readField(maximum: 64, label: "next protocol limits"),
                 expected: protocolId
             )
+            let drainBlocks = try decodeOptionUInt64(
+                update.readField(maximum: 10, label: "protocol private-settlement drain"),
+                label: "protocol private-settlement drain"
+            )
             try update.requireFinished("pending protocol update")
             try validateSchedule(scheduled, effective, committedHeight: committedHeight)
             try requireChanged(limits.values, next.values, label: "protocol")
             return PrivacyProtocolLimitsUpdateV1(
                 scheduledAtHeight: scheduled,
                 effectiveAtHeight: effective,
-                nextLimits: next
+                nextLimits: next,
+                privateSettlementDrainBlocks: drainBlocks
             )
         }
         try record.requireFinished("protocol policy")
@@ -1269,6 +1375,13 @@ enum PrivacyExact12CapabilityManifestCodecV1 {
         appendCompactLength(32, to: &value)
         value.append(bytes)
         return value
+    }
+
+    private static func exactUInt16(_ bytes: Data, _ label: String) throws -> UInt16 {
+        guard bytes.count == 2 else {
+            throw invalid("\(label) must occupy exactly two bytes")
+        }
+        return UInt16(bytes[bytes.startIndex]) | UInt16(bytes[bytes.startIndex + 1]) << 8
     }
 
     private static func exactUInt32(_ bytes: Data, _ label: String) throws -> UInt32 {

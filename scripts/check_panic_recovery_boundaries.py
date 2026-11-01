@@ -22,14 +22,17 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
 ROOT = Path(__file__).resolve().parents[1]
 
 # These modules deliberately convert worker failures into request/provider
-# errors or a supervised fatal ingress error. A bare blocking task here would
-# run outside the physical worker's suppression, signaling process shutdown
-# before its JoinError was handled.
+# errors, an answer from what a read index already folded, or a supervised fatal
+# ingress error. A bare blocking task here would run outside the physical
+# worker's suppression, signaling process shutdown before its JoinError was
+# handled.
 NO_BARE_BLOCKING = (
     "crates/iroha_torii/src/lib.rs",
     "crates/iroha_torii/src/lib_pipeline_handlers.rs",
     "crates/iroha_torii/src/routing.rs",
     "crates/iroha_torii/src/routing/signed_query_execution.rs",
+    "crates/iroha_torii/src/routing/asset_movements.rs",
+    "crates/iroha_torii/src/multisig_approval_landings.rs",
     "crates/iroha_torii/src/privacy_issuance_api.rs",
     "crates/iroha_torii/src/da/ingest.rs",
     "crates/iroha_torii/src/da/spool.rs",
@@ -60,11 +63,16 @@ NO_BARE_BLOCKING = (
     "crates/irohad/src/sorafs_hedging_billing_runtime.rs",
     "crates/irohad/src/soracloud_runtime.rs",
 )
-NO_BARE_STD_THREAD = tuple(
-    relative
-    for relative in NO_BARE_BLOCKING
-    if relative.startswith("crates/irohad/")
-    and relative != "crates/irohad/src/soracloud_runtime.rs"
+NO_BARE_STD_THREAD = (
+    *(
+        relative
+        for relative in NO_BARE_BLOCKING
+        if relative.startswith("crates/irohad/")
+        and relative != "crates/irohad/src/soracloud_runtime.rs"
+    ),
+    # A background index pass on a raw thread escapes suppression the same way.
+    "crates/iroha_torii/src/routing/asset_movements.rs",
+    "crates/iroha_torii/src/multisig_approval_landings.rs",
 )
 
 REQUIRED_SNIPPETS = {
@@ -195,7 +203,10 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_stream_token_gateway_check_permission_tests.rs",
         "executor/root_fees.rs",
         "executor/attachment_custody.rs",
+        "executor/attachment_custody/host.rs",
         "executor/attachment_custody/tests.rs",
+        "executor/attachment_custody/x509.rs",
+        "executor/attachment_custody/x509/tests.rs",
         "executor/attachment_custody/pgc_bootstrap.rs",
         "executor/attachment_custody/pgc_bootstrap/tests.rs",
         "executor/attachment_direct.rs",
@@ -224,6 +235,7 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
         "executor_opaque_monetary_tests.rs",
         "executor/root_scope/tests/amx_approvals.rs",
         "executor/root_scope/tests/amx_roles.rs",
+        "executor/root_scope/tests/contract_permissions.rs",
         "executor/root_scope/tests/role_removal.rs",
         "executor/root_scope/tests/decode_refusal.rs",
     )
@@ -1615,15 +1627,15 @@ def _token_issuance_worker_policy_failures(source: str) -> list[str]:
         let issuance_result = worker_issuer.issue_token(
             quota_subject, manifest_cid, provider_id, profile_handle, overrides, policy.as_ref(),
         );
-        if let Some(account) = &account {
-            if Some(current_account_read_policy(
+        if let Some(account) = &account
+            && Some(current_account_read_policy(
                 &worker_state, account, ProviderId::new(provider_id),
-            )?) != policy {
-                return Err(json_error(
-                    StatusCode::FORBIDDEN,
-                    "account-read policy changed during token issuance",
-                ));
-            }
+            )?) != policy
+        {
+            return Err(json_error(
+                StatusCode::FORBIDDEN,
+                "account-read policy changed during token issuance",
+            ));
         }
         Ok(issuance_result)
     """

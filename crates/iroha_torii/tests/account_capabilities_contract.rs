@@ -1,89 +1,28 @@
 //! Account-free bootstrap qualification through the shipping Torii router and `OpenAPI` projection.
-
-use std::sync::Arc;
+//! The listener authority comes from an applied signed genesis; the caller needs no account.
 
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use iroha_config::parameters::actual::Root;
-use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    queue::Queue,
-    state::{State, World, WorldReadOnly as _},
-};
-use iroha_data_model::NetworkId;
-use iroha_torii::{OnlinePeersProvider, TestApiRouterRuntime, Torii};
+use iroha_core::state::{World, WorldReadOnly as _};
 use iroha_torii_shared::{
     account_capabilities::{ACCOUNT_CAPABILITIES_MAX_BYTES_V1, AccountCapabilitiesV1},
     route_catalog,
 };
 use norito::json::Value;
 use tower::ServiceExt as _;
-
-fn bootstrap_router(cfg: &Root) -> (TestApiRouterRuntime, Arc<State>) {
-    let kura = Kura::blank_kura_for_testing();
-    let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let world = World::default();
-    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-        iroha_crypto::Algorithm::Secp256k1,
-    ])
-    .expect("explicit no-Ed25519 bootstrap fixture policy");
-    let mut block = world.block();
-    block
-        .set_parameter_for_testing(policy.into_parameter().unwrap())
-        .unwrap();
-    block.commit();
-    let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-        world,
-        kura.clone(),
-        LiveQueryStore::start_test(),
-        cfg.common.chain.clone(),
-        network_id,
-    ));
-    let queue = Arc::new(Queue::from_config(
-        iroha_config::parameters::actual::Queue::default(),
-        tokio::sync::broadcast::channel(1).0,
-    ));
-    let (_, peers_rx) = tokio::sync::watch::channel(<_>::default());
-    let torii = Torii::new_with_handle(
-        cfg.common.chain.clone(),
-        network_id,
-        KisoHandle::mock(cfg),
-        cfg.torii.clone(),
-        queue,
-        tokio::sync::broadcast::channel(1).0,
-        LiveQueryStore::start_test(),
-        kura,
-        state.clone(),
-        cfg.common.key_pair.clone(),
-        OnlinePeersProvider::new(peers_rx),
-        None,
-        iroha_torii::test_utils::with_private_settlement_test_signers(
-            iroha_torii::ToriiRuntimeDeps::new(
-                build_identity_test_fixture::build_identity(),
-                iroha_torii::MaybeTelemetry::disabled(),
-            ),
-            &iroha_torii::test_utils::private_settlement_test_node_key(),
-        ),
-    )
-    .expect("valid empty-ledger bootstrap fixture");
-    (
-        torii
-            .api_router_for_tests()
-            .expect("shipping Torii router initializes"),
-        state,
-    )
-}
+#[path = "fixtures.rs"]
+mod fixtures;
 
 #[tokio::test]
 async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_only() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
-    let (runtime, state) = bootstrap_router(&cfg);
-    assert_eq!(state.view().world().accounts_iter().count(), 0);
+    let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
+    let state = &torii.state;
+    let runtime = torii.router();
+    let genesis_accounts = state.view().world().accounts_iter().count();
     let expected = {
         let parameters = state.transaction_admission_parameters();
         AccountCapabilitiesV1::from_policy(
@@ -134,7 +73,11 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
         ],
         "bootstrap must expose only the four public V1 fields"
     );
-    assert_eq!(actual.allowed_signing, ["secp256k1"]);
+    assert_eq!(
+        actual.allowed_signing,
+        ["ed25519", "secp256k1", "bls_normal"],
+        "bootstrap reports the exact policy the signed genesis authored"
+    );
 
     for (method, path, body, expected_status) in [
         (
@@ -161,9 +104,10 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
             Vec::new(),
             StatusCode::METHOD_NOT_ALLOWED,
         ),
+        ("GET", "/v1/node/capabilities", Vec::new(), StatusCode::OK),
         (
             "GET",
-            "/v1/node/capabilities",
+            "/v1/privacy/capabilities",
             Vec::new(),
             StatusCode::UNAUTHORIZED,
         ),
@@ -181,13 +125,18 @@ async fn account_capabilities_shipping_router_is_public_exact_bounded_and_read_o
             .expect("bootstrap policy response");
         assert_eq!(response.status(), expected_status, "{method} {path}");
     }
-    assert_eq!(state.view().world().accounts_iter().count(), 0);
+    assert_eq!(
+        state.view().world().accounts_iter().count(),
+        genesis_accounts,
+        "credential-free discovery registers nothing"
+    );
     runtime.shutdown().await;
 
     // Public account bootstrap does not bypass the listener's configured API-token policy.
     cfg.torii.require_api_token = true;
     cfg.torii.api_tokens = vec!["bootstrap-listener-test-token-00000000".to_owned()].into();
-    let (protected, _) = bootstrap_router(&cfg);
+    let protected_torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
+    let protected = protected_torii.router();
     let denied = protected
         .router()
         .oneshot(
@@ -253,14 +202,16 @@ fn account_capabilities_generated_openapi_preserves_exact_public_bootstrap_contr
             .len(),
         4
     );
+    assert_eq!(
+        document["paths"]["/v1/node/capabilities"]["get"]["security"],
+        norito::json!([{}, {"IrohaApiToken": []}]),
+        "node compatibility discovery is public apart from the listener token policy"
+    );
     assert!(
-        document["paths"]["/v1/node/capabilities"]["get"]["security"]
+        document["paths"]["/v1/privacy/capabilities"]["get"]["security"]
             .as_array()
-            .expect("authenticated node capability security")
+            .expect("authenticated privacy capability security")
             .iter()
             .all(|value| value.as_object().is_some_and(|object| !object.is_empty()))
     );
 }
-
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;

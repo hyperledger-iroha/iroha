@@ -60,6 +60,47 @@ def test_daemon_recoverable_workers_have_no_bare_blocking(relative: str) -> None
     assert module._bare_blocking_lines(source) == []
 
 
+READ_INDEX_FOLDS = (
+    "crates/iroha_torii/src/multisig_approval_landings.rs",
+    "crates/iroha_torii/src/routing/asset_movements.rs",
+)
+READ_INDEX_RECOVERABLE_WORKER = (
+    "crate::panic_recovery::spawn_blocking_recoverable(move ||"
+)
+
+
+@pytest.mark.parametrize("relative", READ_INDEX_FOLDS)
+@pytest.mark.parametrize(
+    "raw_spawn", ("tokio::task::spawn_blocking", "handle.spawn_blocking")
+)
+def test_read_index_folds_reject_bare_blocking_workers(
+    relative: str, raw_spawn: str
+) -> None:
+    module = load_guard_module()
+    assert relative in module.NO_BARE_BLOCKING
+    source = (module.ROOT / relative).read_text(encoding="utf-8")
+    workers = source.count(READ_INDEX_RECOVERABLE_WORKER)
+    assert workers == 2, "the read's tail fold and the background pass"
+    assert module._bare_blocking_lines(source) == []
+    tampered = source.replace(READ_INDEX_RECOVERABLE_WORKER, f"{raw_spawn}(move ||")
+    assert len(module._bare_blocking_lines(tampered)) == workers
+
+
+@pytest.mark.parametrize("relative", READ_INDEX_FOLDS)
+def test_read_index_folds_reject_raw_thread_workers(relative: str) -> None:
+    module = load_guard_module()
+    assert relative in module.NO_BARE_STD_THREAD
+    source = (module.ROOT / relative).read_text(encoding="utf-8")
+    workers = source.count(READ_INDEX_RECOVERABLE_WORKER)
+    assert workers == 2, "the read's tail fold and the background pass"
+    assert module._bare_std_thread_lines(source) == []
+    tampered = source.replace(
+        READ_INDEX_RECOVERABLE_WORKER,
+        "std::thread::Builder::new().spawn(move ||",
+    )
+    assert len(module._bare_std_thread_lines(tampered)) == workers
+
+
 @pytest.mark.parametrize(
     "relative",
     (
@@ -1745,8 +1786,8 @@ def _rust_fragment_span(module, source: str, fragment: str) -> tuple[int, int]:
     (".transpose()?;", ".transpose().unwrap_or(None);"),
     ("let issuance_result = worker_issuer.issue_token(", "let issuance_result = detached_issuer.issue_token("),
     ("policy.as_ref(),", "None,"),
-    ("if let Some(account) = &account {", "if false { let account = &account;"),
-    ("if Some(current_account_read_policy(", "if Some(stale_account_read_policy("),
+    ("if let Some(account) = &account &&", "if false && let Some(account) = &account &&"),
+    ("&& Some(current_account_read_policy(", "&& Some(stale_account_read_policy("),
     ("            )?) != policy", "            ).ok()) != policy"),
     ("            )?) != policy", "            )?) == policy"),
     ('"account-read policy changed during token issuance"', '"ignore changed policy"'),
@@ -1772,7 +1813,7 @@ def test_token_issuance_policy_reads_cannot_be_reordered_or_move_outside_worker(
     source = (root / "crates/iroha_torii/src/sorafs/api/storage_token_issuance.rs").read_text(encoding="utf-8")
     prefix, _ = _rust_fragment_span(module, source, "let policy = account")
     issue, _ = _rust_fragment_span(module, source, "let issuance_result = worker_issuer.issue_token(")
-    recheck, _ = _rust_fragment_span(module, source, "if let Some(account) = &account {")
+    recheck, _ = _rust_fragment_span(module, source, "if let Some(account) = &account &&")
     result, _ = _rust_fragment_span(module, source, "Ok(issuance_result) })")
     policy = source[prefix:issue]
     issuance = source[issue:recheck]

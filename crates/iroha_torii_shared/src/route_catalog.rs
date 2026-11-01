@@ -2694,6 +2694,14 @@ pub mod sumeragi {
         "/v1/private-dataspaces/{dataspace_id}/records/{height}/proof",
     )
     .with_projections(RouteProjections::SDK);
+    /// Read a bounded native game world for untrusted discovery.
+    pub const GAME_PARTITION_STATE: RouteDescriptor = public_get(
+        "game_partition.state.read", "/v1/game-partitions/{world}/state",
+    ).with_projections(RouteProjections::SDK);
+    /// Read the original certified native game-unit export.
+    pub const GAME_PARTITION_EXPORT_PROOF: RouteDescriptor = public_get(
+        "game_partition.export_proof.read", "/v1/game-partitions/{world}/exports/{receipt}/proof",
+    ).with_projections(RouteProjections::SDK);
     /// Export the immutable private root registration to its authenticated owner token.
     pub const PRIVATE_ROOT_REGISTRATION: RouteDescriptor = public_get(
         "private_root.registration.read",
@@ -2753,6 +2761,8 @@ pub mod sumeragi {
         LANES,
         BLS_KEYS,
         PRIVATE_DATASPACE_RECORD_PROOF,
+        GAME_PARTITION_STATE,
+        GAME_PARTITION_EXPORT_PROOF,
         SNS_DATASPACE_LEASE,
         PRIVATE_ROOT_REGISTRATION,
         PRIVATE_ROOT_ANCHOR,

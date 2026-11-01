@@ -1928,6 +1928,9 @@ impl<'s> Worker<'s> {
             Some(
                 crate::smartcontracts::isi::sccp::keepalive::ProgressClock::capture(
                     original_view.world(),
+                    original_view
+                        .native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
                     height,
                     time_ms,
                 )

@@ -5,11 +5,9 @@
 //! etc.). Each cfg-gated block runs only when the corresponding feature is enabled.
 #![allow(clippy::too_many_lines)]
 use axum::http::{Request, StatusCode, Uri};
-use iroha_core::{
-    kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
-};
-use iroha_model_base::chain::ChainId;
-use iroha_model_base::peer::PeerId;
+use iroha_core::{kiso::KisoHandle, prelude::World, query::store::LiveQueryStore};
+#[cfg(feature = "telemetry")]
+use iroha_primitives::time::TimeSource;
 use iroha_torii_shared::route_catalog;
 use norito::json;
 use std::sync::Arc;
@@ -113,16 +111,15 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 }
 #[tokio::test]
 async fn router_builds_under_current_features() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = mk_minimal_root_cfg();
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
+    let local_peer_id = native_chain.validators()[0].0.clone();
     // Start a minimal Kiso
-    let cfg = mk_minimal_root_cfg();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     // Minimal in-memory components required by Torii
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -132,9 +129,10 @@ async fn router_builds_under_current_features() {
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = peers_tx; // keep channel alive
     let da_receipt_signer = cfg.common.key_pair.clone();
+    let network_id = native_chain.network_id();
     let torii = iroha_torii::Torii::new_with_handle(
-        ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        cfg.common.chain.clone(),
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -153,11 +151,14 @@ async fn router_builds_under_current_features() {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii route-matrix fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
-    let app = runtime.router();
+    .expect("valid Torii route-matrix fixture")
+    .with_local_peer_id(local_peer_id);
+    let app = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     diff_openapi_if_available(&app).await;
     let canonical_openapi = app
         .clone()
@@ -188,14 +189,16 @@ async fn router_builds_under_current_features() {
     // These operator reads are present regardless of telemetry features.
     let evidence_list = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri(Uri::from_static("/v1/sumeragi/evidence"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            app.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(Uri::from_static("/v1/sumeragi/evidence"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -205,14 +208,16 @@ async fn router_builds_under_current_features() {
     );
     let resp1 = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            app.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -232,15 +237,17 @@ async fn router_builds_under_current_features() {
     ] {
         let response = app
             .clone()
-            .oneshot(fixtures::operator_signed_request(
-                &cfg.common.key_pair,
-                Request::builder()
-                    .method(method)
-                    .uri(Uri::from_static(path))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-                &[],
-            ))
+            .oneshot(
+                app.operator_signed_request(
+                    &cfg.common.key_pair,
+                    Request::builder()
+                        .method(method)
+                        .uri(Uri::from_static(path))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                    &[],
+                ),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -275,14 +282,16 @@ async fn router_builds_under_current_features() {
     }
     let resp2 = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri(Uri::from_static(route_catalog::core::PEERS.path()))
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            app.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(Uri::from_static(route_catalog::core::PEERS.path()))
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     // Depending on rate-limits/test timing, allow OK or 429 after operator admission.
@@ -417,20 +426,19 @@ async fn router_builds_under_current_features() {
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
-    runtime.shutdown().await;
+    app.shutdown().await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
 async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     // Build with telemetry enabled
-    let cfg = mk_minimal_root_cfg();
+    let mut cfg = mk_minimal_root_cfg();
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
+    let local_peer_id = native_chain.validators()[0].0.clone();
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -443,26 +451,26 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
     // Telemetry handle
     let telemetry = {
         use iroha_core::telemetry as core_telemetry;
-        use iroha_primitives::time::TimeSource;
-        let metrics = fixtures::shared_metrics();
+        let metrics = fixtures::reset_shared_metrics();
         let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
         core_telemetry::start(
             metrics,
             state.clone(),
             kura.clone(),
             queue.clone(),
-            (peers_rx.clone(), local_peer_id),
+            (peers_rx.clone(), local_peer_id.clone()),
             ts,
-            false,
+            true,
         )
         .expect("test telemetry resource registration")
         .0
     };
     let telemetry_profile = iroha_config::parameters::actual::TelemetryProfile::Operator;
     assert!(!telemetry_profile.developer_outputs_enabled());
+    let network_id = native_chain.network_id();
     let torii = iroha_torii::Torii::new_with_handle(
-        ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        cfg.common.chain.clone(),
+        network_id,
         kiso,
         cfg.torii.clone(),
         queue,
@@ -481,11 +489,14 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii route-matrix fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
-    let app = runtime.router();
+    .expect("valid Torii route-matrix fixture")
+    .with_local_peer_id(local_peer_id);
+    let app = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     for path in [
         route_catalog::diagnostic::STATUS.path(),
         route_catalog::diagnostic::STATUS_BLOCKS.path(),
@@ -493,14 +504,16 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
     ] {
         let resp = app
             .clone()
-            .oneshot(fixtures::operator_signed_request(
-                &cfg.common.key_pair,
-                Request::builder()
-                    .uri(Uri::from_static(path))
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-                &[],
-            ))
+            .oneshot(
+                app.operator_signed_request(
+                    &cfg.common.key_pair,
+                    Request::builder()
+                        .uri(Uri::from_static(path))
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                    &[],
+                ),
+            )
             .await
             .unwrap();
         assert!(
@@ -508,21 +521,24 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
                 resp.status(),
                 StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::INTERNAL_SERVER_ERROR
             ),
-            "path={path}"
+            "path={path} status={}",
+            resp.status()
         );
     }
 
     let evidence_count = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
-                .header(axum::http::header::ACCEPT, "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            app.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
+                    .header(axum::http::header::ACCEPT, "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     assert_eq!(evidence_count.status(), StatusCode::OK);
@@ -540,15 +556,17 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
 
     let evidence_list = app
         .clone()
-        .oneshot(fixtures::operator_signed_request(
-            &cfg.common.key_pair,
-            Request::builder()
-                .uri(Uri::from_static("/v1/sumeragi/evidence"))
-                .header(axum::http::header::ACCEPT, "application/json")
-                .body(axum::body::Body::empty())
-                .unwrap(),
-            &[],
-        ))
+        .oneshot(
+            app.operator_signed_request(
+                &cfg.common.key_pair,
+                Request::builder()
+                    .uri(Uri::from_static("/v1/sumeragi/evidence"))
+                    .header(axum::http::header::ACCEPT, "application/json")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+                &[],
+            ),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -573,14 +591,16 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
         let uri = format!("/v1/sumeragi/evidence?{query}");
         let response = app
             .clone()
-            .oneshot(fixtures::operator_signed_request(
-                &cfg.common.key_pair,
-                Request::builder()
-                    .uri(uri.as_str())
-                    .body(axum::body::Body::empty())
-                    .unwrap(),
-                &[],
-            ))
+            .oneshot(
+                app.operator_signed_request(
+                    &cfg.common.key_pair,
+                    Request::builder()
+                        .uri(uri.as_str())
+                        .body(axum::body::Body::empty())
+                        .unwrap(),
+                    &[],
+                ),
+            )
             .await
             .unwrap();
         assert_eq!(
@@ -591,6 +611,7 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
     }
 
     let unknown = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(Uri::from_static("/status/not-a-probe"))
@@ -600,7 +621,7 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
         .await
         .unwrap();
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-    runtime.shutdown().await;
+    app.shutdown().await;
 }
 
 #[path = "../src/build_identity_test_fixture.rs"]

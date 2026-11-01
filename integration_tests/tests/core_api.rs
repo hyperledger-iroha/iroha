@@ -90,6 +90,8 @@ mod sorting;
 mod telemetry;
 #[path = "threshold_escrow.rs"]
 mod threshold_escrow;
+#[path = "tides_native_two_partition.rs"]
+mod tides_native_two_partition;
 #[path = "torii_failure.rs"]
 mod torii_failure;
 #[path = "torii_load_profile.rs"]
@@ -108,3 +110,6 @@ mod tx_history;
 mod tx_rollback;
 #[path = "upgrade.rs"]
 mod upgrade;
+
+#[path = "tides_independent_roots.rs"]
+mod tides_independent_roots;

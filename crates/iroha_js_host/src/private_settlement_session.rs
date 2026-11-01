@@ -22,8 +22,11 @@ use std::{
 use tokio::sync::Semaphore;
 
 /// Complete source descriptor limit, checked natively before its first retained copy.
-#[napi(js_name = "privateSettlementDescriptorMaxBytes")]
-pub const DESCRIPTOR_MAX_BYTES: u32 = NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES as u32;
+// napi registers a const under its Rust identifier and ignores `js_name`.
+#[allow(non_upper_case_globals)]
+#[napi]
+pub const privateSettlementDescriptorMaxBytes: u32 =
+    NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES as u32;
 
 /// Canonical native local observation defaults. These never change committed validity.
 #[napi(object)]

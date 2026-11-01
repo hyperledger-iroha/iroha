@@ -85,6 +85,21 @@ const CONSENSUS_LIMIT_MAXIMA = Object.freeze({
   max_commitments_per_action: 8,
   retained_root_count: 2048,
 });
+// PrivateSettlementValidityLimitsV1 in Core's field order: [key, minimum, maximum]. A bigint
+// bound marks a uint64 field; the others are uint8 or uint16 and stay plain numbers.
+const PRIVATE_SETTLEMENT_LIMIT_FIELDS = Object.freeze([
+  ["max_participants", 2, 255],
+  ["max_expiry_blocks", 1n, MAX_U64],
+  ["audit_timeout_blocks", 1n, MAX_U64],
+  ["prepare_timeout_blocks", 1n, MAX_U64],
+  ["commit_timeout_blocks", 1n, MAX_U64],
+  ["capsule_padding_classes", 1, 0b1111],
+  ["max_proof_bytes", 1n, 8n * 1024n * 1024n],
+  ["max_capsule_bytes", 1n, 16n * 1024n * 1024n],
+  ["max_carrier_bytes", 1n, 4n * 1024n * 1024n],
+  ["sidecar_retention_blocks", 1n, MAX_U64],
+  ["min_auditor_approvals", 1, 32],
+]);
 
 function parseConsensusPolicy(value, committedHeight, path) {
   const policy = objectWithExactKeys(value, ["current_limits", "pending_update"], path);
@@ -106,7 +121,7 @@ function parseConsensusPolicy(value, committedHeight, path) {
 }
 
 function parseConsensusLimits(value, path) {
-  const limits = objectWithExactKeys(value, CONSENSUS_LIMIT_KEYS, path);
+  const limits = objectWithExactKeys(value, [...CONSENSUS_LIMIT_KEYS, "private_settlement"], path);
   const result = {};
   for (const key of CONSENSUS_LIMIT_KEYS) {
     const number = positiveU32(limits[key], `${path}.${key}`);
@@ -120,6 +135,25 @@ function parseConsensusLimits(value, path) {
     || result.max_privacy_bytes_per_transaction > result.max_privacy_bytes_per_block
     || result.max_statement_and_encrypted_output_bytes_per_transaction > result.max_action_bytes
   ) fail("violates consensus resource-limit ordering", path);
+  result.private_settlement = parsePrivateSettlementLimits(limits.private_settlement, `${path}.private_settlement`);
+  return result;
+}
+
+// The native validator that runs first also decides whether each selected padding class can
+// hold its complete minimum-auditor capsule, and whether a schedule drains its obligations.
+function parsePrivateSettlementLimits(value, path) {
+  const limits = objectWithExactKeys(value, PRIVATE_SETTLEMENT_LIMIT_FIELDS.map(([key]) => key), path);
+  const result = {};
+  for (const [key, minimum, maximum] of PRIVATE_SETTLEMENT_LIMIT_FIELDS) {
+    const fieldPath = `${path}.${key}`;
+    const number = typeof maximum === "bigint" ? u64(limits[key], fieldPath) : u32(limits[key], fieldPath);
+    if (number < minimum || number > maximum) fail("is outside its native first-release bound", fieldPath);
+    result[key] = number;
+  }
+  if (result.audit_timeout_blocks + result.prepare_timeout_blocks + result.commit_timeout_blocks > result.max_expiry_blocks) {
+    fail("phase durations exceed the expiry span", path);
+  }
+  if (result.sidecar_retention_blocks < result.max_expiry_blocks) fail("retention is shorter than the expiry span", path);
   return result;
 }
 
@@ -230,19 +264,20 @@ function limitFieldsFor(protocol) {
 
 function parseProtocolUpdate(value, current, committedHeight, path) {
   if (value === null) return null;
-  const update = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits"], path);
+  const update = objectWithExactKeys(value, ["scheduled_at_height", "effective_at_height", "next_limits", "private_settlement_drain_blocks"], path);
   const scheduled = positiveU64(update.scheduled_at_height, `${path}.scheduled_at_height`);
   const effective = positiveU64(update.effective_at_height, `${path}.effective_at_height`);
   if (effective <= scheduled || scheduled > committedHeight || effective <= committedHeight) fail("has invalid committed-height schedule", path);
   const next = parseProtocolLimits(update.next_limits, current.protocol, `${path}.next_limits`);
   if (sameJson(next, current)) fail("must change at least one limit", path);
-  return { scheduled_at_height: scheduled, effective_at_height: effective, next_limits: next };
+  const drainBlocks = update.private_settlement_drain_blocks === null
+    ? null
+    : positiveU64(update.private_settlement_drain_blocks, `${path}.private_settlement_drain_blocks`);
+  return { scheduled_at_height: scheduled, effective_at_height: effective, next_limits: next, private_settlement_drain_blocks: drainBlocks };
 }
 
 function assertUpdateChanged(current, next, path) {
-  if (!CONSENSUS_LIMIT_KEYS.some((key) => next[key] !== current[key])) {
-    fail("must change at least one limit", path);
-  }
+  if (manifestValuesEqualV1(current, next)) fail("must change at least one limit", path);
 }
 
 function taggedUnit(value, tagKey, contentKey, permitted, path) {
@@ -255,9 +290,16 @@ function taggedUnit(value, tagKey, contentKey, permitted, path) {
 function tagged(value, tagKey, contentKey) { return { [tagKey]: value, [contentKey]: null }; }
 
 function fixedBytes(value, path) {
-  const bytes = fixedBytesWithLength(value, 32, path);
+  const bytes = fixedBytesWithLength(tupleField(value, path), 32, path);
   if (bytes.every((byte) => byte === 0)) fail("must not be all zero", path);
   return bytes;
+}
+
+// Core's Norito JSON writes a one-field tuple struct as a one-element array, so digests and the
+// feature mask arrive as [value]. The parsed model exposes the inner value.
+function tupleField(value, path) {
+  if (!Array.isArray(value) || value.length !== 1) fail("must be a one-element tuple-struct array", path);
+  return value[0];
 }
 
 function fixedBytesWithLength(value, length, path) {
@@ -701,7 +743,7 @@ function parsePrivacyExact12ManifestProjectionV1(payload) {
       executionMode,
       `${path}.execution_mode`,
     );
-    if (row.privacy_feature_mask !== featureMask) {
+    if (tupleField(row.privacy_feature_mask, `${path}.privacy_feature_mask`) !== featureMask) {
       manifestFailV1(
         `must equal the closed feature mask ${featureMask}`,
         `${path}.privacy_feature_mask`,
@@ -829,7 +871,8 @@ function manifestTaggedUnitV1(value, tagKey, contentKey, expected, path) {
   return { [tagKey]: expected, [contentKey]: null };
 }
 
-function manifestFixed32V1(value, path) {
+function manifestFixed32V1(wrapper, path) {
+  const value = tupleField(wrapper, path);
   if (!Array.isArray(value) || value.length !== 32) {
     manifestFailV1("must contain exactly 32 bytes", path);
   }

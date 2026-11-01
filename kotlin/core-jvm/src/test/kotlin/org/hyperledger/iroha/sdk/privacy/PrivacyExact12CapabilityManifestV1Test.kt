@@ -3,7 +3,10 @@
 
 package org.hyperledger.iroha.sdk.privacy
 
+import java.io.File
+import java.math.BigInteger
 import java.nio.charset.StandardCharsets
+import java.util.Base64
 import org.hyperledger.iroha.sdk.core.model.NetworkId
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -15,6 +18,149 @@ import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
 class PrivacyExact12CapabilityManifestV1Test {
+    @Test
+    fun parsesTheManifestCoreSerializesIncludingItsPrivateSettlementContract() {
+        val manifest = parseCoreManifest()
+        val current = manifest.consensusPolicy.currentLimits
+        assertEquals(
+            PrivateSettlementValidityLimitsV1(
+                255,
+                7_200.toBigInteger(),
+                1_200.toBigInteger(),
+                1_200.toBigInteger(),
+                1_200.toBigInteger(),
+                0b1111,
+                8_388_608.toBigInteger(),
+                1_048_576.toBigInteger(),
+                4_194_304.toBigInteger(),
+                1_000_000.toBigInteger(),
+                1,
+            ),
+            current.privateSettlement,
+        )
+        // This pending update changes only the private-settlement contract.
+        val next = manifest.consensusPolicy.pendingUpdate!!.nextLimits
+        assertEquals(current.retainedRootCount, next.retainedRootCount)
+        assertEquals(3_600.toBigInteger(), next.privateSettlement.maxExpiryBlocks)
+        assertEquals(
+            7_200.toBigInteger(),
+            manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
+                .policy!!.pendingUpdate!!.privateSettlementDrainBlocks,
+        )
+        assertNull(
+            manifest.rowFor(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)
+                .policy!!.pendingUpdate!!.privateSettlementDrainBlocks,
+        )
+        assertTrue(manifest.canonicalBytes().contentEquals(coreManifestArchive()))
+        // Core wraps each digest and the mask in a one-element array; the model exposes the inner value.
+        val closing = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
+        assertEquals(7, closing.privacyFeatureMask)
+        assertEquals(
+            PrivacyFixed32V1(ByteArray(32) { 1 }),
+            assertIs<PrivacyCompiledProfileResultV1.Available>(closing.compiledProfile).profile.parameterId,
+        )
+        // Every unavailable reason keeps its own detail shape.
+        val schemaInvalid = assertIs<PrivacyCompiledProfileResultV1.Unavailable>(
+            manifest.rowFor(PrivacyProtocolIdV1.VEGA_EXISTING_CREDENTIAL_ZK_V1).compiledProfile,
+        )
+        assertEquals(PrivacyCompiledProfileUnavailableReasonV1.STATEMENT_SCHEMA_INVALID, schemaInvalid.reason)
+        assertEquals(PrivacyCompiledStatementSchemaErrorV1.MISSING_TYPE_REFERENCE, schemaInvalid.statementSchemaError)
+        for ((protocol, reason) in listOf(
+            PrivacyProtocolIdV1.IROHA_BOOTLE_LANTERN_ANONCRED_V1 to
+                PrivacyCompiledProfileUnavailableReasonV1.PROFILE_INITIALIZATION_FAILED,
+            PrivacyProtocolIdV1.MONERO_FCMP_PLUS_PLUS_V1 to
+                PrivacyCompiledProfileUnavailableReasonV1.ENGINE_UNAVAILABLE,
+            PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1 to
+                PrivacyCompiledProfileUnavailableReasonV1.JOINT_SECURITY_REDUCTION_INCOMPLETE,
+        )) {
+            assertEquals(
+                reason,
+                assertIs<PrivacyCompiledProfileResultV1.Unavailable>(manifest.rowFor(protocol).compiledProfile).reason,
+            )
+        }
+        // A fixed-limit protocol's committed policy carries no limit fields.
+        assertNull(manifest.rowFor(PrivacyProtocolIdV1.IROHA_ZK_X509_STARK_P256_V1).policy!!.currentLimits.values)
+    }
+
+    @Test
+    fun refusesADigestOrFeatureMaskWithoutCoresTupleStructArray() {
+        val core = coreManifestJson()
+        val mask = Regex(""""privacy_feature_mask":\s*\[\s*(\d+)\s*\]""")
+        val parameter = Regex(""""parameter_id":\s*\[\s*(\[[^\]]*\])\s*\]""")
+        val digest = Regex(""""manifest_digest":\s*\[\s*(\[[^\]]*\])\s*\]""")
+        for (retired in listOf(
+            mask.replaceFirst(core, "\"privacy_feature_mask\": $1"),
+            mask.replaceFirst(core, "\"privacy_feature_mask\": []"),
+            parameter.replaceFirst(core, "\"parameter_id\": $1"),
+            digest.replaceFirst(core, "\"manifest_digest\": $1"),
+            digest.replaceFirst(core, "\"manifest_digest\": [$1, $1]"),
+        )) {
+            assertTrue(retired != core)
+            assertFailsWith<IllegalArgumentException> { parseCoreManifest(retired) }
+        }
+    }
+
+    @Test
+    fun refusesTheLimitAndUpdateLayoutsCoreNoLongerSerializes() {
+        val core = coreManifestJson()
+        val settlement = Regex(""",\s*"private_settlement":\s*\{[^}]*\}""")
+        assertEquals(2, settlement.findAll(core).count())
+        val drain = Regex(""",\s*"private_settlement_drain_blocks":\s*(null|\d+)""")
+        assertEquals(2, drain.findAll(core).count())
+        val retired = listOf(
+            core.replaceFirst(settlement, ""),
+            settlement.replace(core, ""),
+            core.replaceFirst(drain, ""),
+            drain.replace(core, ""),
+            core.replaceFirst("\"min_auditor_approvals\": 1", "\"min_auditor_approvals\": 1, \"retired\": 1"),
+        )
+        for (layout in retired) {
+            assertTrue(layout != core)
+            assertFailsWith<IllegalArgumentException> { parseCoreManifest(layout) }
+        }
+    }
+
+    @Test
+    fun coreManifestFieldsStayInsideTheirNativeBoundsAndPhaseRelationships() {
+        val core = coreManifestJson()
+        for ((field, value) in listOf(
+            "max_participants" to "1",
+            "max_participants" to "256",
+            "max_expiry_blocks" to "0",
+            "max_expiry_blocks" to "3599",
+            "commit_timeout_blocks" to "4801",
+            "capsule_padding_classes" to "0",
+            "capsule_padding_classes" to "16",
+            "max_proof_bytes" to "8388609",
+            "max_capsule_bytes" to "16777217",
+            "max_carrier_bytes" to "4194305",
+            "sidecar_retention_blocks" to "7199",
+            "sidecar_retention_blocks" to "18446744073709551616",
+            "min_auditor_approvals" to "0",
+            "min_auditor_approvals" to "33",
+            "max_expiry_blocks" to "\"7200\"",
+        )) {
+            val invalid = core.replaceFirst(Regex("\"$field\":\\s*\\d+"), "\"$field\": $value")
+            assertTrue(invalid != core, "$field=$value did not change the manifest")
+            assertFailsWith<IllegalArgumentException>("$field=$value") { parseCoreManifest(invalid) }
+        }
+        assertEquals(
+            BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE),
+            parseCoreManifest(
+                core.replaceFirst(
+                    Regex("\"sidecar_retention_blocks\":\\s*\\d+"),
+                    "\"sidecar_retention_blocks\": 18446744073709551615",
+                ),
+            ).consensusPolicy.currentLimits.privateSettlement.sidecarRetentionBlocks,
+        )
+        val closing = Regex("\"private_settlement_drain_blocks\":\\s*7200")
+        for (invalid in listOf("0", "18446744073709551616", "\"7200\"")) {
+            assertFailsWith<IllegalArgumentException>("drain=$invalid") {
+                parseCoreManifest(core.replaceFirst(closing, "\"private_settlement_drain_blocks\": $invalid"))
+            }
+        }
+    }
+
     @Test
     fun runtimeManifestRejectsDocumentaryQualificationFields() {
         val canonical = inspection()
@@ -125,7 +271,8 @@ class PrivacyExact12CapabilityManifestV1Test {
             for ((scheduled, effective, committed, accepted) in cases) {
                 val next = if (consensus) consensusLimits().replace("2048", "1024") else
                     """{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":32,"max_recipient_count":8}}"""
-                val pending = """{"scheduled_at_height":$scheduled,"effective_at_height":$effective,"next_limits":$next}"""
+                val drain = if (consensus) "" else ",\"private_settlement_drain_blocks\":null"
+                val pending = """{"scheduled_at_height":$scheduled,"effective_at_height":$effective,"next_limits":$next$drain}"""
                 var input = inspection(mapOf(protocol to availableRow(
                     "available", policy(),
                 ))).replace("\"committed_height\":42", "\"committed_height\":$committed")
@@ -215,7 +362,7 @@ class PrivacyExact12CapabilityManifestV1Test {
     fun policyAllowsIncreasesWithinCanonicalBoundsAndNeverEnablesUnavailableRows() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val current = protocolLimits().replace(":64", ":32")
-        val pending = "{\"scheduled_at_height\":42,\"effective_at_height\":43,\"next_limits\":${protocolLimits()}}"
+        val pending = "{\"scheduled_at_height\":42,\"effective_at_height\":43,\"next_limits\":${protocolLimits()},\"private_settlement_drain_blocks\":null}"
         val ordinary = policy(current, pending)
         val row = parseInspection(inspection(mapOf(protocol to availableRow("available", ordinary)))).rowFor(protocol)
         assertTrue(row.isNetworkAvailable())
@@ -409,16 +556,16 @@ class PrivacyExact12CapabilityManifestV1Test {
             overrides[protocol] ?: unavailableRow(protocol)
         }
         val matches = PrivacyProtocolIdV1.values().joinToString(",") { "false" }
-        return """{"manifest":{"version":1,"network_id":"${NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }).literal}","committed_height":42,"consensus_policy":{"current_limits":${consensusLimits()},"pending_update":null},"protocols":[$rows],"manifest_digest":${bytes(9, 32)}},"local_compiled_tuple_matches":[$matches]}"""
+        return """{"manifest":{"version":1,"network_id":"${NetworkId.fromBytes(ByteArray(32) { 0xD1.toByte() }).literal}","committed_height":42,"consensus_policy":{"current_limits":${consensusLimits()},"pending_update":null},"protocols":[$rows],"manifest_digest":[${bytes(9, 32)}]},"local_compiled_tuple_matches":[$matches]}"""
     }
 
     private fun unavailableRow(protocol: PrivacyProtocolIdV1): String =
-        """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":${compiledUnavailable()},"readiness":${compiledUnavailableReadiness()},"policy":null}"""
+        """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":[${expectedFeatureMask(protocol)}],"compiled_profile":${compiledUnavailable()},"readiness":${compiledUnavailableReadiness()},"policy":null}"""
 
     private fun availableRow(reason: String, policy: String?): String {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val profile = profileFields(protocol)
-        return """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":${expectedFeatureMask(protocol)},"compiled_profile":{"status":"available","value":{$profile}},"readiness":${if (reason == "available") "{\"readiness\":\"available\",\"detail\":null}" else unavailableReadiness(reason)},"policy":${policy ?: "null"}}"""
+        return """{"protocol_id":${protocolTag(protocol)},"operation_schema":{"operation_schema":"${expectedOperationSchema(protocol).canonicalLabel}","value":null},"execution_mode":{"execution_mode":"${expectedExecutionMode(protocol).canonicalLabel}","value":null},"privacy_feature_mask":[${expectedFeatureMask(protocol)}],"compiled_profile":{"status":"available","value":{$profile}},"readiness":${if (reason == "available") "{\"readiness\":\"available\",\"detail\":null}" else unavailableReadiness(reason)},"policy":${policy ?: "null"}}"""
     }
 
     private fun availablePolicyRow(): String = availableRow("available", policy())
@@ -430,7 +577,7 @@ class PrivacyExact12CapabilityManifestV1Test {
         """{"protocol_id":${protocolTag(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)},"current_limits":$current,"pending_update":$pending}"""
 
     private fun profileFields(protocol: PrivacyProtocolIdV1): String =
-        """"protocol_id":${protocolTag(protocol)},"proof_system_id":{"proof_system":"${protocol.expectedProofSystem.canonicalLabel}","value":null},"engine_id":{"engine":"${protocol.expectedEngine.canonicalLabel}","value":null},"parameter_id":${bytes(1, 32)},"parameter_digest":${bytes(2, 32)},"verifier_digest":${bytes(3, 32)},"statement_schema_digest":${bytes(4, 32)},"engine_manifest_digest":${bytes(5, 32)},"protocol_limits":{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":64,"max_recipient_count":8}}"""
+        """"protocol_id":${protocolTag(protocol)},"proof_system_id":{"proof_system":"${protocol.expectedProofSystem.canonicalLabel}","value":null},"engine_id":{"engine":"${protocol.expectedEngine.canonicalLabel}","value":null},"parameter_id":[${bytes(1, 32)}],"parameter_digest":[${bytes(2, 32)}],"verifier_digest":[${bytes(3, 32)}],"statement_schema_digest":[${bytes(4, 32)}],"engine_manifest_digest":[${bytes(5, 32)}],"protocol_limits":{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":64,"max_recipient_count":8}}"""
 
     private fun compiledUnavailable(): String =
         """{"status":"unavailable","value":{"reason":"engine-unavailable","detail":null}}"""
@@ -492,5 +639,29 @@ class PrivacyExact12CapabilityManifestV1Test {
         List(count) { value }.joinToString(",", "[", "]")
 
     private fun consensusLimits(): String =
-        """{"max_actions_per_transaction":1,"max_actions_per_block":2,"max_proof_bytes_per_action":9437184,"max_action_bytes":9699840,"max_privacy_bytes_per_transaction":9699840,"max_privacy_bytes_per_block":16711680,"max_statement_and_encrypted_output_bytes_per_transaction":262144,"max_nullifiers_per_action":8,"max_commitments_per_action":8,"retained_root_count":2048}"""
+        """{"max_actions_per_transaction":1,"max_actions_per_block":2,"max_proof_bytes_per_action":9437184,"max_action_bytes":9699840,"max_privacy_bytes_per_transaction":9699840,"max_privacy_bytes_per_block":16711680,"max_statement_and_encrypted_output_bytes_per_transaction":262144,"max_nullifiers_per_action":8,"max_commitments_per_action":8,"retained_root_count":2048,"private_settlement":{"max_participants":255,"max_expiry_blocks":7200,"audit_timeout_blocks":1200,"prepare_timeout_blocks":1200,"commit_timeout_blocks":1200,"capsule_padding_classes":15,"max_proof_bytes":8388608,"max_capsule_bytes":1048576,"max_carrier_bytes":4194304,"sidecar_retention_blocks":1000000,"min_auditor_approvals":1}}"""
+
+    private fun coreManifestArchive(): ByteArray =
+        Base64.getDecoder().decode(coreFixture("fixtures/privacy/exact12_capability_manifest_v1.norito.b64").trim())
+
+    private fun coreManifestJson(): String =
+        coreFixture("fixtures/privacy/exact12_capability_manifest_v1.json")
+
+    /** Wrap Core's manifest projection the way the native inspection bridge does. */
+    private fun coreInspection(manifestJson: String = coreManifestJson()): ByteArray {
+        val matches = PrivacyProtocolIdV1.values().joinToString(",") { "false" }
+        return """{"manifest":$manifestJson,"local_compiled_tuple_matches":[$matches]}"""
+            .toByteArray(StandardCharsets.UTF_8)
+    }
+
+    private fun parseCoreManifest(manifestJson: String = coreManifestJson()): PrivacyExact12CapabilityManifestV1 =
+        PrivacyExact12CapabilityManifestInspectionV1.parse(coreManifestArchive(), coreInspection(manifestJson))
+
+    private fun coreFixture(path: String): String {
+        val file = generateSequence(File(".").canonicalFile) { it.parentFile }
+            .map { File(it, path) }
+            .firstOrNull(File::isFile)
+            ?: error("cannot locate $path")
+        return file.readText(StandardCharsets.UTF_8)
+    }
 }
