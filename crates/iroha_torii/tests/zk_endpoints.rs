@@ -93,7 +93,7 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
     (chain.state().clone(), asset_definition_id.to_string())
 }
 #[tokio::test]
-async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_state() {
+async fn zk_roots_endpoint_returns_404_for_registered_asset_without_shielded_state() {
     let (state, asset_id) = state_with_registered_asset_definition();
     let app = Router::new().route(
         "/v1/zk/roots",
@@ -116,32 +116,8 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
         .body(axum::body::Body::from(body))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::OK);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    // Basic shape keys
-    assert!(v.get("latest").is_some());
-    assert!(v.get("roots").is_some());
-    assert!(v.get("evaluated_block_height").is_some());
-    assert!(v.get("evaluated_block_hash").is_some());
-    assert_eq!(v.get("latest").and_then(|value| value.as_str()), Some(""));
-    assert_eq!(
-        v.get("roots")
-            .and_then(|value| value.as_array())
-            .map(std::vec::Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        v.get("evaluated_block_height")
-            .and_then(norito::json::native::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        v.get("evaluated_block_hash")
-            .and_then(|value| value.as_str())
-            .map(str::len),
-        Some(64)
-    );
+    // Only an asset with a persisted confidential tree profile has roots to report.
+    assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
 #[tokio::test]
 async fn zk_roots_endpoint_returns_404_for_missing_asset() {

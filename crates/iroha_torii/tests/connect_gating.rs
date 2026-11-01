@@ -1,4 +1,5 @@
 //! Verify that Connect routes are stable while runtime configuration controls availability.
+use crate::fixtures;
 use axum::http::{Request, StatusCode, Uri};
 use iroha_config::{base::WithOrigin, parameters::actual as A};
 use iroha_core::{kiso::KisoHandle, prelude::World, query::store::LiveQueryStore, queue::Queue};
@@ -7,7 +8,6 @@ use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt;
-use crate::fixtures;
 /// The network of the signed genesis `build_torii` applied and bound into `cfg`.
 fn connect_network_id(cfg: &iroha_config::parameters::actual::Root) -> NetworkId {
     NetworkId::from_genesis_hash(cfg.genesis.expected_hash)

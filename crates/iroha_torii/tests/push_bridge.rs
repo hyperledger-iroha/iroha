@@ -129,7 +129,8 @@ async fn push_registration_rejected_when_disabled() {
         enabled: false,
         ..Default::default()
     };
-    let (_torii, runtime, _data_dir, network_id, _native_chain) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir, network_id, _native_chain) =
+        build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
         register_device_request(&network_id, &account_id, &key_pair, "t0"),
@@ -145,7 +146,8 @@ async fn push_registration_rejected_without_credentials() {
         enabled: true,
         ..Default::default()
     };
-    let (_torii, runtime, _data_dir, network_id, _native_chain) = build_torii(push_cfg, &account_id);
+    let (_torii, runtime, _data_dir, network_id, _native_chain) =
+        build_torii(push_cfg, &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
         register_device_request(&network_id, &account_id, &key_pair, "t0"),
@@ -157,7 +159,8 @@ async fn push_registration_rejected_without_credentials() {
 #[tokio::test]
 async fn push_registration_succeeds_with_credentials() {
     let (key_pair, account_id) = push_identity(13);
-    let (torii, runtime, _data_dir, network_id, _native_chain) = build_torii(push_config(), &account_id);
+    let (torii, runtime, _data_dir, network_id, _native_chain) =
+        build_torii(push_config(), &account_id);
     let (status, body) = status_and_body(
         runtime.router(),
         register_device_request(&network_id, &account_id, &key_pair, "t0"),

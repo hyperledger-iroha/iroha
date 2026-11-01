@@ -4,7 +4,6 @@
 package org.hyperledger.iroha.sdk.privacy
 
 import java.io.File
-import java.math.BigInteger
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 import org.hyperledger.iroha.sdk.core.model.NetworkId
@@ -19,45 +18,21 @@ import kotlin.test.assertTrue
 
 class PrivacyExact12CapabilityManifestV1Test {
     @Test
-    fun parsesTheManifestCoreSerializesIncludingItsPrivateSettlementContract() {
+    fun parsesTheManifestCoreSerializes() {
         val manifest = parseCoreManifest()
-        val current = manifest.consensusPolicy.currentLimits
-        assertEquals(
-            PrivateSettlementValidityLimitsV1(
-                255,
-                7_200.toBigInteger(),
-                1_200.toBigInteger(),
-                1_200.toBigInteger(),
-                1_200.toBigInteger(),
-                0b1111,
-                8_388_608.toBigInteger(),
-                1_048_576.toBigInteger(),
-                4_194_304.toBigInteger(),
-                1_000_000.toBigInteger(),
-                1,
-            ),
-            current.privateSettlement,
-        )
-        // This pending update changes only the private-settlement contract.
-        val next = manifest.consensusPolicy.pendingUpdate!!.nextLimits
-        assertEquals(current.retainedRootCount, next.retainedRootCount)
-        assertEquals(3_600.toBigInteger(), next.privateSettlement.maxExpiryBlocks)
-        assertEquals(
-            7_200.toBigInteger(),
-            manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
-                .policy!!.pendingUpdate!!.privateSettlementDrainBlocks,
-        )
-        assertNull(
-            manifest.rowFor(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)
-                .policy!!.pendingUpdate!!.privateSettlementDrainBlocks,
-        )
+        val policy = manifest.consensusPolicy
+        assertEquals(2048, policy.currentLimits.retainedRootCount)
+        assertEquals(1024, policy.pendingUpdate!!.nextLimits.retainedRootCount)
+        assertEquals(302.toBigInteger(), policy.pendingUpdate!!.effectiveAtHeight)
+        val pgc = manifest.rowFor(PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1)
+        assertEquals(32, pgc.policy!!.pendingUpdate!!.nextLimits.values!!.getValue("max_anonymity_set_size"))
         assertTrue(manifest.canonicalBytes().contentEquals(coreManifestArchive()))
         // Core wraps each digest and the mask in a one-element array; the model exposes the inner value.
-        val closing = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
-        assertEquals(7, closing.privacyFeatureMask)
+        val note = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
+        assertEquals(7, note.privacyFeatureMask)
         assertEquals(
             PrivacyFixed32V1(ByteArray(32) { 1 }),
-            assertIs<PrivacyCompiledProfileResultV1.Available>(closing.compiledProfile).profile.parameterId,
+            assertIs<PrivacyCompiledProfileResultV1.Available>(note.compiledProfile).profile.parameterId,
         )
         // Every unavailable reason keeps its own detail shape.
         val schemaInvalid = assertIs<PrivacyCompiledProfileResultV1.Unavailable>(
@@ -83,6 +58,23 @@ class PrivacyExact12CapabilityManifestV1Test {
     }
 
     @Test
+    fun refusesLimitAndUpdateFieldsCoreDoesNotSerialize() {
+        val core = coreManifestJson()
+        val protocolUpdate = Regex(""""effective_at_height":\s*302,\s*"next_limits":\s*\{\s*"protocol"""")
+        for (extended in listOf(
+            core.replaceFirst("\"retained_root_count\": 2048", "\"retained_root_count\": 2048, \"private_settlement\": {}"),
+            core.replaceFirst("\"retained_root_count\": 1024", "\"retained_root_count\": 1024, \"private_settlement\": {}"),
+            protocolUpdate.replaceFirst(
+                core,
+                "\"effective_at_height\": 302, \"private_settlement_drain_blocks\": null, \"next_limits\": { \"protocol\"",
+            ),
+        )) {
+            assertTrue(extended != core)
+            assertFailsWith<IllegalArgumentException> { parseCoreManifest(extended) }
+        }
+    }
+
+    @Test
     fun refusesADigestOrFeatureMaskWithoutCoresTupleStructArray() {
         val core = coreManifestJson()
         val mask = Regex(""""privacy_feature_mask":\s*\[\s*(\d+)\s*\]""")
@@ -97,67 +89,6 @@ class PrivacyExact12CapabilityManifestV1Test {
         )) {
             assertTrue(retired != core)
             assertFailsWith<IllegalArgumentException> { parseCoreManifest(retired) }
-        }
-    }
-
-    @Test
-    fun refusesTheLimitAndUpdateLayoutsCoreNoLongerSerializes() {
-        val core = coreManifestJson()
-        val settlement = Regex(""",\s*"private_settlement":\s*\{[^}]*\}""")
-        assertEquals(2, settlement.findAll(core).count())
-        val drain = Regex(""",\s*"private_settlement_drain_blocks":\s*(null|\d+)""")
-        assertEquals(2, drain.findAll(core).count())
-        val retired = listOf(
-            core.replaceFirst(settlement, ""),
-            settlement.replace(core, ""),
-            core.replaceFirst(drain, ""),
-            drain.replace(core, ""),
-            core.replaceFirst("\"min_auditor_approvals\": 1", "\"min_auditor_approvals\": 1, \"retired\": 1"),
-        )
-        for (layout in retired) {
-            assertTrue(layout != core)
-            assertFailsWith<IllegalArgumentException> { parseCoreManifest(layout) }
-        }
-    }
-
-    @Test
-    fun coreManifestFieldsStayInsideTheirNativeBoundsAndPhaseRelationships() {
-        val core = coreManifestJson()
-        for ((field, value) in listOf(
-            "max_participants" to "1",
-            "max_participants" to "256",
-            "max_expiry_blocks" to "0",
-            "max_expiry_blocks" to "3599",
-            "commit_timeout_blocks" to "4801",
-            "capsule_padding_classes" to "0",
-            "capsule_padding_classes" to "16",
-            "max_proof_bytes" to "8388609",
-            "max_capsule_bytes" to "16777217",
-            "max_carrier_bytes" to "4194305",
-            "sidecar_retention_blocks" to "7199",
-            "sidecar_retention_blocks" to "18446744073709551616",
-            "min_auditor_approvals" to "0",
-            "min_auditor_approvals" to "33",
-            "max_expiry_blocks" to "\"7200\"",
-        )) {
-            val invalid = core.replaceFirst(Regex("\"$field\":\\s*\\d+"), "\"$field\": $value")
-            assertTrue(invalid != core, "$field=$value did not change the manifest")
-            assertFailsWith<IllegalArgumentException>("$field=$value") { parseCoreManifest(invalid) }
-        }
-        assertEquals(
-            BigInteger.ONE.shiftLeft(64).subtract(BigInteger.ONE),
-            parseCoreManifest(
-                core.replaceFirst(
-                    Regex("\"sidecar_retention_blocks\":\\s*\\d+"),
-                    "\"sidecar_retention_blocks\": 18446744073709551615",
-                ),
-            ).consensusPolicy.currentLimits.privateSettlement.sidecarRetentionBlocks,
-        )
-        val closing = Regex("\"private_settlement_drain_blocks\":\\s*7200")
-        for (invalid in listOf("0", "18446744073709551616", "\"7200\"")) {
-            assertFailsWith<IllegalArgumentException>("drain=$invalid") {
-                parseCoreManifest(core.replaceFirst(closing, "\"private_settlement_drain_blocks\": $invalid"))
-            }
         }
     }
 
@@ -271,8 +202,7 @@ class PrivacyExact12CapabilityManifestV1Test {
             for ((scheduled, effective, committed, accepted) in cases) {
                 val next = if (consensus) consensusLimits().replace("2048", "1024") else
                     """{"protocol":"${protocol.canonicalLabel}","limits":{"max_anonymity_set_size":32,"max_recipient_count":8}}"""
-                val drain = if (consensus) "" else ",\"private_settlement_drain_blocks\":null"
-                val pending = """{"scheduled_at_height":$scheduled,"effective_at_height":$effective,"next_limits":$next$drain}"""
+                val pending = """{"scheduled_at_height":$scheduled,"effective_at_height":$effective,"next_limits":$next}"""
                 var input = inspection(mapOf(protocol to availableRow(
                     "available", policy(),
                 ))).replace("\"committed_height\":42", "\"committed_height\":$committed")
@@ -362,7 +292,7 @@ class PrivacyExact12CapabilityManifestV1Test {
     fun policyAllowsIncreasesWithinCanonicalBoundsAndNeverEnablesUnavailableRows() {
         val protocol = PrivacyProtocolIdV1.ANONYMOUS_PGC_K_OUT_OF_N_V1
         val current = protocolLimits().replace(":64", ":32")
-        val pending = "{\"scheduled_at_height\":42,\"effective_at_height\":43,\"next_limits\":${protocolLimits()},\"private_settlement_drain_blocks\":null}"
+        val pending = "{\"scheduled_at_height\":42,\"effective_at_height\":43,\"next_limits\":${protocolLimits()}}"
         val ordinary = policy(current, pending)
         val row = parseInspection(inspection(mapOf(protocol to availableRow("available", ordinary)))).rowFor(protocol)
         assertTrue(row.isNetworkAvailable())
@@ -639,7 +569,7 @@ class PrivacyExact12CapabilityManifestV1Test {
         List(count) { value }.joinToString(",", "[", "]")
 
     private fun consensusLimits(): String =
-        """{"max_actions_per_transaction":1,"max_actions_per_block":2,"max_proof_bytes_per_action":9437184,"max_action_bytes":9699840,"max_privacy_bytes_per_transaction":9699840,"max_privacy_bytes_per_block":16711680,"max_statement_and_encrypted_output_bytes_per_transaction":262144,"max_nullifiers_per_action":8,"max_commitments_per_action":8,"retained_root_count":2048,"private_settlement":{"max_participants":255,"max_expiry_blocks":7200,"audit_timeout_blocks":1200,"prepare_timeout_blocks":1200,"commit_timeout_blocks":1200,"capsule_padding_classes":15,"max_proof_bytes":8388608,"max_capsule_bytes":1048576,"max_carrier_bytes":4194304,"sidecar_retention_blocks":1000000,"min_auditor_approvals":1}}"""
+        """{"max_actions_per_transaction":1,"max_actions_per_block":2,"max_proof_bytes_per_action":9437184,"max_action_bytes":9699840,"max_privacy_bytes_per_transaction":9699840,"max_privacy_bytes_per_block":16711680,"max_statement_and_encrypted_output_bytes_per_transaction":262144,"max_nullifiers_per_action":8,"max_commitments_per_action":8,"retained_root_count":2048}"""
 
     private fun coreManifestArchive(): ByteArray =
         Base64.getDecoder().decode(coreFixture("fixtures/privacy/exact12_capability_manifest_v1.norito.b64").trim())

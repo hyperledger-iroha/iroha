@@ -156,7 +156,7 @@ fn seeded_zk_roots_state(
             let mut note = [0u8; 32];
             note[0] = i.saturating_add(1);
             zk_state
-                .push_commitment(note, nonzero!(64_usize))
+                .push_commitment(note, tree_roots_history_len)
                 .expect("seed authenticated commitment root");
         }
         let zk_assets = stx.world_mut_for_testing().zk_assets_mut_for_testing();

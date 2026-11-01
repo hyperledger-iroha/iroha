@@ -1,13 +1,12 @@
 //! Smoke tests for Torii NFT endpoints.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{body::Body, http::Request};
 use http::StatusCode;
 use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_torii::Torii;
 use std::{net::SocketAddr, sync::Arc};
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
     let service = app
         .clone()

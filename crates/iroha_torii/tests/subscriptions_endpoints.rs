@@ -335,7 +335,7 @@ async fn subscription_list_and_get_return_generic_plan_metadata() {
     let list_resp = call_app(
         &harness.app,
         Request::builder()
-            .uri("/v1/subscriptions?offset=0")
+            .uri("/v1/subscriptions")
             .body(Body::empty())
             .expect("request"),
     )
@@ -344,16 +344,11 @@ async fn subscription_list_and_get_return_generic_plan_metadata() {
     let list_json = response_json(list_resp).await;
     let items = list_json["items"].as_array().expect("items array");
     assert_eq!(items.len(), 1);
-    assert_eq!(
-        items[0]["subscription_id"].as_str(),
-        Some(subscription_id.as_str())
-    );
+    assert_eq!(items[0]["id"].as_str(), Some(subscription_id.as_str()));
     let list_plan: SubscriptionPlan =
         norito::json::from_value(items[0]["plan"].clone()).expect("subscription plan");
     assert_eq!(list_plan.provider, *ALICE_ID);
-    let list_state: SubscriptionState =
-        norito::json::from_value(items[0]["subscription"].clone()).expect("subscription state");
-    assert_eq!(list_state.status, SubscriptionStatus::Paused);
+    assert_eq!(items[0]["status"].as_str(), Some("paused"));
     let list_invoice: SubscriptionInvoice =
         norito::json::from_value(items[0]["invoice"].clone()).expect("subscription invoice");
     assert_eq!(list_invoice.asset_definition, harness.charge_asset_id);

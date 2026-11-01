@@ -137,19 +137,6 @@ function consensusPolicy() {
       max_nullifiers_per_action: 8,
       max_commitments_per_action: 8,
       retained_root_count: 2048,
-      private_settlement: {
-        max_participants: 255,
-        max_expiry_blocks: 7_200,
-        audit_timeout_blocks: 1_200,
-        prepare_timeout_blocks: 1_200,
-        commit_timeout_blocks: 1_200,
-        capsule_padding_classes: 0b1111,
-        max_proof_bytes: 8 * 1024 * 1024,
-        max_capsule_bytes: 1024 * 1024,
-        max_carrier_bytes: 4 * 1024 * 1024,
-        sidecar_retention_blocks: 1_000_000,
-        min_auditor_approvals: 1,
-      },
     },
     pending_update: null,
   };
@@ -296,17 +283,12 @@ const CORE_MANIFEST_JSON = readFileSync(
   new URL("../../../fixtures/privacy/exact12_capability_manifest_v1.json", import.meta.url),
   "utf8",
 );
-const CLOSING_PROTOCOL = "iroha-ivm-private-note-stark-v1";
 
 function coreManifestNative(json = CORE_MANIFEST_JSON) {
   return fakeNative(undefined, {
     privacyValidateExact12CapabilityManifestV1: (bytes) => (sameBytes(bytes, CORE_MANIFEST_ARCHIVE) ? 0 : 7),
     privacyExact12CapabilityManifestJsonV1: () => json,
   });
-}
-
-function closingUpdate(payload) {
-  return payload.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(CLOSING_PROTOCOL)].policy.pending_update;
 }
 
 test("mutable global bindings cannot authorize Exact12 native admission", () => {
@@ -566,7 +548,6 @@ test("pending policy update accepts next block and rejects invalid snapshot heig
           protocol: ACTIVE_PROTOCOL,
           limits: { max_anonymity_set_size: 32, max_recipient_count: 8 },
         };
-        pending.private_settlement_drain_blocks = null;
         row.policy.pending_update = pending;
       }
       // Native JSON carries uint64 values as integer tokens, never quoted strings.
@@ -644,7 +625,6 @@ test("ordinary updates accept bounded increases and decreases but reject no-ops 
     policy.pending_update = {
       scheduled_at_height: 42, effective_at_height: 43,
       next_limits: { protocol: ACTIVE_PROTOCOL, limits: { max_anonymity_set_size: 64, max_recipient_count: increase ? 8 : 4 } },
-      private_settlement_drain_blocks: null,
     };
     await withNative(fakeNative(payload), () => {
       const manifest = decodePrivacyExact12CapabilityManifestV1(ARCHIVE);
@@ -666,10 +646,7 @@ test("ordinary updates accept bounded increases and decreases but reject no-ops 
         if (kind === "consensus") next.max_actions_per_transaction = 2;
         else next.protocol = PRIVACY_PROTOCOL_IDS_V1[2];
       }
-      policy.pending_update = {
-        scheduled_at_height: 42, effective_at_height: 43, next_limits: next,
-        ...(kind === "protocol" ? { private_settlement_drain_blocks: null } : {}),
-      };
+      policy.pending_update = { scheduled_at_height: 42, effective_at_height: 43, next_limits: next };
       await withNative(fakeNative(payload), () => {
         assert.throws(() => decodePrivacyExact12CapabilityManifestV1(ARCHIVE), PrivacyExact12CapabilityManifestError);
       });
@@ -677,41 +654,25 @@ test("ordinary updates accept bounded increases and decreases but reject no-ops 
   }
 });
 
-test("decodes the manifest Core serializes, including its private-settlement contract", async () => {
+test("decodes the manifest Core serializes", async () => {
   await withNative(coreManifestNative(), () => {
     const manifest = decodePrivacyExact12CapabilityManifestV1(CORE_MANIFEST_ARCHIVE);
     const { current_limits: current, pending_update: pending } = manifest.consensus_policy;
-    assert.deepEqual(current.private_settlement, {
-      max_participants: 255,
-      max_expiry_blocks: 7_200n,
-      audit_timeout_blocks: 1_200n,
-      prepare_timeout_blocks: 1_200n,
-      commit_timeout_blocks: 1_200n,
-      capsule_padding_classes: 0b1111,
-      max_proof_bytes: 8_388_608n,
-      max_capsule_bytes: 1_048_576n,
-      max_carrier_bytes: 4_194_304n,
-      sidecar_retention_blocks: 1_000_000n,
-      min_auditor_approvals: 1,
-    });
-    // This pending update changes only the private-settlement contract.
-    assert.deepEqual(
-      { ...pending.next_limits, private_settlement: current.private_settlement },
-      current,
-    );
-    assert.equal(pending.next_limits.private_settlement.max_expiry_blocks, 3_600n);
-    const pendingProtocol = (protocol) =>
-      manifest.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol)].policy.pending_update;
-    assert.equal(pendingProtocol(CLOSING_PROTOCOL).private_settlement_drain_blocks, 7_200n);
-    assert.equal(pendingProtocol(ACTIVE_PROTOCOL).private_settlement_drain_blocks, null);
+    assert.equal(current.retained_root_count, 2048);
+    assert.equal(pending.next_limits.retained_root_count, 1024);
+    assert.equal(pending.effective_at_height, 302n);
+    const row = (protocol) => manifest.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol)];
+    assert.equal(row(ACTIVE_PROTOCOL).policy.pending_update.next_limits.limits.max_anonymity_set_size, 32);
     assert.deepEqual(manifest.canonicalBytes(), Uint8Array.from(CORE_MANIFEST_ARCHIVE));
     // Core wraps each digest and the mask in a one-element array; the model exposes the inner value.
-    const closing = manifest.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(CLOSING_PROTOCOL)];
-    assert.equal(closing.privacy_feature_mask, 7);
-    assert.deepEqual(closing.compiled_profile.value.parameter_id, Array(32).fill(1));
+    const note = row("iroha-ivm-private-note-stark-v1");
+    assert.equal(note.privacy_feature_mask, 7);
+    assert.deepEqual(note.compiled_profile.value.parameter_id, Array(32).fill(1));
     assert.equal(manifest.manifest_digest.length, 32);
+    // A fixed-limit protocol's committed policy carries no limit fields.
+    assert.equal(row("iroha-zk-x509-stark-p256-v1").policy.current_limits.limits, null);
     // Every unavailable reason keeps its own detail shape.
-    const profile = (protocol) => manifest.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(protocol)].compiled_profile.value;
+    const profile = (protocol) => row(protocol).compiled_profile.value;
     assert.deepEqual(profile("vega-existing-credential-zk-v1"), {
       reason: "statement-schema-invalid",
       detail: { schema_error: "missing-type-reference", detail: null },
@@ -722,15 +683,15 @@ test("decodes the manifest Core serializes, including its private-settlement con
   });
 });
 
-test("refuses the limit and update layouts Core no longer serializes", async () => {
-  for (const retire of [
-    (p) => { delete p.consensus_policy.current_limits.private_settlement; },
-    (p) => { delete p.consensus_policy.pending_update.next_limits.private_settlement; },
-    (p) => { delete closingUpdate(p).private_settlement_drain_blocks; },
-    (p) => { p.consensus_policy.current_limits.private_settlement.retired = 1; },
+test("refuses limit and update fields Core does not serialize", async () => {
+  const pendingProtocol = (p) => p.protocols[PRIVACY_PROTOCOL_IDS_V1.indexOf(ACTIVE_PROTOCOL)].policy.pending_update;
+  for (const extend of [
+    (p) => { p.consensus_policy.current_limits.private_settlement = {}; },
+    (p) => { p.consensus_policy.pending_update.next_limits.private_settlement = {}; },
+    (p) => { pendingProtocol(p).private_settlement_drain_blocks = null; },
   ]) {
-    const retired = JSON.parse(CORE_MANIFEST_JSON); retire(retired);
-    await withNative(coreManifestNative(JSON.stringify(retired)), () => {
+    const extended = JSON.parse(CORE_MANIFEST_JSON); extend(extended);
+    await withNative(coreManifestNative(JSON.stringify(extended)), () => {
       assert.throws(() => decodePrivacyExact12CapabilityManifestV1(CORE_MANIFEST_ARCHIVE), /must contain exactly/u);
     });
   }
@@ -756,62 +717,6 @@ test("refuses a digest or feature mask without Core's tuple-struct array", async
       assert.throws(() => decodePrivacyExact12CapabilityManifestV1(CORE_MANIFEST_ARCHIVE), PrivacyExact12CapabilityManifestError);
     });
   }
-});
-
-test("private-settlement limits stay inside their native bounds and phase relationships", async () => {
-  const decodes = async (mutate) => {
-    const payload = JSON.parse(CORE_MANIFEST_JSON);
-    mutate(payload.consensus_policy.current_limits.private_settlement, payload);
-    return withNative(coreManifestNative(JSON.stringify(payload)), () => {
-      try {
-        decodePrivacyExact12CapabilityManifestV1(CORE_MANIFEST_ARCHIVE);
-        return true;
-      } catch (error) {
-        assert.ok(error instanceof PrivacyExact12CapabilityManifestError);
-        return false;
-      }
-    });
-  };
-  for (const [key, valid, invalid] of [
-    ["max_participants", [2, 255], [0, 1, 256, "255"]],
-    ["max_expiry_blocks", [3_601, 1_000_000], [0, 3_599, -1, 7_200.5, "7200"]],
-    ["audit_timeout_blocks", [1, 4_800], [0, 4_801]],
-    ["prepare_timeout_blocks", [1, 4_800], [0, 4_801]],
-    ["commit_timeout_blocks", [1, 4_800], [0, 4_801]],
-    ["capsule_padding_classes", [1, 0b1111], [0, 0b1_0000, 255]],
-    ["max_proof_bytes", [1, 8 * 1024 * 1024], [0, 8 * 1024 * 1024 + 1]],
-    ["max_capsule_bytes", [1024 * 1024, 16 * 1024 * 1024], [0, 16 * 1024 * 1024 + 1]],
-    ["max_carrier_bytes", [1, 4 * 1024 * 1024], [0, 4 * 1024 * 1024 + 1]],
-    ["sidecar_retention_blocks", [7_200, 2 ** 53 - 1], [0, 7_199]],
-    ["min_auditor_approvals", [1, 32], [0, 33]],
-  ]) {
-    for (const value of valid) {
-      assert.equal(await decodes((limits) => { limits[key] = value; }), true, `${key}=${value}`);
-    }
-    for (const value of invalid) {
-      assert.equal(await decodes((limits) => { limits[key] = value; }), false, `${key}=${value}`);
-    }
-  }
-  // A digit-exact uint64 survives the bound check, and the next integer is refused.
-  for (const [token, accepted] of [["18446744073709551615", true], ["18446744073709551616", false]]) {
-    const json = CORE_MANIFEST_JSON.replace("\"sidecar_retention_blocks\": 1000000", `"sidecar_retention_blocks": ${token}`);
-    assert.notEqual(json, CORE_MANIFEST_JSON);
-    await withNative(coreManifestNative(json), () => {
-      if (accepted) {
-        const { private_settlement: limits } =
-          decodePrivacyExact12CapabilityManifestV1(CORE_MANIFEST_ARCHIVE).consensus_policy.current_limits;
-        assert.equal(limits.sidecar_retention_blocks, BigInt(token));
-      } else {
-        assert.throws(() => decodePrivacyExact12CapabilityManifestV1(CORE_MANIFEST_ARCHIVE), PrivacyExact12CapabilityManifestError);
-      }
-    });
-  }
-  // Identical contracts stay a no-op, so an update must change a limit or the contract.
-  assert.equal(await decodes((_limits, payload) => {
-    payload.consensus_policy.pending_update.next_limits = structuredClone(payload.consensus_policy.current_limits);
-  }), false);
-  assert.equal(await decodes((_limits, payload) => { closingUpdate(payload).private_settlement_drain_blocks = 0; }), false);
-  assert.equal(await decodes((_limits, payload) => { closingUpdate(payload).private_settlement_drain_blocks = "7200"; }), false);
 });
 
 test("selected active protocol admits without a global qualification receipt", async () => {

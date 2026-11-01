@@ -125,14 +125,29 @@ pub fn commit_signed_genesis(
     world: World,
     instructions: Vec<iroha_data_model::prelude::InstructionBox>,
 ) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
-    let native_chain = commit_genesis_fixture(
-        world,
-        cfg.common.chain.clone(),
-        &cfg.common.key_pair,
-        instructions,
-        None,
-        iroha_primitives::time::TimeSource::new_system(),
-    );
+    commit_signed_genesis_with(cfg, world, |config| {
+        config.genesis_instructions = instructions;
+    })
+}
+/// [`commit_signed_genesis`] for a chain that also authors parameters or Nexus configuration.
+#[allow(dead_code)]
+pub fn commit_signed_genesis_with(
+    cfg: &mut iroha_config::parameters::actual::Root,
+    world: World,
+    author: impl FnOnce(&mut iroha_core::sumeragi::test_chain::TestChainConfig),
+) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+    let time_ms = u64::try_from(
+        iroha_primitives::time::TimeSource::new_system()
+            .get_unix_time()
+            .as_millis(),
+    )
+    .expect("fixture time fits");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, time_ms);
+    config.chain_id = cfg.common.chain.clone();
+    config.genesis_key = cfg.common.key_pair.clone();
+    author(&mut config);
+    let native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original signed fixture genesis");
     cfg.genesis.expected_hash = native_chain.genesis().hash();
     cfg.genesis.public_key = cfg.common.key_pair.public_key().clone();
     native_chain

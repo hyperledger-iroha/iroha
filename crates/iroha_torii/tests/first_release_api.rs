@@ -1,6 +1,7 @@
 //! Integration coverage for the single, first-release Torii API surface.
 
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::http::Request;
 use http::{
     HeaderMap, HeaderValue, Method, StatusCode,
@@ -15,8 +16,6 @@ use std::{
     sync::Arc,
 };
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 fn local_connect_info() -> axum::extract::connect_info::ConnectInfo<SocketAddr> {
     axum::extract::connect_info::ConnectInfo(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
 }

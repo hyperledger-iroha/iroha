@@ -12,7 +12,7 @@ use iroha_core::{
     EventsSender,
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
-    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    sumeragi::test_chain::CertifiedTestChain,
 };
 use iroha_data_model::nexus::LaneLifecycleStatusV1;
 use iroha_model_base::topology::LaneId;
@@ -46,11 +46,10 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
     // Core and Torii share the network identity of the applied signed genesis.
-    let mut chain_config = TestChainConfig::new(world, 1_000);
-    chain_config.chain_id = cfg.common.chain.clone();
-    chain_config.nexus = Some(cfg.nexus.clone());
-    let native_chain =
-        CertifiedTestChain::start(chain_config).expect("original lifecycle fixture genesis");
+    let nexus = cfg.nexus.clone();
+    let native_chain = fixtures::commit_signed_genesis_with(&mut cfg, world, |config| {
+        config.nexus = Some(nexus);
+    });
     let state = native_chain.state().clone();
     let kura = native_chain.kura().clone();
     let events_sender: EventsSender = tokio::sync::broadcast::channel(64).0;

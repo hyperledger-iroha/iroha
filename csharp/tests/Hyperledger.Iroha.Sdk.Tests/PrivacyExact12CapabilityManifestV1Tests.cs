@@ -227,11 +227,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 var next = consensus
                     ? Struct(U32(1), U32(2), U32(9 * 1024 * 1024), U32(9_699_840),
                         U32(9_699_840), U32(16_711_680), U32(256 * 1024),
-                        U32(8), U32(8), U32(1_024), PrivateSettlementLimits())
+                        U32(8), U32(8), U32(1_024))
                     : EnumValue(6, Struct(U32(3)));
-                var pending = consensus
-                    ? Struct(U64(item.Scheduled), U64(item.Effective), next)
-                    : PendingProtocolUpdate(item.Scheduled, item.Effective, next);
+                var pending = Struct(U64(item.Scheduled), U64(item.Effective), next);
                 var fixture = BuildFixture(
                     committedHeight: item.Committed,
                     pendingConsensus: consensus ? pending : null,
@@ -440,13 +438,13 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
     {
         foreach (var next in new[] { 1U, 3U, 4U })
         {
-            var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: PendingProtocolUpdate(3, 4, EnumValue(6, Struct(U32(next)))));
+            var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: Struct(U64(3), U64(4), EnumValue(6, Struct(U32(next)))));
             var decoded = PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog);
             Assert.True(decoded.Protocols[6].IsNetworkAvailable);
         }
         foreach (var next in new[] { 0U, 2U, 5U })
         {
-            var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: PendingProtocolUpdate(3, 4, EnumValue(6, Struct(U32(next)))));
+            var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: Struct(U64(3), U64(4), EnumValue(6, Struct(U32(next)))));
             Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
                 PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
         }
@@ -462,104 +460,34 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         Assert.Equal(manifest, decoded.CanonicalArchive);
         Assert.Equal(3UL, decoded.CommittedHeight);
         Assert.All(decoded.Protocols, row => Assert.True(row.LocalCompiledTupleMatches));
-        // Core's bytes spell the current and pending contracts exactly as the managed builder does.
-        var consensusPolicy = decoded.ConsensusPolicy.AsSpan();
-        Assert.True(consensusPolicy.IndexOf(PrivateSettlementLimits()) >= 0);
-        Assert.True(consensusPolicy.IndexOf(PrivateSettlementLimits(maxExpiryBlocks: 3_600)) >= 0);
-        // An update ends with its framed drain option, so these rows differ only in that presence.
-        var closing = decoded.Protocols[(int)PrivacyProtocolIdV1.IrohaIvmPrivateNoteStarkV1].PolicyCanonicalBytes;
-        Assert.True(closing.AsSpan().EndsWith(Struct(Option(U64(7_200), present: true))));
-        var ordinary = decoded.Protocols[(int)PrivacyProtocolIdV1.AnonymousPgcKOutOfNV1].PolicyCanonicalBytes;
-        Assert.True(ordinary.AsSpan().EndsWith(Struct(Option(Array.Empty<byte>(), present: false))));
-    }
-
-    [Fact]
-    public void RetiredConsensusLimitAndProtocolUpdateLayoutsAreRejected()
-    {
-        var tenFieldLimits = Struct(U32(1), U32(2), U32(9 * 1024 * 1024), U32(9_699_840), U32(9_699_840),
-            U32(16_711_680), U32(256 * 1024), U32(8), U32(8), U32(1024));
-        var retiredConsensus = BuildFixture(pendingConsensus: Struct(U64(3), U64(4), tenFieldLimits));
-        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(retiredConsensus.Manifest, retiredConsensus.Catalog));
-        var retiredProtocol = BuildFixture(jindoCurrentLimit: 2, pendingJindo: Struct(U64(3), U64(4), EnumValue(6, Struct(U32(3)))));
-        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(retiredProtocol.Manifest, retiredProtocol.Catalog));
-        var trailing = BuildFixture(privateSettlement: PrivateSettlementLimits().Concat(new byte[] { 0 }).ToArray());
-        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(trailing.Manifest, trailing.Catalog));
-    }
-
-    [Fact]
-    public void PrivateSettlementLimitsStayInsideTheirNativeBoundsAndPhaseRelationships()
-    {
-        foreach (var valid in new[]
+        // Core's bytes spell the consensus policy exactly as the managed builder does.
+        Assert.Equal(
+            ConsensusPolicy(pending: Struct(U64(2), U64(302), ConsensusLimits(1024))),
+            decoded.ConsensusPolicy);
+        foreach (var (protocol, reason) in new[]
         {
-            PrivateSettlementLimits(),
-            PrivateSettlementLimits(maxParticipants: 2, capsulePaddingClasses: 1),
-            PrivateSettlementLimits(maxExpiryBlocks: 3_600, sidecarRetentionBlocks: 3_600),
-            PrivateSettlementLimits(maxProofBytes: 1, maxCarrierBytes: 1),
-            PrivateSettlementLimits(maxCapsuleBytes: 16 * 1024 * 1024, minAuditorApprovals: 32),
-            PrivateSettlementLimits(sidecarRetentionBlocks: ulong.MaxValue),
+            (PrivacyProtocolIdV1.VegaExistingCredentialZkV1, PrivacyCompiledProfileUnavailableReasonV1.StatementSchemaInvalid),
+            (PrivacyProtocolIdV1.IrohaBootleLanternAnoncredV1, PrivacyCompiledProfileUnavailableReasonV1.ProfileInitializationFailed),
+            (PrivacyProtocolIdV1.MoneroFcmpPlusPlusV1, PrivacyCompiledProfileUnavailableReasonV1.EngineUnavailable),
+            (PrivacyProtocolIdV1.IrohaZkX509StarkP256V1, PrivacyCompiledProfileUnavailableReasonV1.JointSecurityReductionIncomplete),
         })
         {
-            var fixture = BuildFixture(privateSettlement: valid);
-            Assert.Equal(fixture.Manifest, PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog).CanonicalArchive);
+            Assert.Equal(reason, decoded.Protocols[(int)protocol].CompiledProfileUnavailableReason);
         }
-        foreach (var invalid in new[]
+    }
+
+    [Fact]
+    public void LimitAndUpdateFieldsCoreDoesNotSerializeAreRejected()
+    {
+        foreach (var fixture in new[]
         {
-            PrivateSettlementLimits(maxParticipants: 1),
-            PrivateSettlementLimits(maxParticipants: 256),
-            PrivateSettlementLimits(maxExpiryBlocks: 0),
-            PrivateSettlementLimits(maxExpiryBlocks: 3_599),
-            PrivateSettlementLimits(auditTimeoutBlocks: 0),
-            PrivateSettlementLimits(prepareTimeoutBlocks: 0),
-            PrivateSettlementLimits(commitTimeoutBlocks: 0),
-            PrivateSettlementLimits(commitTimeoutBlocks: 4_801),
-            // Plain 64-bit addition would wrap these phases back inside the expiry span.
-            PrivateSettlementLimits(auditTimeoutBlocks: ulong.MaxValue, prepareTimeoutBlocks: 1_200, commitTimeoutBlocks: 1_200),
-            PrivateSettlementLimits(capsulePaddingClasses: 0),
-            PrivateSettlementLimits(capsulePaddingClasses: 0b1_0000),
-            PrivateSettlementLimits(maxProofBytes: 0),
-            PrivateSettlementLimits(maxProofBytes: 8 * 1024 * 1024 + 1),
-            PrivateSettlementLimits(maxCapsuleBytes: 0),
-            PrivateSettlementLimits(maxCapsuleBytes: 16 * 1024 * 1024 + 1),
-            PrivateSettlementLimits(maxCarrierBytes: 0),
-            PrivateSettlementLimits(maxCarrierBytes: 4 * 1024 * 1024 + 1),
-            PrivateSettlementLimits(sidecarRetentionBlocks: 0),
-            PrivateSettlementLimits(sidecarRetentionBlocks: 7_199),
-            PrivateSettlementLimits(minAuditorApprovals: 0),
-            PrivateSettlementLimits(minAuditorApprovals: 33),
+            BuildFixture(pendingConsensus: Struct(U64(3), U64(4), ConsensusLimits(1024, U64(1)))),
+            BuildFixture(jindoCurrentLimit: 2, pendingJindo: Struct(U64(3), U64(4), EnumValue(6, Struct(U32(3))), Option(U64(1), true))),
         })
         {
-            var fixture = BuildFixture(privateSettlement: invalid);
             Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
                 PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
         }
-    }
-
-    [Fact]
-    public void ConsensusUpdateMayChangeOnlyThePrivateSettlementContract()
-    {
-        byte[] Limits(byte[] privateSettlement) => Struct(U32(1), U32(2), U32(9 * 1024 * 1024), U32(9_699_840), U32(9_699_840),
-            U32(16_711_680), U32(256 * 1024), U32(8), U32(8), U32(2048), privateSettlement);
-        var changed = BuildFixture(pendingConsensus: Struct(U64(3), U64(4), Limits(PrivateSettlementLimits(maxExpiryBlocks: 3_600))));
-        Assert.Equal(changed.Manifest, PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(changed.Manifest, changed.Catalog).CanonicalArchive);
-        var unchanged = BuildFixture(pendingConsensus: Struct(U64(3), U64(4), Limits(PrivateSettlementLimits())));
-        Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(unchanged.Manifest, unchanged.Catalog));
-    }
-
-    [Theory]
-    [InlineData(1UL, true)]
-    [InlineData(ulong.MaxValue, true)]
-    [InlineData(0UL, false)]
-    public void PendingProtocolUpdateDrainIsPositiveWhenPresent(ulong drain, bool accepted)
-    {
-        var fixture = BuildFixture(jindoCurrentLimit: 2, pendingJindo: PendingProtocolUpdate(3, 4, EnumValue(6, Struct(U32(3))), drain));
-        if (accepted)
-            Assert.Equal(fixture.Manifest, PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog).CanonicalArchive);
-        else Assert.Throws<PrivacyExact12CapabilityManifestException>(() =>
-            PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog));
     }
 
     [Fact]
@@ -568,7 +496,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         foreach (var next in new[] { 512U, 1536U, 2048U, 0U, 1024U, 2049U })
         {
             var limits = Struct(U32(1), U32(2), U32(9 * 1024 * 1024), U32(9_699_840), U32(9_699_840),
-                U32(16_711_680), U32(256 * 1024), U32(8), U32(8), U32(next), PrivateSettlementLimits());
+                U32(16_711_680), U32(256 * 1024), U32(8), U32(8), U32(next));
             var fixture = BuildFixture(retainedRootCount: 1024, pendingConsensus: Struct(U64(3), U64(4), limits));
             if (next is > 0 and <= 2048 && next != 1024)
                 Assert.Equal(fixture.Manifest, PrivacyExact12CapabilityManifestCodecV1.DecodeValidated(fixture.Manifest, fixture.Catalog).CanonicalArchive);
@@ -624,8 +552,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         bool x509AvailableReadiness = false,
         byte[]? pendingConsensus = null,
         byte[]? pendingJindo = null,
-        byte[]? rowZeroPolicy = null, byte[]? x509Policy = null, uint jindoCurrentLimit = 4, uint retainedRootCount = 2048, byte[]? verangePolicy = null,
-        byte[]? privateSettlement = null)
+        byte[]? rowZeroPolicy = null, byte[]? x509Policy = null, uint jindoCurrentLimit = 4, uint retainedRootCount = 2048, byte[]? verangePolicy = null)
     {
         var profiles = new byte[12][];
         profiles[0] = AvailableProfile(
@@ -709,7 +636,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             new byte[32],
             maxActionsPerTransaction,
             committedHeight,
-            pendingConsensus, retainedRootCount, privateSettlement: privateSettlement);
+            pendingConsensus, retainedRootCount);
         var digest = ComputeManifestDigest(manifestWithZeroDigest);
         return new Fixture(
             BuildManifestArchive(
@@ -719,7 +646,7 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
                 digest,
                 maxActionsPerTransaction,
                 committedHeight,
-                pendingConsensus, retainedRootCount, privateSettlement: privateSettlement),
+                pendingConsensus, retainedRootCount),
             catalog,
             profiles);
     }
@@ -779,8 +706,18 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         return Struct(fields.ToArray());
     }
 
+    private static byte[] ConsensusLimits(uint retainedRootCount, params byte[][] extraFields) => Struct(
+        new[]
+        {
+            U32(1), U32(2), U32(9 * 1024 * 1024), U32(9_699_840), U32(9_699_840),
+            U32(16_711_680), U32(256 * 1024), U32(8), U32(8), U32(retainedRootCount),
+        }.Concat(extraFields).ToArray());
+
+    private static byte[] CoreFixture(string name) => Convert.FromBase64String(
+        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures/privacy", name)).Trim());
+
     private static byte[] ConsensusPolicy(
-        uint maxActionsPerTransaction = 1, byte[]? pending = null, uint retainedRootCount = 2048, byte[]? verangePolicy = null, byte[]? privateSettlement = null)
+        uint maxActionsPerTransaction = 1, byte[]? pending = null, uint retainedRootCount = 2048, byte[]? verangePolicy = null)
     {
         var consensusLimits = Struct(
             U32(maxActionsPerTransaction),
@@ -792,45 +729,11 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
             U32(256 * 1024),
             U32(8),
             U32(8),
-            U32(retainedRootCount),
-            privateSettlement ?? PrivateSettlementLimits());
+            U32(retainedRootCount));
         return Struct(
             consensusLimits,
             Option(pending ?? Array.Empty<byte>(), present: pending is not null));
     }
-
-    /// <summary>The first-release <c>PrivateSettlementValidityLimitsV1::protocol_default</c> record.</summary>
-    private static byte[] PrivateSettlementLimits(
-        ushort maxParticipants = 255,
-        ulong maxExpiryBlocks = 7_200,
-        ulong auditTimeoutBlocks = 1_200,
-        ulong prepareTimeoutBlocks = 1_200,
-        ulong commitTimeoutBlocks = 1_200,
-        byte capsulePaddingClasses = 0b1111,
-        ulong maxProofBytes = 8 * 1024 * 1024,
-        ulong maxCapsuleBytes = 1024 * 1024,
-        ulong maxCarrierBytes = 4 * 1024 * 1024,
-        ulong sidecarRetentionBlocks = 1_000_000,
-        ushort minAuditorApprovals = 1) => Struct(
-            U16(maxParticipants),
-            U64(maxExpiryBlocks),
-            U64(auditTimeoutBlocks),
-            U64(prepareTimeoutBlocks),
-            U64(commitTimeoutBlocks),
-            new[] { capsulePaddingClasses },
-            U64(maxProofBytes),
-            U64(maxCapsuleBytes),
-            U64(maxCarrierBytes),
-            U64(sidecarRetentionBlocks),
-            U16(minAuditorApprovals));
-
-    /// <summary>Protocol update with its trailing relation-closure drain, absent unless given.</summary>
-    private static byte[] PendingProtocolUpdate(ulong scheduled, ulong effective, byte[] nextLimits, ulong? drain = null) =>
-        Struct(U64(scheduled), U64(effective), nextLimits,
-            Option(drain is ulong blocks ? U64(blocks) : Array.Empty<byte>(), present: drain is not null));
-
-    private static byte[] CoreFixture(string name) => Convert.FromBase64String(
-        File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "Fixtures/privacy", name)).Trim());
 
     private static byte[] BuildManifestArchive(
         IReadOnlyList<byte[]> rows,
@@ -840,9 +743,9 @@ public sealed class PrivacyExact12CapabilityManifestV1Tests
         uint maxActionsPerTransaction,
         ulong committedHeight,
         byte[]? pendingConsensus = null,
-        uint retainedRootCount = 2048, byte[]? verangePolicy = null, byte[]? privateSettlement = null)
+        uint retainedRootCount = 2048, byte[]? verangePolicy = null)
     {
-        var fields = new List<byte[]> { U32(1), networkId, U64(committedHeight), ConsensusPolicy(maxActionsPerTransaction, pendingConsensus, retainedRootCount, privateSettlement: privateSettlement) };
+        var fields = new List<byte[]> { U32(1), networkId, U64(committedHeight), ConsensusPolicy(maxActionsPerTransaction, pendingConsensus, retainedRootCount) };
         if (retiredQualificationField) fields.Add(Option(Array.Empty<byte>(), false));
         fields.Add(Sequence(rows)); fields.Add(Struct(digest));
         return NoritoCodec.Encode(PrivacyExact12CapabilityManifestCodecV1.ManifestSchemaName,

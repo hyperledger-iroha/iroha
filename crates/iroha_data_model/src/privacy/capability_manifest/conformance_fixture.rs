@@ -4,10 +4,9 @@
 //! change to the manifest fails every parser that does not follow it.
 use super::{PrivacyExact12CapabilityManifestBuildErrorV1, PrivacyExact12CapabilityManifestV1};
 use crate::privacy::{
-    ANONYMOUS_PGC_MAX_RECIPIENTS_V1, AnonymousPgcLimitsV1, IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
-    IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1, IvmPrivateNoteLimitsV1,
-    PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1, PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
-    PrivacyCapabilityRowV1, PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileCatalogRowV1,
+    ANONYMOUS_PGC_MAX_RECIPIENTS_V1, AnonymousPgcLimitsV1, PRIVACY_CAPABILITY_SNAPSHOT_VERSION_V1,
+    PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1, PrivacyCapabilityRowV1,
+    PrivacyCapabilitySnapshotV1, PrivacyCompiledProfileCatalogRowV1,
     PrivacyCompiledProfileCatalogV1, PrivacyCompiledProfileCatalogValidationErrorV1,
     PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
@@ -54,10 +53,8 @@ pub enum PrivacyExact12CapabilityManifestFixtureErrorV1 {
 
 /// Build the capability-manifest conformance fixture from typed Rust values.
 ///
-/// The manifest schedules every pending shape that carries the private-settlement contract: a
-/// consensus update changing only that contract, a protocol update closing the native relation
-/// with its original drain horizon, and an ordinary protocol update without one. Its rows mix
-/// available compiled profiles with every unavailable reason.
+/// The manifest schedules a consensus update and a protocol update, and its rows mix available
+/// compiled profiles with every unavailable reason and with a fixed-limit protocol's policy.
 ///
 /// # Errors
 ///
@@ -66,11 +63,10 @@ pub fn privacy_exact12_capability_manifest_fixture_v1()
 -> Result<PrivacyExact12CapabilityManifestFixtureV1, PrivacyExact12CapabilityManifestFixtureErrorV1>
 {
     let current_limits = PrivacyConsensusLimitsV1::taira_default();
-    let drain_blocks = current_limits.private_settlement.max_expiry_blocks;
     let scheduled_at_height = 2;
-    let effective_at_height = scheduled_at_height + drain_blocks + 1;
+    let effective_at_height = 302;
     let mut next_limits = current_limits;
-    next_limits.private_settlement.max_expiry_blocks = drain_blocks / 2;
+    next_limits.retained_root_count /= 2;
 
     let samples = privacy_action_role_samples_v1()?;
     let protocols = PrivacyProtocolIdV1::ALL
@@ -85,12 +81,7 @@ pub fn privacy_exact12_capability_manifest_fixture_v1()
             Ok(PrivacyCapabilityRowV1 {
                 protocol_id,
                 compiled_profile: compiled_profile(protocol_id, sample.profile),
-                policy: protocol_policy(
-                    protocol_id,
-                    scheduled_at_height,
-                    effective_at_height,
-                    drain_blocks,
-                ),
+                policy: protocol_policy(protocol_id, scheduled_at_height, effective_at_height),
             })
         })
         .collect::<Result<Vec<_>, PrivacyExact12CapabilityManifestFixtureErrorV1>>()?;
@@ -150,26 +141,17 @@ fn protocol_policy(
     protocol_id: PrivacyProtocolIdV1,
     scheduled_at_height: u64,
     effective_at_height: u64,
-    drain_blocks: u64,
 ) -> Option<PrivacyProtocolPolicyV1> {
-    let (next_limits, private_settlement_drain_blocks) = match protocol_id {
+    let next_limits = match protocol_id {
         PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
             return Some(PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id));
         }
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => (
+        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
             PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 32,
                 max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
-            }),
-            None,
-        ),
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
-            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
-                max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1 - 1,
-                max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
-            }),
-            Some(drain_blocks),
-        ),
+            })
+        }
         _ => return None,
     };
     Some(PrivacyProtocolPolicyV1 {
@@ -179,7 +161,6 @@ fn protocol_policy(
             scheduled_at_height,
             effective_at_height,
             next_limits,
-            private_settlement_drain_blocks,
         }),
     })
 }

@@ -4,13 +4,9 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
-- The Exact12 capability manifest parser accepts what current nodes return.
-  `PrivacyConsensusLimitsV1.private_settlement` carries the new `PrivateSettlementValidityLimitsV1`
-  admission contract and `PrivacyProtocolLimitsUpdateV1.private_settlement_drain_blocks` the pending
-  relation-closure horizon. Their uint64 fields decode to `bigint`, and the retired limit and update
-  layouts are refused. It also reads digests and the feature mask in the one-element tuple-struct
-  arrays Core's JSON writes, which every real manifest failed on before; the parsed model still
-  exposes the inner 32 bytes and number.
+- The Exact12 capability manifest parser accepts what current nodes return. It reads digests and the
+  feature mask in the one-element tuple-struct arrays Core's JSON writes, which every real manifest
+  failed on before; the parsed model still exposes the inner 32 bytes and number.
 
 - `createPrivateSettlementHost(limits)` works against the installed addon, which now exports
   `privateSettlementDescriptorMaxBytes` under that name; napi had registered it as `DESCRIPTOR_MAX_BYTES`.

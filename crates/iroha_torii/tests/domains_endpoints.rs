@@ -1,13 +1,12 @@
 //! Smoke tests for Torii domains endpoints.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::http::Request;
 use http::StatusCode;
 use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_torii::Torii;
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[tokio::test]
 async fn domains_endpoints_exist() {
     // Minimal Torii setup

@@ -13026,12 +13026,6 @@
    {
     "family": "kotlin_java_android",
     "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt",
-    "product": "atomic_settlement",
-    "symbols": ["requirePrivateSettlementLimitV1"]
-   },
-   {
-    "family": "kotlin_java_android",
-    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyCapabilitiesV1.kt",
     "product": "exact12_admission",
     "symbols": [
      "privacyConsensusLimitValuesV1",
@@ -13043,12 +13037,6 @@
      "requireValidPrivacyConsensusLimitsV1",
      "requireValidPrivacyPolicyScheduleV1"
     ]
-   },
-   {
-    "family": "kotlin_java_android",
-    "path": "kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/privacy/PrivacyExact12CapabilityManifestV1.kt",
-    "product": "atomic_settlement",
-    "symbols": ["parsePrivateSettlementLimits"]
    },
    {
     "family": "kotlin_java_android",
@@ -13201,12 +13189,6 @@
     "path": "IrohaSwift/Sources/IrohaSwift/NativeBridge.swift",
     "product": "voting",
     "symbols": ["encodeGovernanceCastPlainBallot", "encodeGovernanceCastZkBallot"]
-   },
-   {
-    "family": "swift",
-    "path": "IrohaSwift/Sources/IrohaSwift/PrivacyExact12CapabilityManifestV1.swift",
-    "product": "atomic_settlement",
-    "symbols": ["decodePrivateSettlementLimits"]
    },
    {
     "family": "swift",
@@ -13866,12 +13848,6 @@
      "normalizeParliamentTransitionDraftResponseV1",
      "parliamentAttemptReadPathV1"
     ]
-   },
-   {
-    "family": "javascript",
-    "path": "javascript/iroha_js/src/privacyCapabilities.js",
-    "product": "atomic_settlement",
-    "symbols": ["parsePrivateSettlementLimits"]
    },
    {
     "family": "javascript",

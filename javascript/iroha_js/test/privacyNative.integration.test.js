@@ -22,12 +22,11 @@ test("the real addon projection of Core's manifest reaches the managed parser", 
   assert.equal(getNativeBinding().privacyValidateExact12CapabilityManifestV1(archive), 0);
   const manifest = decodePrivacyExact12CapabilityManifestV1(archive);
   const { current_limits: current, pending_update: pending } = manifest.consensus_policy;
-  assert.equal(current.private_settlement.max_expiry_blocks, 7_200n);
-  assert.equal(pending.next_limits.private_settlement.max_expiry_blocks, 3_600n);
-  const closing = manifest.protocols[10];
-  assert.equal(closing.protocol_id.protocol, "iroha-ivm-private-note-stark-v1");
-  assert.equal(closing.policy.pending_update.private_settlement_drain_blocks, 7_200n);
-  assert.equal(closing.privacy_feature_mask, 7);
+  assert.equal(current.retained_root_count, 2048);
+  assert.equal(pending.next_limits.retained_root_count, 1024);
+  const note = manifest.protocols[10];
+  assert.equal(note.protocol_id.protocol, "iroha-ivm-private-note-stark-v1");
+  assert.equal(note.privacy_feature_mask, 7);
   assert.equal(manifest.manifest_digest.length, 32);
 });
 

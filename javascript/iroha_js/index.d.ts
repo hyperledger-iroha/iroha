@@ -127,7 +127,6 @@ export type {
   PrivacyProtocolTagV1,
   PrivacyTaggedUnitV1,
   PrivacyU64V1,
-  PrivateSettlementValidityLimitsV1,
 } from "./privacy-capabilities.js";
 export interface CryptoKeyPair {
   algorithm: CryptoAlgorithm;

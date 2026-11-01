@@ -431,65 +431,55 @@ fn exact12_capability_manifest_fixture_files_are_what_core_serializes() {
     );
 }
 #[test]
-fn exact12_capability_manifest_fixture_schedules_every_private_settlement_shape() {
+fn exact12_capability_manifest_fixture_pins_pending_updates_and_tuple_struct_json() {
     let fixture =
         privacy_exact12_capability_manifest_fixture_v1().expect("capability manifest fixture");
     let manifest: PrivacyExact12CapabilityManifestV1 =
         norito::decode_from_bytes(&fixture.manifest_norito).expect("decode manifest archive");
-    let current = manifest.consensus_policy.current_limits;
-    assert_eq!(
-        current.private_settlement,
-        PrivateSettlementValidityLimitsV1::protocol_default()
+    let policy = manifest.consensus_policy;
+    assert_ne!(
+        policy
+            .pending_update
+            .expect("pending consensus update")
+            .next_limits,
+        policy.current_limits
     );
-    let next = manifest
-        .consensus_policy
-        .pending_update
-        .expect("pending consensus update")
-        .next_limits;
-    assert_ne!(next.private_settlement, current.private_settlement);
-    assert_eq!(
-        PrivacyConsensusLimitsV1 {
-            private_settlement: current.private_settlement,
-            ..next
-        },
-        current,
-        "the pending consensus update changes only the private-settlement contract"
-    );
-    let drain = |protocol_id| {
+    assert!(
         manifest
             .protocols
             .iter()
-            .find(|row| row.protocol_id == protocol_id)
+            .find(|row| row.protocol_id == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
             .and_then(|row| row.policy)
             .and_then(|policy| policy.pending_update)
-            .expect("pending protocol update")
-            .private_settlement_drain_blocks
-    };
-    assert_eq!(
-        drain(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1),
-        Some(current.private_settlement.max_expiry_blocks)
+            .is_some()
     );
-    assert_eq!(drain(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1), None);
-    // Core itself refuses the limit layouts the SDK parsers must also refuse.
-    fn current_limits(projection: &mut norito::json::Value) -> &mut norito::json::Value {
-        projection
-            .get_mut("consensus_policy")
-            .and_then(|policy| policy.get_mut("current_limits"))
-            .expect("current limits")
-    }
+    // SDK JSON parsers read this exact shape: a one-field tuple struct is a one-element array.
     let projection: norito::json::Value =
         norito::json::from_json(&fixture.manifest_json).expect("manifest projection");
-    let mut retired = projection.clone();
-    current_limits(&mut retired)
-        .as_object_mut()
-        .expect("limits object")
-        .remove("private_settlement");
-    assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(retired).is_err());
-    let mut unknown = projection;
-    current_limits(&mut unknown)
-        .get_mut("private_settlement")
+    let digest = projection["manifest_digest"]
+        .as_array()
+        .expect("digest array");
+    assert_eq!(digest.len(), 1);
+    assert_eq!(digest[0].as_array().expect("digest bytes").len(), 32);
+    let mask = projection["protocols"][10]["privacy_feature_mask"]
+        .as_array()
+        .expect("feature mask array");
+    assert_eq!(mask.len(), 1);
+    assert_eq!(mask[0].as_u64(), Some(7));
+    // Core itself refuses the layouts the SDK parsers must also refuse.
+    let mut flat = projection.clone();
+    let inner = flat["manifest_digest"][0].clone();
+    *flat.get_mut("manifest_digest").expect("digest") = inner;
+    assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(flat).is_err());
+    let mut extended = projection;
+    extended
+        .get_mut("consensus_policy")
+        .and_then(|policy| policy.get_mut("current_limits"))
         .and_then(norito::json::Value::as_object_mut)
-        .expect("contract object")
-        .insert("retired".to_owned(), norito::json::Value::Null);
-    assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(unknown).is_err());
+        .expect("limits object")
+        .insert(
+            "private_settlement".to_owned(),
+            norito::json::Value::Object(norito::json::Map::new()),
+        );
+    assert!(norito::json::from_value::<PrivacyExact12CapabilityManifestV1>(extended).is_err());
 }

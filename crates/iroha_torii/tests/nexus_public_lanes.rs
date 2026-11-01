@@ -7,7 +7,6 @@ use http_body_util::BodyExt;
 use iroha_config::parameters::actual::Queue;
 use iroha_core::{
     kura::Kura,
-    smartcontracts::Execute,
     state::{State, World},
     sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
@@ -16,7 +15,6 @@ use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
-    block::BlockHeader,
     domain::Domain,
     isi::staking::{ActivatePublicLaneValidator, BondPublicLaneStake, RegisterPublicLaneValidator},
     nexus::{
@@ -27,6 +25,7 @@ use iroha_data_model::{
         Parameter,
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
+    transaction::{FeePaymentIntent, TransactionBuilder},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -38,7 +37,7 @@ use iroha_primitives::{
     numeric::{NumericSpec, Quantity},
 };
 use norito::json::{self, Value};
-use std::{net::SocketAddr, num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use tokio::sync::broadcast;
 fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
     request
@@ -53,7 +52,11 @@ fn with_loopback_connect_info(mut request: Request<Body>) -> Request<Body> {
 async fn nexus_public_lane_endpoints_exist() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let fixture = public_lane_fixture();
-    let router = build_test_router(fixture.chain.state(), fixture.chain.kura(), &fixture.local_peer);
+    let router = build_test_router(
+        fixture.chain.state(),
+        fixture.chain.kura(),
+        &fixture.local_peer,
+    );
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request("/v1/nexus/public-lanes/0/validators")),
@@ -77,7 +80,11 @@ async fn nexus_public_lane_endpoints_list_records() {
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let fixture = public_lane_fixture();
     let validator = fixture.validator.clone();
-    let router = build_test_router(fixture.chain.state(), fixture.chain.kura(), &fixture.local_peer);
+    let router = build_test_router(
+        fixture.chain.state(),
+        fixture.chain.kura(),
+        &fixture.local_peer,
+    );
     let resp = fixtures::request(
         &router,
         with_loopback_connect_info(fixtures::get_request("/v1/nexus/public-lanes/0/validators")),
@@ -208,55 +215,39 @@ fn public_lane_fixture() -> PublicLaneFixture {
         }
         .into(),
     ];
-    let chain = CertifiedTestChain::start(config).expect("original public-lane genesis");
-    bond_delegator_stake(
-        chain.state(),
-        &validator_id,
-        &delegator_id,
-        delegator_asset_id,
-        escrow_asset,
-        local_peer.clone(),
-    );
+    let mut chain = CertifiedTestChain::start(config).expect("original public-lane genesis");
+    // The delegator bonds in the first block after genesis, through the ordinary transaction path.
+    let bond = BondPublicLaneStake {
+        lane_id: LaneId::SINGLE,
+        validator: validator_id.clone(),
+        staker: delegator_id.clone(),
+        amount: Quantity::from(250_u32),
+        metadata: Metadata::default(),
+        monetary_plan: PublicLaneMonetaryPlanV1 {
+            network_scope: PublicLaneMonetaryScopeV1::Network(chain.network_id()),
+            valid_until_height: 2,
+            source_asset: delegator_asset_id,
+            destination_asset: escrow_asset,
+            amount: Quantity::from(250_u32),
+            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
+                activation_height: 1,
+                peer_id: local_peer.clone(),
+            }),
+        },
+    };
+    let bond_transaction = TransactionBuilder::new(
+        chain.network_id(),
+        delegator_id,
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([bond])
+    .sign(delegator_keypair.private_key());
+    assert_eq!(chain.commit(vec![bond_transaction]), vec![true]);
     PublicLaneFixture {
         chain,
         validator: validator_id,
         local_peer,
     }
-}
-fn bond_delegator_stake(
-    state: &Arc<State>,
-    validator: &AccountId,
-    delegator: &AccountId,
-    source_asset: AssetId,
-    destination_asset: AssetId,
-    peer_id: PeerId,
-) {
-    let mut block = state.block(block_header(2));
-    let mut tx = block.transaction();
-    BondPublicLaneStake {
-        lane_id: LaneId::SINGLE,
-        validator: validator.clone(),
-        staker: delegator.clone(),
-        amount: Quantity::from(250_u32),
-        metadata: Metadata::default(),
-        monetary_plan: PublicLaneMonetaryPlanV1 {
-            network_scope: PublicLaneMonetaryScopeV1::Network(*state.network_id_ref()),
-            valid_until_height: 2,
-            source_asset,
-            destination_asset,
-            amount: Quantity::from(250_u32),
-            precondition: PublicLaneMonetaryPreconditionV1::Bond(PublicLaneMonetaryBondV1 {
-                activation_height: 2,
-                peer_id,
-            }),
-        },
-    }
-    .execute(delegator, &mut tx)
-    .expect("bond stake");
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit block");
 }
 fn build_test_router(
     state: &Arc<State>,
@@ -277,15 +268,6 @@ fn build_test_router(
         iroha_config::parameters::actual::TelemetryProfile::Operator,
     );
     torii.router()
-}
-fn block_header(height: u64) -> BlockHeader {
-    BlockHeader::new(
-        NonZeroU64::new(height).expect("height must be non-zero"),
-        None,
-        None,
-        height,
-        0,
-    )
 }
 async fn read_json(body: Body) -> Value {
     json::from_slice(&collect_body(body).await).expect("valid JSON payload")

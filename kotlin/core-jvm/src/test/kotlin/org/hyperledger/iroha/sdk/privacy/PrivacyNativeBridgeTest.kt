@@ -212,11 +212,9 @@ class PrivacyNativeBridgeTest {
             Base64.getDecoder().decode(file.readText().trim()),
         )
         val policy = manifest.consensusPolicy
-        assertEquals(7_200.toBigInteger(), policy.currentLimits.privateSettlement.maxExpiryBlocks)
-        assertEquals(3_600.toBigInteger(), policy.pendingUpdate!!.nextLimits.privateSettlement.maxExpiryBlocks)
-        val closing = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
-        assertEquals(7_200.toBigInteger(), closing.policy!!.pendingUpdate!!.privateSettlementDrainBlocks)
-        assertEquals(7, closing.privacyFeatureMask)
+        assertEquals(2048, policy.currentLimits.retainedRootCount)
+        assertEquals(1024, policy.pendingUpdate!!.nextLimits.retainedRootCount)
+        assertEquals(7, manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1).privacyFeatureMask)
     }
 
     @Test

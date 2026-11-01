@@ -1613,7 +1613,7 @@ struct ToriiHarness {
     #[allow(dead_code)]
     kiso_child: Child,
     state: Arc<State>,
-    native_history: Option<Mutex<Option<PinReadbackHistory>>>,
+    native_history: Mutex<Option<PinReadbackHistory>>,
     queue: Arc<CoreQueue>,
     network_id: NetworkId,
     alias_policy: actual_cfg::SorafsAliasCachePolicy,
@@ -2135,9 +2135,7 @@ fn build_torii_harness_with_history(
     let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
     let state = Arc::clone(&original.state);
     let kura = Arc::clone(&original.kura);
-    let native_history = Some(Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(
-        original,
-    )))));
+    let native_history = Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(original))));
     let query = state.query_handle.clone();
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -2780,7 +2778,8 @@ async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off()
     assert!(!cfg.torii.sorafs_storage.enabled);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let submitted_hash = fixture.transaction.hash();
     let body = pin_register_json_body(&fixture.transaction);
@@ -2974,7 +2973,8 @@ async fn pin_register_json_fixture_roundtrips_through_the_public_http_route() {
     enable_storage_with_discovery_native_signers(&mut cfg);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let body = pin_register_json_body(&fixture.transaction);
     let envelope: json::Value = json::from_slice(&body).expect("versioned JSON object");
@@ -3100,7 +3100,8 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     enable_storage_with_discovery_native_signers(&mut cfg);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let submitted_hash = fixture.transaction.hash();
     let body = pin_register_json_body(&fixture.transaction);
@@ -3164,7 +3165,8 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     enable_storage_with_discovery_native_signers(&mut cfg);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let response = harness
         .app
@@ -3372,8 +3374,6 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
 fn commit_pin_readback_fixture(harness: &ToriiHarness) {
     let mut owner = harness
         .native_history
-        .as_ref()
-        .expect("certified query harness")
         .lock()
         .expect("native query history lock");
     let chain = match owner.take().expect("original native history") {

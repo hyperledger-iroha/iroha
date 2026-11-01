@@ -1,11 +1,9 @@
 //! Regression test ensuring `Torii::start` waits for shutdown.
-use iroha_core::{
-    kiso::KisoHandle, query::store::LiveQueryStore, queue::Queue, state::World,
-};
+use crate::fixtures;
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, queue::Queue, state::World};
 use iroha_futures::supervisor::ShutdownSignal;
 use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, test_utils};
 use std::{sync::Arc, time::Duration};
-use crate::fixtures;
 #[tokio::test]
 async fn torii_start_blocks_until_shutdown_signal() {
     // Some sandboxed test environments forbid binding sockets (for example, when networking is

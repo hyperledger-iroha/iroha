@@ -53,20 +53,6 @@ export type PrivacyEngineTagV1 = PrivacyTaggedUnitV1<
 export type PrivacyFixed32BytesV1 = readonly number[];
 /** Exact unsigned 64-bit protocol integer decoded without IEEE-754 rounding. */
 export type PrivacyU64V1 = bigint;
-/** Committed admission contract for the fixed native private-payment relation. */
-export interface PrivateSettlementValidityLimitsV1 {
-  readonly max_participants: number;
-  readonly max_expiry_blocks: PrivacyU64V1;
-  readonly audit_timeout_blocks: PrivacyU64V1;
-  readonly prepare_timeout_blocks: PrivacyU64V1;
-  readonly commit_timeout_blocks: PrivacyU64V1;
-  readonly capsule_padding_classes: number;
-  readonly max_proof_bytes: PrivacyU64V1;
-  readonly max_capsule_bytes: PrivacyU64V1;
-  readonly max_carrier_bytes: PrivacyU64V1;
-  readonly sidecar_retention_blocks: PrivacyU64V1;
-  readonly min_auditor_approvals: number;
-}
 export interface PrivacyConsensusLimitsV1 {
   readonly max_actions_per_transaction: number;
   readonly max_actions_per_block: number;
@@ -78,7 +64,6 @@ export interface PrivacyConsensusLimitsV1 {
   readonly max_nullifiers_per_action: number;
   readonly max_commitments_per_action: number;
   readonly retained_root_count: number;
-  readonly private_settlement: PrivateSettlementValidityLimitsV1;
 }
 export interface PrivacyConsensusPolicyUpdateV1 {
   readonly scheduled_at_height: PrivacyU64V1;
@@ -130,8 +115,6 @@ export interface PrivacyProtocolLimitsUpdateV1 {
   readonly scheduled_at_height: PrivacyU64V1;
   readonly effective_at_height: PrivacyU64V1;
   readonly next_limits: PrivacyProtocolLimitsV1;
-  /** Original private-payment expiry horizon when this schedule closes the native relation. */
-  readonly private_settlement_drain_blocks: PrivacyU64V1 | null;
 }
 /** Optional committed resource policy; absence uses the selected native defaults. */
 export interface PrivacyProtocolPolicyV1 {

@@ -403,10 +403,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
     // Dataspace filter excludes unknown ids.
     let resp = fixtures::request_get(
         &app,
-        &filtered_manifests_uri(
-            &uaid,
-            &format!("dataspace_id = {}", dataspace.as_u64() + 1),
-        ),
+        &filtered_manifests_uri(&uaid, &format!("dataspace_id = {}", dataspace.as_u64() + 1)),
     )
     .await
     .expect("response");

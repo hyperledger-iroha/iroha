@@ -14,11 +14,13 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
 };
-use iroha_data_model::Registrable as _;
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_data_model::Registrable as _;
 use iroha_data_model::{
     account::{AccountId, NewAccount},
-    asset::{Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId, NewAssetDefinition},
+    asset::{
+        Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId, NewAssetDefinition,
+    },
     block::BlockHeader,
     domain::Domain,
     isi::Register,
@@ -471,8 +473,9 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
     // Reconstruct an initial World containing a dataspace absent from the active
-    // catalog. Configured genesis must prune both its manifest and derived binding;
-    // the account's global asset remains owned by the same canonical account.
+    // catalog. A genesis that configures a new catalog must prune both its manifest
+    // and derived binding; the account's global asset remains owned by the same
+    // canonical account.
     {
         let world = state.world_view();
         assert!(
@@ -500,7 +503,18 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
     assert_eq!(before_account.account_id, account_id);
     assert_eq!(before_account.assets.len(), 1);
     assert_eq!(before_account.assets[0].quantity, Quantity::from(9u32));
-    let (router, state) = build_test_router_with_state(Arc::new(state));
+    let mut nexus = state.nexus_snapshot();
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: DataSpaceId::new(405),
+            alias: "retail".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    let (router, state) = build_test_router_with_nexus(Arc::new(state), nexus);
     {
         let world = state.world_view();
         assert!(world.uaid_dataspaces().get(&uaid).is_none());
@@ -873,10 +887,16 @@ fn build_test_router(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
 fn build_test_router_with_state(
     state: Arc<State>,
 ) -> (iroha_torii::TestApiRouterRuntime, Arc<State>) {
+    let nexus = state.nexus_snapshot();
+    build_test_router_with_nexus(state, nexus)
+}
+fn build_test_router_with_nexus(
+    state: Arc<State>,
+    mut nexus: iroha_config::parameters::actual::Nexus,
+) -> (iroha_torii::TestApiRouterRuntime, Arc<State>) {
     // The fixture assembly above only populates a pre-genesis World. Authenticate that exact
     // initial World through original signed genesis before exercising native fanout reads.
     assert_eq!(state.committed_height(), 0);
-    let mut nexus = state.nexus_snapshot();
     // The catalog routes are physical storage/authority labels, separate from native lanes.
     let lanes = nexus
         .dataspace_catalog

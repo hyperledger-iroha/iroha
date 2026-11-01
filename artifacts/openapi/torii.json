@@ -31862,9 +31862,6 @@
             "minimum": 1,
             "type": "integer"
           },
-          "private_settlement": {
-            "$ref": "#/components/schemas/PrivateSettlementValidityLimitsV1"
-          },
           "retained_root_count": {
             "format": "uint32",
             "minimum": 1,
@@ -31881,8 +31878,7 @@
           "max_statement_and_encrypted_output_bytes_per_transaction",
           "max_nullifiers_per_action",
           "max_commitments_per_action",
-          "retained_root_count",
-          "private_settlement"
+          "retained_root_count"
         ],
         "type": "object"
       },
@@ -33451,19 +33447,6 @@
           "next_limits": {
             "$ref": "#/components/schemas/PrivacyProtocolLimitsV1"
           },
-          "private_settlement_drain_blocks": {
-            "anyOf": [
-              {
-                "format": "uint64",
-                "minimum": 1,
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "description": "Original governed private-payment expiry horizon; required only for a native relation-closing update and derived by execution."
-          },
           "scheduled_at_height": {
             "format": "uint64",
             "minimum": 1,
@@ -33473,8 +33456,7 @@
         "required": [
           "scheduled_at_height",
           "effective_at_height",
-          "next_limits",
-          "private_settlement_drain_blocks"
+          "next_limits"
         ],
         "type": "object"
       },

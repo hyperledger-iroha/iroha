@@ -1,5 +1,6 @@
 //! Smoke tests for Torii asset definitions endpoints.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -20,8 +21,6 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_torii::Torii;
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 fn checked_asset_definition_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked asset-definition Ed25519 fixture keypair")
