@@ -833,6 +833,58 @@ impl CatalogMethodRouter<SharedAppState, ToriiDefaultAuthentication> {
         }
     }
 }
+/// The response future of an [`ErasedHandler`].
+pub(crate) type ErasedHandlerFuture = futures::future::BoxFuture<'static, axum::response::Response>;
+
+/// A route handler erased to one concrete type per router state.
+///
+/// Axum builds its per-route service stack (`HandlerService`, response
+/// mapping and the boxed clone service) for every distinct handler type, and
+/// code generation re-proves each layer's trait bounds down to the handler's
+/// `Handler` impl, including the `Send` proof of its async state machine.
+/// With hundreds of async handlers that stack dominated Torii's compile time
+/// (about 14 deep trait queries per handler). Erasing each handler once at
+/// registration leaves a single service stack per state type; requests call
+/// the original handler exactly as Axum's own `HandlerService` does (clone,
+/// then `Handler::call`), at the cost of one reference-count clone and one
+/// boxed future per request.
+pub(crate) struct ErasedHandler<S>(
+    Arc<dyn Fn(Request<Body>, S) -> ErasedHandlerFuture + Send + Sync>,
+);
+
+impl<S> Clone for ErasedHandler<S> {
+    fn clone(&self) -> Self {
+        Self(Arc::clone(&self.0))
+    }
+}
+
+impl<S> ErasedHandler<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    /// Erase `handler`; its extractors, response conversion and future are unchanged.
+    pub(crate) fn new<H, T>(handler: H) -> Self
+    where
+        H: Handler<T, S>,
+        T: 'static,
+    {
+        Self(Arc::new(move |request, state| {
+            Box::pin(handler.clone().call(request, state))
+        }))
+    }
+}
+
+impl<S> Handler<(), S> for ErasedHandler<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    type Future = ErasedHandlerFuture;
+
+    fn call(self, request: Request<Body>, state: S) -> Self::Future {
+        (self.0)(request, state)
+    }
+}
+
 macro_rules! catalog_method_constructor {
     ($name:ident, $method:ident, $constructor:ident) => {
         #[doc = concat!("Construct a sealed single-", stringify!($method), " router.")]
@@ -845,7 +897,7 @@ macro_rules! catalog_method_constructor {
             CatalogMethodRouter {
                 method: HttpMethod::$method,
                 authentication: ToriiDefaultAuthentication,
-                inner: $constructor(handler),
+                inner: $constructor(ErasedHandler::new(handler)),
             }
         }
     };
@@ -865,7 +917,7 @@ where
     CatalogMethodRouter {
         method: HttpMethod::Get,
         authentication: ToriiDefaultAuthentication,
-        inner: on(MethodFilter::GET, handler),
+        inner: on(MethodFilter::GET, ErasedHandler::new(handler)),
     }
 }
 catalog_method_constructor!(catalog_post, Post, post);
@@ -1239,6 +1291,50 @@ mod tests {
                 );
             }
         }
+    }
+    #[tokio::test]
+    async fn erased_handler_preserves_extractors_state_and_rejections() {
+        use axum::extract::{Path, State};
+        #[derive(Clone)]
+        struct Calls(Arc<AtomicUsize>);
+        async fn echo(
+            State(Calls(calls)): State<Calls>,
+            Path(id): Path<u32>,
+            body: String,
+        ) -> (StatusCode, String) {
+            calls.fetch_add(1, Ordering::SeqCst);
+            (StatusCode::ACCEPTED, format!("{id}:{body}"))
+        }
+        let calls = Arc::new(AtomicUsize::new(0));
+        let router = Router::new()
+            .route("/echo/{id}", post(ErasedHandler::new(echo)))
+            .with_state(Calls(Arc::clone(&calls)));
+        let post_to = |uri: &str| {
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .body(Body::from("payload"))
+                .expect("echo request")
+        };
+        for _ in 0..2 {
+            let response = router
+                .clone()
+                .oneshot(post_to("/echo/7"))
+                .await
+                .expect("echo response");
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .expect("echo body");
+            assert_eq!(&body[..], b"7:payload");
+        }
+        // The original extractor still rejects before the handler body runs.
+        let response = router
+            .oneshot(post_to("/echo/seven"))
+            .await
+            .expect("rejected echo response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
     #[tokio::test]
     async fn ledger_original_carriers_mount_without_optional_features() {

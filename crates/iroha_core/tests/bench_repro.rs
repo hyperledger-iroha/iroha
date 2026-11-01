@@ -17,9 +17,9 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::topology::DataSpaceId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::gen_account_in;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn bench_block_header() -> BlockHeader {
     BlockHeader::new(nonzero!(2_u64), None, None, 0, 0)
 }

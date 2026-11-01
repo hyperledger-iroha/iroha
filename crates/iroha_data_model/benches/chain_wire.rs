@@ -11,8 +11,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::const_vec::ConstVec;
+use iroha_primitives::nonzero;
 use iroha_version::codec::{DecodeVersioned, EncodeVersioned};
-use nonzero_ext::nonzero;
 use norito::core::{self as ncore, DecodeFlagsGuard, header_flags};
 use std::hint::black_box;
 #[derive(Clone, Copy)]

@@ -3,7 +3,7 @@
 use super::*;
 use iroha_config::base::toml::WriteExt as _;
 use iroha_data_model::{
-    block::consensus::{RootFeePolicy, SumeragiGenesisContextParameters},
+    block::consensus::SumeragiGenesisContextParameters,
     isi::{Grant, Mint, Register},
     parameter::Parameter,
     sns::{DATASPACE_ALIAS_SUFFIX_ID, NameSelectorV1},

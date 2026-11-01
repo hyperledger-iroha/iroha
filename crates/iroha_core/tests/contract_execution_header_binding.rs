@@ -15,8 +15,8 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn assert_manifest_signature_error(error: &InstructionExecutionError, field: &str) {
     const EXPECTED: &str = "manifest signature verification failed";
     match error {

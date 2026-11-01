@@ -1,6 +1,6 @@
 //! First-party Microsoft Vega-MC compatibility implementation.
-use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
+use std::sync::OnceLock;
 
 use super::{
     VegaMdlProofDimensionsV1, VegaT256ScalarV1 as Scalar,
@@ -198,16 +198,16 @@ pub(super) enum Figure9VerificationError {
 }
 
 struct GovernedFigure9ArtifactSlots {
-    verifier_key: OnceCell<verifier_key::McVerifierKeyWire>,
-    prover_key: OnceCell<prover_key::McProverKeyWire>,
+    verifier_key: OnceLock<verifier_key::McVerifierKeyWire>,
+    prover_key: OnceLock<prover_key::McProverKeyWire>,
     install_lock: Mutex<()>,
 }
 
 impl GovernedFigure9ArtifactSlots {
     const fn new() -> Self {
         Self {
-            verifier_key: OnceCell::new(),
-            prover_key: OnceCell::new(),
+            verifier_key: OnceLock::new(),
+            prover_key: OnceLock::new(),
             install_lock: Mutex::new(()),
         }
     }

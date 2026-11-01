@@ -89,7 +89,7 @@ fn unknown_syscall_is_rejected_at_admission() {
         prelude::{AssetDefinition, TransactionBuilder},
         transaction::error::TransactionRejectionReason,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::borrow::Cow;
     // Build a minimal world with a single authority account.
     let kura = Kura::blank_kura_for_testing();

@@ -25,8 +25,21 @@ mod one_argument {
 
     fn accepts_exact_field_type() {
         let _: Example = Box::new(1_u8).into();
-        assert!(impls::impls!(Example: !From<u8>));
     }
+
+    // `From<u8>` must not be derived for the local `Box<u8>` field. The
+    // inherent constant only applies when the bound holds and wins over the
+    // trait fallback, so this fails to compile if the impl appears.
+    trait LacksFromU8 {
+        const IMPLEMENTS: bool = false;
+    }
+    impl<T: ?Sized> LacksFromU8 for T {}
+    struct Probe<T: ?Sized>(core::marker::PhantomData<T>);
+    #[allow(dead_code)]
+    impl<T: ?Sized + From<u8>> Probe<T> {
+        const IMPLEMENTS: bool = true;
+    }
+    const _: () = assert!(!<Probe<Example>>::IMPLEMENTS);
 }
 
 mod two_arguments {

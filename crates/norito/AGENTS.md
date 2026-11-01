@@ -25,9 +25,11 @@ These guidelines apply to the `crates/norito` crate (Iroha serialization codec).
 - Python: if `python` is unavailable, use `python3` to run scripts.
 
 ## CRC64
-- Algorithm: CRC64-XZ (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected, init/xor all ones)
-  via the `crc64fast` crate.
-- Runtime selection: `hardware_crc64` is an alias of `crc64_fallback`; both use the same implementation.
+- Algorithm: CRC64-XZ (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected, init/xor all ones),
+  implemented in `src/core/simd_crc64.rs`.
+- Runtime selection: `crc64_fallback` is the portable slicing-by-16 reference; `hardware_crc64`
+  and `Crc64Digest` use the PCLMULQDQ/PMULL kernel (`simd-accel`) only after it passes a startup
+  parity check against the reference.
 - Determinism: Parity tests ensure consistent outputs across platforms.
 
 ### Parity tests
@@ -48,7 +50,7 @@ These guidelines apply to the `crates/norito` crate (Iroha serialization codec).
 
 ## Performance Notes
 
-- The checksum uses the optimized `crc64fast` implementation.
+- The checksum uses the in-house carry-less multiply kernel where available (see `## CRC64`).
 - Buffer reservations and derive-provided length hints help minimize reallocations during serialization.
 
 ## Serialization

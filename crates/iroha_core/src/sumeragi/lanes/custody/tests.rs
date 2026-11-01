@@ -1258,7 +1258,7 @@ fn original_signer_creation_refusal_preserves_exact_stake_cut_and_last_owner_cha
 }
 
 fn original_world_generation_bytes(world: &World) -> usize {
-    fn pair<V: mv::Value>(_: &mv::cell::Cell<V, iroha_allocation::AllocationCharge>) -> usize {
+    fn pair<V: mv::CellValue>(_: &mv::cell::Cell<V, iroha_allocation::AllocationCharge>) -> usize {
         mv::cell::Cell::<V, iroha_allocation::AllocationCharge>::allocation_layouts()
             .into_iter()
             .map(|layout| layout.size())

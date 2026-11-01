@@ -36,7 +36,7 @@ use halo2curves::{
     bn256::Fr,
     ff::{Field, PrimeField},
 };
-use once_cell::sync::OnceCell;
+use std::sync::OnceLock;
 #[path = "poseidon/bn254_v1.rs"]
 mod bn254_v1;
 #[cfg(test)]
@@ -211,11 +211,11 @@ fn fixed_fields<const W: usize, const R: usize>(
     )
 }
 fn poseidon3_params() -> &'static PoseidonConstants<3, WIDTH3_ROUNDS> {
-    static CONSTS: OnceCell<PoseidonConstants<3, WIDTH3_ROUNDS>> = OnceCell::new();
+    static CONSTS: OnceLock<PoseidonConstants<3, WIDTH3_ROUNDS>> = OnceLock::new();
     CONSTS.get_or_init(|| fixed_fields(bn254_v1::WIDTH3))
 }
 fn poseidon6_params() -> &'static PoseidonConstants<6, WIDTH6_ROUNDS> {
-    static CONSTS: OnceCell<PoseidonConstants<6, WIDTH6_ROUNDS>> = OnceCell::new();
+    static CONSTS: OnceLock<PoseidonConstants<6, WIDTH6_ROUNDS>> = OnceLock::new();
     CONSTS.get_or_init(|| fixed_fields(bn254_v1::WIDTH6))
 }
 #[inline(always)]

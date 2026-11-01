@@ -51,7 +51,7 @@ impl ValidationCache {
         let way = set
             .iter()
             .position(|slot| *slot == EMPTY)
-            .unwrap_or(usize::from(key[2]) % WAYS);
+            .unwrap_or_else(|| usize::from(key[2]) % WAYS);
         set[way] = *key;
     }
 }

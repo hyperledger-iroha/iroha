@@ -29,8 +29,8 @@ pub enum RowPositionError<E> {
 /// copies a cursor or gives another tree publication authority.
 pub struct BptreeMapFrozenOwned<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     owner: BptreeMapOwned<K, V, M>,
@@ -43,8 +43,8 @@ where
 /// the original charges and shared-node owners that fund/retain it.
 pub struct BptreeMapFrozenReader<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     original: MapRetainedWork<K, V, M>,
@@ -54,8 +54,8 @@ where
 /// No key/value clone, fresh identity allocation or raw node pointer is stored.
 pub struct BptreeMapRowPosition<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     original: BptreeMapFrozenReader<K, V, M>,
@@ -66,8 +66,8 @@ where
 /// The exact caller work admission precedes all node/slot examinations.
 pub struct BptreeMapRowPositions<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     original: BptreeMapFrozenReader<K, V, M>,
@@ -77,8 +77,8 @@ where
 
 impl<K, V, M> BptreeMapOwned<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Move this exact completed original cursor into immutable custody.
@@ -89,8 +89,8 @@ where
 
 impl<K, V, M> BptreeMapFrozenOwned<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Retain actual original work/base/root allocations without new storage.
@@ -116,8 +116,8 @@ where
 
 impl<K, V, M> Clone for BptreeMapFrozenReader<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn clone(&self) -> Self {
@@ -129,8 +129,8 @@ where
 
 impl<K, V, M> Clone for BptreeMapRowPosition<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn clone(&self) -> Self {
@@ -143,8 +143,8 @@ where
 
 impl<K, V, M> BptreeMapFrozenReader<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Compare exact original work/base/root allocations, never their contents.
@@ -188,8 +188,8 @@ where
 
 impl<K, V, M> BptreeMapRowPositions<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Admit the finite next-position kernel, preserving progress on refusal.

@@ -15,7 +15,7 @@ use iroha_data_model::{
     proof::{VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord},
     zk::BackendTag,
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::{convert::TryFrom, sync::Arc};
 use tower::ServiceExt as _;
 #[allow(clippy::too_many_lines)]
@@ -68,7 +68,7 @@ async fn zk_vk_get_returns_record_with_key() {
         }),
     );
     // Encode backend with '/'
-    let backend_enc = urlencoding::encode(backend);
+    let backend_enc = iroha_torii::test_utils::percent_encode(backend);
     let uri = format!("/v1/zk/vk/{backend_enc}/{name}");
     let req = http::Request::builder()
         .method("GET")
@@ -180,7 +180,7 @@ async fn zk_vk_get_not_found() {
             }
         }),
     );
-    let backend_enc = urlencoding::encode("pipa-r/pasta");
+    let backend_enc = iroha_torii::test_utils::percent_encode("pipa-r/pasta");
     let uri = format!("/v1/zk/vk/{}/{}", backend_enc, "missing");
     let req = http::Request::builder()
         .method("GET")

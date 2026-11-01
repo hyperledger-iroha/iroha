@@ -111,7 +111,7 @@ pub mod simd_crc64;
 pub use simd_crc64::crc64_neon;
 #[cfg(all(target_arch = "x86_64", target_feature = "sse4.2"))]
 pub use simd_crc64::crc64_sse42;
-pub use simd_crc64::{crc64_fallback, hardware_crc64};
+pub use simd_crc64::{Crc64Digest, crc64_fallback, hardware_crc64};
 #[cfg(feature = "gpu-compression")]
 pub mod gpu_zstd;
 /// Default upper bound on Norito archive length (bytes) when hosts do not
@@ -673,7 +673,7 @@ fn limit_to_u64(limit: usize) -> u64 {
 }
 fn charge_atomic_budget(counter: &AtomicU64, amount: u64, limit: u64) -> Result<u64, u64> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(amount).filter(|next| *next <= limit)
         })
         .map(|previous| previous.saturating_add(amount))
@@ -6323,14 +6323,14 @@ const PAYLOAD_CHECKSUM_BLOCK: usize = 512;
 /// a dispatch and a table walk for every tiny write. CRC64 is a streaming checksum, so the
 /// result is identical to one pass over the concatenated bytes.
 pub(crate) struct PayloadChecksum {
-    digest: crc64fast::Digest,
+    digest: Crc64Digest,
     pending: [u8; PAYLOAD_CHECKSUM_BLOCK],
     filled: usize,
 }
 impl PayloadChecksum {
     pub(crate) fn new() -> Self {
         Self {
-            digest: crc64fast::Digest::new(),
+            digest: Crc64Digest::new(),
             pending: [0; PAYLOAD_CHECKSUM_BLOCK],
             filled: 0,
         }

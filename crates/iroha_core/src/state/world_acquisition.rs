@@ -49,10 +49,10 @@ impl<A: BlockAcquisition> WorldFieldAcquisition for OrdinaryAcquisition<A> {
 /// Cells retain their original partial pair on nonblocking acquisition refusal.
 pub(super) struct CellAcquisition<
     'a,
-    V: mv::Value,
+    V: mv::CellValue,
     C: Send + Sync + 'static = concread::ebrcell::Untracked,
 >(pub(super) mv::cell::BlockAcquisitionSlot<'a, V, C>);
-impl<'a, V: mv::Value, C: Send + Sync + 'static> WorldFieldAcquisition
+impl<'a, V: mv::CellValue, C: Send + Sync + 'static> WorldFieldAcquisition
     for CellAcquisition<'a, V, C>
 {
     type Block = mv::cell::Block<'a, V, C>;

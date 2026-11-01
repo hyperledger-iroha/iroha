@@ -278,6 +278,10 @@ fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     clippy::cast_precision_loss,
     reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and rounding steps."
 )]
+#[expect(
+    clippy::suboptimal_flops,
+    reason = "keep separate multiply and add: fused mul_add changes rounding and results must match on every node"
+)]
 fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     const LN_2: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef);
     let mut bytes = Zeroizing::new([0_u8; 16]);

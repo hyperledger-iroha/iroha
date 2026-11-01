@@ -23,7 +23,7 @@ use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
 #[test]
 fn referendum_open_and_close_by_height() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     // Build minimal state.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();

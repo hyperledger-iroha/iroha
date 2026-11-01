@@ -1047,7 +1047,7 @@
         "symbol": "max_block_bytes",
         "kind": "fn",
         "anchor": "pub mod sumeragi {",
-        "expr": "nonzero_ext::nonzero!(16_777_216_u32)"
+        "expr": "iroha_primitives::nonzero!(16_777_216_u32)"
       },
       "committed_as": "Parameters.sumeragi.max_block_bytes (SumeragiParameter::MaxBlockBytes), scheduled at h + 2 as ChainParams.max_block_bytes",
       "inclusive": true,
@@ -1346,7 +1346,7 @@
         "symbol": "max_time_trigger_invocations",
         "kind": "field",
         "anchor": "pub const fn new(max_transactions: NonZeroU64) -> Self {",
-        "expr": "nonzero_ext::nonzero!(512_u32)"
+        "expr": "iroha_primitives::nonzero!(512_u32)"
       },
       "inclusive": true,
       "committed_as": "Parameters.block.max_time_trigger_invocations (BlockParameter::MaxTimeTriggerInvocations)",
@@ -6935,7 +6935,7 @@
         "symbol": "exec_budget_ms",
         "kind": "fn",
         "anchor": "pub mod sumeragi {",
-        "expr": "nonzero_ext::nonzero!(4_000_u64)"
+        "expr": "iroha_primitives::nonzero!(4_000_u64)"
       },
       "validity": false,
       "committed_as": "Parameters.sumeragi.exec_budget_ms (SumeragiParameter::ExecBudgetMs)",
@@ -6986,7 +6986,7 @@
         "symbol": "apply_budget_ms",
         "kind": "fn",
         "anchor": "pub mod sumeragi {",
-        "expr": "nonzero_ext::nonzero!(1_000_u64)"
+        "expr": "iroha_primitives::nonzero!(1_000_u64)"
       },
       "validity": false,
       "committed_as": "Parameters.sumeragi.apply_budget_ms (SumeragiParameter::ApplyBudgetMs)",
@@ -15297,9 +15297,9 @@
           "due_work_max_lag_ms"
         ],
         "exprs": {
-          "block_cadence_ms": "nonzero_ext::nonzero!(1_000_u64)",
-          "payload_retry_interval_ms": "nonzero_ext::nonzero!(5_000_u64)",
-          "due_work_max_lag_ms": "nonzero_ext::nonzero!(60_000_u64)"
+          "block_cadence_ms": "iroha_primitives::nonzero!(1_000_u64)",
+          "payload_retry_interval_ms": "iroha_primitives::nonzero!(5_000_u64)",
+          "due_work_max_lag_ms": "iroha_primitives::nonzero!(60_000_u64)"
         }
       },
       {
@@ -15328,8 +15328,8 @@
           "key_allowed_algorithms"
         ],
         "exprs": {
-          "epoch_length_blocks": "nonzero_ext::nonzero!(3_600_u64) | nonzero_ext::nonzero!(3_600_u64)",
-          "demotion_window": "nonzero_ext::nonzero!(128_u64)",
+          "epoch_length_blocks": "iroha_primitives::nonzero!(3_600_u64) | iroha_primitives::nonzero!(3_600_u64)",
+          "demotion_window": "iroha_primitives::nonzero!(128_u64)",
           "max_clock_drift_ms": "1_000",
           "key_activation_lead_blocks": "1",
           "key_overlap_grace_blocks": "8",
@@ -15796,7 +15796,7 @@
       },
       {
         "path": "crates/iroha_p2p/src/lib.rs",
-        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md §6, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
+        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md \u00a76, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
         "symbols": [
           "MAX_HANDSHAKE_HOST_PROFILES"
         ],
@@ -19482,7 +19482,7 @@
               "ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN"
             ],
             "exprs": {
-              "ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN": "ASSET_DEFINITION_ADDRESS_LEN + ASSET_DEFINITION_ADDRESS_LEN.div_ceil(2)"
+              "ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN": "crate::base58::max_encoded_len(ASSET_DEFINITION_ADDRESS_LEN)"
             }
           },
           {
@@ -19513,6 +19513,20 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/iroha_data_model/src/bech32.rs",
+        "reason": "The Bech32 and Bech32m codec (BIP-173, BIP-350) that spells contract addresses and checks the checksum of I105 account addresses: the six-character checksum width, the 83-byte ceiling of the human-readable part and the 1,023-byte ceiling of a whole string, the length up to which its BCH checksum is specified. Each bounds one string the codec parses or builds and no amount; a string that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) whatever its own ceiling says.",
+        "symbols": [
+          "CHECKSUM_LEN",
+          "CODE_LENGTH",
+          "MAX_HRP_LEN"
+        ],
+        "exprs": {
+          "CHECKSUM_LEN": "6",
+          "CODE_LENGTH": "1023",
+          "MAX_HRP_LEN": "83"
+        }
       },
       {
         "reason": "Other product shapes in the data model: the confidential memo ciphertext and wire widths, the DA ingest admission windows and pin-intent alias, the FASTPQ source-statement frames (structural bounds, as their definitions state, not admission quotas), fee-evidence record, page and window bounds and the retail catch-up months, the jurisdiction identifier, the oracle reputation score, the QR stream chunk, payload and frame bounds, the SoraNet ticket uses and VPN integer widths, and the Taikai anchor identifier and segment window. A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
@@ -25651,7 +25665,7 @@
         }
       },
       {
-        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof.",
+        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof. The wire ID of an instruction envelope (section 5.2) is held to the same text length, so every wire ID an interface can declare fits; a longer one is a structural decode error of that envelope, which travels inside transaction.max_tx_bytes (10 MiB) and bounds no amount.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/parameter/runtime_upgrade_policy.rs",
@@ -25708,6 +25722,15 @@
             ],
             "exprs": {
               "ENDORSEMENT_LIFETIME_MS": "30 * 60 * 1000"
+            }
+          },
+          {
+            "path": "crates/iroha_data_model/src/isi/envelope.rs",
+            "symbols": [
+              "MAX_INSTRUCTION_WIRE_ID_BYTES"
+            ],
+            "exprs": {
+              "MAX_INSTRUCTION_WIRE_ID_BYTES": "crate::runtime::definition::MAX_DEFINITION_TEXT_BYTES"
             }
           }
         ]
@@ -26827,12 +26850,6 @@
               }
             },
             {
-              "path": "crates/iroha_data_model/src/account/address.rs",
-              "sites": {
-                "bits >= 5": 2
-              }
-            },
-            {
               "path": "crates/iroha_data_model/src/account/controller.rs",
               "sites": {
                 "major <= 0b111": 1
@@ -26842,6 +26859,14 @@
               "path": "crates/iroha_data_model/src/account/i105_json.rs",
               "sites": {
                 "self.bits >= 5": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/bech32.rs",
+              "sites": {
+                "(33..=126).contains(&byte)": 1,
+                "self.bits < 8": 1,
+                "self.bits < 5": 1
               }
             },
             {

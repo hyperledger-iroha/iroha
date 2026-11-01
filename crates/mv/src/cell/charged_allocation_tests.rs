@@ -12,14 +12,14 @@ use std::{
 
 type ChargedCell<V> = Cell<V, AllocationCharge>;
 
-fn pair_bytes<V: Value>() -> usize {
+fn pair_bytes<V: CellValue>() -> usize {
     ChargedCell::<V>::allocation_layouts()
         .into_iter()
         .map(|layout| layout.size())
         .sum()
 }
 
-fn charges<V: Value>(
+fn charges<V: CellValue>(
     budget: &AllocationBudget,
 ) -> Result<CellAllocationCharges<AllocationCharge>, AllocationRefusal> {
     let [current, undo] = ChargedCell::<V>::allocation_layouts();

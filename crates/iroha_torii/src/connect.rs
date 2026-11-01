@@ -845,7 +845,7 @@ impl Bus {
         if let Some(v) = counts.get_mut(&ip) {
             if *v > 0 {
                 *v -= 1;
-                let _ = self.shared.sessions_total.fetch_update(
+                let _ = self.shared.sessions_total.try_update(
                     Ordering::AcqRel,
                     Ordering::Acquire,
                     |total| total.checked_sub(1),

@@ -8,8 +8,8 @@ use iroha::{
 use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_primitives::nonzero;
 use iroha_test_network::*;
-use nonzero_ext::nonzero;
 #[test]
 fn pagination_behaves() -> Result<()> {
     // Stored cursors are required to validate multi-batch pagination behavior.

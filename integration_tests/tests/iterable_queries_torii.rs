@@ -8,8 +8,8 @@ use iroha_model_base::name::Name;
 use std::{thread::sleep, time::Duration};
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test
 use iroha_data_model::query::dsl::SelectorTuple;
+use iroha_primitives::nonzero;
 use iroha_test_network::NetworkBuilder;
-use nonzero_ext::nonzero;
 use sandbox::start_network_blocking_or_skip as start_network_or_skip;
 fn is_permission_grant_repetition(
     err: &eyre::Report,

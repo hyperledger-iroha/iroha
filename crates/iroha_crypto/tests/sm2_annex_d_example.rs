@@ -1,5 +1,4 @@
 #![allow(clippy::needless_range_loop)]
-#![allow(clippy::non_std_lazy_statics)]
 //! SM2 Annex D Example 1 verification using the original Fp‑256 parameters.
 //!
 //! This harness keeps the canonical GM/T 0003‑2012 Annex D Example 1 vector in
@@ -14,6 +13,8 @@ use num_bigint::BigUint;
 use sm3::{Digest, Sm3};
 #[cfg(feature = "sm")]
 use std::fmt::Write as _;
+#[cfg(feature = "sm")]
+use std::sync::LazyLock;
 #[cfg(feature = "sm")]
 #[derive(Clone, Debug)]
 struct Point {
@@ -39,17 +40,33 @@ fn to_fixed_32(x: &BigUint) -> [u8; 32] {
 }
 // Annex D Example 1 (older Fp-256 parameters, see GM/T 0003-2012).
 #[cfg(feature = "sm")]
-lazy_static::lazy_static! {
-    static ref ZERO: BigUint = BigUint::default();
-    static ref ONE: BigUint = BigUint::from(1u32);
-    static ref P:  BigUint = bu("8542D69E4C044F18E8B92435BF6FF7DE457283915C45517D722EDB8B08F1DFC3");
-    static ref A:  BigUint = bu("787968B4FA32C3FD2417842E73BBFEFF2F3C848B6831D7E0EC65228B3937E498");
-    static ref B:  BigUint = bu("63E4C6D3B23B0C849CF84241484BFE48F61D59A5B16BA06E6E12D1DA27C5249A");
-    static ref N:  BigUint = bu("8542D69E4C044F18E8B92435BF6FF7DD297720630485628D5AE74EE7C32E79B7");
-    static ref GX: BigUint = bu("421DEBD61B62EAB6746434EBC3CC315E32220B3BADD50BDC4C4E6C147FEDD43D");
-    static ref GY: BigUint = bu("0680512BCBB42C07D47349D2153B70C4E5D7FDFCBFA36EA1A85841B9E46E09A2");
-    static ref G:  Point   = Point { x: GX.clone(), y: GY.clone(), infinity: false };
-}
+static ZERO: LazyLock<BigUint> = LazyLock::new(BigUint::default);
+#[cfg(feature = "sm")]
+static ONE: LazyLock<BigUint> = LazyLock::new(|| BigUint::from(1u32));
+#[cfg(feature = "sm")]
+static P: LazyLock<BigUint> =
+    LazyLock::new(|| bu("8542D69E4C044F18E8B92435BF6FF7DE457283915C45517D722EDB8B08F1DFC3"));
+#[cfg(feature = "sm")]
+static A: LazyLock<BigUint> =
+    LazyLock::new(|| bu("787968B4FA32C3FD2417842E73BBFEFF2F3C848B6831D7E0EC65228B3937E498"));
+#[cfg(feature = "sm")]
+static B: LazyLock<BigUint> =
+    LazyLock::new(|| bu("63E4C6D3B23B0C849CF84241484BFE48F61D59A5B16BA06E6E12D1DA27C5249A"));
+#[cfg(feature = "sm")]
+static N: LazyLock<BigUint> =
+    LazyLock::new(|| bu("8542D69E4C044F18E8B92435BF6FF7DD297720630485628D5AE74EE7C32E79B7"));
+#[cfg(feature = "sm")]
+static GX: LazyLock<BigUint> =
+    LazyLock::new(|| bu("421DEBD61B62EAB6746434EBC3CC315E32220B3BADD50BDC4C4E6C147FEDD43D"));
+#[cfg(feature = "sm")]
+static GY: LazyLock<BigUint> =
+    LazyLock::new(|| bu("0680512BCBB42C07D47349D2153B70C4E5D7FDFCBFA36EA1A85841B9E46E09A2"));
+#[cfg(feature = "sm")]
+static G: LazyLock<Point> = LazyLock::new(|| Point {
+    x: GX.clone(),
+    y: GY.clone(),
+    infinity: false,
+});
 #[cfg(feature = "sm")]
 fn mod_add(a: &BigUint, b: &BigUint, m: &BigUint) -> BigUint {
     (a + b) % m

@@ -1267,7 +1267,7 @@
       "id": "T1-A02",
       "owner": "I.5",
       "path": "crates/iroha_core/src/executor.rs",
-      "anchor": "if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit)",
+      "anchor": "if let Ok(verdict) = <Result<(), ValidationFail>>::decode(&mut slice_unit)",
       "summary": "executor migrate entrypoint result is decoded as one layout, then as a second one"
     },
     {

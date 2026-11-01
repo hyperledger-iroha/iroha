@@ -13,7 +13,9 @@
 //! enclosing executor/callback scope. The legacy all-table decrease_repeats sweep
 //! is not intercepted. Register preserves its original deferred-byte policy; a
 //! captured Action does not become canonical/schema-authorized by being recorded.
-//! Production journal/output-V2 activation remains outside.
+//! Production journal/output-V2 activation remains outside; until it lands, the
+//! component is compiled only with its tests.
+#![cfg(test)]
 
 use crate::smartcontracts::Execute;
 use iroha_allocation::{AllocationBudget, ChargedBuffer, ChargedBufferError};

@@ -3671,7 +3671,7 @@ fn apply_slash_to_validator_inner(
     validator: &AccountId,
     slash_id: Hash,
     amount: &Quantity,
-    now_ms: u64,
+    _now_ms: u64,
     liability: Option<&ConsensusSlashLiability>,
     indexed_share_keys: Option<&[PublicLaneStakeShareKey]>,
     record_execution_evidence: bool,
@@ -4027,10 +4027,9 @@ pub(crate) mod tests {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::peer::Peer;
     use iroha_model_base::topology::DataSpaceId;
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, gen_account_in};
-    use nonzero_ext::nonzero;
-    use std::time::Duration;
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("staking fixture key generation should succeed")
     }
@@ -6237,7 +6236,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(7);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -6332,7 +6331,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _, escrow, asset_definition) = prepare_accounts(&mut stx);
+        let (validator, _, _escrow, asset_definition) = prepare_accounts(&mut stx);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         let (replacement, _) = gen_account_in("nexus");
         Register::account(Account::new(replacement.clone()))
@@ -6440,7 +6439,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, _asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(12);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -6561,7 +6560,7 @@ pub(crate) mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
-        let (validator, _delegator, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(10);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
@@ -7819,7 +7818,7 @@ pub(crate) mod tests {
         let mut stx = state_block.transaction_for_callback_testing();
         stx.nexus.staking.max_validators = nonzero!(1u32);
         let lane_id = LaneId::new(35);
-        let (validator, _, escrow, asset_def_id) = prepare_accounts(&mut stx);
+        let (validator, _, _escrow, asset_def_id) = prepare_accounts(&mut stx);
         RegisterPublicLaneValidator {
             monetary_plan: fixture_registration_plan(
                 &stx,
@@ -8349,7 +8348,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn register_rejects_below_min_stake() {
-        let mut state = setup_state();
+        let state = setup_state();
         let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
             .expect("funded parameter fixture block");
         let mut policy = parameters.require_staking_policy().unwrap().clone();
@@ -8639,7 +8638,7 @@ pub(crate) mod tests {
     }
     #[test]
     fn schedule_public_lane_unbond_rejects_mismatched_public_lane_validator_row() {
-        let mut state = setup_state();
+        let state = setup_state();
         let block = new_block();
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
@@ -8907,7 +8906,7 @@ pub(crate) mod tests {
         let block = new_block_with_height_and_time(1, 0);
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction_for_callback_testing();
-        let (validator, _delegator, escrow, asset_definition) = prepare_accounts(&mut stx);
+        let (validator, _delegator, _escrow, asset_definition) = prepare_accounts(&mut stx);
         let lane_id = LaneId::new(175);
         set_test_npos_penalty_windows(&mut stx, 1, 1);
         RegisterPublicLaneValidator {

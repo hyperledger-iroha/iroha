@@ -24,7 +24,9 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{ConfidentialGas, PipaR, Sccp, Stark, VerifyingKeyRef, Zk};
-use iroha_data_model::parameter::{CustomParameter, Parameters};
+#[cfg(test)]
+use iroha_data_model::parameter::CustomParameter;
+use iroha_data_model::parameter::Parameters;
 pub use iroha_data_model::zk_validity_policy::{
     ZkConfidentialValidityV1, ZkPipaRValidityV1, ZkProofValidityV1, ZkSccpValidityV1,
     ZkStarkValidityV1, ZkValidityPolicyError, ZkValidityPolicyV1, ZkVerificationGasV1,

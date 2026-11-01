@@ -16,9 +16,9 @@ use iroha_data_model::{
     proof::{ProofAttachment, ProofBox},
     zk::{NativePipaRProofV1, OpenVerifyEnvelope},
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn assert_closed_registry(error: &InstructionExecutionError) {
     assert_eq!(
         error,

@@ -655,7 +655,7 @@ mod tests {
     use super::*;
     use crate::block::ExternalExecutionContext;
     use iroha_crypto::{Hash, KeyPair, Signature};
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use norito::{
         codec::{DecodeAll as _, decode_adaptive, encode_with_header_flags},
         core::NoritoSerialize,

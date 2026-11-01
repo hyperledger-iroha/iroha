@@ -215,7 +215,6 @@ macro_rules! record_json {
         {
             const MAX_CHARGES: usize = 0 $(+ <$type as $crate::zk_validity_policy::json_admission::Field<D>>::MAX_CHARGES)+;
             fn decode_field(parser: &mut norito::json::Parser<'_>, destination: &mut D) -> Result<Self, D::Error> {
-                use $crate::zk_validity_policy::json_admission::Field as _;
                 parser.skip_ws(); parser.preflight_object_entries()?; parser.expect(b'{')?; parser.skip_ws();
                 $(let mut $field: Option<$type> = None;)+
                 if !parser.try_consume_char(b'}')? {

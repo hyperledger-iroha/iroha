@@ -874,6 +874,13 @@ The same parent-State rule governs `DueWorkMaxLagMs`. Genesis, lane policy admis
 parameter changes validate the combined drift/lag/cadence bound. A parameter write cannot
 weaken its own block's admission. The native execution owner captures the parent lag before
 executing any instruction; cached admission does not reread a later State or node setting.
+A native CT5 rollback discards provisional ledger effects while retaining the exact signed
+proposal and ordinary continuation schedule. The schedule's original allocation lease stays
+with the inputs, completed result and live execution; a stale result returns that same graph
+and ledger to its preparation bank, restoring only fixed pristine fields. While either owner
+is live, another preparation or lend refuses. Retry still reacquires the current State cut,
+root and pulse and verifies the original source and pool; it never recreates the graph or
+turns the local clock refusal into an invalid verdict.
 
 **Certified re-proposals.** The core sets `certified = !certified_results(bh).is_empty()` whenever
 it emits `Execute` (§6.2 step 9), re-evaluated when a `RetryAt` entry re-emits it; this covers a
@@ -4281,6 +4288,7 @@ profile and the same strict named-test, normal-exit and complete-harness require
 | HC490 | Charge authority handoff recovery against a full ordinary pending pool | `cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group` | One exact handoff group has bounded reserved custody even after cold restart with all ordinary slots occupied. Admission preserves every unresolved ordinary identity and refuses a second handoff group. |
 | HC334 | omit native final freshness after original encoding and admission waits | `ct5_post_encoding_clock_advance_rolls_back_actual_begin_and_fees_with_original_decode`, `sccp_ct5_completion_resamples_clock_and_retains_original_for_certified_retry` | time-sensitive effects must be locally deferred after the last encoding wait. |
 | HC335 | reuse cached native Valid without checking the actual wall clock | `ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source` | cached native Valid cannot bypass a fresh local clock check. |
+| HC981 | discard the ordinary continuation graph on rollback | `ordinary_continuation_requested_and_done_rollback_reuse_exact_graph_at_full_capacity` | Requested, completed and extracted owners return the same graph and ledger without refunding capacity that could satisfy their own outstanding wait. The two CT5 paid-Begin regressions additionally retain nested key/proof addresses and canonical schedule bytes through finishing/live rollback and genuine retry. |
 | HC336 | allow a first-Prepare request to substitute the original native result | `ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source` | a certificate flag cannot substitute another result. |
 | HC337 | omit native first-signing freshness after execution | `ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source`, `sccp_ct5_prepare_signing_resamples_original_after_valid_and_binds_every_coordinate` | native first signing must recheck the actual wall clock after execution. |
 | HC382 | Omit native CT1 at first Prepare after retained execution | `ct1_native_first_prepare_rechecks_original_clock_after_execution`, `prepare_withheld_while_block_time_ahead` | A rewind beyond the committed original parent's drift refuses signing for both ordinary and paid AMX work without replacing the executed state; the inclusive boundary resumes and certification cannot substitute a source. |

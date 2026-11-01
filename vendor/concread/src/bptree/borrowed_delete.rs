@@ -59,8 +59,8 @@ where
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Remove current and retain its first preimage under both original writers.
@@ -97,8 +97,8 @@ where
 
 impl<K, V, P> BptreeMapCheckpoint<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Remove through the exact original current/undo parent rollback owners.

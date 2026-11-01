@@ -29,9 +29,9 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanProposeRuntimeChangeSet;
 use iroha_model_base::{chain::ChainId, domain::DomainId};
+use iroha_primitives::nonzero;
 use ivm::ProgramMetadata;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;

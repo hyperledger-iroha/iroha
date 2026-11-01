@@ -311,7 +311,7 @@ fn dispatch_source_keeps_source_sized_request_clones_closed() {
     for forbidden in [
         "form_urlencoded::Serializer",
         "json::to_string(value)",
-        "urlencoding::encode",
+        "percent_encoding::encode",
     ] {
         assert!(
             !source.contains(forbidden) && !borrowed_source.contains(forbidden),

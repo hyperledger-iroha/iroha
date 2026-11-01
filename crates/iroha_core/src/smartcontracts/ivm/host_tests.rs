@@ -30,9 +30,9 @@ use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias, CanResolveAccountAlias,
 };
 use iroha_model_base::chain::ChainId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
-use nonzero_ext::nonzero;
 use std::{collections::BTreeMap, sync::Arc};
 
 fn shared_argument_fixture_payload() -> Json {
@@ -10780,8 +10780,13 @@ fn state_syscall_flushes_to_wsv() {
     let query = LiveQueryStore::start_test();
     let state = State::new_for_testing(world, kura, query);
     let authority: AccountId = fixture_account("alice");
-    let header =
-        iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(
+        iroha_primitives::nonzero!(1_u64),
+        None,
+        None,
+        0,
+        0,
+    );
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let mut host = local_contract_host(authority);

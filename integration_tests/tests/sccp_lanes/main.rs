@@ -82,12 +82,32 @@ fn configured_builder(
     if let Some(delay) = slashing_delay_blocks {
         npos.slashing_delay_blocks = delay;
     }
+    // Preserve the generated NPoS profile's original deterministic custody key.
+    // Monetary terms are authored once in the signed genesis policy.
+    let staking_custody = AccountId::new(
+        KeyPair::try_from_seed(
+            b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("original NPoS bootstrap custody key")
+        .public_key()
+        .clone(),
+    );
+    let mut staking_policy = iroha_genesis::default_staking_policy(
+        npos.xor_asset_definition_id.clone(),
+        staking_custody.clone(),
+        staking_custody,
+    );
+    staking_policy.unbonding_delay_ms = 1_814_400_000;
+    staking_policy.max_slash_bps =
+        u16::try_from(max_slash_bps).expect("fixture slash bound fits basis points");
     let proposal_permission: Permission = CanProposeSccpRouteGovernance.into();
     NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
         .with_npos_genesis_bootstrap(1_000_u64.into())
+        .with_genesis_staking_policy(staking_policy)
         .with_block_cadence(cadence)
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::EpochLengthBlocks(epoch),
@@ -116,16 +136,10 @@ fn configured_builder(
             }),
         ))
         .with_config_layer(move |layer| {
-            layer
-                .write(
-                    ["nexus", "storage", "local_budget_bytes"],
-                    1_073_741_824_i64,
-                )
-                .write(
-                    ["nexus", "staking", "unbonding_delay_ms"],
-                    1_814_400_000_i64,
-                )
-                .write(["nexus", "staking", "max_slash_bps"], max_slash_bps);
+            layer.write(
+                ["nexus", "storage", "local_budget_bytes"],
+                1_073_741_824_i64,
+            );
         })
 }
 

@@ -443,11 +443,10 @@ fn sanitize_label(input: &str) -> String {
     result
 }
 fn compact_timestamp_format() -> &'static [FormatItem<'static>] {
-    static FORMAT: once_cell::sync::Lazy<Vec<FormatItem<'static>>> =
-        once_cell::sync::Lazy::new(|| {
-            time::format_description::parse("[year][month][day]T[hour][minute][second]Z")
-                .expect("valid timestamp format")
-        });
+    static FORMAT: std::sync::LazyLock<Vec<FormatItem<'static>>> = std::sync::LazyLock::new(|| {
+        time::format_description::parse("[year][month][day]T[hour][minute][second]Z")
+            .expect("valid timestamp format")
+    });
     &FORMAT
 }
 pub fn parse_duration_spec(spec: &str) -> Result<TimeDuration, Box<dyn Error>> {

@@ -11,8 +11,8 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_data_model::{account::AccountId, transaction::TransactionBuilder};
+use iroha_primitives::nonzero;
 use iroha_torii::NoritoJson;
-use nonzero_ext::nonzero;
 use norito::json;
 use std::sync::Arc;
 use tower::ServiceExt as _;

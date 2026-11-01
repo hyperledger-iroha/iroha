@@ -8,7 +8,7 @@ use iroha_core::{
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::block::BlockHeader;
 use iroha_primitives::addr::socket_addr;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt;
 fn request_with_loopback_connect_info(

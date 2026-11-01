@@ -263,6 +263,26 @@ impl norito::SerializePayload for BorrowedNexusPolicy<'_> {
                 nexus.axt.proof_cache_ttl_slots.get(),
                 nexus.axt.replay_retention_slots.get()
             ),
+            // Keep the frozen signed V1 slots in the same position and types as
+            // NexusConsensusAtomicPrivateSettlementV1 in iroha_config. Local
+            // sidecar capacities and mutable defaults are not this authority.
+            record!(
+                1_u16,
+                255_u16,
+                7_200_u64,
+                1_200_u64,
+                1_200_u64,
+                1_200_u64,
+                Seq([4_096_u32, 16_384, 65_536, 262_144].into_iter()),
+                8_388_608_u64,
+                1_048_576_u64,
+                4_194_304_u64,
+                1_000_000_u64,
+                256_u32,
+                3_221_225_472_u64,
+                1_u16,
+                Seq([1_u16].into_iter())
+            ),
             record!(
                 Ref(&nexus.governance.default_module),
                 Seq(nexus
@@ -526,6 +546,40 @@ mod tests {
                 .unwrap(),
             present
         );
+    }
+
+    #[test]
+    fn borrowed_nexus_retains_frozen_private_settlement_bytes_and_field_position() {
+        let nexus = Nexus::default();
+        let runtime = runtime(&nexus);
+        let borrowed = BorrowedNexusPolicy::new(&nexus, &runtime, None, None, None).unwrap();
+        let _layout = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
+        let mut encoded = Vec::new();
+        norito::core::serialize_to_writer(&borrowed, &mut encoded).unwrap();
+        let decoded = norito::codec::decode_adaptive::<NexusStaticAuthorityV1>(&encoded).unwrap();
+        let mut remaining = decoded.bare_policy_preimage.as_slice();
+        let mut fields = Vec::new();
+        while !remaining.is_empty() {
+            let (length, prefix) = norito::core::read_len_from_slice_with_flags(
+                remaining,
+                norito::core::default_encode_flags(),
+            )
+            .unwrap();
+            let (field, rest) = remaining[prefix..].split_at(length);
+            fields.push(field);
+            remaining = rest;
+        }
+        // Independent V1 wire literal shared with the configuration owner's
+        // original-contract test; it is not generated from this projection.
+        let expected = hex::decode(concat!(
+            "02010002ff0008201c00000000000008b00400000000000008b004000000000000",
+            "08b0040000000000001c0400000000000000040010000004004000000400000100",
+            "0400000400080000800000000000080000100000000000080000400000000000",
+            "0840420f0000000000040001000008000000c0000000000201000b0100000000000000020100",
+        ))
+        .unwrap();
+        assert_eq!(fields.len(), 21);
+        assert_eq!(fields[11], expected, "private settlement follows AXT");
     }
 
     #[test]

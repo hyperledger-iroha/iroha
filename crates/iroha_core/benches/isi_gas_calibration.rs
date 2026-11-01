@@ -20,8 +20,8 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::gen_account_in;
-use nonzero_ext::nonzero;
 const BENCH_DOMAIN_NAME: &str = "wonderland";
 const BENCH_DATASPACE_NAME: &str = "universal";
 const BENCH_ASSET_NAME: &str = "xor";

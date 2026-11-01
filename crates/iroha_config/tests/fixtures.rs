@@ -1,5 +1,19 @@
 //! Test fixtures exercising `iroha_config` parameter loading and validation.
-use assertables::assert_contains;
+/// Assert that `container.contains(containee)` holds, reporting both on failure.
+macro_rules! assert_contains {
+    ($container:expr, $containee:expr $(,)?) => {
+        match (&$container, &$containee) {
+            (container, containee) => assert!(
+                container.contains(*containee),
+                "assertion failed: `{}` does not contain `{}`\n container: {:?}\n containee: {:?}",
+                stringify!($container),
+                stringify!($containee),
+                container,
+                containee,
+            ),
+        }
+    };
+}
 use error_stack::{Report, ResultExt};
 use expect_test::expect_file;
 use iroha_config::parameters::user::ParseError;

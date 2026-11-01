@@ -315,7 +315,7 @@ impl WorldProjection for JournalVisitor<'_> {
         }
         Ok(())
     }
-    fn append_cell_with<V: Value, C: Send + Sync + 'static>(
+    fn append_cell_with<V: mv::CellValue, C: Send + Sync + 'static>(
         &mut self,
         name: &'static str,
         cell: &CellField<'_, V, C>,

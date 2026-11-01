@@ -13,11 +13,11 @@ impl Drop for Reservation {
     }
 }
 
-fn detach<V: Value>(block: Block<'_, V>) -> Detached<V, ()> {
+fn detach<V: CellValue>(block: Block<'_, V>) -> Detached<V, ()> {
     block.try_detach(|_| Ok::<_, ()>(())).unwrap()
 }
 
-fn writers_are_free<V: Value>(cell: &Cell<V>) {
+fn writers_are_free<V: CellValue>(cell: &Cell<V>) {
     assert!(cell.revert.try_write().is_some());
     assert!(cell.blocks.try_write().is_some());
 }

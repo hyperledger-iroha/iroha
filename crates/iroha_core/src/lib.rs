@@ -3,15 +3,6 @@
 //! Framed Core records declare their protocol identity with `NoritoSchema`.
 //! Borrowed query views retain distinct nominal identities and explicitly project
 //! to the owned result's frame; payload serialization does not choose an identity.
-// The compiler-generated test table exceeds Clippy's stack-array threshold.
-// Source items below restore the denial so this covers only the generated harness.
-#![cfg_attr(
-    test,
-    expect(
-        clippy::large_stack_arrays,
-        reason = "the compiler-generated test table exceeds the array threshold; source items retain the denial"
-    )
-)]
 #![allow(unexpected_cfgs)]
 #[cfg(not(feature = "zk-ipa-native"))]
 compile_error!(

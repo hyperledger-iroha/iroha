@@ -253,6 +253,8 @@ impl RetainedStateParameters {
     }
 
     /// Prepare a full consensus-family replacement with exact array custody.
+    /// Only component fixtures (`state::parameter_fixture`) and tests author it.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn prepare_sumeragi(
         &self,
         family: &iroha_data_model::parameter::SumeragiParameters,

@@ -18,7 +18,6 @@ dev-tools = []
 # The CLI builds and signs publication transactions, so it needs the data
 # model's constructor surface (`transparent_api`) in standalone builds too.
 cli-orchestrator = [
-    "dep:iroha_config",
     "dep:iroha_torii_shared",
     "dep:sha2",
     "dep:sorafs_chunker",
@@ -63,7 +62,6 @@ iroha_version = { workspace = true }
 sorafs_chunker = { path = "../sorafs_chunker", optional = true }
 sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"], optional = true }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["application"] }
-iroha_config = { path = "../iroha_config", optional = true }
 iroha_torii_shared = { workspace = true, optional = true }
 toml = { workspace = true, optional = true }
 
@@ -98,3 +96,10 @@ path = "tests/orchestrator_parity.rs"
 name = "sorafs_cli"
 path = "tests/sorafs_cli.rs"
 required-features = ["cli-orchestrator", "moderation-grpc"]
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+drain_collect = "allow"
+manual_checked_ops = "allow"
+unnecessary_sort_by = "allow"

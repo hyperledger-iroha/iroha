@@ -531,7 +531,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId, ipfs::IpfsPath, soradns::ResolverDirectoryRecordV1,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::str::FromStr;
     const BLOCK_TIMESTAMP_MS: u64 = 1_700_000_000_000;
     fn block_header() -> iroha_data_model::block::BlockHeader {

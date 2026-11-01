@@ -9,8 +9,8 @@ use iroha_core::{
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
-use nonzero_ext::nonzero;
 #[test]
 fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
     // Direct execution and transcript draining share the block witness recorder.

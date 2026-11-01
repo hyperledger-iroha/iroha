@@ -1508,10 +1508,6 @@ pub async fn handle_runtime_abi_hash(
 ///
 /// # Errors
 /// Returns an error if the committed selection or a change-set identity cannot be encoded.
-#[expect(
-    clippy::unused_async,
-    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
-)]
 pub async fn handle_runtime_upgrades_list(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeUpgradesListResponse, crate::Error> {
@@ -1645,10 +1641,6 @@ pub struct RuntimeProposeUpgradeRequest {
 /// POST /v1/runtime/upgrades/propose — draft the SORA Parliament proposal that schedules the
 /// change set in the body with its endorsements (`specs/live_runtime_upgrades.md` §6). Admission,
 /// including the provenance check, happens when the signed proposal executes.
-#[expect(
-    clippy::unused_async,
-    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
-)]
 pub async fn handle_runtime_propose_upgrade(
     NoritoJson(request): NoritoJson<RuntimeProposeUpgradeRequest>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
@@ -1662,10 +1654,6 @@ pub async fn handle_runtime_propose_upgrade(
 ///
 /// # Errors
 /// Returns an error when the identifier is not 32 bytes of hex.
-#[expect(
-    clippy::unused_async,
-    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
-)]
 pub async fn handle_runtime_cancel_upgrade(
     Path(id): Path<String>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {

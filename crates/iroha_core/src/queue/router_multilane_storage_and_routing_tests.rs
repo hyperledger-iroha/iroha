@@ -35,9 +35,9 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::nonzero;
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::gen_account_in;
-use nonzero_ext::nonzero;
 use std::{collections::BTreeMap, num::NonZeroU32, sync::Arc, time::Duration};
 use tempfile::tempdir;
 fn sample_catalogs() -> (LaneCatalog, DataSpaceCatalog, LaneRoutingPolicy) {

@@ -12262,7 +12262,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -12328,7 +12328,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -13549,7 +13549,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let manifest_root = [0x66; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let timing = iroha_config::parameters::actual::NexusAxt {
-            slot_length_ms: nonzero_ext::nonzero!(1_u64),
+            slot_length_ms: iroha_primitives::nonzero!(1_u64),
             max_clock_skew_ms: 0,
             proof_cache_ttl_slots: NonZeroU64::new(2).expect("non-zero ttl"),
             replay_retention_slots: NonZeroU64::new(

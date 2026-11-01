@@ -396,7 +396,7 @@ POW = re.compile(r"(\d+)\s*\.\s*pow\s*\(\s*(\d+)\s*\)")
 METHOD_GET = re.compile(r"\.\s*get\s*\(\s*\)")
 EXPECT = re.compile(r"\.\s*(?:expect\s*\(\s*\"[^\"]*\"\s*\)|unwrap\s*\(\s*\))")
 WRAPPERS = re.compile(
-    r"\b(?:nonzero_ext::nonzero!|nonzero!|Bytes|u64::from|u32::from|usize::from"
+    r"\b(?:iroha_primitives::nonzero!|nonzero!|Bytes|u64::from|u32::from|usize::from"
     r"|NonZeroUsize::new|NonZeroU64::new|NonZeroU32::new)\s*\("
 )
 EMPTY_CALL = re.compile(r"\(\s*\)")

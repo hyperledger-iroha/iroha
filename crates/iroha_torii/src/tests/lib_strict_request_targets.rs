@@ -497,7 +497,10 @@ fn proof_record_separator_exception_requires_one_canonical_typed_identifier() {
         ]);
         assert!(has_percent_encoded_separator(url.path()));
         assert!(is_canonical_proof_record_path(url.path()), "{}", url.path());
-        let component_path = format!("/v1/proofs/{}", urlencoding::encode(&id.to_string()));
+        let component_path = format!(
+            "/v1/proofs/{}",
+            crate::percent_encoding::encode(&id.to_string())
+        );
         assert!(
             is_canonical_proof_record_path(&component_path),
             "{component_path}"

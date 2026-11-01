@@ -812,7 +812,7 @@ impl RelayLedger {
         Ok(())
     }
     async fn proof(&self, height: u64) -> Result<ProofInput> {
-        self.reads.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| remaining.checked_sub(1))
+        self.reads.try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| remaining.checked_sub(1))
             .map_err(|_| eyre!("AMX destination proof-read budget exhausted; retained verifier remains resumable"))?;
         self.source
             .proof(NonZeroU64::new(height).ok_or_else(|| eyre!("zero AMX destination locator"))?)

@@ -39,9 +39,7 @@ use iroha::{
         domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register, SetParameter, Transfer,
-            privacy::{
-                SchedulePrivacyConsensusPolicyUpdateV1, SchedulePrivacyProtocolLimitsUpdateV1,
-            },
+            privacy::SchedulePrivacyProtocolLimitsUpdateV1,
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
             },
@@ -75,9 +73,10 @@ use iroha::{
             IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             IvmPrivateNoteLimitsV1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
             PrivacyCapabilityRowV1, PrivacyCommitmentV1, PrivacyCompiledProfileResultV1,
-            PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyEncryptedOutputV1,
-            PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, PrivacyRecipientIdV1, PrivacyRootV1,
+            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
+            PrivacyRecipientIdV1, PrivacyRootV1, PrivateSettlementPolicyUpdateV1,
+            PrivateSettlementPolicyV1, PrivateSettlementValidityLimitsV1,
         },
         query::block::prelude::FindBlocks,
         sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy},
@@ -165,16 +164,30 @@ fn approve_all_audit_material(_: PrivateSettlementAuditEvaluationV1<'_>) -> bool
     true
 }
 
-fn private_settlement_consensus_limits() -> PrivacyConsensusLimitsV1 {
-    let mut limits = PrivacyConsensusPolicyV1::taira_default().current_limits;
-    let settlement = &mut limits.private_settlement;
-    settlement.max_participants = 16;
-    settlement.max_expiry_blocks = MAX_EXPIRY_BLOCKS;
-    settlement.audit_timeout_blocks = 1_024;
-    settlement.prepare_timeout_blocks = 1_024;
-    settlement.commit_timeout_blocks = 1_024;
-    settlement.sidecar_retention_blocks = SIDECAR_RETENTION_BLOCKS;
-    limits
+/// The fixture's private-payment limits; every other field keeps the native V1 baseline.
+fn private_settlement_limits() -> PrivateSettlementValidityLimitsV1 {
+    PrivateSettlementValidityLimitsV1 {
+        max_participants: 16,
+        max_expiry_blocks: MAX_EXPIRY_BLOCKS,
+        audit_timeout_blocks: 1_024,
+        prepare_timeout_blocks: 1_024,
+        commit_timeout_blocks: 1_024,
+        sidecar_retention_blocks: SIDECAR_RETENTION_BLOCKS,
+        ..PrivateSettlementValidityLimitsV1::protocol_default()
+    }
+}
+
+/// The committed private-settlement policy genesis writes: the native baseline now, and
+/// the fixture's limits scheduled for the first ordinary block.
+fn private_settlement_policy() -> PrivateSettlementPolicyV1 {
+    PrivateSettlementPolicyV1 {
+        pending_update: Some(PrivateSettlementPolicyUpdateV1 {
+            scheduled_at_height: GENESIS_HEIGHT,
+            effective_at_height: PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
+            next_limits: private_settlement_limits(),
+        }),
+        ..PrivateSettlementPolicyV1::protocol_default()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -548,13 +561,15 @@ fn genesis_post_topology(
         );
     }
     // The native relation uses compiled defaults without protocol registration.
-    // Genesis commits the fixture's payment limits for the first ordinary block;
-    // node-local sidecar custody settings never select payment validity.
+    // Genesis schedules the fixture's payment limits in the committed
+    // private-settlement policy for the first ordinary block; node-local sidecar
+    // custody settings never select payment validity.
     universal.push(
-        SchedulePrivacyConsensusPolicyUpdateV1::new(
-            PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
-            private_settlement_consensus_limits(),
-        )
+        SetParameter::new(Parameter::Custom(
+            private_settlement_policy()
+                .to_custom_parameter()
+                .expect("fixture private-settlement policy is canonical"),
+        ))
         .into(),
     );
     // Retain actual governance permission, fee funding, participant lane policy,
@@ -2688,7 +2703,7 @@ impl SmokeDiagnosticSpanV1 {
                 // Relaxed order is sufficient for uniqueness, not clock ordering.
                 let span = context
                     .next_span
-                    .fetch_update(
+                    .try_update(
                         std::sync::atomic::Ordering::Relaxed,
                         std::sync::atomic::Ordering::Relaxed,
                         |next| next.checked_add(1),
@@ -4739,12 +4754,21 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .map(|peer| GenesisTopologyEntry::new(peer, vec![1]))
         .collect::<Vec<_>>();
     let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
-    let expected_privacy = SchedulePrivacyConsensusPolicyUpdateV1::new(
-        PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
-        private_settlement_consensus_limits(),
+    let expected_privacy = private_settlement_policy();
+    expected_privacy.validate().unwrap();
+    assert_eq!(
+        expected_privacy.current_limits,
+        PrivateSettlementValidityLimitsV1::protocol_default(),
+        "genesis keeps the native baseline until the first ordinary block"
     );
-    expected_privacy.next_limits.validate().unwrap();
-    let private_limits = expected_privacy.next_limits.private_settlement;
+    let scheduled = expected_privacy
+        .pending_update
+        .expect("genesis schedules the fixture's payment limits");
+    assert_eq!(
+        scheduled.effective_at_height,
+        PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT
+    );
+    let private_limits = scheduled.next_limits;
     assert_eq!(private_limits.max_participants, 16);
     assert_eq!(private_limits.max_expiry_blocks, MAX_EXPIRY_BLOCKS);
     assert_eq!(private_limits.audit_timeout_blocks, 1_024);
@@ -4758,14 +4782,19 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .iter()
         .flatten()
         .filter_map(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<SchedulePrivacyConsensusPolicyUpdateV1>()
+            let set = instruction.as_any().downcast_ref::<SetParameter>()?;
+            let Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            (custom.id() == PrivateSettlementPolicyV1::parameter_id()).then(|| {
+                PrivateSettlementPolicyV1::from_custom_parameter(custom)
+                    .expect("canonical private-settlement policy")
+            })
         })
         .collect::<Vec<_>>();
     assert_eq!(
         privacy_updates,
-        [&expected_privacy],
+        [expected_privacy],
         "signed genesis selects exactly one complete payment policy for height two"
     );
     let governance_permission = Permission::from(CanEnactGovernance);
@@ -4826,12 +4855,17 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
                     panic!("genesis is an instruction batch");
                 };
                 for instruction in instructions.iter() {
-                    if let Some(policy) = instruction
-                        .as_any()
-                        .downcast_ref::<SchedulePrivacyConsensusPolicyUpdateV1>()
+                    if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>()
+                        && let Parameter::Custom(custom) = set.inner()
+                        && custom.id() == PrivateSettlementPolicyV1::parameter_id()
                     {
                         assert!(
-                            signed_privacy.replace(policy.clone()).is_none(),
+                            signed_privacy
+                                .replace(
+                                    PrivateSettlementPolicyV1::from_custom_parameter(custom)
+                                        .expect("canonical original signed payment policy"),
+                                )
+                                .is_none(),
                             "normalized signed genesis must retain exactly one payment policy"
                         );
                     }

@@ -14,8 +14,7 @@ workspace = true
 iroha_derive = { workspace = true }
 zeroize = { workspace = true }
 
-drop_bomb = { workspace = true }
-norito = { workspace = true, default-features = false, features = ["node-codec"] }
+norito ={ workspace = true, default-features = false, features = ["node-codec"] }
 thiserror = { workspace = true }
 toml = { workspace = true }
 error-stack = { workspace = true }

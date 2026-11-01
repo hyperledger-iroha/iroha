@@ -14,8 +14,8 @@ use iroha_crypto::KeyPair;
 use iroha_data_model::{domain::Domain, prelude::*};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_primitives::time::TimeSource;
-use nonzero_ext::nonzero;
 use std::{borrow::Cow, collections::BTreeSet, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::time::sleep;
 /// Read the queue's bounded ready snapshot and complete pending observation.

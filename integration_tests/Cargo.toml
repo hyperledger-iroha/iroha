@@ -136,7 +136,6 @@ base64 = { workspace = true }
 
 toml = { workspace = true }
 futures-util = "0.3.31"
-nonzero_ext = { workspace = true }
 iroha_test_samples = { workspace = true }
 iroha_genesis = { workspace = true }
 iroha_core = { workspace = true, features = ["node", "iroha-core-tests"], default-features = false }
@@ -151,9 +150,7 @@ p256 = { version = "0.14.0", default-features = false, features = ["std", "ecdsa
 mint_rose_trigger_data_model = { path = "../data_model/samples/mint_rose_trigger_data_model" }
 executor_custom_data_model = { path = "../data_model/samples/executor_custom_data_model" }
 
-assert_matches = "1.5.0"
 tempfile = { workspace = true }
-ascii_table = "=5.0.0" # pinned for edition/format stability
 
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }

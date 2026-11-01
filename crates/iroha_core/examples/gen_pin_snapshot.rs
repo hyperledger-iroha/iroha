@@ -508,7 +508,7 @@ fn make_state(council_keys: &KeyPair) -> State {
     state
 }
 fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 42, 0)
+    iroha_data_model::block::BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 42, 0)
 }
 fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
     ProviderIngestFinalizedAnchorV1 {

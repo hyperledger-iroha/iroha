@@ -2,8 +2,8 @@
 use iroha_data_model::{account::AccountId, asset::prelude::AssetDefinitionId};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Quantity;
-use nonzero_ext::nonzero;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
@@ -65,7 +65,8 @@ pub mod runtime_provider_broker {
     pub const OBSERVER_OPERATION_TIMEOUT: Duration = Duration::from_secs(15);
 
     /// Finite aggregate public-transcript memory for one credential registry (64 MiB).
-    pub const CREDENTIAL_MAX_MEMORY_BYTES: NonZeroUsize = nonzero_ext::nonzero!(67_108_864usize);
+    pub const CREDENTIAL_MAX_MEMORY_BYTES: NonZeroUsize =
+        iroha_primitives::nonzero!(67_108_864usize);
 
     /// Default Unix socket path for the local runtime-provider broker.
     #[cfg(target_os = "macos")]
@@ -954,7 +955,7 @@ pub mod kura {
         parameters::actual::{KuraFastpqArtifactPolicy, KuraMembershipStoragePolicy},
     };
     use iroha_config_base::util::Bytes;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::{
         num::{NonZeroU64, NonZeroUsize},
         time::Duration,
@@ -1850,10 +1851,10 @@ pub mod sorafs {
         pub const RUNTIME_CHECKPOINT_MAX_BYTES: Bytes = Bytes(64 * 1024 * 1024);
         /// Finalized reconciliation cadence for durable proof-outcome delivery.
         pub const RUNTIME_PROOF_OUTCOME_FORWARDER_INTERVAL_MS: std::num::NonZeroU64 =
-            nonzero_ext::nonzero!(1_000_u64);
+            iroha_primitives::nonzero!(1_000_u64);
         /// Submission attempts allowed for one exact proof-outcome transaction.
         pub const RUNTIME_PROOF_OUTCOME_MAX_ATTEMPTS: std::num::NonZeroU32 =
-            nonzero_ext::nonzero!(8_u32);
+            iroha_primitives::nonzero!(8_u32);
         /// Default telemetry alias advertised by the node.
         pub fn alias() -> Option<String> {
             None
@@ -1928,7 +1929,7 @@ pub mod sorafs {
         /// Durable native orderbook transaction worker defaults.
         pub mod orderbook_worker {
             use iroha_config_base::util::Bytes;
-            use nonzero_ext::nonzero;
+            use iroha_primitives::nonzero;
             use std::num::{NonZeroU32, NonZeroU64};
             /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
@@ -1968,7 +1969,7 @@ pub mod sorafs {
         /// Durable native reserve/rent transaction worker defaults.
         pub mod reserve_worker {
             use iroha_config_base::util::Bytes;
-            use nonzero_ext::nonzero;
+            use iroha_primitives::nonzero;
             use std::num::{NonZeroU32, NonZeroU64};
             /// New work generation is opt-in; storage enablement still activates durable drain.
             pub const ENABLED: bool = false;
@@ -2244,7 +2245,7 @@ pub mod sorafs {
         /// Static-site host binding file defaults.
         pub mod site_bindings {
             use iroha_config_base::util::Bytes;
-            use nonzero_ext::nonzero;
+            use iroha_primitives::nonzero;
             use std::{num::NonZeroUsize, path::PathBuf};
             /// Optional JSON binding document loaded and validated when Torii starts.
             #[must_use]
@@ -2377,8 +2378,8 @@ pub mod torii {
         da::types::{BlobClass, GovernanceTag, RetentionPolicy},
         sorafs::pin_registry::StorageClass as SorafsStorageClass,
     };
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::XorQuantity;
-    use nonzero_ext::nonzero;
     use std::{
         num::{NonZeroU32, NonZeroUsize},
         path::PathBuf,
@@ -3093,7 +3094,7 @@ pub mod torii {
     /// Transport-specific defaults (Norito-RPC, future streaming surfaces, etc.).
     pub mod transport {
         use iroha_config_base::util::Bytes;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::num::NonZeroUsize;
         /// Explicit trusted proxy hosts whose appended `X-Forwarded-For` chain
         /// is used to derive the canonical remote IP.
@@ -3638,7 +3639,7 @@ pub mod nexus {
     /// Public-lane validator capacity defaults. Monetary policy has no node defaults.
     pub mod staking {
         use super::super::NonZeroU32;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         /// Maximum number of validators allowed per lane.
         pub const MAX_VALIDATORS: NonZeroU32 = nonzero!(32_u32);
     }
@@ -3843,7 +3844,7 @@ pub mod time {
 }
 /// Execution pipeline defaults (scheduler, overlay, batching).
 pub mod pipeline {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::num::NonZeroU64;
     /// Enable dynamic prepass (IVM read-only run to derive access sets).
     pub const DYNAMIC_PREPASS: bool = true;
@@ -4059,7 +4060,7 @@ pub mod accel {
 pub mod zk {
     /// SCCP proof-admission and deterministic verifier-work defaults.
     pub mod sccp {
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::num::{NonZeroU32, NonZeroU64};
         /// Maximum closed SCCP proofs in one transaction.
         pub const MAX_PROOFS_PER_TRANSACTION: NonZeroU32 = nonzero!(1_u32);
@@ -4108,7 +4109,7 @@ pub mod zk {
     /// FASTPQ prover defaults.
     pub mod fastpq {
         use iroha_config_base::util::Bytes;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::num::NonZeroUsize;
         /// Retry unresolved local proof work even while the native chain is idle.
         pub const PRODUCER_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);

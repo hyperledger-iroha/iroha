@@ -1,10 +1,7 @@
 //! Payout fixtures author monetary policy before authenticating their original genesis.
 
 use super::*;
-use crate::{
-    state::{StateReadOnly, WorldReadOnly},
-    sumeragi::test_chain::CertifiedTestChain,
-};
+use crate::{state::WorldReadOnly, sumeragi::test_chain::CertifiedTestChain};
 use iroha_data_model::{
     block::consensus::PublicLaneStakingPolicy,
     isi::SetParameter,

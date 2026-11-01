@@ -103,7 +103,7 @@ use super::{
     lanes,
     network_topology::Topology,
     payload::{self, Assembly},
-    schedule::{self, NativeExecutionInputs},
+    schedule::{self, CompletedExecution, CompletedResult},
 };
 use crate::{
     EventsSender,
@@ -839,10 +839,10 @@ impl std::ops::Deref for ScheduledAuthority {
 )]
 enum FinishingPhase {
     ContextProof {
-        inputs: iroha_allocation::RetainedPayload<NativeExecutionInputs>,
+        inputs: CompletedExecution,
         refusal: Option<NativeLaneStateProofError>,
     },
-    Ready(iroha_allocation::RetainedPayload<CertifiedResultV1>),
+    Ready(CompletedResult),
     /// A one-shot deterministic transition failed or unwound; only recovery may release it.
     Consuming,
 }
@@ -900,7 +900,7 @@ struct Live<'s> {
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
     /// Retained for custody through the same Live lifetime and field drop order, even when
     /// shipping execution no longer reads its value after encoding the original preimage.
-    _commitment: iroha_allocation::RetainedPayload<CertifiedResultV1>,
+    _commitment: CompletedResult,
     applied_config: AppliedConfig,
     committee: Vec<PeerId>,
     events: Vec<EventBox>,

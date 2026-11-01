@@ -25,14 +25,14 @@ impl From<PublicationPreparationError<Infallible>> for CommittedCellReadError {
 ///
 /// This is local source custody, not a State commitment or permission to publish.
 /// Collector pin/control allocation is outside this owner's funding guarantees.
-pub struct CommittedCellView<'storage, V: Value> {
+pub struct CommittedCellView<'storage, V: CellValue> {
     current: EbrCellReadTxn<V>,
     undo: EbrCellReadTxn<Option<V>>,
     original: CapturedPublication,
     _source: PhantomData<&'storage V>,
 }
 
-impl<V: Value> CommittedCellView<'_, V> {
+impl<V: CellValue> CommittedCellView<'_, V> {
     /// Borrow the exact published value without cloning its payload.
     pub fn current(&self) -> &V {
         &self.current
@@ -57,7 +57,7 @@ impl<V: Value> CommittedCellView<'_, V> {
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> Cell<V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Cell<V, C> {
     /// Retain a coherent current/undo pair without initializing an execution block.
     ///
     /// Both collector pins are acquired before entering the publication lock.

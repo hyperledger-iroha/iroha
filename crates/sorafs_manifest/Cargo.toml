@@ -68,3 +68,8 @@ rand_chacha = "0.10.0"
 [[test]]
 name = "sorafs_manifest_integration"
 path = "tests/sorafs_manifest_integration.rs"
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+useless_conversion = "allow"

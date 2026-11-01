@@ -8,7 +8,7 @@ use iroha_allocation::release::{DeferredRelease, DeferredReleaseBatch};
 /// Inert original cell slot, initialized only after its aggregate owns every slot.
 /// A caught initialization panic allows only release and destruction, not retry.
 #[must_use = "initialize or abandon the original acquisition slot"]
-pub struct BlockAcquisitionSlot<'a, V: Value, C: Send + Sync + 'static = Untracked> {
+pub struct BlockAcquisitionSlot<'a, V: CellValue, C: Send + Sync + 'static = Untracked> {
     target: &'a Cell<V, C>,
     phase: AcquisitionPhase<'a, V, C>,
     started: bool,
@@ -39,14 +39,14 @@ enum SuccessorAcquisition {
 // These are mutually exclusive physical phases, not simultaneous owners. Keep
 // their storage overlapped so a World-sized acquisition does not retain a second
 // full block alongside its raw/partly constructed pair on the thread stack.
-enum AcquisitionPhase<'a, V: Value, C: Send + Sync + 'static> {
+enum AcquisitionPhase<'a, V: CellValue, C: Send + Sync + 'static> {
     Empty,
     Pending(PendingPair<'a, V, C>),
     Writers(CellWriters<'a, V, C>),
     Block(Block<'a, V, C>),
 }
 
-struct PendingPair<'a, V: Value, C: Send + Sync + 'static> {
+struct PendingPair<'a, V: CellValue, C: Send + Sync + 'static> {
     revert: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, Option<V>, C>>>,
     blocks: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, V, C>>>,
     undo_value: Option<EbrCellOwned<Option<V>, C>>,
@@ -74,7 +74,7 @@ type RefusedGeneration<'a, T, C> = (
     EbrCellWriterAdmissionError<std::convert::Infallible>,
 );
 
-impl<T: Value, C: Send + Sync + 'static> GenerationAdmission<T, C> {
+impl<T: CellValue, C: Send + Sync + 'static> GenerationAdmission<T, C> {
     fn try_clone<'a>(
         self,
         writer: EbrCellWriterAcquisition<'a, T, C>,
@@ -106,7 +106,7 @@ impl<T: Value, C: Send + Sync + 'static> GenerationAdmission<T, C> {
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
     pub(super) fn new(target: &'a Cell<V, C>, charges: CellAllocationCharges<C>) -> Self {
         let CellAllocationCharges { current, undo } = charges;
         Self::with_generations(
@@ -349,7 +349,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
     /// Acquire the original pair without blocking on another physical writer.
     ///
     /// # Errors
@@ -402,7 +402,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockAcquisitionSlot<'a, V, C> {
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
+impl<'a, V: CellValue, C: Send + Sync + 'static> crate::BlockAcquisition
     for BlockAcquisitionSlot<'a, V, C>
 {
     type Block = Block<'a, V, C>;
@@ -461,18 +461,18 @@ impl<'a, V: Value, C: Send + Sync + 'static> crate::BlockAcquisition
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> Drop for BlockAcquisitionSlot<'_, V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Drop for BlockAcquisitionSlot<'_, V, C> {
     fn drop(&mut self) {
         crate::BlockAcquisition::release(self);
     }
 }
 
-pub(super) struct OriginalCellWriters<'a, V: Value, C: Send + Sync + 'static> {
+pub(super) struct OriginalCellWriters<'a, V: CellValue, C: Send + Sync + 'static> {
     pub(super) revert: CellWriter<'a, Option<V>, C>,
     pub(super) blocks: CellWriter<'a, V, C>,
 }
 
-enum CellWriterState<'a, V: Value, C: Send + Sync + 'static> {
+enum CellWriterState<'a, V: CellValue, C: Send + Sync + 'static> {
     Attached(OriginalCellWriters<'a, V, C>),
     Preparing {
         writers: PreparedCellWriters<'a, V, C>,
@@ -489,11 +489,11 @@ enum CellWriterState<'a, V: Value, C: Send + Sync + 'static> {
     },
 }
 
-pub(super) struct CellWriters<'a, V: Value, C: Send + Sync + 'static> {
+pub(super) struct CellWriters<'a, V: CellValue, C: Send + Sync + 'static> {
     state: Option<CellWriterState<'a, V, C>>,
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> CellWriters<'a, V, C> {
     fn new(revert: CellWriter<'a, Option<V>, C>, blocks: CellWriter<'a, V, C>) -> Self {
         Self {
             state: Some(CellWriterState::Attached(OriginalCellWriters {
@@ -616,7 +616,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> CellWriters<'a, V, C> {
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> Drop for CellWriters<'_, V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Drop for CellWriters<'_, V, C> {
     fn drop(&mut self) {
         self.release();
     }

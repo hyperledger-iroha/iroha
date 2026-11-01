@@ -391,7 +391,7 @@ impl CanonicalHistoryError {
 mod tests {
     use core::any::TypeId as RustTypeId;
 
-    use iroha_schema::{IntoSchema as _, Metadata};
+    use iroha_schema::Metadata;
 
     use super::*;
 

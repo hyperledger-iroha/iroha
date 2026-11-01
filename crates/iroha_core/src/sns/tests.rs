@@ -1642,7 +1642,7 @@ fn register_name_accepts_underscore_account_alias_labels() {
 #[test]
 fn sns_state_block_does_not_advance_transaction_height() {
     use iroha_data_model::block::BlockHeader;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let mut state = State::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),

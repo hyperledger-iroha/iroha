@@ -28,10 +28,6 @@ use mv::storage::StorageReadOnly;
 pub mod tests;
 
 /// A requested exit cannot release either a current seat or an immutable future seat.
-#[expect(
-    single_use_lifetimes,
-    reason = "stable Rust requires a named reference lifetime in the iterator item"
-)]
 pub fn peer_has_committee_obligation<'a>(
     world: &impl WorldReadOnly,
     current: impl IntoIterator<Item = &'a PeerId>,

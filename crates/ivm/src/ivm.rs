@@ -56,17 +56,10 @@ pub(crate) use literal_table::{DecodedLiteral, DecodedLiteralTable, decode_liter
 mod diagnostic;
 #[cfg(test)]
 mod snapshot;
+use crate::branch_hint::unlikely;
 use diagnostic::TrapSnapshot;
 use iroha_allocation::AllocationBudget;
-use likely_stable::unlikely;
-#[cfg(feature = "beep")]
-use rodio::{
-    DeviceSinkBuilder, DeviceSinkError, MixerDeviceSink, Player, Source, mixer::Mixer,
-    source::SineWave,
-};
 use sha2::{Digest, Sha256};
-#[cfg(feature = "beep")]
-use std::time::Duration;
 use std::{
     collections::{HashMap, VecDeque},
     panic::AssertUnwindSafe,
@@ -93,15 +86,6 @@ const DEFAULT_VECTOR_LENGTH: usize = 4;
 const WIDE_INSTRUCTION_LEN: u64 = 4;
 /// Number of prepared instruction streams retained outside the decode cache.
 const PREPARED_PROGRAM_CACHE_CAPACITY: usize = 128;
-#[cfg(feature = "beep")]
-fn with_audio_mixer(
-    open_stream: impl FnOnce() -> Result<MixerDeviceSink, DeviceSinkError>,
-    play: impl FnOnce(&Mixer),
-) {
-    if let Ok(stream) = open_stream() {
-        play(stream.mixer());
-    }
-}
 fn require_registered_syscall_metering(
     number: u32,
     metering: Option<SyscallMetering>,
@@ -1461,107 +1445,12 @@ impl IVM {
     const VECTOR_BASE: usize = 32;
     /// Play a short tune on the default audio device.
     ///
+    /// The tune is synthesized in-process and played with the platform's
+    /// built-in audio player; hosts without a player or audio device skip it.
     /// This function is only available when built with the `beep` feature.
     #[cfg(feature = "beep")]
     pub fn beep_music() {
-        const BPM: u64 = 120;
-        const BEAT_MS: u64 = 60_000 / BPM;
-        #[derive(Clone, Copy)]
-        enum Note {
-            A4,
-            B4,
-            G4,
-            E4,
-            Rest,
-        }
-        impl Note {
-            fn freq(self) -> Option<u32> {
-                match self {
-                    Note::A4 => Some(440),
-                    Note::B4 => Some(494),
-                    Note::G4 => Some(392),
-                    Note::E4 => Some(330),
-                    Note::Rest => None,
-                }
-            }
-        }
-        fn play_element(mixer: &Mixer, note: Note, beats: f32) {
-            let dur_ms = (BEAT_MS as f32 * beats) as u64;
-            if let Some(f) = note.freq() {
-                let sink = Player::connect_new(mixer);
-                let src = SineWave::new(f as f32)
-                    .take_duration(Duration::from_millis(dur_ms))
-                    .amplify(0.20);
-                sink.append(src);
-                sink.sleep_until_end();
-            } else {
-                std::thread::sleep(Duration::from_millis(dur_ms));
-            }
-        }
-        // Japanese song, Kagome-Kagome
-        fn play_kagome(mixer: &Mixer) {
-            let score = vec![
-                (Note::A4, 2.0),
-                (Note::A4, 1.0),
-                (Note::B4, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::Rest, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 0.5),
-                (Note::A4, 0.5),
-                (Note::A4, 1.0),
-                (Note::G4, 0.5),
-                (Note::G4, 0.5),
-                (Note::A4, 1.0),
-                (Note::A4, 0.5),
-                (Note::G4, 0.5),
-                (Note::E4, 1.0),
-                (Note::Rest, 1.0),
-                (Note::A4, 1.0),
-                (Note::G4, 1.0),
-                (Note::A4, 1.0),
-                (Note::G4, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 0.5),
-                (Note::G4, 0.5),
-                (Note::E4, 1.0),
-                (Note::Rest, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::B4, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::Rest, 1.0),
-                (Note::A4, 1.0),
-                (Note::G4, 0.5),
-                (Note::G4, 0.5),
-                (Note::A4, 1.0),
-                (Note::G4, 0.5),
-                (Note::G4, 0.5),
-                (Note::A4, 1.0),
-                (Note::A4, 1.0),
-                (Note::E4, 1.0),
-                (Note::Rest, 1.0),
-                (Note::A4, 0.5),
-                (Note::A4, 0.5),
-                (Note::A4, 0.5),
-                (Note::A4, 0.5),
-                (Note::A4, 1.0),
-                (Note::B4, 1.0),
-                (Note::A4, 1.5),
-                (Note::G4, 0.5),
-                (Note::A4, 1.0),
-                (Note::Rest, 1.0),
-            ];
-            for (n, b) in score {
-                play_element(mixer, n, b);
-            }
-        }
-        with_audio_mixer(DeviceSinkBuilder::open_default_sink, play_kagome);
+        crate::beep::play_startup_jingle();
     }
     fn startup_banner(
         core_count: usize,
@@ -6494,18 +6383,6 @@ mod tests {
         collections::BTreeMap,
         sync::atomic::{AtomicU32, Ordering as AtomicOrdering},
     };
-    #[cfg(feature = "beep")]
-    #[test]
-    fn unavailable_audio_output_is_safe() {
-        let played = Cell::new(false);
-        with_audio_mixer(
-            || Err(DeviceSinkError::NoDevice),
-            |_| {
-                played.set(true);
-            },
-        );
-        assert!(!played.get());
-    }
     #[test]
     fn private_memory_ranges_merge_split_and_respect_half_open_boundaries() {
         let mut ranges = PrivateMemoryRanges::default();

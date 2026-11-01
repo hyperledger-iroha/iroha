@@ -52,7 +52,7 @@ pub const NATIVE_PRIVATE_SETTLEMENT_TERMINAL_ALLOWANCE: usize = MAX_EXECUTED_BLO
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
 fn next_id() -> Result<u64, NativePrivateSettlementSessionError> {
     NEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
         .map_err(|_| NativePrivateSettlementSessionError::Capacity)
 }
 

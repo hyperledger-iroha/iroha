@@ -134,3 +134,9 @@ path = "tests/sorafs_car_integration.rs"
 name = "sorafs_fetch_cli"
 path = "tests/sorafs_fetch_cli.rs"
 required-features = ["cli"]
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"
+unnecessary_sort_by = "allow"

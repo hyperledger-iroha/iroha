@@ -37,7 +37,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::{
     borrow::Cow,
     collections::BTreeMap,
@@ -72,6 +72,13 @@ pub(crate) fn attach_fixture_execution_outputs(
             },
         )
         .unwrap();
+}
+/// Percent-encode one URI component exactly as Torii's routes do.
+///
+/// Every byte except `A-Z`, `a-z`, `0-9`, `-`, `.`, `_` and `~` becomes `%XX`.
+#[must_use]
+pub fn percent_encode(value: &str) -> std::borrow::Cow<'_, str> {
+    crate::percent_encoding::encode(value)
 }
 /// Exact genesis-lineage identity used by [`mk_minimal_root_cfg`].
 #[must_use]

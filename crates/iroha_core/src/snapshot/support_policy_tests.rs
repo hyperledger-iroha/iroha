@@ -45,7 +45,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::{
     borrow::Cow,
     fs::File,

@@ -17,7 +17,7 @@ fn staking_instructions_change_only_future_reward_exposure() {
     let first = new_block_with_height_and_time(2, 1_000);
     let mut first_block = state.block(first.as_ref().header());
     let mut stx = first_block.transaction_for_callback_testing();
-    let (validator, nominator, escrow, definition) =
+    let (validator, nominator, _escrow, definition) =
         prepare_accounts_with_delegator(&mut stx, receiver);
     RegisterPublicLaneValidator {
         monetary_plan: fixture_registration_plan(&stx, lane, &validator, Quantity::from(1_000_u64)),

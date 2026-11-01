@@ -1344,7 +1344,7 @@ pub fn format_capabilities(caps: &[CapabilityTlv]) -> impl fmt::Display + '_ {
     Formatter(caps)
 }
 /// Helper structure for serialising capability summaries to JSON fixtures.
-#[derive(Debug, JsonSerialize)]
+#[derive(Debug)]
 /// JSON-friendly summary of capability TLVs.
 pub struct CapabilitySummary<'a> {
     /// Capability entries to encode.

@@ -2,7 +2,7 @@
 use super::*;
 use crate::kura::Kura;
 use iroha_data_model::block::BlockHeader;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::sync::Arc;
 #[test]
 fn state_block_fragment_counter_updates_on_apply() {

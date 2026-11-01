@@ -287,12 +287,12 @@ mod tests {
     use iroha_model_base::name::Name;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use iroha_primitives::nonzero;
     use iroha_primitives::{
         json::Json,
         numeric::{NumericSpec, Quantity},
     };
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
     include!("domain/monetary_policy_tests.rs");
 
     fn test_state() -> State {

@@ -3736,7 +3736,7 @@ impl StorageBackend {
     }
     fn next_access_sequence(&self) -> Result<u64, StorageError> {
         self.access_counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |previous| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |previous| {
                 previous.checked_add(1)
             })
             .map(|previous| previous + 1)

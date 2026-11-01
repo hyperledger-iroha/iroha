@@ -5265,7 +5265,7 @@ fn moderation_try_acquire_permit(
     limit: usize,
 ) -> Option<ModerationActivePermit> {
     active
-        .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+        .try_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
             (current < limit).then_some(current + 1)
         })
         .ok()?;

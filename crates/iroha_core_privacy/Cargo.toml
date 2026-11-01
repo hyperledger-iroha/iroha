@@ -56,7 +56,6 @@ sha3 = { version = "0.12.0", default-features = false, features = ["zeroize", "a
 blake2 = { workspace = true }
 blake3 = "1.8.2"
 hex = { workspace = true }
-once_cell = { workspace = true }
 rayon = { workspace = true }
 thiserror = { workspace = true }
 time = { workspace = true }

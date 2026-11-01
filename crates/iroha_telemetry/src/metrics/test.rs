@@ -218,6 +218,27 @@ fn catalog_retires_consensus_vrf_metrics() {
     );
 }
 #[test]
+fn catalog_leaves_ivm_owned_metrics_to_the_ivm_collector() {
+    // IVM owns these families (`ivm::metrics`) and Core registers its collector in
+    // this registry; a catalog copy would make that registration a duplicate.
+    let catalog = include_str!("catalog_v2.tsv");
+    for name in [
+        "merkle_root_gpu_total",
+        "merkle_root_cpu_total",
+        "ivm_memory_commit_ms",
+        "ivm_memory_commit_dirty_chunks",
+        "ivm_merkle_rebuild_total",
+        "ivm_merkle_incremental_leaf_updates_total",
+    ] {
+        assert!(
+            !catalog
+                .lines()
+                .any(|row| row.split('\t').take(2).any(|field| field == name)),
+            "`{name}` belongs to the IVM collector, not the telemetry catalog"
+        );
+    }
+}
+#[test]
 fn records_alias_cache_metrics() {
     let metrics = Metrics::default();
     metrics.record_sorafs_alias_cache("success", "fresh", 42.0);

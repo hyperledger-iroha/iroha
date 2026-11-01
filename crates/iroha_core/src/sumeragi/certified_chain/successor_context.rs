@@ -246,8 +246,9 @@ impl SuccessorContextPreparation {
         Ok(())
     }
 
-    /// Prepare ordinary schedule custody before World acquisition, within the same observed
-    /// State generation as native header authentication. This grants no cached State authority.
+    /// Prepare ordinary schedule custody after authenticated lane expansion and before World
+    /// acquisition, within the State generation of native header authentication. The retained
+    /// graph binds the expanded execution header; this grants no cached State authority.
     pub(crate) fn prepare_continuation(
         &mut self,
         state: &(impl StateReadOnly + ?Sized),

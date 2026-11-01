@@ -1262,7 +1262,7 @@ impl GovernanceDagMirrorReadinessV1 {
         let desired_parity = u64::from(!ready);
         let _ = self
             .epoch
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 let increment = if current & 1 == desired_parity { 2 } else { 1 };
                 current.checked_add(increment)
             });

@@ -25,8 +25,8 @@ use super::{
     sponge::keccak256,
 };
 use core::fmt;
-use once_cell::sync::Lazy;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use thiserror::Error;
 #[path = "zk_ams/mkhe.rs"]
 mod mkhe;
@@ -306,10 +306,11 @@ const NEXT_EPOCH_HIGH_INDEX: usize = 85;
 const NEXT_EPOCH_LOW_INDEX: usize = 86;
 const BATCH_SIZE_INDEX: usize = 87;
 const ANCHOR_INDEX: usize = 88;
-static CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>> =
-    Lazy::new(build_canonical_profile);
-static CANONICAL_SHAPE: Lazy<Result<Arc<Shape>, CircuitError>> = Lazy::new(build_canonical_shape);
-static T256_GENERATOR_DIGEST: Lazy<[u8; 32]> = Lazy::new(|| {
+static CANONICAL_PROFILE: LazyLock<Result<Arc<CircuitProfile>, CircuitError>> =
+    LazyLock::new(build_canonical_profile);
+static CANONICAL_SHAPE: LazyLock<Result<Arc<Shape>, CircuitError>> =
+    LazyLock::new(build_canonical_shape);
+static T256_GENERATOR_DIGEST: LazyLock<[u8; 32]> = LazyLock::new(|| {
     let points = derive_t256_generators_v1(
         COMMITMENT_KEY_LABEL_V1,
         super::masked_relaxed::MASKED_RELAXED_COMMITMENT_COLUMNS_V1 + 1,
@@ -1313,13 +1314,12 @@ mod tests {
             .next()
             .expect("production ZK-AMS source");
         assert!(
-            production.contains("static CANONICAL_SHAPE: Lazy<Result<Arc<Shape>, CircuitError>>")
+            production
+                .contains("static CANONICAL_SHAPE: LazyLock<Result<Arc<Shape>, CircuitError>>")
         );
-        assert!(
-            production.contains(
-                "static CANONICAL_PROFILE: Lazy<Result<Arc<CircuitProfile>, CircuitError>>"
-            )
-        );
+        assert!(production.contains(
+            "static CANONICAL_PROFILE: LazyLock<Result<Arc<CircuitProfile>, CircuitError>>"
+        ));
         assert!(production.contains("fn canonical_shape() -> Result<Arc<Shape>"));
         assert!(production.contains(
             "#[cfg(test)]\npub(super) fn canonical_shape_ref() -> Result<&'static Shape"

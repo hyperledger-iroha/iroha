@@ -78,7 +78,7 @@ impl State {
             u64::try_from(curr_block.creation_time().as_millis()).unwrap_or(u64::MAX),
         ));
         soracloud_runtime = Some(self.soracloud_runtime());
-        accounts_snapshot_cache = Some(SyncOnceCell::new());
+        accounts_snapshot_cache = Some(OnceLock::new());
         // Execution limits are read from the committed pipeline validity policy
         // of the acquired predecessor and frozen for this block, like the ZK
         // policy above; the installed value supplies local resources.

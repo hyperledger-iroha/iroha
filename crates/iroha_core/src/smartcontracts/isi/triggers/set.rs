@@ -23,6 +23,7 @@ mod contract_capture;
 mod contract_relation;
 #[path = "set_detachment.rs"]
 mod detachment;
+#[cfg(test)]
 #[path = "set_time_source.rs"]
 mod time_source;
 pub(crate) use acquisition::SetBlockAcquisition;
@@ -34,6 +35,7 @@ pub(crate) use detachment::{
     AbortedSet, DetachError, DetachedSet, DetachedSetPublicationSlot, PreparedSet, PublishedSet,
     SetBlockCapture, SetPublicationError,
 };
+#[cfg(test)]
 pub(crate) use time_source::{
     ApplyingTimeSourceError, ApplyingTimeSourceWork, CapturedApplyingTimeSource,
 };
@@ -126,7 +128,9 @@ impl BorrowedTriggerFilter<'_> {
 /// The complete source remains the wire oracle and response identity.
 pub(crate) struct BorrowedTriggerSource<'a> {
     full: &'a dyn norito::core::SerializePayload,
+    #[cfg(test)]
     persistent_action: &'a dyn norito::core::SerializePayload,
+    #[cfg(test)]
     retry_state: Option<(u32, u64)>,
     id: &'a TriggerId,
     executable: &'a dyn norito::core::SerializePayload,
@@ -146,6 +150,7 @@ impl BorrowedTriggerSource<'_> {
     /// Store traversal, original-contract lookup and lifecycle authentication
     /// precede this method and still require their own bounded owner. This does
     /// not journal a change, admit an instruction registry, or activate V2.
+    #[cfg(test)]
     pub(crate) fn try_prepare_bounded_time_frame(
         &self,
         pool: &iroha_allocation::AllocationBudget,
@@ -164,11 +169,13 @@ impl BorrowedTriggerSource<'_> {
     /// It allocates or retains nothing. A lifecycle journal must separately fund
     /// ownership, normalization, hashing and encoding before retaining a copy.
     /// This borrowed source alone is not an authenticated lifecycle statement.
+    #[cfg(test)]
     pub(crate) fn persistent_action(&self) -> &dyn norito::core::SerializePayload {
         self.persistent_action
     }
     /// Actual retry runtime tuple, kept separate from the legacy Action payload.
     /// Absence stays absent; this accessor does not infer a zero or clear state.
+    #[cfg(test)]
     pub(crate) fn retry_state(&self) -> Option<(u32, u64)> {
         self.retry_state
     }
@@ -222,7 +229,9 @@ impl BorrowedTriggerSource<'_> {
 }
 /// Private construction binds the serializer to the visitor's original six
 /// borrowed fields; no caller-supplied payload or hash can replace that source.
+#[cfg(test)]
 struct BoundedTimeActionPayload<'source, 'borrow>(&'source BorrowedTriggerSource<'borrow>);
+#[cfg(test)]
 impl norito::core::SerializePayload for BoundedTimeActionPayload<'_, '_> {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), norito::Error> {
         use norito::core::{charge_encode_prewrite, refuse_encode_source};
@@ -246,6 +255,7 @@ impl norito::core::SerializePayload for BoundedTimeActionPayload<'_, '_> {
 }
 /// Close the variable-shaped producer surface without invoking a registry,
 /// argument decoder, contract lookup or an owned replacement serializer.
+#[cfg(test)]
 fn admit_bounded_time_executable(source: &ExecutableRef) -> Result<(), norito::Error> {
     use norito::core::{charge_encode_prewrite, refuse_encode_source};
     if !charge_encode_prewrite(0)? {
@@ -291,6 +301,7 @@ fn admit_bounded_time_executable(source: &ExecutableRef) -> Result<(), norito::E
 /// their original lexical bytes, including the digest's marker and checksum, without a JSON
 /// decoder or an owned replacement. The source-only path also supports empty metadata and
 /// fixtures carrying just the numeric pair or digest; this does not authenticate registration.
+#[cfg(test)]
 fn admit_bounded_registration_metadata(metadata: &Metadata) -> Result<(), norito::Error> {
     use norito::core::{charge_encode_prewrite, refuse_encode_source};
     if !charge_encode_prewrite(0)? {
@@ -2457,7 +2468,9 @@ pub(crate) trait BorrowedTriggerSourceReadOnly: SetReadOnly {
             crate::smartcontracts::isi::query::BorrowedSingularStruct::<2>::new([id, &full_action]);
         visitor(Some(&BorrowedTriggerSource {
             full: &full_trigger,
+            #[cfg(test)]
             persistent_action: &full_action,
+            #[cfg(test)]
             retry_state: action
                 .retry_state
                 .map(|state| (state.retries_used, state.next_retry_at_ms)),

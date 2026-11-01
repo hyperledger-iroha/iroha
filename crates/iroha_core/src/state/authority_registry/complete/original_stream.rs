@@ -620,7 +620,7 @@ impl Collector {
     }
 
     /// Borrow one original MV cell, preserving a touched equal-value preimage.
-    pub(crate) fn cell<V: Value, C: Send + Sync + 'static>(
+    pub(crate) fn cell<V: mv::CellValue, C: Send + Sync + 'static>(
         &mut self,
         id: &'static str,
         cell: &CellField<'_, V, C>,

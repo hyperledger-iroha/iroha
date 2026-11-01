@@ -177,11 +177,13 @@ pub const ZK_X509_RFC5280_STARK_CONSTRAINT_DEGREE_V1: u8 = 4;
 /// Copy/call bus challenge lanes. This must remain equal to strict DER.
 pub const ZK_X509_RFC5280_STARK_BUS_LANES_V1: usize = 4;
 /// Maximum compressed events in any one relation.
+#[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_RELATION_EVENT_BOUND_V1: usize =
     ZK_X509_RFC5280_STARK_TRACE_SIZE_V1;
 /// Conservatively union-bounded compressed relations, including the
 /// DER-byte/DER-node serial/key-source lookups, serial copy bus, and the unified
 /// authenticated temporal/numeric lookup, plus nine normalized output role equalities.
+#[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1: usize = 39;
 /// Conservative remaining collision-security bits.
 ///
@@ -189,6 +191,7 @@ pub const ZK_X509_RFC5280_STARK_COMPRESSED_RELATIONS_V1: usize = 39;
 /// collision polynomial has degree at most `N = 2^19`; four independent lanes
 /// therefore fail with probability `< (2^19 / 2^63)^4 = 2^-176`.  A union
 /// over at most thirty-nine relations is `< 39 * 2^-176 < 2^-170`.
+#[cfg(test)]
 pub const ZK_X509_RFC5280_STARK_COPY_SOUNDNESS_BITS_V1: u16 = 170;
 const RFC_TUPLE_CHALLENGE_LABELS_V1: [&[u8]; 12] = [
     b"zk-x509-rfc5280-bus-tuple-slot-00-v1",

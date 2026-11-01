@@ -242,7 +242,7 @@ fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId
             let retry = register_domain();
             match retry {
                 Ok(_) => Ok(()),
-                Err(retry_err)
+                Err(_)
                     if wait_for_domain_visibility(
                         client,
                         domain,

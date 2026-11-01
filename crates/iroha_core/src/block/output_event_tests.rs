@@ -37,7 +37,7 @@ fn local_storage_recovery_emits_no_block_rejection() {
     use iroha_data_model::block::error::BlockRejectionReason;
 
     let header = BlockHeader::new(
-        nonzero_ext::nonzero!(2_u64),
+        iroha_primitives::nonzero!(2_u64),
         Some(HashOf::from_untyped_unchecked(Hash::prehashed(
             [7; Hash::LENGTH],
         ))),
@@ -150,7 +150,7 @@ fn event_fixture_block(
     keypair: &iroha_crypto::KeyPair,
 ) -> SignedBlock {
     let mut builder = iroha_data_model::block::builder::BlockBuilder::new(BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
+        iroha_primitives::nonzero!(1_u64),
         None,
         None,
         0,

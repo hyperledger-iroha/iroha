@@ -298,12 +298,6 @@ ivm_execution_memory_peak_bytes	ivm_execution_memory_peak_bytes	Highest requeste
 ivm_execution_memory_limit_bytes	ivm_execution_memory_limit_bytes	Current configured limit of the State-owned execution allocation pool	registered
 ivm_register_max_index	ivm_register_max_index	Maximum general-purpose register index touched per VM execution	registered
 ivm_register_unique_count	ivm_register_unique_count	Unique general-purpose registers touched per VM execution	registered
-merkle_root_gpu_total	merkle_root_gpu_total	Merkle root computations using GPU acceleration (cumulative)	registered
-merkle_root_cpu_total	merkle_root_cpu_total	Merkle root computations using CPU (cumulative)	registered
-ivm_memory_commit_ms	ivm_memory_commit_ms	IVM memory commit duration in milliseconds by commit path	registered
-ivm_memory_commit_dirty_chunks	ivm_memory_commit_dirty_chunks	IVM memory commit dirty chunk count by commit path	registered
-ivm_merkle_rebuild_total	ivm_merkle_rebuild_total	IVM completed in-place canonical Merkle node refreshes (excluding construction and copies)	registered
-ivm_merkle_incremental_leaf_updates_total	ivm_merkle_incremental_leaf_updates_total	IVM Merkle cache incremental leaf updates	registered
 pipeline_dag_vertices	pipeline_dag_vertices	DAG vertices (transactions) in the latest validated block	registered
 pipeline_dag_edges	pipeline_dag_edges	DAG edges (conflicts) in the latest validated block	registered
 pipeline_conflict_rate_bps	pipeline_conflict_rate_bps	DAG conflict rate (basis points) for the latest validated block	registered

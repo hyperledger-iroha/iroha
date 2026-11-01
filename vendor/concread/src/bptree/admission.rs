@@ -553,8 +553,8 @@ where
 
 impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: NodeCloning<K, V>,
 {
     /// Exact layout-only demand for the original no-edit writer start.
@@ -618,8 +618,8 @@ where
 
 impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Construct an empty map with prepaid node, root and initial reader owners.
@@ -800,8 +800,8 @@ where
 
 impl<K, V, P> BptreeMapOwned<K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Observe the complete insertion demand of this original private generation.
@@ -847,8 +847,8 @@ where
 
 impl<K, V, P> BptreeMapOwned<K, V, Prepaid<P>>
 where
-    K: Copy + Ord + Debug + Send + Sync + 'static,
-    V: Copy + Send + Sync + 'static,
+    K: Copy + Ord + Debug + 'static,
+    V: Copy + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Observe a checked required-reservation floor for this fixed-size owner.
@@ -910,8 +910,8 @@ where
 
 impl<K, V, P> BptreeMap<K, V, Prepaid<P>>
 where
-    K: Copy + Ord + Debug + Send + Sync + 'static,
-    V: Copy + Send + Sync + 'static,
+    K: Copy + Ord + Debug + 'static,
+    V: Copy + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Admit a no-edit fixed-size successor with its exact current-tree floor.
@@ -966,8 +966,8 @@ where
 
 impl<K, V, P> BptreeMapOwned<K, V, Prepaid<P>>
 where
-    K: Copy + Ord + Debug + Send + Sync + 'static,
-    V: Copy + Send + Sync + 'static,
+    K: Copy + Ord + Debug + 'static,
+    V: Copy + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Replace a fixed-size value only when its leaf is already private.
@@ -1054,8 +1054,8 @@ where
 #[must_use = "consume the preparation with original funding or recover its input"]
 pub struct BptreeMapPreparedInsert<'a, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     prepared: PreparedInsertCursor<'a, K, V, P>,
@@ -1064,8 +1064,8 @@ where
 
 impl<K, V, P> BptreeMapPreparedInsert<'_, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Complete checked demand for this retained insertion, before any allocation.
@@ -1117,8 +1117,8 @@ where
 #[must_use = "consume the preparation with original funding or recover its value"]
 pub struct BptreeMapPreparedKeyCopyInsert<'a, 's, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     prepared: PreparedInsertCursor<'a, K, V, P>,
@@ -1128,8 +1128,8 @@ where
 
 impl<K, V, P> BptreeMapPreparedKeyCopyInsert<'_, '_, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Checked tree demand plus the incoming key's actual nested copy layouts.
@@ -1163,8 +1163,8 @@ where
 #[must_use = "consume the preparation with original funding or drop it unchanged"]
 pub struct BptreeMapPreparedOptionalCopyInsert<'a, 's, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     prepared: PreparedInsertCursor<'a, K, Option<V>, P>,
@@ -1174,8 +1174,8 @@ where
 
 impl<K, V, P> BptreeMapPreparedOptionalCopyInsert<'_, '_, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Checked target-tree demand plus the incoming key and optional value copies.
@@ -1203,8 +1203,8 @@ where
 // checked tree plan. There is one insertion executor and no input factory.
 struct PreparedInsertCursor<'a, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     cursor: &'a mut CursorWrite<K, V, Prepaid<P>>,
@@ -1253,8 +1253,8 @@ where
 
 impl<'a, K, V, P> PreparedInsertCursor<'a, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     fn start(self, provider: P) -> (StartedInsert<'a, K, V, P>, P) {
@@ -1289,8 +1289,8 @@ fn prepare_insert_cursor<'a, K, V, P>(
     saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
 ) -> Result<PreparedInsertCursor<'a, K, V, P>, PlanningError>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     let plan = plan_edit(cursor, key)?;
@@ -1308,8 +1308,8 @@ fn prepare_insert<'a, K, V, P>(
     saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
 ) -> PreparedInsertResult<'a, K, V, P>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     match prepare_insert_cursor(cursor, &key, saved) {
@@ -1328,8 +1328,8 @@ fn prepare_key_copy_insert<'a, 's, K, V, P>(
     saved: Option<&'a mut crate::internals::bptree::cursor::CheckpointBuffers<K, V, Prepaid<P>>>,
 ) -> Result<BptreeMapPreparedKeyCopyInsert<'a, 's, K, V, P>, (V, PlanningError)>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     let prepare = || {
@@ -1356,8 +1356,8 @@ fn prepare_optional_copy_insert<'a, 's, K, V, P>(
     >,
 ) -> Result<BptreeMapPreparedOptionalCopyInsert<'a, 's, K, V, P>, PlanningError>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     let mut prepared = prepare_insert_cursor(cursor, key, saved)?;
@@ -1386,8 +1386,8 @@ where
 /// unwinds; abort that writer instead of publishing it.
 pub struct BptreeMapCheckpoint<'a, K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: crate::internals::bptree::cursor::CursorCheckpoint<'a, K, V, M>,
@@ -1403,8 +1403,8 @@ where
 /// cannot roll back checkpoints whose original rollback buffers were consumed.
 pub struct CheckpointRetirement<K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     _buffers: crate::internals::bptree::cursor::CheckpointBuffers<K, V, M>,
@@ -1412,8 +1412,8 @@ where
 
 impl<K, V, M> BptreeMapWriteTxn<'_, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Begin an allocation-free private checkpoint under this original writer.
@@ -1431,8 +1431,8 @@ where
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Prepare an insertion while exclusively retaining this original writer.
@@ -1517,8 +1517,8 @@ where
 
 impl<K, V, M> BptreeMapCheckpoint<'_, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Borrow an immutable value from this private checkpoint's current state.
@@ -1632,8 +1632,8 @@ where
 
 impl<K, V> BptreeMapCheckpoint<'_, K, V>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
 {
     /// Insert or replace an entry, returning the previous private value.
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
@@ -1653,8 +1653,8 @@ where
 
 impl<K, V, P> BptreeMapCheckpoint<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Prepare an insertion retaining this checkpoint's exact rollback ownership.
@@ -1733,8 +1733,8 @@ where
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, Option<V>, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Prepare an exact optional preimage copy under this original writer.
@@ -1752,8 +1752,8 @@ where
 
 impl<K, V, P> BptreeMapCheckpoint<'_, K, Option<V>, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V> + ClonePlanning<K, Option<V>>,
 {
     /// Prepare an optional preimage copy under this exact rollback checkpoint.
@@ -1780,8 +1780,8 @@ mod owned_footprint_tests;
 
 impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     fn insert_with_source<E>(
@@ -1845,8 +1845,8 @@ fn current_footprint<K, V, P>(
     source: &SuperBlock<K, V, Prepaid<P>>,
 ) -> Result<AllocationDemand, PlanningError>
 where
-    K: Copy + Ord + Debug + Send + Sync + 'static,
-    V: Copy + Send + Sync + 'static,
+    K: Copy + Ord + Debug + 'static,
+    V: Copy + 'static,
     P: ClonePlanning<K, V>,
 {
     let mut existing = AllocationDemand::new();
@@ -1865,8 +1865,8 @@ where
 
 impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
 where
-    K: Copy + Ord + Debug + Send + Sync + 'static,
-    V: Copy + Send + Sync + 'static,
+    K: Copy + Ord + Debug + 'static,
+    V: Copy + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Admit a no-edit successor while retaining the original acquired writer.
@@ -1905,8 +1905,8 @@ where
 
 impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: NodeCloning<K, V>,
 {
     /// Use the original admission engine under this actual writer acquisition.
@@ -1964,8 +1964,8 @@ where
 
 impl<'a, K, V, P> BptreeMapWriterAcquisition<'a, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: ClonePlanning<K, V>,
 {
     /// Use the original admission engine under this actual writer acquisition.

@@ -86,7 +86,7 @@ fn fee_sponsor_expected_rows_with_allocation(
 fn faulty_verifier_fee_sponsor_capacity_is_exact_and_identical_replay_adds_no_lock() {
     let (state, first) = fee_sponsor_faulty_effect_fixture();
     let mut block = state.block(BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
+        iroha_primitives::nonzero!(1_u64),
         None,
         None,
         0,
@@ -154,7 +154,7 @@ fn faulty_verifier_fee_sponsor_capacity_is_exact_and_identical_replay_adds_no_lo
 fn faulty_verifier_fee_sponsor_cannot_rebind_a_lease_or_overlap_a_live_route() {
     let (state, first) = fee_sponsor_faulty_effect_fixture();
     let mut block = state.block(BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
+        iroha_primitives::nonzero!(1_u64),
         None,
         None,
         0,
@@ -187,7 +187,7 @@ fn faulty_verifier_fee_sponsor_cannot_rebind_a_lease_or_overlap_a_live_route() {
 fn faulty_verifier_fee_sponsor_respects_current_height_and_scheduled_revision() {
     let (state, mut record) = fee_sponsor_faulty_effect_fixture();
     let mut block = state.block(BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
+        iroha_primitives::nonzero!(1_u64),
         None,
         None,
         0,
@@ -237,7 +237,7 @@ fn faulty_verifier_fee_sponsor_respects_current_height_and_scheduled_revision() 
 fn faulty_verifier_fee_sponsor_failed_batch_discards_earlier_allocation() {
     let (state, first) = fee_sponsor_faulty_effect_fixture();
     let mut block = state.block(BlockHeader::new(
-        nonzero_ext::nonzero!(1_u64),
+        iroha_primitives::nonzero!(1_u64),
         None,
         None,
         0,

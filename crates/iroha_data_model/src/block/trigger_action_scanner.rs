@@ -538,7 +538,6 @@ fn scan_contract_invocation_record<'frame>(
 
 fn scan_contract_address(mut value: Cursor<'_>, budget: &mut Budget) -> Result<(), ScanError> {
     use crate::smart_contract::{CONTRACT_ADDRESS_HRP, CONTRACT_ADDRESS_LITERAL_LEN_V1};
-    use bech32::{Bech32, Bech32m, primitives::decode::UncheckedHrpstring};
 
     let text = value.bounded_string(CONTRACT_ADDRESS_LITERAL_LEN_V1, budget)?;
     value.finish()?;
@@ -546,23 +545,17 @@ fn scan_contract_address(mut value: Cursor<'_>, budget: &mut Budget) -> Result<(
         return Err(ScanError::InvalidValue);
     }
     // The original V1 literal has 60 ASCII bytes, six HRP bytes and 29 decoded
-    // bytes. Prepay fixed Hrp initialization/copies plus character validation,
-    // both finite checksum passes and streaming payload conversion. The borrowed
-    // parser carries fixed stack state only; never call allocating decode/parse
-    // or format its error. This conservative debit is independent of contents.
+    // bytes. Prepay HRP and character validation, the checksum pass and
+    // streaming payload conversion. The borrowed decoder carries fixed stack
+    // state only; never call the allocating decode or format its error. This
+    // conservative debit is independent of contents.
     budget.work(4096)?;
-    let unchecked = UncheckedHrpstring::new(text).map_err(|_| ScanError::InvalidValue)?;
-    if unchecked.validate_checksum::<Bech32m>().is_err()
-        && !unchecked.has_valid_checksum::<Bech32>()
-    {
+    // Accepts a Bech32m or Bech32 checksum, as the contract-address parser does.
+    let decoded = crate::bech32::decode_borrowed(text).map_err(|_| ScanError::InvalidValue)?;
+    if decoded.hrp().as_str() != CONTRACT_ADDRESS_HRP {
         return Err(ScanError::InvalidValue);
     }
-    // Both original checksum algorithms have six characters, as in bech32::decode.
-    let checked = unchecked.remove_checksum::<Bech32m>();
-    if checked.hrp().as_str() != CONTRACT_ADDRESS_HRP {
-        return Err(ScanError::InvalidValue);
-    }
-    let mut bytes = checked.byte_iter();
+    let mut bytes = decoded.bytes();
     if bytes.next() != Some(1) {
         return Err(ScanError::InvalidValue);
     }

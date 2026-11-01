@@ -6054,11 +6054,13 @@ fn reconcile_last_reported_block_with_kura(
     *reported = actual;
     true
 }
-/// Start the telemetry service after binding its authoritative resource collector.
+/// Start the telemetry service after binding its authoritative resource collector and
+/// the process-wide IVM collector ([`ivm::metrics::collector`]).
 ///
 /// # Errors
 /// Returns an error before spawning the actor if the collector descriptors are invalid
-/// or the registry already has a resource source. Disabled telemetry does not bind one.
+/// or the registry already has a resource source or IVM collector. Disabled telemetry
+/// binds neither.
 pub fn start(
     metrics: Arc<Metrics>,
     state: Arc<State>,
@@ -6071,6 +6073,7 @@ pub fn start(
     #[cfg(feature = "telemetry")]
     if enabled {
         kura.register_resource_telemetry(&metrics)?;
+        metrics.register_collector(Box::new(ivm::metrics::collector()))?;
     }
     let (actor, handle) = mpsc::channel(CHANNEL_CAPACITY);
     let last_reported_block = Arc::new(RwLock::new(None));
@@ -6193,12 +6196,12 @@ mod tests {
     use iroha_model_base::peer::Peer;
     use iroha_model_base::peer::PeerId;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use iroha_primitives::nonzero;
     use iroha_primitives::{
         addr::{SocketAddr, socket_addr},
         time::{MockTimeHandle, TimeSource},
     };
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     #[cfg(feature = "telemetry")]
     use norito::streaming::{
         SyncDiagnostics, TelemetryAuditOutcome, TelemetryDecodeStats, TelemetryEncodeStats,
@@ -6859,8 +6862,8 @@ mod tests {
         };
         use iroha_model_base::peer::PeerId;
         use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+        use iroha_primitives::nonzero;
         use iroha_test_samples::PEER_KEYPAIR;
-        use nonzero_ext::nonzero;
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let lane_catalog = LaneCatalog::new(
@@ -9379,6 +9382,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn telemetry_start_exports_ivm_owned_metrics() {
+        let system = SystemUnderTest::new();
+        let exported = system
+            .telemetry
+            .metrics
+            .try_to_string()
+            .expect("render started telemetry");
+        // Counters are always exported; the commit histograms appear once a path is observed.
+        for counter in [
+            "merkle_root_gpu_total",
+            "merkle_root_cpu_total",
+            "ivm_merkle_rebuild_total",
+            "ivm_merkle_incremental_leaf_updates_total",
+        ] {
+            let type_line = format!("# TYPE {counter} counter");
+            assert!(
+                exported.lines().any(|line| line == type_line),
+                "started telemetry must export the IVM-owned `{counter}`"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn telemetry_disabled_skips_updates() {
         use iroha_primitives::time::TimeSource;
         use tokio::sync::watch;
@@ -9404,8 +9430,8 @@ mod tests {
         let (_mh, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
             iroha_config::parameters::actual::Queue {
-                capacity: nonzero_ext::nonzero!(10usize),
-                capacity_per_user: nonzero_ext::nonzero!(10usize),
+                capacity: iroha_primitives::nonzero!(10usize),
+                capacity_per_user: iroha_primitives::nonzero!(10usize),
                 transaction_time_to_live: Duration::from_secs(100),
                 ..Default::default()
             },
@@ -9439,9 +9465,14 @@ mod tests {
                 .get(),
             0
         );
+        let exported = m.try_to_string().unwrap();
         assert!(
-            !m.try_to_string().unwrap().contains("iroha_kura_resource_"),
+            !exported.contains("iroha_kura_resource_"),
             "disabled telemetry must not fabricate an available resource source"
+        );
+        assert!(
+            !exported.contains("ivm_merkle_rebuild_total"),
+            "disabled telemetry must not bind the IVM collector"
         );
     }
     #[test]
@@ -9625,8 +9656,8 @@ mod tests {
         let (_mh, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(
             iroha_config::parameters::actual::Queue {
-                capacity: nonzero_ext::nonzero!(10usize),
-                capacity_per_user: nonzero_ext::nonzero!(10usize),
+                capacity: iroha_primitives::nonzero!(10usize),
+                capacity_per_user: iroha_primitives::nonzero!(10usize),
                 transaction_time_to_live: Duration::from_secs(100),
                 ..Default::default()
             },

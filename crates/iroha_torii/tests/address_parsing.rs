@@ -15,6 +15,7 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::time::TimeSource;
 use iroha_telemetry::metrics::Metrics;
+use iroha_torii::test_utils::percent_encode;
 use iroha_torii::{
     Torii,
     filter::{FieldPath, FilterExpr, ListQuery},
@@ -23,7 +24,6 @@ use norito::json;
 use prometheus::core::Collector;
 use std::sync::Arc;
 use tower::ServiceExt as _;
-use urlencoding::encode;
 #[path = "fixtures.rs"]
 mod fixtures;
 const ACCOUNT_SIGNATORY: &str =
@@ -44,7 +44,7 @@ fn query_envelope_with_account_filter(field: &str, literal: &str) -> Vec<u8> {
     norito::json::to_vec(&query.to_json_value()).expect("serialize collection query")
 }
 fn encode_query_value(value: &str) -> String {
-    encode(value).into_owned()
+    percent_encode(value).into_owned()
 }
 #[tokio::test]
 async fn transactions_endpoint_accepts_encoded_account_segments() {

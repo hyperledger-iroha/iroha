@@ -5117,18 +5117,18 @@ mod tests {
     use http::StatusCode;
     use ivm::bn254_vec::{self, FieldElem};
     use norito::to_bytes;
-    use once_cell::sync::OnceCell;
     use pyo3::{
         Python,
         types::{PyBytes, PyDict, PyList},
     };
     use sorafs_car::multi_fetch::PolicyBlockEvidence;
     use std::fs;
+    use std::sync::OnceLock;
     use tempfile::tempdir;
     const SAMPLE_RWA_ID: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal";
     fn ensure_python() {
-        static INIT: OnceCell<()> = OnceCell::new();
+        static INIT: OnceLock<()> = OnceLock::new();
         INIT.get_or_init(|| {
             Python::initialize();
         });

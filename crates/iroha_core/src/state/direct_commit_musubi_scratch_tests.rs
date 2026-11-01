@@ -424,7 +424,7 @@ fn check_direct_refusal(replacement: bool) {
 }
 
 fn original_funded_generations(state: &State) -> Vec<(usize, usize)> {
-    fn pair<V: mv::Value>(
+    fn pair<V: mv::CellValue>(
         cell: &mv::cell::Cell<V, iroha_allocation::AllocationCharge>,
     ) -> [(usize, usize); 2] {
         let [current, undo] =

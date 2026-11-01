@@ -227,6 +227,10 @@ mod allocated {
     }
 
     #[test]
+    #[expect(
+        clippy::result_large_err,
+        reason = "the refusal returns the original move-only charge by value; boxing it would allocate inside the no-allocation observer"
+    )]
     fn invalid_capacity_returns_original_charge_before_any_allocation() {
         let mut funding = prepaid();
         type Buffer = FixedTrackingBuffer<usize, Charge>;

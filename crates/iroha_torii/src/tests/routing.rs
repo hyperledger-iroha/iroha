@@ -101,7 +101,7 @@ mod tests {
             })
             .collect();
         nexus.lane_catalog =
-            iroha_data_model::nexus::LaneCatalog::new(nonzero_ext::nonzero!(4u32), lanes)
+            iroha_data_model::nexus::LaneCatalog::new(iroha_primitives::nonzero!(4u32), lanes)
                 .expect("status lane catalog");
         nexus.configured_lane_catalog = nexus.lane_catalog.clone();
         nexus.configured_dataspace_catalog = nexus.dataspace_catalog.clone();
@@ -1293,7 +1293,7 @@ mod tests {
 #[cfg(feature = "profiling")]
 pub mod profiling {
     use super::*;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use pprof::protos::Message;
     use std::num::{NonZeroU16, NonZeroU64};
     /// Query params used to configure profile gathering

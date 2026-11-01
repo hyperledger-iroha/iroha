@@ -6,7 +6,7 @@ use iroha_data_model::{
     block::BlockHeader,
     parameter::{BlockParameter, Parameter},
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 
 fn state() -> State {
     State::new_for_testing(

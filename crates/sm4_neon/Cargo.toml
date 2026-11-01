@@ -14,3 +14,8 @@ force-neon = []
 [dependencies]
 
 [dev-dependencies]
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"

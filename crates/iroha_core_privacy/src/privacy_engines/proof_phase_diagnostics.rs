@@ -143,7 +143,7 @@ impl ProofPhaseInvocationV1 {
             return None;
         }
         let id = PROOF_PHASE_SEQUENCE_V1
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .ok()?;

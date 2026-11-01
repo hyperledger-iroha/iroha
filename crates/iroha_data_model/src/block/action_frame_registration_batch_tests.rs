@@ -1,7 +1,6 @@
 //! Authored source controls only; no compilation or execution has occurred.
 use super::*;
 use crate::{
-    HasMetadata,
     account::AccountId,
     events::time::{ExecutionTime, Schedule, TimeEventFilter},
     smart_contract::{
@@ -370,13 +369,13 @@ fn argument_presence_wire_cap_and_selector_bounds_are_enforced() {
 
 #[test]
 fn borrowed_address_validator_preserves_original_checksum_variants_and_refusals() {
-    use bech32::{Bech32, Bech32m, Hrp};
+    use crate::bech32::{self, Hrp, Variant};
     let mut decoded = [0u8; 29];
     decoded[0] = 1;
     let hrp = Hrp::parse("irohac").unwrap();
     for text in [
-        bech32::encode::<Bech32m>(hrp, &decoded).unwrap(),
-        bech32::encode::<Bech32>(hrp, &decoded).unwrap(),
+        bech32::encode(Variant::Bech32m, hrp, &decoded).unwrap(),
+        bech32::encode(Variant::Bech32, hrp, &decoded).unwrap(),
     ] {
         let _: ContractAddress = text.parse().unwrap();
         assert!(
@@ -390,9 +389,10 @@ fn borrowed_address_validator_preserves_original_checksum_variants_and_refusals(
                 .is_err()
         );
     }
-    let wrong_hrp = bech32::encode::<Bech32m>(Hrp::parse("wrongx").unwrap(), &decoded).unwrap();
+    let wrong_hrp =
+        bech32::encode(Variant::Bech32m, Hrp::parse("wrongx").unwrap(), &decoded).unwrap();
     decoded[0] = 2;
-    let wrong_version = bech32::encode::<Bech32m>(hrp, &decoded).unwrap();
+    let wrong_version = bech32::encode(Variant::Bech32m, hrp, &decoded).unwrap();
     let mut wrong_checksum = ADDRESS.as_bytes().to_vec();
     let last = wrong_checksum.last_mut().unwrap();
     *last = if *last == b'q' { b'p' } else { b'q' };

@@ -27,9 +27,9 @@ use iroha_data_model::{
     zk::{BackendTag, OpenVerifyEnvelope},
 };
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn grant_manage_vk(block: &mut iroha_core::state::StateBlock<'_>) {
     let mut stx = block.transaction();
     let perm = Permission::new(

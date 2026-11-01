@@ -26,9 +26,9 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::{CanEnactGovernance, CanManageParliament};
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 
 fn election_state() -> State {
     let domain_id = DomainId::try_new("wonderland", "universal").expect("domain");

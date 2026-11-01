@@ -28,7 +28,6 @@ pub use config::chain_id;
 pub use config::genesis_participant_committee_key_instructions;
 use core::{fmt, future::Future, time::Duration};
 pub use dedicated_read::read_on_dedicated_thread;
-use fslock::LockFile;
 use fslock_ports::AllocatedPort;
 use futures::{prelude::*, stream::FuturesUnordered};
 use iroha::data_model::sumeragi::SumeragiStatus;
@@ -90,6 +89,7 @@ use iroha_model_base::topology::LaneId;
 use iroha_model_base::topology::{
     MAX_VALIDATORS_PER_HEIGHT, MIN_VALIDATORS_PER_HEIGHT, is_valid_committee_size,
 };
+use iroha_primitives::nonzero;
 use iroha_primitives::{
     addr::{SocketAddr, socket_addr},
     json::Json,
@@ -100,7 +100,6 @@ use iroha_test_samples::{
     SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
 use iroha_torii_shared::status::Status;
-use nonzero_ext::nonzero;
 use norito::json::{self, Value as JsonValue};
 pub use private_settlement_route_control::{
     PrivateSettlementRouteControl, PrivateSettlementRouteControlAck,
@@ -2031,6 +2030,17 @@ fn lock_path(cache_dir: &Path, pkg: &str, profile: &str) -> PathBuf {
 fn global_build_lock_path(cache_dir: &Path) -> PathBuf {
     cache_dir.join("cargo-build.lock")
 }
+/// Open, creating if needed, an advisory lock file that serializes child builds.
+///
+/// [`fs::File::lock`] takes the exclusive lock; it is released by [`fs::File::unlock`] or
+/// when the handle is dropped. Nothing is written to the file.
+fn open_build_lock_file(path: &Path) -> std::io::Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true).create(true).truncate(false);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o644);
+    options.open(path)
+}
 fn is_rustc_metadata_mismatch(output: &str) -> bool {
     // Top-level builds occasionally trip over stale/corrupted `target` artifacts (e.g. after
     // toolchain upgrades or interrupted builds). Cleaning the target dir and retrying once is a
@@ -2600,7 +2610,7 @@ fn ensure_binary_fresh(
         .wrap_err_with(|| eyre!("Failed to prepare build cache directory {cache_dir:?}"))?;
     let stamp_path = stamp_path(&cache_dir, pkg, profile);
     let lock_path = lock_path(&cache_dir, pkg, profile);
-    let mut lock = LockFile::open(&lock_path)
+    let lock = open_build_lock_file(&lock_path)
         .wrap_err_with(|| eyre!("Failed to open build lock at {lock_path:?}"))?;
     lock.lock()
         .wrap_err_with(|| eyre!("Failed to acquire build lock for {pkg}"))?;
@@ -2627,7 +2637,7 @@ fn ensure_binary_fresh(
     if needs_build {
         tracing::info!(%name, %pkg, %profile, "building `{name}` for tests");
         let build_lock_path = global_build_lock_path(&cache_dir);
-        let mut build_lock = LockFile::open(&build_lock_path)
+        let build_lock = open_build_lock_file(&build_lock_path)
             .wrap_err_with(|| eyre!("Failed to open build lock at {build_lock_path:?}"))?;
         build_lock
             .lock()
@@ -10380,6 +10390,58 @@ impl PartialEq for NetworkPeer {
         self.key_pair.eq(&other.key_pair)
     }
 }
+/// Adjectives for generated peer names: lowercase ASCII words without separators.
+const PEER_NAME_ADJECTIVES: [&str; 100] = [
+    "able", "agile", "amber", "ample", "azure", "balmy", "bold", "brave", "breezy", "bright",
+    "brisk", "calm", "candid", "cheery", "civic", "clear", "clever", "cosmic", "crisp", "curious",
+    "dapper", "daring", "deft", "eager", "early", "earnest", "easy", "elated", "epic", "even",
+    "fair", "fancy", "fast", "fearless", "fluent", "frank", "free", "fresh", "gentle", "glad",
+    "golden", "grand", "happy", "hardy", "hearty", "honest", "humble", "ideal", "jolly", "jovial",
+    "keen", "kind", "lively", "loyal", "lucid", "lucky", "merry", "mellow", "mighty", "modest",
+    "neat", "nimble", "noble", "open", "patient", "peppy", "placid", "plucky", "polite", "proud",
+    "quick", "quiet", "radiant", "rapid", "ready", "regal", "robust", "rosy", "rugged", "sage",
+    "serene", "sharp", "shiny", "silent", "sleek", "smart", "snug", "solid", "spry", "stable",
+    "steady", "sturdy", "sunny", "swift", "tidy", "tranquil", "trusty", "vivid", "warm", "witty",
+];
+/// Nouns for generated peer names: lowercase ASCII words without separators.
+const PEER_NAME_NOUNS: [&str; 100] = [
+    "acorn", "alpaca", "anchor", "badger", "beacon", "beaver", "bison", "breeze", "brook",
+    "canyon", "cedar", "comet", "condor", "coral", "cougar", "coyote", "crane", "creek", "cricket",
+    "dolphin", "dune", "eagle", "ember", "falcon", "fern", "finch", "fjord", "forest", "fox",
+    "gazelle", "geyser", "glacier", "grove", "harbor", "hawk", "heron", "hill", "ibis", "island",
+    "jaguar", "kestrel", "koala", "lagoon", "lark", "lemur", "lily", "lynx", "maple", "meadow",
+    "meteor", "mink", "moose", "nebula", "newt", "oak", "ocelot", "orca", "osprey", "otter", "owl",
+    "panda", "pebble", "pelican", "pine", "plover", "pond", "puffin", "quail", "quasar", "raven",
+    "reef", "ridge", "river", "robin", "salmon", "sparrow", "spruce", "stork", "summit", "swan",
+    "thrush", "tiger", "trout", "tulip", "tundra", "valley", "violet", "walrus", "willow", "wolf",
+    "wombat", "wren", "yak", "zebra", "orchid", "aspen", "birch", "cobra", "delta", "egret",
+];
+/// Number of distinct adjective/noun peer names.
+const PEER_NAME_PAIRS: usize = PEER_NAME_ADJECTIVES.len() * PEER_NAME_NOUNS.len();
+/// Step between consecutive peer names; coprime with [`PEER_NAME_PAIRS`] so the sequence
+/// visits every pair before repeating.
+const PEER_NAME_STRIDE: usize = 7_919;
+/// Two-word peer name, such as `brisk_otter`, used for logs and the peer directory.
+///
+/// Names follow one per-process sequence that starts at a random pair and visits every
+/// adjective/noun pair once before repeating, so peers created by one process (and therefore
+/// inside one network directory) receive distinct names.
+fn generate_peer_name() -> String {
+    static NEXT_PEER_NAME: std::sync::LazyLock<std::sync::atomic::AtomicUsize> =
+        std::sync::LazyLock::new(|| {
+            std::sync::atomic::AtomicUsize::new(rand::random_range(0..PEER_NAME_PAIRS))
+        });
+    peer_name(NEXT_PEER_NAME.fetch_add(1, std::sync::atomic::Ordering::Relaxed))
+}
+/// Peer name at position `index` of the [`generate_peer_name`] sequence.
+fn peer_name(index: usize) -> String {
+    let pair = (index % PEER_NAME_PAIRS) * PEER_NAME_STRIDE % PEER_NAME_PAIRS;
+    format!(
+        "{}_{}",
+        PEER_NAME_ADJECTIVES[pair / PEER_NAME_NOUNS.len()],
+        PEER_NAME_NOUNS[pair % PEER_NAME_NOUNS.len()]
+    )
+}
 pub struct NetworkPeerBuilder {
     mnemonic: String,
     seed: Option<Vec<u8>>,
@@ -10390,10 +10452,9 @@ impl NetworkPeerBuilder {
     #[allow(clippy::new_without_default)] // has side effects
     pub fn new() -> Self {
         Self {
-            // `petname` may occasionally yield multi-word parts or stray newline characters.
-            // Replace all whitespace with underscores to conform to `Name` restrictions.
-            mnemonic: petname::petname(2, "_")
-                .unwrap()
+            // Peer names become directory names and must conform to `Name` restrictions;
+            // replace any whitespace with underscores.
+            mnemonic: generate_peer_name()
                 .split_whitespace()
                 .collect::<Vec<_>>()
                 .join("_"),
@@ -15906,6 +15967,60 @@ mod tests {
     fn peer_builder_mnemonic_has_no_whitespace() {
         let builder = NetworkPeerBuilder::new();
         assert!(builder.mnemonic.chars().all(|c| !c.is_whitespace()));
+    }
+    #[test]
+    fn peer_name_words_are_unique_lowercase_ascii() {
+        for words in [PEER_NAME_ADJECTIVES, PEER_NAME_NOUNS] {
+            let unique: HashSet<&str> = words.iter().copied().collect();
+            assert_eq!(unique.len(), words.len(), "peer-name words must be unique");
+            for word in words {
+                assert!(
+                    !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_lowercase()),
+                    "peer-name word {word:?} must be lowercase ASCII letters"
+                );
+            }
+        }
+    }
+    #[test]
+    fn peer_name_sequence_visits_every_pair_before_repeating() {
+        let mut seen = HashSet::new();
+        for index in 0..PEER_NAME_PAIRS {
+            let name = peer_name(index);
+            let (adjective, noun) = name.split_once('_').expect("two words joined by `_`");
+            assert!(PEER_NAME_ADJECTIVES.contains(&adjective), "{name}");
+            assert!(PEER_NAME_NOUNS.contains(&noun), "{name}");
+            assert!(seen.insert(name), "peer name repeated at index {index}");
+        }
+        assert_eq!(peer_name(PEER_NAME_PAIRS), peer_name(0));
+    }
+    #[test]
+    fn generated_peer_names_are_distinct_two_word_names() {
+        let first = generate_peer_name();
+        let second = generate_peer_name();
+        assert_ne!(first, second);
+        for name in [first, second] {
+            let (adjective, noun) = name.split_once('_').expect("two words joined by `_`");
+            assert!(PEER_NAME_ADJECTIVES.contains(&adjective), "{name}");
+            assert!(PEER_NAME_NOUNS.contains(&noun), "{name}");
+        }
+    }
+    #[test]
+    fn build_lock_file_is_exclusive_until_unlocked_or_dropped() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cargo-build.lock");
+        let holder = open_build_lock_file(&path).unwrap();
+        holder.lock().unwrap();
+        let contender = open_build_lock_file(&path).unwrap();
+        assert!(matches!(
+            contender.try_lock(),
+            Err(fs::TryLockError::WouldBlock)
+        ));
+        holder.unlock().unwrap();
+        contender.try_lock().unwrap();
+        drop(contender);
+        let reopened = open_build_lock_file(&path).unwrap();
+        reopened.try_lock().unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), 0);
     }
     #[test]
     fn checked_key_pair_from_seed_uses_checked_derivation() {

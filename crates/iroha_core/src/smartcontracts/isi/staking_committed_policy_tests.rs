@@ -16,7 +16,7 @@ fn committed_staking_fixture_policy() -> iroha_data_model::block::consensus::Pub
 
 #[test]
 fn registration_uses_explicit_original_committed_minimum() {
-    let mut state = setup_state();
+    let state = setup_state();
     let mut parameters = crate::state::parameter_cell_block_for_testing(&state.world)
         .expect("funded parameter fixture block");
     let mut policy = committed_staking_fixture_policy();

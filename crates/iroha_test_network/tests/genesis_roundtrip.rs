@@ -8,9 +8,9 @@ use iroha_data_model::{
     prelude::{Parameter, SetParameter},
 };
 use iroha_model_base::peer::PeerId;
+use iroha_primitives::nonzero;
 use iroha_primitives::unique_vec::UniqueVec;
 use iroha_test_network::{NetworkBuilder, genesis_factory, init_instruction_registry};
-use nonzero_ext::nonzero;
 use std::{collections::HashSet, time::Duration};
 fn checked_bls_fixture_keypair() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::BlsNormal)

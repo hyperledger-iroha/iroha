@@ -1,5 +1,4 @@
 //! Validate header minor-version handling.
-use crc64fast::Digest;
 use norito::{
     core::{Compression, Error, NoritoSerialize, VERSION_MAJOR, VERSION_MINOR, header_flags},
     decode_from_bytes,
@@ -12,7 +11,7 @@ fn frame_payload<T: NoritoSerialize>(minor: u8, flags: u8, payload: &[u8]) -> Ve
     bytes.extend_from_slice(&norito::schema::identity::frame_hash::<T>());
     bytes.push(Compression::None as u8);
     bytes.extend_from_slice(&(payload.len() as u64).to_le_bytes());
-    let mut digest = Digest::new();
+    let mut digest = norito::core::Crc64Digest::new();
     digest.write(payload);
     bytes.extend_from_slice(&digest.sum64().to_le_bytes());
     bytes.push(flags);

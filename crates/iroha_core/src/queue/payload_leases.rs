@@ -87,7 +87,7 @@ impl Queue {
     pub(super) fn advance_pending_ownership_generation(&self, hash: EntrypointHash) -> Option<u64> {
         if self
             .pending_ownership_generation
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |prior| {
                 if cfg!(all(test, sumeragi_core_mutation = "HC145")) {
                     Some(prior.wrapping_add(1))
                 } else {

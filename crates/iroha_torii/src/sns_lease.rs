@@ -58,12 +58,16 @@ fn capacity() -> Error {
 }
 
 fn lease_source_limits(bytes: usize) -> NativeFinalityLimits {
+    // The three canonical frames share one cumulative decoder allowance. Five
+    // eighths leave the default 384 MB grant with 76,891,136 bytes after its
+    // capped 64 MiB journal: two maximum lease projections and request controls.
+    // Smaller configured grants remain finite and can refuse the original read.
     let unit = bytes / 8;
     NativeFinalityLimits {
         block_bytes: unit.min(NATIVE_FINALITY_MAX_BLOCK_BYTES),
         journal_bytes: (unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES),
         block_count: 3,
-        allocated_bytes: unit * 4,
+        allocated_bytes: unit * 5,
     }
 }
 

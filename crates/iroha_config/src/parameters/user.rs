@@ -33,8 +33,8 @@ use iroha_data_model::{
     soranet::vpn::{VpnExitClassV1, VpnFlowLabelV1},
 };
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Numeric;
-use nonzero_ext::nonzero;
 #[cfg(test)]
 use std::fs;
 use std::{

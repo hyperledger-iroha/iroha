@@ -82,7 +82,7 @@ impl SettlementLedger {
     {
         let height = NonZeroU64::new(height).ok_or(PrivateSettlementError::Binding)?;
         self.reads
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
             .map_err(|_| PrivateSettlementError::ReadBudget)?;
         let response = self
             .account

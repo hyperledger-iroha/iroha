@@ -56,3 +56,11 @@ tower = { version = "0.5.2", features = ["util"] }
 [[test]]
 name = "pin_workflows"
 path = "tests/pin_workflows.rs"
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+needless_borrows_for_generic_args = "allow"
+result_large_err = "allow"
+unnecessary_fold = "allow"
+unnecessary_sort_by = "allow"

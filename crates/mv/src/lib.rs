@@ -66,13 +66,28 @@ pub mod json;
 pub mod storage;
 /// Marker trait for keys stored in MV containers.
 ///
-/// Keys must be totally ordered to resolve version order and implement common
-/// concurrency-safe bounds.
-pub trait Key: Clone + Ord + Debug + Send + Sync + 'static {}
+/// Keys must be totally ordered to resolve version order. Thread safety is not
+/// part of this bound: it is enforced where a container crosses threads, by the
+/// containers' `Send`/`Sync` impls.
+pub trait Key: Clone + Ord + Debug + 'static {}
 /// Marker trait for values stored in MV containers.
-pub trait Value: Clone + Send + Sync + 'static {}
-impl<T: Clone + Ord + Debug + Send + Sync + 'static> Key for T {}
-impl<T: Clone + Send + Sync + 'static> Value for T {}
+///
+/// Like [`Key`], this carries no thread-safety bound. A storage whose keys or
+/// values are not `Send + Sync` still cannot leave its thread:
+///
+/// ```compile_fail,E0277
+/// let storage = mv::storage::Storage::<u64, std::rc::Rc<u64>>::new();
+/// std::thread::spawn(move || drop(storage));
+/// ```
+pub trait Value: Clone + 'static {}
+impl<T: Clone + Ord + Debug + 'static> Key for T {}
+impl<T: Clone + 'static> Value for T {}
+/// Marker trait for values held in epoch-reclaimed MV cells.
+///
+/// Retired cell generations are destroyed by whichever thread advances the
+/// epoch, so cell values must also be `Send + Sync`.
+pub trait CellValue: Value + Send + Sync {}
+impl<T: Value + Send + Sync> CellValue for T {}
 
 #[cfg(test)]
 mod capture_tests;

@@ -199,15 +199,8 @@ impl NativeExecutionTipSnapshot {
                 == previous.map(|tip| tip.map(|tip| tip.0))
     }
 
-    /// Restore authority by checking original native history, never by trusting
-    /// the decoded Cell or World. H1-only restart must replay signed genesis.
-    ///
-    /// The certified successor of the tip in Kura extends the same verified walk: its
-    /// `parent_world_state_root` is the root of the World published at the tip, which the
-    /// caller must match against a cold capture of the decoded World (E51, E56).
-    ///
-    /// Every certified block from genesis through the tip also passes through `observe`, so
-    /// callers that check other snapshot fields against the same history share this walk.
+    /// Test-only [`Self::restore_with_checkpoint`] without an upgrade checkpoint.
+    #[cfg(test)]
     pub(in crate::state) fn restore(
         self,
         budget: &AllocationBudget,
@@ -220,11 +213,20 @@ impl NativeExecutionTipSnapshot {
         self.restore_with_checkpoint(budget, chain_id, network, hashes, kura, None, observe)
     }
 
-    /// [`Self::restore`] for a node that may take over at an upgrade checkpoint.
+    /// Restore authority by checking original native history, never by trusting
+    /// the decoded Cell or World. H1-only restart must replay signed genesis.
     ///
-    /// A tip at the checkpoint needs no certified successor: the previous release executed its
-    /// last block, and this release proves the decoded World against that block's own certified
-    /// World root ([`RestoredNativeTip::checkpoint_world_root`]) instead.
+    /// The certified successor of the tip in Kura extends the same verified walk: its
+    /// `parent_world_state_root` is the root of the World published at the tip, which the
+    /// caller must match against a cold capture of the decoded World (E51, E56).
+    ///
+    /// Every certified block from genesis through the tip also passes through `observe`, so
+    /// callers that check other snapshot fields against the same history share this walk.
+    ///
+    /// A node may take over at an upgrade checkpoint. A tip at the checkpoint needs no certified
+    /// successor: the previous release executed its last block, and this release proves the
+    /// decoded World against that block's own certified World root
+    /// ([`RestoredNativeTip::checkpoint_world_root`]) instead.
     #[expect(
         clippy::too_many_arguments,
         reason = "the walk inputs of restore plus the optional upgrade checkpoint"

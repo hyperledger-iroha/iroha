@@ -103,7 +103,7 @@ impl<K: Key, V: Value, M: mv::storage::StorageMode<K, V>> StorageField<'_, K, V,
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> CellField<'_, V, C> {
+impl<V: mv::CellValue, C: Send + Sync + 'static> CellField<'_, V, C> {
     /// Move the same original current/undo allocations into this field's read phase.
     /// No value, charge, admission or predecessor is cloned or reacquired.
     pub(crate) fn retain_original_readers(&mut self) -> Option<mv::cell::FrozenDetachedRead<V, C>> {

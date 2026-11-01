@@ -66,7 +66,7 @@ pub(super) fn cell<V, C>(
     cell: &CellBlock<'_, V, C>,
 ) -> Result<(), norito::Error>
 where
-    V: MvValue + Encode,
+    V: mv::CellValue + Encode,
     C: Send + Sync + 'static,
 {
     if !cell.is_dirty() {

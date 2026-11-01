@@ -205,12 +205,31 @@ async fn run_key_change() -> Result<()> {
     clock
         .validate(DRIFT_MS, CADENCE_MS)
         .map_err(|error| eyre!(error))?;
+    // Preserve the generated NPoS profile's original deterministic custody key.
+    // Monetary terms are authored once in the signed genesis policy.
+    let staking_custody = AccountId::new(
+        KeyPair::try_from_seed(
+            b"iroha_test_network::npos_bootstrap_gas_account".to_vec(),
+            Algorithm::Ed25519,
+        )
+        .expect("original NPoS bootstrap custody key")
+        .public_key()
+        .clone(),
+    );
+    let mut staking_policy = iroha_genesis::default_staking_policy(
+        npos.xor_asset_definition_id.clone(),
+        staking_custody.clone(),
+        staking_custody,
+    );
+    staking_policy.unbonding_delay_ms = 1_814_400_000;
+    staking_policy.max_slash_bps = 1;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_max_validator_capacity(7)
         .with_auto_populated_trusted_peers()
         .with_npos_consensus()
         .with_npos_genesis_bootstrap(1_000_u64.into())
+        .with_genesis_staking_policy(staking_policy)
         .with_block_cadence(Duration::from_millis(CADENCE_MS))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::MaxClockDriftMs(DRIFT_MS),
@@ -236,11 +255,6 @@ async fn run_key_change() -> Result<()> {
             // consensus ceiling; the authenticated election selects exactly 3f+1.
             layer
                 .write(["nexus", "staking", "max_validators"], registry_capacity)
-                .write(
-                    ["nexus", "staking", "unbonding_delay_ms"],
-                    1_814_400_000_i64,
-                )
-                .write(["nexus", "staking", "max_slash_bps"], 1_i64)
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
                     1_073_741_824_i64,

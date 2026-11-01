@@ -1729,7 +1729,7 @@ pub(crate) mod taikai_ingest {
     }
     fn allocate_artifact_temp_counter(counter: &AtomicU64) -> io::Result<u64> {
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 value.checked_add(1)
             })
             .map_err(|_| io::Error::other("Taikai artifact temp suffix counter exhausted"))

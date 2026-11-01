@@ -34,16 +34,13 @@ fn bench_crc64(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
-        #[cfg(all(
-            feature = "simd-accel",
-            target_arch = "x86_64",
-            target_feature = "pclmulqdq"
-        ))]
+        // The explicit variants check CPU support at runtime before entering the kernel.
+        #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
         c.bench_function(&format!("crc64_pclmul_{}B", n), |b| {
             b.iter_batched(
                 || random_bytes(n),
                 |buf| {
-                    let h = norito::core::simd_crc64::crc64_pclmul(std::hint::black_box(&buf));
+                    let h = norito::core::simd_crc64::crc64_sse42(std::hint::black_box(&buf));
                     std::hint::black_box(h)
                 },
                 BatchSize::SmallInput,
@@ -54,10 +51,7 @@ fn bench_crc64(c: &mut Criterion) {
             b.iter_batched(
                 || random_bytes(n),
                 |buf| {
-                    // SAFETY: compiled only when simd-accel is enabled; runtime feature check is inside impl
-                    let h = unsafe {
-                        norito::core::simd_crc64::crc64_pmull(std::hint::black_box(&buf))
-                    };
+                    let h = norito::core::simd_crc64::crc64_neon(std::hint::black_box(&buf));
                     std::hint::black_box(h)
                 },
                 BatchSize::SmallInput,

@@ -10,9 +10,9 @@ use iroha_core::{
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{collections::BTreeSet, num::NonZeroUsize, sync::Arc};
 use tower::ServiceExt as _;
 const ACCOUNT_SIGNATORY: &str =

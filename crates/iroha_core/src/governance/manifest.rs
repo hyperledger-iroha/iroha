@@ -2679,8 +2679,8 @@ mod tests {
         },
     };
     use iroha_model_base::name::Name;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
     use std::{path::PathBuf, str::FromStr};
     use tempfile::tempdir;
     fn account_id_literal(account: &AccountId) -> String {

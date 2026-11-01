@@ -11,7 +11,7 @@ pub struct PhysicalWriterProbe {
     pub poisoned: bool,
 }
 
-impl<V: Value, C: Send + Sync + 'static> Cell<V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Cell<V, C> {
     /// Probe Undo and Current independently, even when either writer is poisoned.
     ///
     /// This test diagnostic acquires only the original raw mutex guards. It does

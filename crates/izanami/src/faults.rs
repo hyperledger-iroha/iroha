@@ -898,7 +898,7 @@ mod tests {
                     extra_layers: layers,
                 });
                 let should_fail = restart_failures_remaining
-                    .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
+                    .try_update(Ordering::Relaxed, Ordering::Relaxed, |remaining| {
                         (remaining > 0).then(|| remaining - 1)
                     })
                     .is_ok();

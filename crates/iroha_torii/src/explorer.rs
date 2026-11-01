@@ -2277,7 +2277,7 @@ mod tests {
         assert!(hidden_page.pagination.next_cursor.is_none());
     }
     use super::*;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     #[test]
     fn instruction_kind_filter_accepts_camelcase_and_snake_case() {
         for raw in ["SetKeyValue", "set_key_value"] {

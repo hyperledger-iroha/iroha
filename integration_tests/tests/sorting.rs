@@ -9,9 +9,9 @@ use iroha::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
+use iroha_primitives::nonzero;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use rand::{SeedableRng, seq::SliceRandom};
 use rand_chacha::ChaCha8Rng;
 use std::{

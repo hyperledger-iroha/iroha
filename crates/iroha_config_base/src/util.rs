@@ -1,6 +1,5 @@
 //! Various utilities
 use derive_more::Display;
-use drop_bomb::DropBomb;
 use error_stack::Report;
 use norito::{
     DeserializePayload, SerializePayload,
@@ -210,9 +209,62 @@ impl<T, C> EmitterResultExt<T, C> for core::result::Result<T, Report<C>> {
         )
     }
 }
+/// Guard that panics when dropped unless [`DropBomb::defuse`] was called.
+///
+/// Values whose result must be consumed explicitly hold one. The panic is
+/// skipped while the thread is already unwinding, so it never aborts.
+#[derive(Debug)]
+#[must_use]
+pub(crate) struct DropBomb {
+    message: &'static str,
+    defused: bool,
+}
+impl DropBomb {
+    /// Arm a guard that panics with `message` if dropped undefused.
+    pub(crate) const fn new(message: &'static str) -> Self {
+        Self {
+            message,
+            defused: false,
+        }
+    }
+    /// Disarm the guard so dropping it is a no-op.
+    pub(crate) fn defuse(&mut self) {
+        self.defused = true;
+    }
+}
+impl Drop for DropBomb {
+    fn drop(&mut self) {
+        if !self.defused && !std::thread::panicking() {
+            panic!("{}", self.message);
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[should_panic(expected = "bomb went off")]
+    fn drop_bomb_panics_when_dropped_armed() {
+        drop(DropBomb::new("bomb went off"));
+    }
+
+    #[test]
+    fn drop_bomb_is_silent_once_defused() {
+        let mut bomb = DropBomb::new("bomb went off");
+        bomb.defuse();
+        drop(bomb);
+    }
+
+    #[test]
+    fn drop_bomb_does_not_panic_while_unwinding() {
+        let result = std::panic::catch_unwind(|| {
+            let _bomb = DropBomb::new("second panic");
+            panic!("first panic");
+        });
+        let payload = result.expect_err("the first panic propagates");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"first panic"));
+    }
 
     #[test]
     fn manual_decode_duration_returns_missing_context_and_retries_same_payload() {

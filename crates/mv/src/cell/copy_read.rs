@@ -8,12 +8,12 @@ use std::convert::Infallible;
 ///
 /// This local source token carries no publication permission and no State root.
 /// It cannot substitute an equal-valued foreign Cell or an equal republication.
-pub struct CommittedCellCopy<V: Value + Copy> {
+pub struct CommittedCellCopy<V: CellValue + Copy> {
     value: V,
     original: CapturedPublication,
 }
 
-impl<V: Value + Copy> CommittedCellCopy<V> {
+impl<V: CellValue + Copy> CommittedCellCopy<V> {
     /// Borrow the original inline copy without cloning or acquiring a reader.
     pub fn current(&self) -> &V {
         &self.value
@@ -33,7 +33,7 @@ impl<V: Value + Copy> CommittedCellCopy<V> {
     }
 }
 
-impl<V: Value + Copy, C: Send + Sync + 'static> Cell<V, C> {
+impl<V: CellValue + Copy, C: Send + Sync + 'static> Cell<V, C> {
     /// Copy one original scalar while briefly retaining its actual current writer.
     ///
     /// The original publication observations bracket physical acquisition. No

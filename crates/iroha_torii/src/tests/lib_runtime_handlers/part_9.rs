@@ -2433,7 +2433,7 @@ fn iso_error_mapping_returns_expected_variants() {
 }
 #[test]
 fn push_into_queue_error_sets_backpressure_headers() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::Full),
         backpressure: queue::BackpressureState::Saturated {
@@ -2457,7 +2457,7 @@ fn push_into_queue_error_sets_backpressure_headers() {
 }
 #[test]
 fn push_into_queue_error_sets_reject_code_header() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::InBlockchain),
         backpressure: queue::BackpressureState::Healthy {
@@ -2477,7 +2477,7 @@ fn push_into_queue_error_sets_reject_code_header() {
 }
 #[test]
 fn push_into_queue_unresolved_route_maps_to_bad_request() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     let err = super::Error::PushIntoQueue {
         source: Box::new(queue::Error::UnresolvedRoute {
             reason: "lane 9 is not present in the lane catalog".to_owned(),
@@ -2499,7 +2499,7 @@ fn push_into_queue_unresolved_route_maps_to_bad_request() {
 }
 #[test]
 fn push_into_queue_fee_rejections_are_typed_and_redacted() {
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     const PRIVATE_REASON: &str = "private sponsor rule internals";
     for (source, expected_status, expected_code) in [
         (

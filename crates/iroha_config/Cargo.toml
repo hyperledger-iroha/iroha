@@ -55,7 +55,6 @@ log = "0.4.28"
 url.workspace = true
 strum = { workspace = true, features = ["derive", "std"] }
 thiserror = { workspace = true }
-nonzero_ext = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 soranet_pq = { workspace = true }
 iroha_torii_shared = { workspace = true }
@@ -66,7 +65,6 @@ zeroize = { workspace = true }
 
 [dev-dependencies]
 expect-test = { workspace = true }
-assertables = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus", "gost"] }
 # Configuration fixtures include BLS validators; retain the data model's BLS curve registry.
 iroha_data_model = { workspace = true, default-features = false, features = ["bls"] }

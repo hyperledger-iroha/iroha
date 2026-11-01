@@ -2,7 +2,7 @@
 
 use super::*;
 use iroha_data_model::nexus::{DataSpaceMetadata, LaneLifecyclePlan};
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 
 fn fixture() -> (
     LaneManifestRegistry,

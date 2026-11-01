@@ -1921,7 +1921,7 @@ struct SoracloudPreparedRuntimeCounters {
 }
 impl SoracloudPreparedRuntimeCounters {
     fn increment(counter: &AtomicU64) {
-        let _ = counter.fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
+        let _ = counter.try_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
             Some(value.saturating_add(1))
         });
     }
@@ -11530,7 +11530,7 @@ struct SoracloudEgressDnsReservation;
 impl SoracloudEgressDnsReservation {
     fn acquire() -> Option<Self> {
         SORACLOUD_EGRESS_DNS_IN_FLIGHT_V1
-            .fetch_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
+            .try_update(AtomicOrdering::AcqRel, AtomicOrdering::Acquire, |current| {
                 (current < SORACLOUD_EGRESS_DNS_MAX_IN_FLIGHT_V1).then(|| current.saturating_add(1))
             })
             .ok()?;

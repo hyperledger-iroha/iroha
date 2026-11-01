@@ -199,6 +199,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{error::ParseError, name::Name, state_path::StatePath};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::nonzero;
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -212,14 +213,12 @@ use mv::{
         Block as StorageBlock, Storage, Transaction as StorageTransaction, View as StorageView,
     },
 };
-use nonzero_ext::nonzero;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     codec::{Decode, Encode},
     derive::{JsonDeserialize, JsonSerialize},
     json,
 };
-use once_cell::sync::OnceCell as SyncOnceCell;
 use range_bounds::*;
 pub use range_bounds::{
     AsAssetIdAccountCompare, AsAssetIdAccountDefinitionCompare, AsBondEntitlementBondCompare,
@@ -237,7 +236,7 @@ use std::{
     num::{NonZeroU32, NonZeroU64, NonZeroUsize},
     path::{Path, PathBuf},
     sync::{
-        Arc, LazyLock,
+        Arc, LazyLock, OnceLock,
         atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
@@ -282,7 +281,7 @@ fn append_merge_storage_delta<K, V, M>(
 }
 fn append_merge_cell_delta<V, C>(out: &mut Vec<u8>, name: &'static str, cell: &CellBlock<'_, V, C>)
 where
-    V: MvValue + Encode,
+    V: mv::CellValue + Encode,
     C: Send + Sync + 'static,
 {
     if !cell.is_dirty() {
@@ -1122,7 +1121,7 @@ trait CellVecExt<T: MvValue> {
         self.mutate_vec(core::mem::take)
     }
 }
-impl<T: MvValue> CellVecExt<T> for Cell<Vec<T>> {
+impl<T: mv::CellValue> CellVecExt<T> for Cell<Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         let mut block = self.block();
         let mut transaction = block.transaction();
@@ -1132,7 +1131,7 @@ impl<T: MvValue> CellVecExt<T> for Cell<Vec<T>> {
         result
     }
 }
-impl<T: MvValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
+impl<T: mv::CellValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         let mut transaction = self.transaction();
         let result = f(&mut *transaction);
@@ -1140,7 +1139,7 @@ impl<T: MvValue> CellVecExt<T> for CellBlock<'_, Vec<T>> {
         result
     }
 }
-impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
+impl<T: mv::CellValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
     fn mutate_vec<R>(&mut self, f: impl FnOnce(&mut Vec<T>) -> R) -> R {
         f(&mut **self)
     }
@@ -12974,7 +12973,7 @@ pub struct StateBlockFields<'state> {
     /// Optional node-local Soracloud runtime handle; production replay does not consult it.
     pub soracloud_runtime: Option<crate::soracloud_runtime::SharedSoracloudRuntime>,
     /// Cached snapshot of account identifiers for this block.
-    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    accounts_snapshot_cache: OnceLock<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
     /// Validated confidential-root projection for this immutable view or untouched block.
@@ -13929,21 +13928,25 @@ impl<'state> StateBlock<'state> {
         .map_err(|error| {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
         })?;
-        let mut private_changed = false;
-        if let Some(pending) = private.pending_update
+        let pending_applied = if let Some(pending) = private.pending_update
             && pending.effective_at_height == incoming_height
         {
             private.current_limits = pending.next_limits;
             private.pending_update = None;
-            private_changed = true;
-        }
-        if private
+            true
+        } else {
+            false
+        };
+        let drain_closed = if private
             .protocol_closure_drain
             .is_some_and(|drain| drain.effective_at_height == incoming_height)
         {
             private.protocol_closure_drain = None;
-            private_changed = true;
-        }
+            true
+        } else {
+            false
+        };
+        let private_changed = pending_applied || drain_closed;
         // Prepare the exact retained successor before mutating either committed owner.
         // An absent extension remains absent during untouched baseline replay.
         let successor = if private_changed {
@@ -14886,7 +14889,7 @@ pub struct StateView<'state> {
     /// Latest authenticated committed ledger time captured with this view.
     query_ledger_time_ms: Option<u64>,
     /// Cached snapshot of account identifiers for this view.
-    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    accounts_snapshot_cache: OnceLock<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
     /// Validated confidential-root projection for this immutable view or untouched block.
@@ -14925,6 +14928,13 @@ pub struct StateView<'state> {
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
     /// Lifetime diagnostic owner; keep last so snapshot fields release first.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "held only for its Drop, which emits the lifetime diagnostic after every snapshot field has been released"
+        )
+    )]
     created_at: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
@@ -14958,7 +14968,7 @@ pub struct StateQueryView<'state> {
     /// Latest authenticated committed ledger time captured with this query view.
     query_ledger_time_ms: Option<u64>,
     /// Cached snapshot of account identifiers for this view.
-    accounts_snapshot_cache: SyncOnceCell<Arc<Vec<AccountId>>>,
+    accounts_snapshot_cache: OnceLock<Arc<Vec<AccountId>>>,
     /// Validated election projection for this immutable view or untouched block.
     ivm_elections_cache: ivm_elections::SnapshotCache,
     /// Validated confidential-root projection for this immutable view or untouched block.
@@ -15129,7 +15139,7 @@ impl<'state> StateQueryView<'state> {
             self.parameters_before_latest_block
                 .get()
                 .as_ref()
-                .unwrap_or(self.world.parameters.get())
+                .unwrap_or_else(|| self.world.parameters.get())
         } else {
             self.world.parameters.get()
         };
@@ -18662,7 +18672,7 @@ where
 /// Reconstruct a skipped derived cell together with its latest-block undo projection.
 fn rebuild_derived_cell_with_previous<V>(current: V, previous: V) -> Cell<V>
 where
-    V: MvValue + PartialEq,
+    V: mv::CellValue + PartialEq,
 {
     let rebuilt = Cell::new(previous);
     if rebuilt.view().get() != &current {
@@ -26527,9 +26537,12 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
-    #[expect(
-        dead_code,
-        reason = "TODO: connect nonblocking native publication admission to the lifecycle fence and its exact ReleaseWait observation"
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "TODO: connect nonblocking native publication admission to the lifecycle fence and its exact ReleaseWait observation"
+        )
     )]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
@@ -26560,11 +26573,6 @@ impl State {
     ) -> Option<Hash> {
         StateReadOnly::lane_incarnation_at_height(&self.view(), lane_id, proposal_height)
     }
-    /// Snapshot all lane routes and incarnations authoritative at one proposal height.
-    #[cfg_attr(
-        not(test),
-        allow(dead_code, reason = "TODO: wire native state publication")
-    )]
     /// Report whether a canonical Nexus runtime snapshot was decoded.
     /// Fresh state uses its configured catalog until the first canonical snapshot.
     #[must_use]
@@ -27167,10 +27175,6 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -27267,10 +27271,6 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -30619,7 +30619,7 @@ impl State {
             kura: &self.kura,
             query_handle: &self.query_handle,
             query_ledger_time_ms,
-            accounts_snapshot_cache: SyncOnceCell::new(),
+            accounts_snapshot_cache: OnceLock::new(),
             ivm_elections_cache: ivm_elections::SnapshotCache::new(),
             ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
             #[cfg(feature = "telemetry")]
@@ -31962,7 +31962,7 @@ impl State {
                 kura: &self.kura,
                 query_handle: &self.query_handle,
                 query_ledger_time_ms,
-                accounts_snapshot_cache: SyncOnceCell::new(),
+                accounts_snapshot_cache: OnceLock::new(),
                 ivm_elections_cache: ivm_elections::SnapshotCache::new(),
                 ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),
                 #[cfg(feature = "telemetry")]
@@ -37404,7 +37404,7 @@ mod consensus_owned_parameter_tests {
     }
 
     fn second_header() -> BlockHeader {
-        BlockHeader::new(nonzero_ext::nonzero!(2_u64), None, None, 0, 0)
+        BlockHeader::new(iroha_primitives::nonzero!(2_u64), None, None, 0, 0)
     }
 
     #[test]

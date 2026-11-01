@@ -1,20 +1,19 @@
 //! Genesis archive authority stays bound to actual independently executed source owners.
 
 use super::*;
+use crate::sumeragi::schedule::CompletedResult;
 use crate::{
     state::World,
     sumeragi::test_chain::{CertifiedTestChain, PreparedTestChainConfig, TestChainConfig},
 };
-use iroha_allocation::RetainedPayload;
 use iroha_data_model::{
-    block::consensus::SumeragiRootScope,
-    sumeragi_finality::{CertifiedResultV1, NativeLaneStateProof},
+    block::consensus::SumeragiRootScope, sumeragi_finality::NativeLaneStateProof,
 };
 
 struct ExecutedSource<'state> {
     valid: ValidBlock,
     overlay: Box<StateBlock<'state>>,
-    result: RetainedPayload<CertifiedResultV1>,
+    result: CompletedResult,
     scope: SumeragiRootScope,
 }
 

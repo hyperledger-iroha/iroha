@@ -1017,6 +1017,11 @@ CORE_MUTATIONS = [
           join_source="crates/iroha_core/src/sumeragi/executor_publication_tests.rs",
           join_message="publication worker fixture: Any { .. }"))),
 
+    m("HC981", "discard the ordinary continuation graph on rollback",
+      ["sumeragi::schedule::continuation::tests::ordinary_continuation_requested_and_done_rollback_reuse_exact_graph_at_full_capacity"],
+      causes=(ExpectedFailure("ordinary schedule rollback must retain its original graph credit",
+          "crates/iroha_core/src/sumeragi/schedule/continuation/tests.rs"),)),
+
     m("HC335", "reuse cached native Valid without checking the actual wall clock",
       ["sumeragi::executor::prepare_admission_tests::ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source"], causes=(ExpectedFailure("cached native Valid cannot bypass a fresh local clock check",
           "crates/iroha_core/src/sumeragi/executor/prepare_admission_tests.rs",

@@ -11,8 +11,8 @@ use iroha_data_model::{
     prelude::*,
     zk::BackendTag,
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use zk_components::execute_isi_component;
 #[test]
 fn vk_register_update_emit_events() {

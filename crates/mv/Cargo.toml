@@ -86,3 +86,8 @@ path = "tests/cell_generation_backing.rs"
 [[test]]
 name = "flat_index_transactions"
 path = "tests/flat_index_transactions.rs"
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+result_large_err = "allow"

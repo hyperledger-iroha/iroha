@@ -423,7 +423,7 @@ impl LiveQueryStore {
     }
     fn try_reserve_query_slot(&self) -> bool {
         self.query_slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 (current < self.capacity.get()).then_some(current + 1)
             })
             .is_ok()
@@ -433,7 +433,7 @@ impl LiveQueryStore {
             return;
         }
         self.query_slots
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_sub(count)
             })
             .expect("live-query slot accounting must not underflow");
@@ -999,8 +999,8 @@ mod tests {
         },
     };
     use iroha_primitives::json::Json;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
     use std::{
         num::NonZeroU64,
         sync::{

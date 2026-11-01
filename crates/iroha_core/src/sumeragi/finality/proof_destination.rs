@@ -47,6 +47,7 @@ pub(super) struct OwnedProof {
     charges: ChargedBuffer<AllocationCharge>,
 }
 impl OwnedProof {
+    #[cfg(test)]
     pub(super) fn new(
         block: &SharedSignedBlock,
         members: &[iroha_data_model::sumeragi::epoch::ValidatorCommitteeMemberV1],

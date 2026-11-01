@@ -22,8 +22,8 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use norito::json::{self, Value};
 use std::sync::Arc;
 use tower::ServiceExt as _;
@@ -123,7 +123,7 @@ async fn accounts_portfolio_filters_by_asset_id() {
     let mut req = fixtures::get_request(
         &(format!(
             "/v1/accounts/uaid:{uaid_hex}/portfolio?asset_id={}",
-            urlencoding::encode(&asset_id)
+            iroha_torii::test_utils::percent_encode(&asset_id)
         )),
     );
     req.extensions_mut()

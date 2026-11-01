@@ -3951,8 +3951,8 @@ mod tests_overlay_manifest {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
     use iroha_primitives::json::Json;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     fn build_wonderland_account(authority: &AccountId) -> iroha_data_model::account::Account {
         iroha_data_model::account::Account::new(authority.clone()).build(authority)
     }
@@ -7152,7 +7152,7 @@ mod tests {
     #[test]
     fn ivm_proved_axt_only_replay_is_not_dropped() {
         use iroha_data_model::block::BlockHeader;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let (descriptor, binding) = ivm::axt::AxtDescriptor::builder()
             .dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
             .build_with_binding()

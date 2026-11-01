@@ -354,8 +354,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn original_prepared_state_survives_provider_boundary_and_joins_before_release() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, fixture) = fixture([]);
@@ -419,8 +419,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn provider_refusal_retains_valid_genesis_but_releases_native_owners() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, fixture) = fixture([]);
@@ -450,8 +450,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn invalid_native_genesis_never_resolves_a_provider_or_publishes_h1() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let absent = AccountId::new(
@@ -484,8 +484,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn late_prepare_refusal_joins_before_native_storage_can_be_reopened() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, mut fixture) = fixture([]);
@@ -511,8 +511,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn activation_provider_preflight_keeps_original_custody_until_children_exit() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, mut fixture) = fixture([]);
@@ -594,8 +594,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn late_activation_refusal_joins_manifest_watchers_before_release() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, mut fixture) = fixture([]);
@@ -654,8 +654,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn emergency_fast_requires_its_exact_snapshot_without_replay_or_provider_resolution() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, fixture) = fixture([]);

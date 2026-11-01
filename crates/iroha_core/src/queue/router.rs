@@ -10275,10 +10275,10 @@ mod tests {
     use iroha_model_base::metadata::Metadata;
 
     use iroha_model_base::topology::LaneId;
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::NumericSpec;
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     use std::collections::{BTreeMap, BTreeSet};
     #[test]
     fn every_artifact_operation_routes_its_exact_full_width_dataspace() {

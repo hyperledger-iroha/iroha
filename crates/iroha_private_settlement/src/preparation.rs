@@ -299,7 +299,7 @@ impl PreparationDriver {
                 .checked_add(1)
                 .ok_or(OneCallPrivateSettlementError::Binding)?;
             self.reads
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
                 .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
             let target = next.min(height);
             let response = self

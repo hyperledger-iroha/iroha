@@ -128,8 +128,8 @@ fn canonical_execution_does_not_populate_retired_dag_metrics() {
 #[cfg(feature = "telemetry")]
 #[allow(clippy::too_many_lines)]
 fn nexus_lane_and_dataspace_metadata_exposed() {
+    use iroha_primitives::nonzero;
     use iroha_telemetry::metrics::Metrics;
-    use nonzero_ext::nonzero;
     let metrics = Arc::new(Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);
     let lane_core = ModelLaneConfig {
@@ -566,7 +566,7 @@ fn nexus_config_diff_counter_and_event_emitted() {
         LaneRoutingPolicy, LaneRoutingRule, Nexus, NexusAtomicPrivateSettlement, NexusAxt,
         NexusHfSharedLeases, NexusUploadedModels,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use norito::json::to_string as to_json_string;
     let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
     let telemetry = iroha_core::telemetry::StateTelemetry::new(metrics.clone(), true);

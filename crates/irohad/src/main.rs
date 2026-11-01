@@ -806,7 +806,7 @@ use ivm::IVM;
 use ivm::set_banner_enabled;
 /// Detect if the current terminal supports ANSI colors.
 pub fn is_coloring_supported() -> bool {
-    supports_color::on(supports_color::Stream::Stdout).is_some()
+    iroha_config_base::terminal::supports_color(iroha_config_base::terminal::TerminalStream::Stdout)
 }
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
@@ -3186,7 +3186,7 @@ impl Iroha {
                 telemetry_profile.metrics_enabled(),
             )
             .change_context(StartError::StartTorii)
-            .attach("register authoritative Kura resource telemetry before serving diagnostics")?;
+            .attach("register authoritative Kura resource and IVM telemetry before serving diagnostics")?;
             supervisor.monitor(child);
             telemetry
         };
@@ -5750,9 +5750,35 @@ fn fastpq_metal_overrides_from_config(
         debug_enum: config.metal_debug_enum,
     }
 }
+/// Apply IVM native worker stack sizes and publish the applied settings to telemetry.
+fn apply_ivm_stack_sizes(scheduler_bytes: usize, prover_bytes: usize) -> ivm::StackSizeOutcome {
+    let outcome = ivm::apply_stack_sizes(scheduler_bytes, prover_bytes);
+    iroha_telemetry::metrics::record_stack_limits(ivm_stack_settings_snapshot(outcome));
+    outcome
+}
+/// Telemetry record of applied native stack sizes and the fixed V1 guest stack policy.
+fn ivm_stack_settings_snapshot(
+    outcome: ivm::StackSizeOutcome,
+) -> iroha_telemetry::metrics::StackSettingsSnapshot {
+    let guest_policy = ivm::IvmStackPolicy::V1;
+    iroha_telemetry::metrics::StackSettingsSnapshot {
+        requested_scheduler_bytes: outcome.requested_scheduler_bytes as u64,
+        requested_prover_bytes: outcome.requested_prover_bytes as u64,
+        requested_guest_bytes: guest_policy.maximum_stack_bytes(),
+        scheduler_bytes: outcome.scheduler_bytes as u64,
+        prover_bytes: outcome.prover_bytes as u64,
+        guest_bytes: guest_policy.maximum_stack_bytes(),
+        scheduler_clamped: outcome.scheduler_clamped,
+        prover_clamped: outcome.prover_clamped,
+        guest_clamped: false,
+        pool_fallback_total: 0,
+        budget_hit_total: 0,
+        gas_to_stack_multiplier: guest_policy.bytes_per_gas(),
+    }
+}
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
 fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
-    let stack_outcome = ivm::apply_stack_sizes(
+    let stack_outcome = apply_ivm_stack_sizes(
         concurrency.scheduler_stack_bytes,
         concurrency.prover_stack_bytes,
     );
@@ -6011,7 +6037,7 @@ fn read_config_and_genesis_with_filesystem_space(
             // Fast constructs one inert State VM for structural completeness. Cap
             // that VM at one minimum-stack worker and leave the global Rayon pool
             // uninitialized; no contract or proof route is available in this mode.
-            let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
+            let _ = apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
             ivm::set_scheduler_thread_limits(Some(1), Some(1));
             println!("{}", scheduler_banner_line(1));
         } else {
@@ -9707,6 +9733,25 @@ mod tests {
     const GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE: &str =
         "sealed:governance-dag:producer-checkpoint";
     const GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0xA6; 32];
+    /// Serialize tests that touch process-wide state (the global metrics handle,
+    /// the instruction registry and native storage owners).
+    ///
+    /// A failing test must not block the others, so a poisoned lock is recovered.
+    fn serial_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    #[test]
+    fn serial_test_guard_recovers_after_a_panicking_holder() {
+        let panicked = std::thread::spawn(|| {
+            let _serial = serial_test_guard();
+            panic!("holder panics while serialized");
+        })
+        .join();
+        assert!(panicked.is_err());
+        drop(serial_test_guard());
+    }
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn optional_telemetry_exit_does_not_stop_supervisor() {
@@ -10322,7 +10367,7 @@ mod tests {
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
         assert!(compact_source.contains(
-            "lettelemetry_profile=if!emergency_fast{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
+            "lettelemetry_profile=ifemergency_fast{iroha_config::parameters::actual::TelemetryProfile::Disabled}else{config.telemetry_profile};"
         ));
         assert!(
             compact_source.contains(
@@ -10389,13 +10434,13 @@ mod tests {
                 .contains("if!args.startup.check_config&&!args.startup.check_storage{ifconfig.kura.init_mode==InitMode::Fast{")
         );
         assert!(compact_source.contains(
-            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
+            "let_=apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
         ));
         assert!(compact_source.contains(
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
         ));
         assert!(compact_source.contains(
-            "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
+            "letmutacceleration=config.accel;acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
         ));
         assert!(compact_source.contains(
             "if!emergency_fast{letdeadlock_shutdown=supervisor.shutdown_signal();supervisor.monitor(tokio::spawn(asyncmove{loop{tokio::select!{()=deadlock_shutdown.receive()=>break,()=tokio::time::sleep(Duration::from_secs(10))=>{}}"
@@ -10997,6 +11042,54 @@ mod tests {
             assert_eq!(scheduler_banner_line(0), "Using 1 core");
         }
     }
+    mod ivm_stack_telemetry {
+        use super::*;
+        #[test]
+        fn snapshot_reports_outcome_and_fixed_guest_policy() {
+            let snapshot = ivm_stack_settings_snapshot(ivm::StackSizeOutcome {
+                requested_scheduler_bytes: 1,
+                requested_prover_bytes: usize::MAX,
+                scheduler_bytes: ivm::MIN_STACK_BYTES,
+                prover_bytes: ivm::MAX_STACK_BYTES,
+                scheduler_clamped: true,
+                prover_clamped: true,
+            });
+            let guest_policy = ivm::IvmStackPolicy::V1;
+            assert_eq!(snapshot.requested_scheduler_bytes, 1);
+            assert_eq!(snapshot.requested_prover_bytes, u64::MAX);
+            assert_eq!(snapshot.scheduler_bytes, ivm::MIN_STACK_BYTES as u64);
+            assert_eq!(snapshot.prover_bytes, ivm::MAX_STACK_BYTES as u64);
+            assert!(snapshot.scheduler_clamped && snapshot.prover_clamped);
+            assert!(!snapshot.guest_clamped, "guest stack geometry is fixed");
+            assert_eq!(
+                snapshot.requested_guest_bytes,
+                guest_policy.maximum_stack_bytes()
+            );
+            assert_eq!(snapshot.guest_bytes, guest_policy.maximum_stack_bytes());
+            assert_eq!(
+                snapshot.gas_to_stack_multiplier,
+                guest_policy.bytes_per_gas()
+            );
+            assert_eq!(snapshot.pool_fallback_total, 0);
+            assert_eq!(snapshot.budget_hit_total, 0);
+        }
+        #[test]
+        fn applying_stack_sizes_publishes_the_snapshot() {
+            // Default sizes keep the process-wide worker stacks unchanged for other tests.
+            let defaults = iroha_config::parameters::actual::Concurrency::from_defaults();
+            let outcome =
+                apply_ivm_stack_sizes(defaults.scheduler_stack_bytes, defaults.prover_stack_bytes);
+            let expected = ivm_stack_settings_snapshot(outcome);
+            let published = iroha_telemetry::metrics::stack_settings_snapshot();
+            assert_eq!(published.scheduler_bytes, expected.scheduler_bytes);
+            assert_eq!(published.prover_bytes, expected.prover_bytes);
+            assert_eq!(published.guest_bytes, expected.guest_bytes);
+            assert_eq!(
+                published.gas_to_stack_multiplier,
+                expected.gas_to_stack_multiplier
+            );
+        }
+    }
     mod replay_startup_config {
         use super::*;
         #[test]
@@ -11207,11 +11300,10 @@ mod tests {
     }
     #[cfg(feature = "telemetry")]
     mod metrics_bootstrap {
-        use serial_test::serial;
         use std::sync::Arc;
         #[test]
-        #[serial]
         fn init_global_metrics_handle_is_idempotent() {
+            let _serial = super::serial_test_guard();
             let first = super::init_global_metrics_handle(false);
             let second = super::init_global_metrics_handle(false);
             assert!(Arc::ptr_eq(&first, &second));
@@ -12706,7 +12798,21 @@ mod tests {
     mod config_integration {
         #[allow(unused_imports)]
         use super::*;
-        use assertables::assert_contains;
+        /// Assert that `container.contains(containee)` holds, reporting both on failure.
+        macro_rules! assert_contains {
+            ($container:expr, $containee:expr $(,)?) => {
+                match (&$container, &$containee) {
+                    (container, containee) => assert!(
+                        container.contains(*containee),
+                        "assertion failed: `{}` does not contain `{}`\n container: {:?}\n containee: {:?}",
+                        stringify!($container),
+                        stringify!($containee),
+                        container,
+                        containee,
+                    ),
+                }
+            };
+        }
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_model_base::chain::ChainId;

@@ -537,6 +537,9 @@ pub fn with_original_lane_merge_fixture(
 #[path = "merge_tests/parent_service_projection.rs"]
 mod parent_service_projection;
 
+#[path = "merge_tests/continuation_projection.rs"]
+mod continuation_projection;
+
 #[path = "merge_tests/paid_quantity_source.rs"]
 mod paid_quantity_source;
 

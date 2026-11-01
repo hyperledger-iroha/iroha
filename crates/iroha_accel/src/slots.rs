@@ -31,7 +31,7 @@ impl Slots {
         let limit = self.limit.try_read()?;
         let previous = self
             .used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 (used < *limit).then(|| used + 1)
             })
             .ok()?;

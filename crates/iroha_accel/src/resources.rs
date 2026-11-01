@@ -153,7 +153,7 @@ impl InFlightPermit {
             .ok_or(ResourceRefusal::InFlight)?;
         let previous = pools
             .in_flight
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |used| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |used| {
                 (used < *limit).then(|| used + 1)
             })
             .map_err(|_| ResourceRefusal::InFlight)?;

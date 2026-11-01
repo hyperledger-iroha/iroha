@@ -100,6 +100,36 @@ fn lease_current_tip_rejects_a_genuinely_signed_private_root() {
 }
 
 #[test]
+fn lease_source_allowance_retains_two_maximum_projections_and_request_controls() {
+    let working = usize::try_from(
+        iroha_config::parameters::defaults::torii::FINALITY_MAX_WORKING_SET_BYTES.0,
+    )
+    .unwrap();
+    let limits = lease_source_limits(working);
+    let source_bytes = limits.journal_bytes + limits.allocated_bytes;
+    let controls = crate::query_fanout_fixed_overhead_bytes().unwrap();
+    let required = source_bytes + controls + 2 * MAX_SNS_LEASE_PROOF_BYTES_V1;
+    assert_eq!(limits.allocated_bytes, 240_000_000);
+    assert_eq!(working - source_bytes, 76_891_136);
+    assert!(required <= working);
+
+    for capacity in [required - 1, required] {
+        let budget = AllocationBudget::new(capacity);
+        let source = budget.try_reserve_bytes(source_bytes).unwrap();
+        let control = budget.try_reserve_bytes(controls).unwrap();
+        let original =
+            iroha_allocation::ChargedBuffer::<u8>::new(MAX_SNS_LEASE_PROOF_BYTES_V1, &budget)
+                .unwrap();
+        let response =
+            iroha_allocation::ChargedBuffer::<u8>::new(MAX_SNS_LEASE_PROOF_BYTES_V1, &budget);
+        assert_eq!(response.is_ok(), capacity == required);
+        assert!(budget.peak_reserved_bytes() <= capacity);
+        drop((response, original, control, source));
+        assert_eq!(budget.reserved_bytes(), 0);
+    }
+}
+
+#[test]
 fn lease_default_finality_allowance_handles_consecutive_maximum_payments_and_releases_body() {
     let chain = crate::finality_interval::maximum_paid_chain_for_testing();
     let working = usize::try_from(
@@ -127,10 +157,35 @@ fn lease_default_finality_allowance_handles_consecutive_maximum_payments_and_rel
     // The generic 48 MB query split permanently refuses this valid original.
     assert_eq!(chain.height(), 3);
     assert!(current_lease_tip(&view, 3, lease_source_limits(48_000_000)).is_err());
-    let tip = norito::core::with_decode_limits_scope(limits.decode_limits().unwrap(), || {
-        crate::native_projection_response::current_global_tip(&view, 3, limits, unavailable)
-    })
-    .unwrap_or_else(|error| panic!("original SNS current-cut refusal: {error:?}"));
+    let decoder = norito::core::DecodeBudgetContext::new(limits.decode_limits().unwrap());
+    let tip = decoder
+        .with(|| {
+            crate::native_projection_response::current_global_tip(&view, 3, limits, unavailable)
+        })
+        .unwrap_or_else(|error| panic!("original SNS current-cut refusal: {error:?}"));
+    let decoded_bytes = usize::try_from(decoder.consumed_allocated_bytes()).unwrap();
+    assert!(decoded_bytes <= limits.allocated_bytes);
+    let id = tip.id();
+    drop(tip);
+    // Refusal one byte below this original operation's measured cumulative
+    // demand must not poison its unchanged source or grant a fresh frame budget.
+    let exact = NativeFinalityLimits {
+        allocated_bytes: decoded_bytes,
+        ..limits
+    };
+    assert!(
+        current_lease_tip(
+            &view,
+            3,
+            NativeFinalityLimits {
+                allocated_bytes: decoded_bytes.checked_sub(1).unwrap(),
+                ..exact
+            },
+        )
+        .is_err()
+    );
+    let tip = current_lease_tip(&view, 3, exact).unwrap();
+    assert_eq!(tip.id(), id);
     let selector = iroha_core::sns::selector_for_domain(
         &DomainId::try_new("nativeproof", "universal").unwrap(),
     )
@@ -151,6 +206,15 @@ fn lease_default_finality_allowance_handles_consecutive_maximum_payments_and_rel
             .map_err(|error| error.to_string())
         })
         .unwrap();
+    eprintln!(
+        "SNS current-cut custody: decoded={decoded_bytes} decoder_limit={} source={} peak={} remaining={} response={}",
+        limits.allocated_bytes,
+        limits.journal_bytes + limits.allocated_bytes,
+        budget.peak_reserved_bytes(),
+        working - budget.peak_reserved_bytes(),
+        body.as_ref().len(),
+    );
+    assert!(budget.peak_reserved_bytes() <= working);
     body.memory = Some(memory);
     let body = Bytes::from_owner(body);
     let expected_root = tip.commitment().execution.world_state_root;

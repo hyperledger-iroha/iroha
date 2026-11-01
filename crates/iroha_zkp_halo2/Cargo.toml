@@ -24,7 +24,6 @@ iroha_schema = { workspace = true, optional = true }
 halo2curves = { workspace = true, optional = true }
 hex = { workspace = true, features = ["alloc"], optional = true }
 rayon = { workspace = true, optional = true }
-once_cell = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 iroha_zkp_poseidon = { workspace = true, optional = true }
 
@@ -40,7 +39,6 @@ model-primitives = ["dep:iroha_zkp_poseidon"]
 full = [
     "model-primitives",
     "dep:halo2curves",
-    "dep:once_cell",
     "dep:fastpq_isi",
     "dep:iroha_fhe",
     "dep:zeroize",
@@ -75,3 +73,10 @@ required-features = ["full"]
 name = "vega_secret_msm_timing"
 harness = false
 required-features = ["bench"]
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"
+manual_clear = "allow"
+useless_conversion = "allow"

@@ -66,7 +66,7 @@ fn repro_timeinterval_bare_vs_header() {
 fn repro_blocksignature_bare_vs_header() {
     use iroha_crypto::{KeyPair, SignatureOf};
     use iroha_data_model::block::BlockHeader;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
         eprintln!("Skipping: manual derive repro test. Set IROHA_RUN_IGNORED=1 to run.");
         return;

@@ -45,7 +45,7 @@ fn proof_app_with_record(backend: &str, proof_hash: [u8; 32]) -> (Router, String
                 }
             }),
         );
-    let backend_enc = urlencoding::encode(backend);
+    let backend_enc = iroha_torii::test_utils::percent_encode(backend);
     let hash_hex = hex::encode(proof_hash);
     let uri = format!("/v1/zk/proof/{backend_enc}/{hash_hex}");
     (app, uri, hash_hex)
@@ -202,7 +202,7 @@ async fn zk_proof_get_not_found() {
                 }
             }),
         );
-    let backend_enc = urlencoding::encode("pipa-r/pasta");
+    let backend_enc = iroha_torii::test_utils::percent_encode("pipa-r/pasta");
     let uri = format!(
         "/v1/zk/proof/{backend_enc}/{hash}",
         hash = hex::encode([0u8; 32])

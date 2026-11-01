@@ -4800,7 +4800,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             smart_contract::manifest::{AccessSetHints, MANIFEST_METADATA_KEY},
         };
         use iroha_primitives::json::Json;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         // World/state setup with one account to own the manifest
@@ -5002,7 +5002,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     #[test]
     fn access_set_cache_invalidates_on_manifest_update() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         access_set_cache_clear();
@@ -5116,7 +5116,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     #[test]
     fn ivm_access_falls_back_when_manifest_hints_invalid() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -5190,7 +5190,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use iroha_data_model::smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -5313,7 +5313,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
         use iroha_data_model::smart_contract::manifest::{
             ContractManifest, EntryPointKind, EntrypointDescriptor,
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -5409,7 +5409,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
             asset::id::{AssetDefinitionId, AssetId},
             smart_contract::manifest::{ContractManifest, EntryPointKind, EntrypointDescriptor},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
@@ -5586,7 +5586,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     }
     #[test]
     fn execute_trigger_includes_access_from_trigger_instructions() {
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(trigger_component_world(), kura, query);
@@ -5669,7 +5669,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     }
     #[test]
     fn execute_trigger_includes_trigger_metadata_keys() {
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         let state = State::new(trigger_component_world(), kura, query);
@@ -5730,7 +5730,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     #[test]
     fn execute_trigger_uses_retained_entrypoint_hints_without_repreparing() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         access_set_cache_clear();
@@ -5869,7 +5869,7 @@ seiyaku DynamicAccessCounter { permission CanEnactGovernance;
     #[test]
     fn execute_trigger_without_selector_does_not_use_entrypoint_hints() {
         use iroha_data_model::smart_contract::manifest::AccessSetHints;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
 
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         access_set_cache_clear();

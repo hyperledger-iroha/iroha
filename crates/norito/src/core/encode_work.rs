@@ -209,6 +209,10 @@ impl<W: Write + ?Sized> Write for Output<'_, W> {
 
 /// Preserve legacy diagnostics outside this corridor; its refusal path cannot
 /// allocate a boxed diagnostic before the original owner handles the error.
+#[expect(
+    dead_code,
+    reason = "added with the bounded encode-work corridor; no writer error site has been migrated to it yet"
+)]
 pub(super) fn io_error(message: &'static str) -> io::Error {
     if ACTIVE.get().is_some() {
         io::ErrorKind::InvalidData.into()

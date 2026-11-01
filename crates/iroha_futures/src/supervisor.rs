@@ -20,7 +20,7 @@
 //!   messaging system, and, most importantly, address registry
 //!   (for reference, see [Registry - Elixir](https://hexdocs.pm/elixir/1.17.0-rc.1/Registry.html)).
 use error_stack::Report;
-use iroha_logger::{InstrumentFutures, prelude::Span};
+use iroha_logger::{Instrument, prelude::Span};
 use std::{future::Future, time::Duration};
 use tokio::{
     sync::{mpsc, oneshot},

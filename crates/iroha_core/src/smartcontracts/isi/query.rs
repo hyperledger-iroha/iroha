@@ -3034,7 +3034,7 @@ mod fetch_size_limit_tests {
         },
     };
     use iroha_primitives::json::Json;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
     fn request_with_fetch_size(fetch_size: u64) -> QueryRequest {
@@ -3333,9 +3333,9 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
     use mv::storage::StorageReadOnly as _;
-    use nonzero_ext::nonzero;
     use norito::core::SerializePayload;
     use std::{borrow::Cow, sync::Arc};
     fn checked_keypair() -> KeyPair {
@@ -3769,7 +3769,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         // Build sample domains with a sortable metadata key "rank"
         let mut d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let mut d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
@@ -3822,7 +3822,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, SortOrder, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         // Domains with rank metadata
         let mut d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let mut d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
@@ -4428,7 +4428,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
@@ -4460,7 +4460,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
         let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
@@ -4495,7 +4495,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -4577,7 +4577,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let domain =
             Domain::new(DomainId::try_new("bounded", "universal").unwrap()).build(&ALICE_ID);
         let params = QueryParams {
@@ -4673,7 +4673,7 @@ mod tests {
     #[tokio::test]
     async fn stored_unsorted_bounded_cursor_rejects_tail_above_hard_byte_bound() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let first = domain_with_query_payload("bounded-first", 8, 0);
         let mut values = vec![first];
         let mut retained_bytes = 0_u64;
@@ -4727,7 +4727,7 @@ mod tests {
                 parameters::{FetchSize, Pagination, QueryParams, Sorting},
             },
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::sync::{
             Arc, Weak,
             atomic::{AtomicUsize, Ordering},
@@ -4797,7 +4797,7 @@ mod tests {
                 parameters::{FetchSize, Pagination, QueryParams, Sorting},
             },
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::sync::{
             Arc, Weak,
             atomic::{AtomicUsize, Ordering},
@@ -4859,7 +4859,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -4899,7 +4899,7 @@ mod tests {
             domain::Domain,
             query::parameters::{FetchSize, Pagination, QueryParams, Sorting},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         use std::sync::{
             Arc,
             atomic::{AtomicUsize, Ordering},
@@ -5023,7 +5023,7 @@ mod tests {
     #[tokio::test]
     async fn deferred_stored_start_first_continue_preserves_global_order() {
         use iroha_data_model::query::parameters::{FetchSize, Pagination, QueryParams, Sorting};
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
@@ -5214,7 +5214,7 @@ mod tests {
         let params = QueryParams {
             pagination: Pagination::default(),
             sorting: Sorting::by_metadata_key("rank".parse().unwrap()),
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         // Build an erased iterable query for Domains and wrap with params
         let payload =
@@ -5808,7 +5808,7 @@ mod tests {
                 sort_by_metadata_key: Some("rank".parse().unwrap()),
                 order: Some(SortOrder::Desc),
             },
-            fetch_size: FetchSize::new(nonzero_ext::nonzero!(2_u64).into()),
+            fetch_size: FetchSize::new(iroha_primitives::nonzero!(2_u64).into()),
         };
         let payload =
             norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);
@@ -6022,7 +6022,7 @@ mod tests {
         let state_view = state.view();
         // Pagination: offset 1, limit 1, no sorting
         let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero_ext::nonzero!(1_u64)), 1),
+            pagination: Pagination::new(Some(iroha_primitives::nonzero!(1_u64)), 1),
             sorting: Sorting::default(),
             fetch_size: FetchSize::default(),
         };
@@ -6085,9 +6085,9 @@ mod tests {
         let state_view = state.view();
         // Pagination: offset 1, limit 3; fetch_size 2
         let params = QueryParams {
-            pagination: Pagination::new(Some(nonzero_ext::nonzero!(3_u64)), 1),
+            pagination: Pagination::new(Some(iroha_primitives::nonzero!(3_u64)), 1),
             sorting: Sorting::default(),
-            fetch_size: FetchSize::new(Some(nonzero_ext::nonzero!(2_u64))),
+            fetch_size: FetchSize::new(Some(iroha_primitives::nonzero!(2_u64))),
         };
         let payload =
             norito::codec::Encode::encode(&iroha_data_model::query::domain::prelude::FindDomains);

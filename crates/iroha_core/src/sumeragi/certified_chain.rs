@@ -1966,6 +1966,7 @@ fn verify_projected_boundary_source(
     Ok(())
 }
 
+#[cfg(test)]
 fn verify_availability(
     committed: &CommittedBlock,
     config: &iroha_sumeragi::types::HeightConfig,

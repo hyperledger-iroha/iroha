@@ -4,7 +4,7 @@
 //! surface deterministic diffs instead of silent codec drift.
 use hex_literal::hex;
 use iroha_data_model::block::BlockHeader;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use norito::codec::{DecodeAll, Encode};
 #[test]
 fn block_header_roundtrip() {

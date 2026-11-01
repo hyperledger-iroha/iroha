@@ -72,6 +72,17 @@ The 32 MiB portable native frame limit and the larger committed execution-output
 wire limit remain distinct; maximum-payment endpoint qualification alone does
 not close that broader resource contract.
 
+The SNS lease route `/v1/sns/dataspaces/{alias}/lease/{height}` uses the same
+configured finality working-set ceiling for its current-cut read. Its three
+original frames (signed genesis, parent and target) share a cumulative decoder
+allowance of five eighths of that grant; block and journal byte caps stay
+unchanged. At the default ceiling, 240,000,000 decoder bytes and a 64 MiB
+journal leave 76,891,136 bytes for the World projection, response and request
+controls, including two maximum 32 MiB lease buffers. Cumulative decoder work
+can exceed the former half-grant allowance even when these retained owners fit.
+The finite pool still refuses excessive source, projection or response work;
+smaller configured grants do not promise maximum-payment admission.
+
 ## Proof
 
 `SumeragiFinalityProof` has exactly three fields (unknown fields are rejected):

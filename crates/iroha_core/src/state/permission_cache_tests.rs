@@ -16,8 +16,8 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::gen_account_in;
-use nonzero_ext::nonzero;
 use std::collections::BTreeSet;
 fn wonderland_domain_id() -> DomainId {
     DomainId::try_new("wonderland", "universal").expect("domain id")

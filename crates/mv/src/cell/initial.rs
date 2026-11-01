@@ -34,14 +34,14 @@ impl std::error::Error for CellInitializationError {}
 /// observations. This covers requested outer layouts, not nested payloads,
 /// platform mutex internals, waiter storage or epoch collector bookkeeping.
 #[must_use = "initialize or abandon the exact original Cell allocations"]
-pub struct CellInitialization<V: Value> {
+pub struct CellInitialization<V: CellValue> {
     current: ReservedEbrCell<V, AllocationCharge>,
     undo: ReservedEbrCell<Option<V>, AllocationCharge>,
     publication: Publication,
     current_released: ReleaseNotification,
     undo_released: ReleaseNotification,
 }
-impl<V: Value> CellInitialization<V> {
+impl<V: CellValue> CellInitialization<V> {
     /// Exact EBR, initial identity and original notification backing layouts.
     pub fn allocation_layouts() -> [Layout; 7] {
         let [current, undo] = Cell::<V, AllocationCharge>::allocation_layouts();

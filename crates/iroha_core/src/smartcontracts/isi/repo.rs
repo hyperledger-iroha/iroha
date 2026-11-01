@@ -858,9 +858,9 @@ mod tests {
     use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::DataSpaceId;
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::{Numeric, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
     use norito::json::{Map, Number, Value};
     #[test]
     fn repo_numeric_capability_preserves_typed_consent_and_maturity_frames() {

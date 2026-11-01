@@ -1596,6 +1596,7 @@ impl<T: JsonSerialize + Send + 'static> IntoResponse for JsonBody<T> {
 }
 pub mod extractors {
     use super::*;
+    use crate::percent_encoding::decode;
     use axum::{
         body::Bytes,
         extract::{FromRequest, FromRequestParts, OptionalFromRequestParts, Request},
@@ -1605,7 +1606,6 @@ pub mod extractors {
         core::NoritoDeserialize,
         json::{self, JsonDeserializeOwned, Number, Value},
     };
-    use urlencoding::decode;
 
     /// Maximum raw query text accepted by the generic V1 query extractors.
     ///

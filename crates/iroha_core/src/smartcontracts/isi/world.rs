@@ -17564,7 +17564,7 @@ pub mod isi {
                 })?;
             let parameter = private_settlement_parameter
                 .as_ref()
-                .unwrap_or(self.inner());
+                .unwrap_or_else(|| self.inner());
             super::parameter_validation::validate_ivm_heap_parameter(parameter)?;
             super::parameter_validation::validate_parliament_lifecycle_parameter(parameter)
                 .map_err(|error| {
@@ -17829,8 +17829,7 @@ pub mod isi {
                 }
             }
             let mut genesis_cadence = None;
-            let mut root_fee_scope = None;
-            if let Parameter::Custom(next) = parameter {
+            let root_fee_scope = if let Parameter::Custom(next) = parameter {
                 if iroha_data_model::validation_fee::is_reserved_validation_fee_parameter_id(
                     next.id(),
                 ) {
@@ -18005,9 +18004,7 @@ pub mod isi {
                     }
                 }
                 let is_genesis = state_transaction._curr_block.is_genesis();
-                root_fee_scope = if next.id()
-                    == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id()
-                {
+                if next.id() == &iroha_data_model::block::consensus::RootFeePolicy::parameter_id() {
                     Some(
                         crate::sumeragi::lanes::routing::read_routing_root_scope(
                             &*state_transaction.world,
@@ -18032,8 +18029,10 @@ pub mod isi {
                     )
                 } else {
                     None
-                };
-            }
+                }
+            } else {
+                None
+            };
             let prepared = state_transaction
                 .prepare_parameter_change(parameter, genesis_cadence, root_fee_scope)
                 .map_err(|original| {
@@ -23115,12 +23114,6 @@ AccountEvent::PermissionRemoved(change))
                 let mut $block = $state.block(header);
                 let mut $stx = $block.transaction();
             };
-            ($state:ident, $block:ident, $stx:ident) => {
-                let $state = blank_test_state();
-                let header = first_test_block_header();
-                let mut $block = $state.block(header);
-                let mut $stx = $block.transaction();
-            };
             (checked $state:ident, $block:ident, $stx:ident) => {
                 let $state = blank_test_state();
                 let header = first_test_block_header_with_checked_height();
@@ -23148,12 +23141,6 @@ AccountEvent::PermissionRemoved(change))
         macro_rules! component_alice_state_transaction {
             ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
                 component_state_transaction!($state, $block, $state_block, $stx);
-                bootstrap_alice_account(&mut $stx);
-            };
-        }
-        macro_rules! alice_state_transaction {
-            ($state:ident, $block:ident, $state_block:ident, $stx:ident) => {
-                blank_state_transaction!($state, $block, $state_block, $stx);
                 bootstrap_alice_account(&mut $stx);
             };
         }

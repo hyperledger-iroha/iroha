@@ -288,9 +288,9 @@ mod tests {
         nexus::{DataSpaceCatalog, DataSpaceMetadata, LaneCatalog, LaneConfig},
     };
     use iroha_model_base::domain::DomainId;
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::{NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID};
-    use nonzero_ext::nonzero;
 
     fn test_reserve_account() -> AccountId {
         let key = KeyPair::try_from_seed(vec![0x75; 32], Algorithm::Ed25519)

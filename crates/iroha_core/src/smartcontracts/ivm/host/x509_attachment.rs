@@ -261,7 +261,7 @@ fn copy_proof(proof: &[u8], budget: &AllocationBudget) -> Result<ChargedBuffer<u
     Ok(owner)
 }
 
-impl<'run, 'tx, QS: Default + QueryStateAccess> CoreHostImpl<'run, 'tx, QS> {
+impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     pub(super) fn reserve_x509_queue_backing(
         &mut self,
         budget: &AllocationBudget,

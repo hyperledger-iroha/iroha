@@ -1,31 +1,37 @@
 //! Exact original-pool custody for the entire validated parameter projection.
 //!
-//! This owner copies an already validated authoring projection. Its interface
-//! deliberately provides no decoder, mutable projection or uncharged constructor.
+//! Component tests copy an already validated authoring projection; production
+//! assembles directly admitted ingress leaves. Its interface deliberately
+//! provides no decoder, mutable projection or uncharged constructor.
 //! The original ingress/decode owner must fund its source separately; freezing
 //! does not retroactively admit authoring allocations.
 
-use std::{alloc::Layout, fmt};
+#[cfg(test)]
+use std::alloc::Layout;
+use std::fmt;
 
-use iroha_allocation::{
-    AllocationBudget, AllocationCharge, AllocationRefusal, AllocationReservation, ChargedBuffer,
-    ChargedShared,
-};
+use iroha_allocation::{AllocationBudget, AllocationRefusal, ChargedShared};
+#[cfg(test)]
+use iroha_allocation::{AllocationCharge, AllocationReservation, ChargedBuffer};
+#[cfg(test)]
 use iroha_crypto::{Algorithm, PublicKey};
+use iroha_data_model::parameter::CustomParametersAdmissionError;
+#[cfg(test)]
 use iroha_data_model::{
     account::AccountId,
     block::consensus::{PublicLaneStakingPolicy, RootFeePolicy},
     crypto_admission_policy::CryptoAdmissionPolicyV1,
     fraud::{FraudAdmissionAttesterV1, FraudAdmissionPolicyV1},
-    parameter::{CustomParametersAdmissionError, Parameters, SumeragiParameters},
+    parameter::{Parameters, SumeragiParameters},
     zk_validity_policy::{ZkProofValidityV1, ZkValidityPolicyV1, ZkVerifyingKeyRefV1},
 };
-use iroha_primitives::{
-    bigint::BigIntAdmissionCloneError,
-    numeric::{Numeric, Quantity},
-};
+use iroha_primitives::bigint::BigIntAdmissionCloneError;
+#[cfg(test)]
+use iroha_primitives::numeric::{Numeric, Quantity};
 
-use super::{Gas, GasRate, StateParameters};
+use super::StateParameters;
+#[cfg(test)]
+use super::{Gas, GasRate};
 
 mod decoded;
 pub(super) use decoded::{DecodedParameterParts, ReservedParameterGraph};
@@ -65,11 +71,13 @@ pub enum ParameterRetentionError {
     PlanMismatch,
 }
 
+#[cfg(test)]
 fn overflow() -> ParameterRetentionError {
     ParameterRetentionError::Admission(AllocationRefusal::DemandOverflow)
 }
 
 /// An original refusal captured while the real retention operation is observed.
+#[cfg(test)]
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum ParameterRetentionAttemptError {
     /// Original canonical observer identity, including ordinary invalid input.
@@ -80,6 +88,7 @@ pub(crate) enum ParameterRetentionAttemptError {
     Original(ParameterRetentionError),
 }
 
+#[cfg(test)]
 impl ParameterRetentionAttemptError {
     /// Observe the real call before its first codec budget check.
     ///
@@ -112,19 +121,22 @@ impl ParameterRetentionAttemptError {
 pub struct RetainedStateParameters(ChargedShared<ParameterGraph>);
 
 // The exact value always dies before every backing charge, regardless of ingress.
-// Copying an already owned authoring graph and decoding directly have different
-// leaf custody types, but install the same immutable value and publication owner.
+// Copying an already owned authoring graph (component tests only) and decoding
+// directly have different leaf custody types, but install the same immutable
+// value and publication owner.
 struct ParameterGraph {
     value: StateParameters,
     custody: ParameterGraphCustody,
 }
 enum ParameterGraphCustody {
+    #[cfg(test)]
     Copy(ChargedBuffer<AllocationCharge>),
     Decoded(decoded::DecodedCustody),
 }
 impl ParameterGraphCustody {
     fn belongs_to(&self, budget: &AllocationBudget) -> bool {
         match self {
+            #[cfg(test)]
             Self::Copy(ledger) => {
                 ledger.belongs_to(budget)
                     && ledger
@@ -201,7 +213,7 @@ impl RetainedStateParameters {
     ///
     /// # Errors
     /// Returns the exact original finite-pool, physical or graph-copy refusal.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn try_copy_for_testing(
         source: &StateParameters,
         budget: &AllocationBudget,
@@ -214,6 +226,7 @@ impl RetainedStateParameters {
     /// All plain allocations are prepaid before the first clone. Custom array,
     /// key and JSON custody is admitted by its concrete model owner. No original
     /// source is consumed or mutated on any refusal.
+    #[cfg(test)]
     fn try_copy(
         source: &StateParameters,
         budget: &AllocationBudget,
@@ -268,6 +281,7 @@ impl RetainedStateParameters {
     }
 
     /// Share only within the original pool; independently fund a foreign destination.
+    #[cfg(test)]
     pub(crate) fn try_retain_in(
         &self,
         budget: &AllocationBudget,
@@ -324,7 +338,7 @@ impl RetainedStateParameters {
     /// publication token: two already applied siblings must not share a stale plan.
     /// The execution owner must already have checked scope, authorization, retained
     /// liabilities and funded its decoder/event backing before calling this method.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn prepare_replace(
         &self,
         next: &StateParameters,
@@ -394,6 +408,8 @@ impl PreparedParameters {
 
     /// Install with no allocation after the source check and all execution preparation.
     /// Refusal returns the original prepared owner intact and leaves current untouched.
+    /// Only component fixtures (`state::parameter_fixture`) and tests install this way.
+    #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) fn install(
         self,
         current: &mut RetainedStateParameters,
@@ -407,11 +423,13 @@ impl PreparedParameters {
     }
 }
 
+#[cfg(test)]
 #[derive(Default)]
 struct Plan {
     count: usize,
     bytes: usize,
 }
+#[cfg(test)]
 impl Plan {
     fn add(&mut self, layout: Layout) -> Result<(), ParameterRetentionError> {
         if layout.size() != 0 {
@@ -421,11 +439,14 @@ impl Plan {
         Ok(())
     }
 }
+#[cfg(test)]
 fn array<T>(count: usize) -> Result<Layout, ParameterRetentionError> {
     Layout::array::<T>(count).map_err(|_| overflow())
 }
 
+#[cfg(test)]
 type Visitor<'a> = dyn FnMut(Layout) -> Result<(), ParameterRetentionError> + 'a;
+#[cfg(test)]
 fn visit_account(
     account: &AccountId,
     visit: &mut Visitor<'_>,
@@ -439,6 +460,7 @@ fn visit_account(
     result
 }
 
+#[cfg(test)]
 fn visit_root_fee(
     policy: &RootFeePolicy,
     visit: &mut Visitor<'_>,
@@ -465,6 +487,7 @@ fn visit_root_fee(
     Ok(())
 }
 
+#[cfg(test)]
 fn visit_graph(
     source: &StateParameters,
     visit: &mut Visitor<'_>,
@@ -513,10 +536,12 @@ fn visit_graph(
     Ok(())
 }
 
+#[cfg(test)]
 struct CopyCustody {
     reservation: AllocationReservation,
     ledger: ChargedBuffer<AllocationCharge>,
 }
+#[cfg(test)]
 impl CopyCustody {
     fn fund(&mut self, layout: Layout) -> Result<(), ParameterRetentionError> {
         if layout.size() != 0 {
@@ -570,6 +595,7 @@ impl CopyCustody {
     }
 }
 
+#[cfg(test)]
 fn copy_vector<T, U>(
     source: &[T],
     copy: &mut CopyCustody,
@@ -582,6 +608,7 @@ fn copy_vector<T, U>(
     Ok(result)
 }
 
+#[cfg(test)]
 fn copy_root_fees(
     source: &RootFeePolicy,
     copy: &mut CopyCustody,
@@ -609,6 +636,7 @@ fn copy_root_fees(
     })
 }
 
+#[cfg(test)]
 fn copy_key_ref(
     source: &ZkVerifyingKeyRefV1,
     copy: &mut CopyCustody,
@@ -619,6 +647,7 @@ fn copy_key_ref(
     })
 }
 
+#[cfg(test)]
 fn copy_graph(
     source: &StateParameters,
     budget: &AllocationBudget,

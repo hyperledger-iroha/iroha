@@ -743,7 +743,7 @@ impl GovernanceDagSealedCheckpointStore for TestSealedStore {
                 | GovernanceDagSealedStateSlot::SignedHeadRequestReplay
         ) && self
             .replay_initial_loads_remaining
-            .fetch_update(
+            .try_update(
                 AtomicOrdering::SeqCst,
                 AtomicOrdering::SeqCst,
                 |remaining| remaining.checked_sub(1),

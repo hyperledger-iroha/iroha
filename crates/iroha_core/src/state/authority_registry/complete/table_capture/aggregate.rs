@@ -81,30 +81,12 @@ pub(super) struct TableCaptureLimits {
 /// Retains actual table nodes without exposing a root or publication handle.
 pub(super) struct CapturedCanonicalTables {
     /// Diagnostic State publication generation, never a finality certificate.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: complete State/Kura publication must bind the generation"
-        )
-    )]
+    // TODO: complete State/Kura publication must bind the generation.
     pub(super) generation: u64,
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: complete State/Kura publication must retain the nodes"
-        )
-    )]
+    // TODO: complete State/Kura publication must retain the nodes.
     nodes: ChargedBuffer<CanonicalTablePairedSnapshot>,
     /// Same-writer typed frontier and original surface retained with both roots.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "TODO: complete State publication must consume the retained membership companion"
-        )
-    )]
+    // TODO: complete State publication must consume the retained membership companion.
     membership: Option<CapturedMembershipCompanion>,
 }
 

@@ -114,6 +114,7 @@ impl ReservedParameterGraph {
 
     /// Move exact values and ledgers after checking every original pool.
     /// Refusal returns every original leaf and the unused shell intact.
+    #[cfg(test)]
     pub(in crate::pipeline_gas_policy) fn finish(
         self,
         parts: DecodedParameterParts,

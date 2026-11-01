@@ -91,6 +91,7 @@ pub(crate) enum CustodyError {
 )]
 #[derive(Clone, Copy)]
 enum InvocationBinding {
+    #[cfg(test)]
     Transaction,
     Direct {
         instruction_index: u32,
@@ -112,6 +113,7 @@ impl InvocationBinding {
     }
     fn matches(self, declared: &ActionInvocationBindingV1) -> bool {
         match (self, declared) {
+            #[cfg(test)]
             (Self::Transaction, ActionInvocationBindingV1::Transaction) => true,
             (
                 Self::Direct {
@@ -248,7 +250,9 @@ impl<'tx> AttachmentCustody<'tx> {
         }
     }
 
-    /// Visit the transaction-level carrier scope under the original signer.
+    /// Test-only transaction-level carrier scope under the original signer.
+    /// No production consumer opens this scope.
+    #[cfg(test)]
     pub(crate) fn transaction<T, E: From<CustodyError>>(
         &mut self,
         visit: impl FnOnce(&mut Invocation<'_, 'tx>) -> Result<T, E>,

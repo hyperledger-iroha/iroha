@@ -500,6 +500,13 @@ IVM cache metrics
 - ivm_cache_decoded_streams, ivm_cache_decoded_ops_total: Cumulative decode workload counters (number of streams and total ops) reported by the IVM pre-decode cache.
 - ivm_cache_decode_failures, ivm_cache_decode_time_ns_total: Cumulative decode failure count and wall-clock nanoseconds spent decoding.
 
+IVM memory and Merkle metrics
+- IVM owns these families in `ivm::metrics`, outside the telemetry catalog; `iroha_core::telemetry::start` registers `ivm::metrics::collector()` with the node registry when metrics are enabled. Values are process-wide local diagnostics and never enter gas, state or commitments.
+- merkle_root_gpu_total, merkle_root_cpu_total: Standalone Merkle roots computed by Metal/CUDA or by the canonical CPU tree (cumulative).
+- ivm_memory_commit_ms, ivm_memory_commit_dirty_chunks (histograms, label `path` in {"incremental","accel","full_rebuild"}): Memory commit duration in milliseconds and the dirty chunk count it consumed. A `path` series appears once that path is first observed.
+- ivm_merkle_rebuild_total: Completed in-place canonical Merkle node refreshes (excluding construction and copies).
+- ivm_merkle_incremental_leaf_updates_total: Leaves updated along incremental canonical Merkle paths.
+
 IVM register pressure metrics (new)
 - ivm_register_max_index (histogram): highest GPR index touched during a VM execution. Buckets cover 16 → 512 so you can alert when contracts spill beyond the hot register bank.
 - ivm_register_unique_count (histogram): number of distinct GPRs accessed per execution. Useful to spot contracts with high register churn before Merkle tagging becomes expensive.

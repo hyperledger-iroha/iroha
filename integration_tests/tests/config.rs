@@ -2,9 +2,9 @@
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
 use iroha_data_model::Level;
+use iroha_primitives::nonzero;
 use iroha_test_network::NetworkBuilder;
 use iroha_torii_shared::configuration::{Configuration, SoranetHandshakeSummary};
-use nonzero_ext::nonzero;
 use std::borrow::Cow;
 use std::{io::Read as _, time::Duration};
 

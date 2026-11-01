@@ -18,7 +18,7 @@ fn next_boundary(sequence: &super::AtomicU64) -> Option<u64> {
         );
     }
     sequence
-        .fetch_update(
+        .try_update(
             super::Ordering::Relaxed,
             super::Ordering::Relaxed,
             |current| current.checked_add(1),

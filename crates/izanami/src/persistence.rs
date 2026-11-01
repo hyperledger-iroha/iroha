@@ -7,12 +7,12 @@
 //! configuration can influence a chaos run.
 use crate::config::{ChaosConfig, FaultArgs, FaultToggles, IzanamiArgs, WorkloadProfile};
 use color_eyre::{Result, eyre::eyre};
-use dirs::config_dir;
 use norito::{
     DecodeLimits,
     codec::{Decode, Encode},
 };
 use std::{
+    ffi::OsString,
     fs::{self, Metadata, OpenOptions},
     io::{self, Read},
     path::{Path, PathBuf},
@@ -240,6 +240,44 @@ impl StoredArgs {
 }
 fn config_path() -> Option<PathBuf> {
     config_dir().map(|dir| dir.join(APP_DIR).join(CONFIG_FILE))
+}
+/// Per-user configuration directory of this platform, if it can be determined.
+///
+/// See [`platform_config_dir`]; an empty home directory counts as unknown.
+fn config_dir() -> Option<PathBuf> {
+    let home = std::env::home_dir().filter(|home| !home.as_os_str().is_empty());
+    platform_config_dir(home, |key| std::env::var_os(key))
+}
+/// Per-user configuration directory on macOS and iOS: `$HOME/Library/Application Support`.
+#[cfg(any(target_os = "macos", target_os = "ios"))]
+fn platform_config_dir(
+    home: Option<PathBuf>,
+    _var: impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
+    home.map(|home| home.join("Library/Application Support"))
+}
+/// Per-user configuration directory on Windows: the roaming application data folder named
+/// by an absolute `%APPDATA%`.
+#[cfg(windows)]
+fn platform_config_dir(
+    _home: Option<PathBuf>,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
+    var("APPDATA")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+}
+/// Per-user configuration directory on other systems (XDG base directories): an absolute
+/// `$XDG_CONFIG_HOME`, otherwise `$HOME/.config`.
+#[cfg(not(any(windows, target_os = "macos", target_os = "ios")))]
+fn platform_config_dir(
+    home: Option<PathBuf>,
+    var: impl Fn(&str) -> Option<OsString>,
+) -> Option<PathBuf> {
+    var("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| home.map(|home| home.join(".config")))
 }
 #[cfg(unix)]
 fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
@@ -816,5 +854,60 @@ mod tests {
         assert_eq!(loaded.nexus, args.nexus);
         let _ = fs::remove_dir_all(&dir);
         Ok(())
+    }
+}
+#[cfg(test)]
+mod config_dir_tests {
+    use super::{config_dir, platform_config_dir};
+    #[cfg(any(windows, not(any(target_os = "macos", target_os = "ios"))))]
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+    #[test]
+    fn config_dir_reads_the_process_environment() {
+        let home = std::env::home_dir().filter(|home| !home.as_os_str().is_empty());
+        assert_eq!(
+            config_dir(),
+            platform_config_dir(home, |key| std::env::var_os(key))
+        );
+    }
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    #[test]
+    fn apple_config_dir_is_application_support() {
+        assert_eq!(
+            platform_config_dir(Some(PathBuf::from("/Users/u")), |_| None),
+            Some(PathBuf::from("/Users/u/Library/Application Support"))
+        );
+        assert_eq!(platform_config_dir(None, |_| None), None);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_config_dir_is_absolute_roaming_app_data() {
+        let appdata = |value: &'static str| {
+            move |key: &str| (key == "APPDATA").then(|| OsString::from(value))
+        };
+        assert_eq!(
+            platform_config_dir(None, appdata(r"C:\Users\u\AppData\Roaming")),
+            Some(PathBuf::from(r"C:\Users\u\AppData\Roaming"))
+        );
+        assert_eq!(platform_config_dir(None, appdata("relative")), None);
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "ios")))]
+    #[test]
+    fn xdg_config_dir_prefers_an_absolute_config_home() {
+        let home = Some(PathBuf::from("/home/u"));
+        let config_home = |value: &'static str| {
+            move |key: &str| (key == "XDG_CONFIG_HOME").then(|| OsString::from(value))
+        };
+        assert_eq!(
+            platform_config_dir(home.clone(), config_home("/xdg")),
+            Some(PathBuf::from("/xdg"))
+        );
+        for ignored in ["relative", ""] {
+            assert_eq!(
+                platform_config_dir(home.clone(), config_home(ignored)),
+                Some(PathBuf::from("/home/u/.config"))
+            );
+        }
+        assert_eq!(platform_config_dir(None, |_| None), None);
     }
 }

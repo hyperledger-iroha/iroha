@@ -25,10 +25,10 @@ use iroha_data_model::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+use iroha_primitives::nonzero;
 use iroha_primitives::{json::Json, time::TimeSource};
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::gen_account_in;
-use nonzero_ext::nonzero;
 use std::{num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::sync::broadcast;
 fn build_world(authority: &AccountId, domain_id: &DomainId) -> World {

@@ -1839,7 +1839,7 @@ mod tests {
         ) -> Result<[u8; 32], PotrRepairHandoffError> {
             if self
                 .proof_failures_remaining
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                     remaining.checked_sub(1)
                 })
                 .is_ok()
@@ -1886,7 +1886,7 @@ mod tests {
         ) -> Result<[u8; 32], PotrRepairHandoffError> {
             if self
                 .failures_remaining
-                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+                .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                     remaining.checked_sub(1)
                 })
                 .is_ok()

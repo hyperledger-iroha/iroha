@@ -7238,7 +7238,7 @@ impl Metrics {
     }
 }
 fn update_peak(peak: &AtomicU64, candidate: u64) {
-    let _ = peak.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+    let _ = peak.try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
         (candidate > current).then_some(candidate)
     });
 }

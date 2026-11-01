@@ -192,7 +192,7 @@ fn admit_anchor_chunks(
     clippy::needless_pass_by_value,
     reason = "Restoration consumes and releases the decoded source cell after installing the original admitted owner"
 )]
-fn admit_scalar<T: mv::Value>(
+fn admit_scalar<T: mv::CellValue>(
     decoded: Cell<T>,
     budget: &AllocationBudget,
 ) -> Result<Cell<T, iroha_allocation::AllocationCharge>, SccpRestoreError> {
@@ -530,7 +530,7 @@ fn invalid(field: &str, message: impl Into<String>) -> json::Error {
 }
 
 /// Validate one SCCP cell's current and predecessor values with the same rule.
-fn validate_cell<T: mv::Value>(
+fn validate_cell<T: mv::CellValue>(
     cell: &Cell<T>,
     field: &str,
     rule: impl Fn(&T) -> Result<(), String>,

@@ -890,6 +890,7 @@ impl ZkX509ShaBatchCallBaseSourceV1 {
         widened_sha_batch_base_row_v1(&self.word, self.rfc_consumer, index)
     }
     /// Reconstruct one verifier-fixed call row without any challenge.
+    #[cfg(test)]
     pub(crate) fn fixed_row(
         &self,
         index: usize,
@@ -4025,22 +4026,28 @@ pub fn evaluate_sha_call_terminal_constraints_v1(
     core::array::from_fn(|lane| source[lane].sub(sha[lane]))
 }
 /// Maximum typed events in the Projection-to-SHA message/digest equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_PROJECTION_EVENT_COUNT_V1: u64 = 7 * (512 + 1 + 8);
 /// Conservative numerator covering both SHA call and Projection-to-SHA lists.
 ///
 /// For fixed unequal lists the separate four-lane escape terms are bounded by
 /// `(10088/d)^4 + (3647/d)^4 <= (13735/d)^4`. This arithmetic does not establish
 /// the adaptive joint-protocol or Fiat-Shamir reduction.
+#[cfg(test)]
 pub const ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_CALL_EVENT_COUNT_V1 as u64 + ZK_X509_SHA_PROJECTION_EVENT_COUNT_V1;
 /// Exact algebraic collision-bound numerator for each word-memory equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_MAX_MEMORY_ROWS_V1 as u64;
 /// Exact algebraic collision-bound numerator for the three-lane base-fold bus.
+#[cfg(test)]
 pub const ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1: u64 = 440;
 /// Independent challenge lanes used by each SHA word/call equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_COLLISION_LANES_V1: u8 = 4;
 /// Independent challenge lanes used by the SHA base-fold equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1: u8 = 3;
 /// Return conditional fixed-list collision arithmetic in diagnostic form.
 ///

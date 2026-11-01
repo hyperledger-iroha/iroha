@@ -2,8 +2,8 @@
 use super::*;
 use crate::kura::Kura;
 use iroha_data_model::block::BlockHeader;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use nonzero_ext::nonzero;
 fn sample_delta(amount: u32) -> TransferDeltaTranscript {
     TransferDeltaTranscript {
         from_account: (*ALICE_ID).clone(),

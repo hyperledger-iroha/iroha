@@ -39,13 +39,13 @@ use iroha_plonk::{
     verifier::verify_full,
 };
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_samples::gen_account_in;
 use kaigi_zk::{
     Scalar,
     authorization_v1::{KaigiAuthorizationCircuitV1, KaigiAuthorizationContextV1},
     native::NativeRelationV1,
 };
-use nonzero_ext::nonzero;
 use std::{hint::black_box, time::Duration, time::Instant};
 
 const ROSTER_SIZES: [usize; 3] = [64, 1_024, 4_096];

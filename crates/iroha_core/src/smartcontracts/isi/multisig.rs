@@ -3238,8 +3238,8 @@ mod tests {
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::topology::{DataSpaceId, LaneId};
+    use iroha_primitives::nonzero;
     use mv::storage::StorageReadOnly;
-    use nonzero_ext::nonzero;
     use std::{
         collections::{BTreeMap, BTreeSet},
         num::{NonZeroU16, NonZeroU64},

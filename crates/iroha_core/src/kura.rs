@@ -2168,7 +2168,7 @@ impl Kura {
     fn add_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_add(delta))
             });
         self.add_total_disk_usage_bytes_locked(delta);
@@ -2183,7 +2183,7 @@ impl Kura {
     fn sub_disk_usage_bytes_locked(&self, delta: u64) {
         let _ = self
             .disk_usage
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
                 Some(current.saturating_sub(delta))
             });
         self.sub_total_disk_usage_bytes_locked(delta);
@@ -2196,11 +2196,11 @@ impl Kura {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
-        let _ =
-            self.disk_usage_total
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_add(delta))
-                });
+        let _ = self
+            .disk_usage_total
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_add(delta))
+            });
     }
     fn sub_total_disk_usage_bytes(&self, delta: u64) {
         let _accounting_guard = self.disk_usage_total_accounting.lock();
@@ -2210,11 +2210,11 @@ impl Kura {
         if delta == 0 || !self.disk_usage_total_initialized.load(Ordering::Relaxed) {
             return;
         }
-        let _ =
-            self.disk_usage_total
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
-                    Some(current.saturating_sub(delta))
-                });
+        let _ = self
+            .disk_usage_total
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+                Some(current.saturating_sub(delta))
+            });
     }
     #[cfg(any(test, feature = "bench", feature = "iroha-core-tests"))]
     fn invalidate_pending_budget_cache(&self) {
@@ -7647,7 +7647,7 @@ impl BlockStore {
         #[cfg(test)]
         if self
             .fail_eviction_stage_syncs_remaining
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

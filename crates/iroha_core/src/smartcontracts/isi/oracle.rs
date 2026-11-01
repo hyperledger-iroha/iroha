@@ -2106,14 +2106,12 @@ pub mod query {
             filter: CompoundPredicate<FeedConfig>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = FeedConfig>, Error> {
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .oracle_feeds()
                 .iter()
                 .map(|(_, feed)| feed.clone())
-                .filter(move |feed| filter.applies(feed))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |feed| filter.applies(feed)))
         }
     }
     impl ValidQuery for FindOracleHistoryByFeedId {
@@ -2123,16 +2121,14 @@ pub mod query {
             filter: CompoundPredicate<FeedEventRecord>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = FeedEventRecord>, Error> {
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .oracle_history()
                 .get(&self.feed_id)
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                .filter(move |record| filter.applies(record))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |record| filter.applies(record)))
         }
     }
     impl ValidQuery for FindOracleProviderStatsByFeedId {
@@ -2143,18 +2139,16 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = OracleProviderStatsRecord>, Error> {
             let feed_id = self.feed_id;
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .oracle_provider_stats()
                 .iter()
-                .filter(|&(key, _stats)| key.feed_id == feed_id)
+                .filter(move |&(key, _stats)| key.feed_id == feed_id)
                 .map(|(key, stats)| OracleProviderStatsRecord {
                     key: key.clone(),
                     stats: *stats,
                 })
-                .filter(move |record| filter.applies(record))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |record| filter.applies(record)))
         }
     }
     impl ValidQuery for FindDefiOracleAttestationsByKey {
@@ -2164,16 +2158,14 @@ pub mod query {
             filter: CompoundPredicate<DefiOracleAttestation>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = DefiOracleAttestation>, Error> {
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .defi_oracle_attestations()
                 .get(&self.key)
                 .cloned()
                 .unwrap_or_default()
                 .into_iter()
-                .filter(move |attestation| filter.applies(attestation))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |attestation| filter.applies(attestation)))
         }
     }
     impl ValidQuery for FindOracleDisputes {
@@ -2183,14 +2175,12 @@ pub mod query {
             filter: CompoundPredicate<OracleDispute>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = OracleDispute>, Error> {
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .oracle_disputes()
                 .iter()
                 .map(|(_, dispute)| dispute.clone())
-                .filter(move |dispute| filter.applies(dispute))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |dispute| filter.applies(dispute)))
         }
     }
     impl ValidQuery for FindOracleDisputesByFeedId {
@@ -2201,15 +2191,13 @@ pub mod query {
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = OracleDispute>, Error> {
             let feed_id = self.feed_id;
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .oracle_disputes()
                 .iter()
-                .filter(|&(_, dispute)| dispute.feed_id == feed_id)
+                .filter(move |&(_, dispute)| dispute.feed_id == feed_id)
                 .map(|(_, dispute)| dispute.clone())
-                .filter(move |dispute| filter.applies(dispute))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |dispute| filter.applies(dispute)))
         }
     }
     impl ValidQuery for FindOracleChanges {
@@ -2219,14 +2207,12 @@ pub mod query {
             filter: CompoundPredicate<OracleChangeProposal>,
             state_ro: &impl StateReadOnly,
         ) -> Result<impl Iterator<Item = OracleChangeProposal>, Error> {
-            let items = state_ro
+            Ok(state_ro
                 .world()
                 .oracle_changes()
                 .iter()
                 .map(|(_, change)| change.clone())
-                .filter(move |change| filter.applies(change))
-                .collect::<Vec<_>>();
-            Ok(items.into_iter())
+                .filter(move |change| filter.applies(change)))
         }
     }
     impl ValidQuery for FindTwitterBindingsByUaid {

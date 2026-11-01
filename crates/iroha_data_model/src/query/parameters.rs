@@ -6,9 +6,9 @@ use derive_more::Constructor;
 use getset::Getters;
 use iroha_data_model_derive::model;
 use iroha_model_base::name::Name;
+use iroha_primitives::nonzero;
 use iroha_schema::IntoSchema;
 use iroha_version::{Decode, Encode};
-use nonzero_ext::nonzero;
 use std::{borrow::ToOwned, format, num::NonZeroU64, string::String, vec::Vec};
 /// Default value for `fetch_size` parameter in queries.
 pub const DEFAULT_FETCH_SIZE: NonZeroU64 = nonzero!(100_u64);

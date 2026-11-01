@@ -1135,21 +1135,28 @@ mod state_snapshot_decode_error_tests {
 
     #[test]
     fn resource_restore_keeps_original_undo_acquisition_refusal_local() {
+        // Retain fixture generations while checking exact original-pool occupancy.
+        let _retirement = crossbeam_epoch::pin();
         let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);
         let world = World::try_with_execution_budget([], [], [], &budget).unwrap();
         let retained_bytes = budget.reserved_bytes();
-        let undo_scope_bytes = iroha_allocation::OwnedAllocationScope::allocation_layout().size();
-        assert!(retained_bytes >= undo_scope_bytes);
+        let undo_control_bytes = world_acquisition::OriginalWorldFields::layout().size()
+            + world_acquisition::original_world_cell_control_bytes(&world)
+            + iroha_allocation::OwnedAllocationScope::allocation_layout().size();
         crate::resource_coherence::validate_restored_policy(&world.view(), 0).unwrap();
-        // The original undo scope fits this policy, but World's retained owners
-        // occupy the entire pool. A zero limit would instead mean ExceedsLimit.
-        budget.set_limit_bytes(retained_bytes);
+        // World admits its complete controls before acquiring any undo writer.
+        // That exact demand fits the policy, while original World owners and this
+        // retained reservation occupy the pool, so refusal must be Capacity.
+        let occupied_bytes = retained_bytes + undo_control_bytes;
+        budget.set_limit_bytes(occupied_bytes);
+        let held_capacity = budget.try_reserve_bytes(undo_control_bytes).unwrap();
+        assert_eq!(budget.reserved_bytes(), occupied_bytes);
         let iroha_allocation::AllocationRefusal::Capacity {
             release: original_release,
             ..
-        } = budget.try_reserve_bytes(undo_scope_bytes).unwrap_err()
+        } = budget.try_reserve_bytes(undo_control_bytes).unwrap_err()
         else {
-            panic!("original World owners occupy the undo-scope capacity");
+            panic!("original World owners and reservation occupy the undo-control capacity");
         };
         let refused = validate_resource_policy_versions(&world, 0, &budget).unwrap_err();
         let StateRestoreError::Admission(StateAdmissionError::Storage(
@@ -1165,10 +1172,12 @@ mod state_snapshot_decode_error_tests {
         else {
             panic!("expected original undo allocation capacity refusal: {refused:?}");
         };
-        assert_eq!(requested_bytes, undo_scope_bytes);
-        assert_eq!(reserved_bytes, retained_bytes);
-        assert_eq!(limit_bytes, retained_bytes);
+        assert_eq!(requested_bytes, undo_control_bytes);
+        assert_eq!(reserved_bytes, occupied_bytes);
+        assert_eq!(limit_bytes, occupied_bytes);
         assert_eq!(release, original_release);
+        assert_eq!(budget.reserved_bytes(), occupied_bytes);
+        drop(held_capacity);
         assert_eq!(budget.reserved_bytes(), retained_bytes);
         budget.set_limit_bytes(64 * 1024 * 1024);
         validate_resource_policy_versions(&world, 0, &budget).unwrap();

@@ -15,7 +15,7 @@ use iroha_executor_data_model::permission::governance::{
     CanProposeContractDeployment, CanSubmitGovernanceBallot,
 };
 use iroha_model_base::domain::DomainId;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 fn checked_random_governance_proposal_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked governance proposal keypair")
 }

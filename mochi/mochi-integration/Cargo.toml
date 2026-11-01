@@ -25,10 +25,6 @@ parking_lot = { workspace = true }
 norito = { workspace = true, features = ["node-codec"], default-features = false }
 tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 
-[dev-dependencies]
-tempfile = { workspace = true }
-toml = { workspace = true }
-
 [[test]]
 name = "readiness_smoke"
 path = "tests/readiness_smoke.rs"

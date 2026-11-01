@@ -12,8 +12,8 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanManageParliament;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 #[test]
 fn create_election_rejects_plain_conflict() {
     let kura = Kura::blank_kura_for_testing();

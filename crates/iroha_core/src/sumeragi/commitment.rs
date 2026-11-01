@@ -52,9 +52,9 @@ use norito::NoritoDeserialize;
 use norito::NoritoSerialize;
 use thiserror::Error;
 
-use super::schedule::NativeExecutionInputs;
 #[cfg(test)]
 use super::schedule::ScheduleOutcome;
+use super::schedule::{CompletedExecution, CompletedResult};
 use crate::exec_witness::{
     roots::{parent_state_from_witness, witness_pairs},
     smt::compute_post_state_root,
@@ -164,11 +164,11 @@ pub(crate) fn execution_result(
     witness: &mut crate::state::CapturedExecWitness,
     executed: &SignedBlock,
     transition: &WorldStateTransition,
-    inputs: RetainedPayload<NativeExecutionInputs>,
+    inputs: CompletedExecution,
     native_lanes: NativeLaneStateProof,
     header: SccpFinalityHeaderV1,
     scope: CertifiedResultScope,
-) -> Result<RetainedPayload<CertifiedResultV1>, CertifiedResultError> {
+) -> Result<CompletedResult, CertifiedResultError> {
     let height = executed.header().height().get();
     let execution = witness.prepare_native_execution(executed, transition)?;
     // SAFETY: only the two original canonical fields move, without clone, growth, sharing or
@@ -176,7 +176,7 @@ pub(crate) fn execution_result(
     // no owned allocations; the original sealed X is an inline fixed-size array.
     // The original allocation ledger follows the whole R owner through publication and drop.
     let commitment = unsafe {
-        inputs.map_payload(|inputs| {
+        inputs.map_result(|inputs| {
             CertifiedResultV1::from_parts_unvalidated(
                 header,
                 ExecutionResultCommitment {

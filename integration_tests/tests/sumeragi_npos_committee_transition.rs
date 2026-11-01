@@ -836,14 +836,6 @@ fn exact_process_roster<'a>(
     Ok(ordered)
 }
 
-async fn advance_exact_rotation_phase(
-    network: &Network,
-    voters: &[PeerId],
-    height: u64,
-    deadline: Instant,
-) -> Result<()> {
-    advance_exact_rotation_phase_with_workload(network, voters, height, deadline, None).await
-}
 async fn advance_exact_rotation_phase_with_workload(
     network: &Network,
     voters: &[PeerId],
@@ -3358,6 +3350,10 @@ fn committee_history_observation_keeps_original_read_deadline_before_query() -> 
     Ok(())
 }
 
+#[expect(
+    dead_code,
+    reason = "the rotation workload attaches its own roots; the shared harness's self-started two-bank `Exchange` flow is driven only by the native_amx_network target"
+)]
 #[path = "support/native_amx_harness.rs"]
 mod amx_harness;
 #[path = "native_amx_network/rotation.rs"]

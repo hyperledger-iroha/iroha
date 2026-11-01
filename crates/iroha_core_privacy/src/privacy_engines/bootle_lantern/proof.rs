@@ -1282,20 +1282,12 @@ fn polynomials_from_centered_projection(
         ProofPolynomialV1::from_centered_coefficients(&array)
     })
 }
-#[expect(
-    clippy::unnecessary_box_returns,
-    reason = "Polynomial vectors stay heap-owned to avoid large secret stack copies and preserve their clearing owners."
-)]
 fn multiply_vector_by_polynomial<const N: usize>(
     vector: &[ProofPolynomialV1; N],
     scalar: &ProofPolynomialV1,
 ) -> Box<[ProofPolynomialV1; N]> {
     boxed_polynomial_array_from_fn_v1(|index| scalar.multiply(vector[index]))
 }
-#[expect(
-    clippy::unnecessary_box_returns,
-    reason = "Polynomial vectors stay heap-owned to avoid large secret stack copies and preserve their clearing owners."
-)]
 fn add_arrays<const N: usize>(
     lhs: &[ProofPolynomialV1; N],
     rhs: &[ProofPolynomialV1; N],

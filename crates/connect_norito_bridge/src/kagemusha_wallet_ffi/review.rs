@@ -150,7 +150,7 @@ pub(super) fn allocate_token() -> Result<u64> {
 }
 fn allocate_from(next: &std::sync::atomic::AtomicU64) -> Result<u64> {
     use std::sync::atomic::Ordering;
-    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    next.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         value
             .checked_add(1)
             .filter(|value| *value <= i64::MAX as u64)

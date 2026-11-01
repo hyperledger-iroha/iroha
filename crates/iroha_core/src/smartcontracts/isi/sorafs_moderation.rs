@@ -1452,6 +1452,7 @@ pub(crate) fn seed_moderation_policy_asset_reference_for_test(
 /// moderation policy. Every candidate is re-read through the authoritative
 /// validator; malformed, mis-keyed, or internally inconsistent state fails
 /// closed rather than undercounting custody liabilities.
+#[cfg(test)]
 pub(in crate::smartcontracts::isi) fn unsettled_moderation_bond_liability(
     world: &impl WorldReadOnly,
     custody_asset: &AssetId,

@@ -1534,7 +1534,7 @@ mod tests {
 
     #[test]
     fn catalog_streaming_keeps_original_serializer_refusals_and_rejects_drift() {
-        use std::{cell::Cell, io::Write};
+        use std::cell::Cell;
 
         #[derive(norito::NoritoSchema)]
         #[norito_schema(name = "iroha_data_model.test.CatalogAllocatingSerializer")]

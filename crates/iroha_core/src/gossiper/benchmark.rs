@@ -10,6 +10,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     Level,
     account::Account,
+    crypto_admission_policy::CryptoAdmissionPolicyV1,
     isi::Log,
     parameter::{
         Parameter,
@@ -67,6 +68,17 @@ impl HotPathFixture {
                 budget,
             )
             .expect("install benchmark root metadata");
+            // Admission defers every input until a crypto policy is authored; the
+            // benchmark signer uses Ed25519.
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                CryptoAdmissionPolicyV1::new(vec![Algorithm::Ed25519])
+                    .expect("benchmark signing policy")
+                    .into_parameter()
+                    .expect("canonical benchmark signing policy"),
+                budget,
+            )
+            .expect("install benchmark signing policy");
             parameters.commit();
         }
         let state = Arc::new(State::new_for_testing(

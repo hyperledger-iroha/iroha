@@ -2,14 +2,11 @@ use super::*;
 use crate::kura::tests::CommittedNetworkProofFixture;
 use iroha_crypto::MerkleTree as CanonMerkleTree;
 use iroha_data_model::{
-    block::{
-        BlockPayload, BlockResult, execution_output::*,
-        proofs::TrustedBlockProofAnchor,
-    },
+    block::{BlockPayload, BlockResult, execution_output::*, proofs::TrustedBlockProofAnchor},
     events::time::Schedule,
     transaction::signed::TransactionEntrypoint,
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use norito::codec::DecodeAll as _;
 
 #[derive(norito::NoritoSchema, norito::codec::Decode, norito::codec::Encode)]
@@ -329,9 +326,12 @@ fn block_proofs_reject_stored_output_commitment_drift() {
 #[test]
 fn block_proofs_reject_stored_output_count_drift() {
     assert_invalid_finalized_body(|_, result| {
-        let mut leaves = result.outputs.iter().map(HashOf::new).collect::<Vec<_>>();
-        leaves.push(HashOf::from_untyped_unchecked(Hash::new(b"extra output")));
-        result.output_merkle = leaves.into_iter().collect();
+        result.output_merkle = result
+            .outputs
+            .iter()
+            .map(HashOf::new)
+            .chain([HashOf::from_untyped_unchecked(Hash::new(b"extra output"))])
+            .collect();
         assert_eq!(result.output_merkle.leaf_count(), result.outputs.len() + 1);
     });
 }

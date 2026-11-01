@@ -6,8 +6,8 @@ use crate::retained_gossip::RetainedGossip;
 use crate::{
     IrohaNetwork, NetworkMessage,
     queue::{
-        GossipBatchEntry, Queue, RoutingDecision, RoutingPlan, resolve_routing_decision,
-        resolve_routing_plan_against_catalogs,
+        GossipAdmission, GossipBatchEntry, Queue, RoutingDecision, RoutingPlan,
+        resolve_routing_decision, resolve_routing_plan_against_catalogs,
     },
     state::{State, StatelessValidationContext, TransactionsReadOnly},
     tx::{
@@ -1405,10 +1405,27 @@ impl TransactionGossiper {
         );
         true
     }
-    #[allow(clippy::too_many_lines)]
+    /// Admit one inbound gossip batch, then republish the queue's TEU backlog gauges once.
+    ///
+    /// Each admission defers that republish to this batch boundary; nothing admission
+    /// decides reads the gauges. A deferred batch still republishes for the inputs it admitted.
     fn admit_transaction_gossip(
         &self,
         gossip: &TransactionGossip,
+    ) -> Result<(), ExecutionDeferred> {
+        let mut enqueued = 0_usize;
+        let admitted = self.admit_transaction_gossip_entries(gossip, &mut enqueued);
+        if enqueued > 0 {
+            self.queue.publish_teu_backlog_with_state(&self.state);
+        }
+        admitted
+    }
+    /// Admit every valid entry of `gossip`, counting the inputs it enqueued in `enqueued`.
+    #[allow(clippy::too_many_lines)]
+    fn admit_transaction_gossip_entries(
+        &self,
+        gossip: &TransactionGossip,
+        enqueued: &mut usize,
     ) -> Result<(), ExecutionDeferred> {
         let TransactionGossip {
             txs,
@@ -1904,81 +1921,76 @@ impl TransactionGossiper {
             match accepted {
                 Ok(tx) => {
                     let advertised_route = RoutingDecision::new(route.lane_id, route.dataspace_id);
-                    let local_plan = {
-                        match self.queue.route_plan_for_gossip_with_state(&tx, state) {
-                            Ok(plan) => plan,
-                            Err(crate::queue::RoutingResolveError::Deferred(original)) => {
-                                return Err(original);
-                            }
-                            Err(err) => {
+                    // Acceptance already retains the original canonical frame in `tx`. The
+                    // queue routes it and, only on an exact advertised-plan match, admits that
+                    // same owner, all under one lifecycle fence and one committed view.
+                    let push_result = match self.queue.admit_gossip_with_state(
+                        tx,
+                        state,
+                        &advertised_plan,
+                    ) {
+                        GossipAdmission::Pushed(push_result) => push_result,
+                        GossipAdmission::Unrouted(crate::queue::RoutingResolveError::Deferred(
+                            original,
+                        )) => {
+                            return Err(original);
+                        }
+                        GossipAdmission::Unrouted(err) => {
+                            iroha_logger::warn!(
+                                %entrypoint_hash,
+                                reason = %err,
+                                reason_label = err.as_label(),
+                                "dropping transaction gossip entry due to unresolved local route"
+                            );
+                            self.record_drop_metric(
+                                plane,
+                                route.dataspace_id,
+                                &[route.lane_id],
+                                "route_unresolved",
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                            continue;
+                        }
+                        GossipAdmission::PlanMismatch(local_plan) => {
+                            let local_route = local_plan.coordinator_route();
+                            if local_route == advertised_route {
                                 iroha_logger::warn!(
                                     %entrypoint_hash,
-                                    reason = %err,
-                                    reason_label = err.as_label(),
-                                    "dropping transaction gossip entry due to unresolved local route"
+                                    advertised_digest = %advertised_plan.digest(),
+                                    expected_digest = %local_plan.digest(),
+                                    "dropping transaction gossip entry due to routing plan mismatch"
                                 );
-                                self.record_drop_metric(
-                                    plane,
-                                    route.dataspace_id,
-                                    &[route.lane_id],
-                                    "route_unresolved",
-                                    &[],
-                                    self.target_cap_for_plane(plane),
-                                    1,
-                                    0,
+                            } else {
+                                iroha_logger::warn!(
+                                    %entrypoint_hash,
+                                    advertised_lane_id = %route.lane_id,
+                                    advertised_dataspace_id = %route.dataspace_id,
+                                    expected_lane_id = %local_route.lane_id,
+                                    expected_dataspace_id = %local_route.dataspace_id,
+                                    "dropping transaction gossip entry due to routing mismatch"
                                 );
-                                continue;
                             }
+                            self.record_drop_metric(
+                                plane,
+                                local_route.dataspace_id,
+                                &[local_route.lane_id],
+                                DROP_REASON_ROUTE_MISMATCH,
+                                &[],
+                                self.target_cap_for_plane(plane),
+                                1,
+                                0,
+                            );
+                            continue;
                         }
                     };
-                    let local_route = local_plan.coordinator_route();
-                    if local_route != advertised_route {
-                        iroha_logger::warn!(
-                                %entrypoint_hash,
-                                advertised_lane_id = %route.lane_id,
-                                advertised_dataspace_id = %route.dataspace_id,
-                            expected_lane_id = %local_route.lane_id,
-                            expected_dataspace_id = %local_route.dataspace_id,
-                            "dropping transaction gossip entry due to routing mismatch"
-                        );
-                        self.record_drop_metric(
-                            plane,
-                            local_route.dataspace_id,
-                            &[local_route.lane_id],
-                            DROP_REASON_ROUTE_MISMATCH,
-                            &[],
-                            self.target_cap_for_plane(plane),
-                            1,
-                            0,
-                        );
-                        continue;
-                    }
-                    if local_plan != advertised_plan {
-                        iroha_logger::warn!(
-                            %entrypoint_hash,
-                            advertised_digest = %advertised_plan.digest(),
-                            expected_digest = %local_plan.digest(),
-                            "dropping transaction gossip entry due to routing plan mismatch"
-                        );
-                        self.record_drop_metric(
-                            plane,
-                            local_route.dataspace_id,
-                            &[local_route.lane_id],
-                            DROP_REASON_ROUTE_MISMATCH,
-                            &[],
-                            self.target_cap_for_plane(plane),
-                            1,
-                            0,
-                        );
-                        continue;
-                    }
-                    // Acceptance already retains the original canonical frame in `tx`.
-                    // Queue admission moves that same owner through its routing checks.
-                    let push_result = self
-                        .queue
-                        .push_with_lane_with_state_and_routing_plan(tx, state, local_plan);
+                    // Admission ran only on the advertised plan, so its coordinator is local.
+                    let local_route = advertised_route;
                     match push_result {
                         Ok(_) => {
+                            *enqueued = enqueued.saturating_add(1);
                             iroha_logger::debug!(%entrypoint_hash, "transaction enqueued from gossip");
                         }
                         Err(crate::queue::Failure {
@@ -4624,6 +4636,94 @@ deferred_send_ttl: Duration::from_millis(defaults::network::DEFERRED_SEND_TTL_MS
             plane: GossipPlane::Public,
         }));
         assert_eq!(gossiper.queue.queued_len(), 1);
+    }
+    #[test]
+    fn gossip_admission_derives_each_view_route_once() {
+        struct ViewCountingRouter {
+            view_calls: Arc<std::sync::atomic::AtomicUsize>,
+        }
+        impl LaneRouter for ViewCountingRouter {
+            fn try_route(
+                &self,
+                _tx: &dyn crate::queue::TransactionRoutingView,
+            ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+                Ok(RoutingDecision::default())
+            }
+            fn try_route_without_state(
+                &self,
+                _tx: &dyn crate::queue::TransactionRoutingView,
+            ) -> Result<Option<RoutingDecision>, crate::queue::RoutingResolveError> {
+                Ok(None)
+            }
+            fn try_route_with_view(
+                &self,
+                tx: &dyn crate::queue::TransactionRoutingView,
+                _state_view: &crate::state::StateView<'_>,
+            ) -> Result<RoutingDecision, crate::queue::RoutingResolveError> {
+                self.view_calls
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                self.try_route(tx)
+            }
+        }
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let view_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let queue = Queue::test_with_router(
+            QueueConfig::default(),
+            &TimeSource::new_system(),
+            Arc::new(ViewCountingRouter {
+                view_calls: Arc::clone(&view_calls),
+            }),
+        );
+        queue.install_test_router_metadata_for_nexus(&gossiper.state.nexus_snapshot());
+        gossiper.queue = Arc::new(queue);
+        let (first, _) = build_transaction("view-route-once-a");
+        let (second, _) = build_transaction("view-route-once-b");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![route; 2],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+        assert_eq!(gossiper.queue.queued_len(), 2);
+        assert_eq!(
+            view_calls.load(std::sync::atomic::Ordering::Relaxed),
+            2,
+            "routing and admission of each input share one view-derived route"
+        );
+    }
+    #[cfg(feature = "telemetry")]
+    #[test]
+    fn gossip_batch_republishes_teu_backlog_gauges_after_its_admissions() {
+        let mut gossiper = closed_test_gossiper(NonZeroU32::new(1).expect("nonzero resend ticks"));
+        let metrics = Arc::new(iroha_telemetry::metrics::Metrics::default());
+        Arc::get_mut(&mut gossiper.state)
+            .expect("the fixture gossiper solely owns its State")
+            .telemetry = crate::telemetry::StateTelemetry::new(Arc::clone(&metrics), true);
+        let (first, _) = build_transaction("teu-batch-a");
+        let (second, _) = build_transaction("teu-batch-b");
+        let route = GossipRoute {
+            lane_id: LaneId::SINGLE,
+            dataspace_id: DataSpaceId::UNIVERSAL,
+        };
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
+            txs: vec![first.into(), second.into()],
+            routes: vec![route; 2],
+            plans: vec![default_plan(), default_plan()],
+            plane: GossipPlane::Public,
+        }));
+        assert_eq!(gossiper.queue.queued_len(), 2);
+        let committed = metrics
+            .nexus_scheduler_lane_teu_status
+            .read()
+            .expect("lane TEU cache")
+            .get(&LaneId::SINGLE.as_u32())
+            .map(|status| status.committed)
+            .expect("the batch republishes the lane gauge");
+        assert!(committed > 0, "the gauge reflects the admitted pending TEU");
     }
     #[test]
     fn gossip_rejects_changed_signature_after_exact_valid_envelope_warms_cache() {

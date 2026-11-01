@@ -3,6 +3,8 @@
 //! This is source custody, not a lifecycle effect or callable authorization.
 //! No table lookup, generic source callback or historical-image adapter precedes
 //! admission. The Action encoder still owns its separate finite codec budget.
+//! Its only consumer is the Time retry journal; until production journal/output-V2
+//! activation lands, both are compiled only with their tests.
 
 use core::cmp::Ordering;
 

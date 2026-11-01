@@ -21,8 +21,8 @@ use iroha_data_model::{
     prelude::*,
 };
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::num::NonZeroU64;
 fn checked_random_confidential_policy_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked confidential policy keypair")

@@ -22,7 +22,7 @@ use iroha_data_model::{
     ram_lfe::{RamLfeOutputOpeningPayload, RamLfeProgramId},
 };
 use iroha_model_base::{domain::DomainId, metadata::Metadata};
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 
 fn test_state() -> State {
     let kura = Kura::blank_kura_for_testing();

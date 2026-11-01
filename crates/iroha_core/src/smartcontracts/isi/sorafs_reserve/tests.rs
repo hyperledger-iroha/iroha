@@ -24,8 +24,8 @@ use iroha_data_model::{
     },
 };
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_primitives::{json::Json, numeric::Quantity};
-use nonzero_ext::nonzero;
 const NOW: u64 = 20_000;
 const PROVIDER_ID: ProviderId = ProviderId::new([0x61; 32]);
 fn keypair(seed: u8) -> KeyPair {

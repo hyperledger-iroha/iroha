@@ -11,7 +11,7 @@ use iroha_data_model::{
         parameters::FetchSize,
     },
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 #[derive(Clone)]
 struct MockExec {
     data: Vec<Account>,

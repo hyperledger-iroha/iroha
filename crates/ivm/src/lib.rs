@@ -29,7 +29,10 @@ mod aes;
 pub mod analysis;
 mod argument_record;
 pub mod axt;
+#[cfg(feature = "beep")]
+mod beep;
 pub mod bn254_vec;
+mod branch_hint;
 mod byte_merkle_tree;
 pub mod cache_memory;
 mod call_frame;
@@ -85,6 +88,7 @@ pub mod list;
 mod memory;
 pub mod merkle_utils;
 mod metadata;
+pub mod metrics;
 /// Stable Kotodama V1 numeric ABI tags and register conventions.
 pub mod numeric {
     pub use ivm_abi::numeric::*;
@@ -122,7 +126,6 @@ mod vector;
 pub mod zk;
 mod zk_poseidon;
 pub mod zk_verify;
-use iroha_telemetry::metrics::{StackSettingsSnapshot, record_stack_limits};
 use std::sync::{Mutex, OnceLock};
 // Host concurrency policy and declared state access.
 pub mod parallel;
@@ -529,7 +532,9 @@ pub fn set_scheduler_thread_limits(min_threads: Option<usize>, max_threads: Opti
 /// Validate and apply native stack sizes for scheduler and prover pools.
 ///
 /// Guest stack geometry is fixed by [`IvmStackPolicy::V1`] and is deliberately
-/// not accepted by this operational configuration API.
+/// not accepted by this operational configuration API. The returned outcome is
+/// the complete record of what was applied; hosts publish it to their own
+/// telemetry.
 pub fn apply_stack_sizes(scheduler_bytes: usize, prover_bytes: usize) -> StackSizeOutcome {
     let sched = scheduler_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
     let prover = prover_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
@@ -543,21 +548,6 @@ pub fn apply_stack_sizes(scheduler_bytes: usize, prover_bytes: usize) -> StackSi
     };
     set_scheduler_stack_size(sched);
     set_prover_stack_size(prover);
-    let guest_policy = IvmStackPolicy::V1;
-    record_stack_limits(StackSettingsSnapshot {
-        requested_scheduler_bytes: outcome.requested_scheduler_bytes as u64,
-        requested_prover_bytes: outcome.requested_prover_bytes as u64,
-        requested_guest_bytes: guest_policy.maximum_stack_bytes(),
-        scheduler_bytes: outcome.scheduler_bytes as u64,
-        prover_bytes: outcome.prover_bytes as u64,
-        guest_bytes: guest_policy.maximum_stack_bytes(),
-        scheduler_clamped: outcome.scheduler_clamped,
-        prover_clamped: outcome.prover_clamped,
-        guest_clamped: false,
-        pool_fallback_total: 0,
-        budget_hit_total: 0,
-        gas_to_stack_multiplier: guest_policy.bytes_per_gas(),
-    });
     outcome
 }
 /// Initialize the global Rayon thread pool with `num_threads` workers.
@@ -632,37 +622,25 @@ mod tests {
         }
     }
     #[test]
-    fn apply_stack_sizes_clamps_and_records_snapshot() {
-        record_stack_limits(StackSettingsSnapshot::default());
+    fn apply_stack_sizes_clamps_and_reports_requests() {
         let outcome = apply_stack_sizes(1, usize::MAX);
-        assert!(
-            outcome.scheduler_clamped,
-            "scheduler stack should clamp low values"
-        );
-        assert!(
-            outcome.prover_clamped,
-            "prover stack should clamp high values"
-        );
-        let snapshot = iroha_telemetry::metrics::stack_settings_snapshot();
         assert_eq!(
-            snapshot.scheduler_bytes, MIN_STACK_BYTES as u64,
-            "scheduler stack should clamp to minimum"
+            outcome,
+            StackSizeOutcome {
+                requested_scheduler_bytes: 1,
+                requested_prover_bytes: usize::MAX,
+                scheduler_bytes: MIN_STACK_BYTES,
+                prover_bytes: MAX_STACK_BYTES,
+                scheduler_clamped: true,
+                prover_clamped: true,
+            },
+            "out-of-range requests clamp to the supported native stack range"
         );
-        assert_eq!(
-            snapshot.prover_bytes, MAX_STACK_BYTES as u64,
-            "prover stack should clamp to maximum"
-        );
-        assert_eq!(
-            snapshot.guest_bytes,
-            IvmStackPolicy::V1.maximum_stack_bytes(),
-            "telemetry must expose the fixed V1 guest-stack ceiling"
-        );
-        assert_eq!(
-            snapshot.gas_to_stack_multiplier,
-            IvmStackPolicy::V1.bytes_per_gas(),
-            "telemetry must expose the fixed V1 gas policy"
-        );
-        let _ = apply_stack_sizes(32 * 1024 * 1024, 32 * 1024 * 1024);
+        let in_range = 32 * 1024 * 1024;
+        let outcome = apply_stack_sizes(in_range, in_range);
+        assert_eq!(outcome.scheduler_bytes, in_range);
+        assert_eq!(outcome.prover_bytes, in_range);
+        assert!(!outcome.scheduler_clamped && !outcome.prover_clamped);
     }
     #[test]
     fn init_global_rayon_reports_existing_pool() {

@@ -381,12 +381,6 @@ mod json_support {
             }),
         }
     }
-    pub(super) fn ensure_no_extra(map: Map) -> Result<(), json::Error> {
-        if let Some((field, _)) = map.into_iter().next() {
-            return Err(json::Error::UnknownField { field });
-        }
-        Ok(())
-    }
     pub(super) fn expect_u64(value: &json::Value, field: &str) -> Result<u64, json::Error> {
         match value {
             json::Value::Number(num) => num.as_u64().ok_or_else(|| json::Error::InvalidField {
@@ -1592,38 +1586,38 @@ mod defaults {
         use iroha_crypto::Algorithm;
         /// §9.3 default target block time: one second.
         pub const fn block_cadence_ms() -> NonZeroU64 {
-            nonzero_ext::nonzero!(1_000_u64)
+            iroha_primitives::nonzero!(1_000_u64)
         }
         /// §9.3 default bounded payload rebuild retry interval.
         pub const fn payload_retry_interval_ms() -> NonZeroU64 {
-            nonzero_ext::nonzero!(5_000_u64)
+            iroha_primitives::nonzero!(5_000_u64)
         }
         /// §9.3 default execution budget `E_max`.
         pub const fn exec_budget_ms() -> NonZeroU64 {
-            nonzero_ext::nonzero!(4_000_u64)
+            iroha_primitives::nonzero!(4_000_u64)
         }
         /// §9.3 default apply budget `A_max`.
         pub const fn apply_budget_ms() -> NonZeroU64 {
-            nonzero_ext::nonzero!(1_000_u64)
+            iroha_primitives::nonzero!(1_000_u64)
         }
         /// §9.3 default block payload limit: 16 MiB, including a ceiling-sized privacy transaction.
         pub const fn max_block_bytes() -> NonZeroU32 {
-            nonzero_ext::nonzero!(16_777_216_u32)
+            iroha_primitives::nonzero!(16_777_216_u32)
         }
         /// Default epoch length: one hour at the default block time (Appendix E, E12).
         pub const fn epoch_length_blocks() -> NonZeroU64 {
-            nonzero_ext::nonzero!(3_600_u64)
+            iroha_primitives::nonzero!(3_600_u64)
         }
         /// Default demotion window `W` (covers `W ≥ 4n` up to 32 members).
         pub const fn demotion_window() -> NonZeroU64 {
-            nonzero_ext::nonzero!(128_u64)
+            iroha_primitives::nonzero!(128_u64)
         }
         pub const fn max_clock_drift_ms() -> u64 {
             1_000
         }
         /// Default committed CT5 freshness allowance, shared by native due work.
         pub const fn due_work_max_lag_ms() -> NonZeroU64 {
-            nonzero_ext::nonzero!(60_000_u64)
+            iroha_primitives::nonzero!(60_000_u64)
         }
         pub const fn key_activation_lead_blocks() -> u64 {
             1
@@ -1663,13 +1657,13 @@ mod defaults {
                 3_600
             }
             pub const fn epoch_length_blocks() -> NonZeroU64 {
-                nonzero_ext::nonzero!(3_600_u64)
+                iroha_primitives::nonzero!(3_600_u64)
             }
         }
     }
     pub mod block {
         use core::num::NonZeroU64;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         /// Default value for [`Parameters::MaxTransactionsInBlock`]
         pub const fn max_transactions() -> NonZeroU64 {
             nonzero!(2_u64.pow(9))
@@ -1677,7 +1671,7 @@ mod defaults {
     }
     pub mod transaction {
         use core::num::{NonZeroU16, NonZeroU64};
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         pub const fn max_signatures() -> NonZeroU64 {
             nonzero!(16_u64)
         }
@@ -1708,7 +1702,7 @@ mod defaults {
     }
     pub mod smart_contract {
         use core::num::NonZeroU64;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         pub const fn fuel() -> NonZeroU64 {
             nonzero!(55_000_000_u64)
         }
@@ -2097,7 +2091,7 @@ impl BlockParameters {
     pub const fn new(max_transactions: NonZeroU64) -> Self {
         Self {
             max_transactions,
-            max_time_trigger_invocations: nonzero_ext::nonzero!(512_u32),
+            max_time_trigger_invocations: iroha_primitives::nonzero!(512_u32),
             execution_output: ExecutionOutputPolicyV1::bootstrap(),
             fastpq_source: FastpqSourcePolicyV1::bootstrap(),
         }
