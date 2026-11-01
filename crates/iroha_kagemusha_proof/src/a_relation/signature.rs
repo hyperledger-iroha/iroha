@@ -236,7 +236,7 @@ fn signature_slots(
     for (slot, values) in schema
         .slots()
         .iter()
-        .zip(instances[0].chunks_exact(SLOT_WORDS))
+        .zip(instances[0].as_chunks::<SLOT_WORDS>().0)
     {
         let words = values
             .iter()

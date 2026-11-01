@@ -521,7 +521,7 @@ impl Execute for SchedulePrivacyProtocolLimitsUpdateV1 {
             .privacy_protocol_policies
             .get(&key)
             .copied()
-            .unwrap_or(PrivacyProtocolPolicyV1 {
+            .unwrap_or_else(|| PrivacyProtocolPolicyV1 {
                 protocol_id: self.protocol_id,
                 current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(self.protocol_id),
                 pending_update: None,
@@ -5940,7 +5940,7 @@ mod tests {
         };
         let execute = |instruction: iroha_data_model::isi::InstructionBox,
                        tx: &mut StateTransaction<'_, '_>| {
-            crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, instruction)
+            crate::executor::Executor::Initial.execute_instruction(tx, &ALICE_ID, &instruction)
         };
         assert!(execute(schedule(last).into(), &mut transaction).is_err());
         assert_eq!(
@@ -6057,7 +6057,7 @@ mod tests {
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next)
+                &SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next)
                     .into(),
             )
             .expect("authorized ordinary update from implicit defaults");
@@ -6095,7 +6095,7 @@ mod tests {
             let instruction =
                 SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT + 1, next);
             let error = crate::executor::Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, instruction.clone().into())
+                .execute_instruction(&mut transaction, &ALICE_ID, &instruction.clone().into())
                 .unwrap_err();
             assert!(format!("{error:?}").contains("CanEnactGovernance"));
             assert!(
@@ -6110,7 +6110,7 @@ mod tests {
                 .execute_instruction(
                     &mut transaction,
                     &iroha_test_samples::BOB_ID,
-                    instruction.clone().into(),
+                    &instruction.clone().into(),
                 )
                 .unwrap_err();
             assert!(format!("{error:?}").contains("CanEnactGovernance"));
@@ -6118,7 +6118,7 @@ mod tests {
                 .execute_instruction(
                     &mut transaction,
                     &ALICE_ID,
-                    SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT, next)
+                    &SchedulePrivacyProtocolLimitsUpdateV1::new(protocol, TEST_BLOCK_HEIGHT, next)
                         .into(),
                 )
                 .expect_err("updates must be strictly future");
@@ -6130,7 +6130,7 @@ mod tests {
                     .is_none()
             );
             crate::executor::Executor::Initial
-                .execute_instruction(&mut transaction, &ALICE_ID, instruction.into())
+                .execute_instruction(&mut transaction, &ALICE_ID, &instruction.into())
                 .unwrap();
         }
         assert!(

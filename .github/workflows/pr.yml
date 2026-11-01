@@ -374,6 +374,7 @@ jobs:
             scripts/tests/check_fhe_ownership_map_test.py \
             scripts/tests/fhe_bgv_cost_model_test.py \
             scripts/tests/check_zk_x509_presentation_interval_test.py \
+            scripts/tests/check_zk_x509_proof_geometry_test.py \
             scripts/tests/check_zk_resource_contract_test.py \
             scripts/tests/check_zk_runtime_validity_test.py \
             scripts/tests/check_zk_feature_parity_test.py \
@@ -416,6 +417,7 @@ jobs:
           python3 scripts/check_nexus_provisioning_templates.py
           python3 -I -S scripts/check_zk_delivery_plan.py
           python3 -I -S scripts/check_zk_x509_presentation_interval.py
+          python3 -I -S scripts/check_zk_x509_proof_geometry.py
           python3 -I -S scripts/check_zk_resource_contract.py
           python3 -I -S scripts/check_zk_runtime_validity.py
           python3 -I -S scripts/check_zk_operation_inventory.py

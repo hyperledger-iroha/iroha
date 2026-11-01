@@ -1510,7 +1510,7 @@
    "owner": null,
    "path": "crates/iroha_test_network/src/lib.rs",
    "symbol": "IROHA_TEST_SKIP_BUILD_ENV",
-   "gates": "Environment variables read by tools that are not a validator: the command line locating its client configuration (HOME, USERPROFILE), the deployment tool locating its workspace and build directory (XDG_STATE_HOME, LOCALAPPDATA, CARGO_TARGET_DIR) and the test network harness (which binary to build and with which Cargo features, where to keep temporary directories, how many networks run in parallel, whether bind checks are skipped).",
+   "gates": "Environment variables read by tools that are not a validator: the command line locating its client configuration (HOME, USERPROFILE), the deployment tool locating its workspace and build directory (XDG_STATE_HOME, LOCALAPPDATA, CARGO_TARGET_DIR) and the test network harness (which binary to build and with which Cargo features, the release bundle anchors it admits, the developer tools it resolves on PATH, where to keep temporary directories, how many networks run in parallel, whether bind checks are skipped).",
    "decided_by": "Stays local to the tool. None of these values reaches a node's validation: the harness passes its choices to the daemons it starts through their configuration files and command lines.",
    "attribution": "read",
    "note": "AGENTS.md keeps environment toggles for developer convenience in tests only. PROGRAM_IROHAD_FEATURES_ENV selects the Cargo features of the daemon binary the harness builds; the feature gates themselves are the feature.* entries. Native harness helpers also resolve development tools through PATH and admit inherited release-bundle inputs; these choices control harness execution, not validator proof validity.",
@@ -5896,7 +5896,7 @@
    "note": "OwnedProof::new and resumable ProofPreparation check the caller deadline between charged original-pool operations; retries retain partial construction and check the original block, member slice and allocation pool. Cursor/interval consumers propagate Deadline or allocation failure rather than constructing a certificate or consensus-invalid result; timeout does not change the original block or verification relation. State certified-ladder receipt reads pass the same caller deadline through every finite interval attempt; optional checkpoint reuse cannot replace that original deadline. Native-frame destinations check the same deadline before moving charged wire ownership and while filling the committee. A busy State capture waits on its original release through StateViewWaiter under that deadline and cancellation flag; expiration retains the original local refusal rather than certifying a result.",
    "sites": [
     ["crates/iroha_core/src/state/finality_proof_interval.rs", "time_budget", "deadline", 5],
-    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 18],
+    ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "time_budget", "deadline", 16],
     ["crates/iroha_core/src/sumeragi/finality/proof_destination.rs", "wall_clock", "instant", 1]
    ]
   },
@@ -6150,12 +6150,7 @@
     }
    ],
    "sites": [
-    [
-     "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs",
-     "unavailable",
-     "unsupported",
-     2
-    ]
+    ["crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_compiler.rs", "unavailable", "unsupported", 2]
    ]
   },
   {
@@ -6223,12 +6218,7 @@
     }
    ],
    "sites": [
-    [
-     "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs",
-     "unavailable",
-     "unsupported",
-     3
-    ]
+    ["crates/iroha_crypto/src/ram_lfe/bgv_nonlinear.rs", "unavailable", "unsupported", 3]
    ]
   },
   {
@@ -6296,12 +6286,7 @@
     }
    ],
    "sites": [
-    [
-     "crates/iroha_crypto/src/ram_lfe/bgv_input.rs",
-     "unavailable",
-     "unsupported",
-     3
-    ]
+    ["crates/iroha_crypto/src/ram_lfe/bgv_input.rs", "unavailable", "unsupported", 3]
    ]
   },
   {
@@ -6324,12 +6309,7 @@
     }
    ],
    "sites": [
-    [
-     "crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs",
-     "unavailable",
-     "unsupported",
-     1
-    ]
+    ["crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs", "unavailable", "unsupported", 1]
    ]
   }
  ],

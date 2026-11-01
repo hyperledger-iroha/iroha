@@ -273,7 +273,7 @@ fn native_frame_destination_moves_exact_original_backing_and_refunds_foreign_ref
     let frame = original();
     let pointer = frame.as_slice().as_ptr();
     let proof =
-        OwnedProof::from_native_frame(frame, certified.block().header(), members, &pool, deadline)
+        OwnedProof::from_native_frame(frame, &certified.block().header(), members, &pool, deadline)
             .unwrap();
     assert_eq!(
         proof.proof.block_wire.as_ptr(),
@@ -294,7 +294,7 @@ fn native_frame_destination_moves_exact_original_backing_and_refunds_foreign_ref
     assert!(matches!(
         OwnedProof::from_native_frame(
             original(),
-            certified.block().header(),
+            &certified.block().header(),
             members,
             &foreign,
             deadline

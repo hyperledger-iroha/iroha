@@ -4,9 +4,7 @@ use super::*;
 
 /// Evaluate the preserved pre-streaming equation body.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn original_evaluate_zk_x509_sha_word_stark_residues_over_field_v1<
-    A: PolynomialAirFieldV1,
->(
+pub fn original_evaluate_zk_x509_sha_word_stark_residues_over_field_v1<A: PolynomialAirFieldV1>(
     current: &[A; SHA_WORD_BASE_WIDTH_V1],
     next: &[A; SHA_WORD_BASE_WIDTH_V1],
     current_aux: &[A; SHA_WORD_AUX_WIDTH_V1],
@@ -56,17 +54,17 @@ pub(crate) fn original_evaluate_zk_x509_sha_word_stark_residues_over_field_v1<
         }
         base_error_count += 1;
     };
-    for column in 33..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(word_or_digest.mul(current[column]));
+    for value in &current[33..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(word_or_digest.mul(*value));
     }
-    for column in 40..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(boolean_any.mul(current[column]));
+    for value in &current[40..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(boolean_any.mul(*value));
     }
-    for column in 41..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(add_any.mul(current[column]));
+    for value in &current[41..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(add_any.mul(*value));
     }
-    for column in 6..SHA_WORD_BASE_WIDTH_V1 {
-        push_base_error(memory.mul(current[column]));
+    for value in &current[6..SHA_WORD_BASE_WIDTH_V1] {
+        push_base_error(memory.mul(*value));
     }
     for value in current {
         push_base_error(padding.mul(*value));
@@ -79,7 +77,7 @@ pub(crate) fn original_evaluate_zk_x509_sha_word_stark_residues_over_field_v1<
     }
     push_base_error(word_or_digest.mul(current[0].sub(word_value)));
     for byte in 0..4 {
-        let byte_value = pack_bits(&current[1 + byte * 8..1 + (byte + 1) * 8]);
+        let byte_value = pack_bits(&current[(1 + byte * 8)..=((byte + 1) * 8)]);
         push_base_error(
             fixed[FIX_WORD_BYTE_MASK + byte]
                 .mul(byte_value.sub(fixed[FIX_WORD_BYTE_EXPECTED + byte])),
@@ -401,7 +399,7 @@ pub(crate) fn original_evaluate_zk_x509_sha_word_stark_residues_over_field_v1<
 
 /// Evaluate the preserved pre-streaming equation body.
 #[allow(clippy::too_many_lines)]
-pub(crate) fn original_evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<
+pub fn original_evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<
     A: PolynomialAirFieldV1,
 >(
     current: &[A; SHA_WORD_CAPACITY_BASE_WIDTH_V1],
@@ -490,9 +488,8 @@ pub(crate) fn original_evaluate_zk_x509_sha_word_capacity_residues_over_field_v1
     effective_fixed[FIX_EVENT_ADDRESS] = digest
         .mul(current[SHA_WORD_CAPACITY_DYNAMIC_ADDRESS_V1])
         .add(A::ONE.sub(digest).mul(effective_fixed[FIX_EVENT_ADDRESS]));
-    for index in 0..7 {
-        effective_fixed[FIX_CONTINUATION_PUBLIC + index] = current_aux[CONT_SEGMENT_INDEX + index];
-    }
+    effective_fixed[FIX_CONTINUATION_PUBLIC..FIX_CONTINUATION_PUBLIC + 7]
+        .copy_from_slice(&current_aux[CONT_SEGMENT_INDEX..CONT_SEGMENT_INDEX + 7]);
     let current_raw: &[A; SHA_WORD_BASE_WIDTH_V1] = current[..SHA_WORD_BASE_WIDTH_V1]
         .try_into()
         .expect("raw base prefix");
@@ -759,11 +756,11 @@ pub(crate) fn original_evaluate_zk_x509_sha_word_capacity_residues_over_field_v1
             ),
         );
     }
-    for column in SHA_WORD_MEMORY_PRODUCT_WIDTH_V1..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1 {
-        residues.push(memory.mul(current_aux[column]));
+    for value in &current_aux[SHA_WORD_MEMORY_PRODUCT_WIDTH_V1..SHA_WORD_LOCAL_PRODUCT_WIDTH_V1] {
+        residues.push(memory.mul(*value));
     }
-    for column in CONTINUATION_OFFSET..GLOBAL_LOCAL_PRODUCT_END {
-        residues.push(current_aux[column]);
+    for value in &current_aux[CONTINUATION_OFFSET..GLOBAL_LOCAL_PRODUCT_END] {
+        residues.push(*value);
     }
     if residues.len() != SHA_WORD_CAPACITY_CONSTRAINT_COUNT_V1 {
         return Err(ZkX509ShaWordStarkErrorV1::Topology);

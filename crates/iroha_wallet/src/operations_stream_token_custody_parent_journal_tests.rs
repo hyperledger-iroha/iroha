@@ -13,7 +13,7 @@ struct SignedJournals {
     configure: StreamTokenCustodyConfigureRequest,
     enroll: StreamTokenCustodyEnrollRequest,
     // Drop retained native owners before removing their temporary directory on Windows.
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
 }
 impl SignedJournals {
     fn new() -> Self {
@@ -41,7 +41,7 @@ impl SignedJournals {
             transport,
             configure,
             enroll,
-            _root: root,
+            root,
         }
     }
     fn name(enroll: bool) -> &'static OsStr {
@@ -276,7 +276,7 @@ fn signed_parent_verification_refuses_same_bytes_replacement_and_restores_exact_
     let bytes = [false, true]
         .map(|enroll| files(&fixture.parent.path().join(SignedJournals::name(enroll))));
     let parent_identity = fixture.parent.identity().unwrap();
-    let displaced = fixture._root.path().join("displaced-parent");
+    let displaced = fixture.root.path().join("displaced-parent");
     fs::rename(fixture.parent.path(), &displaced).unwrap();
     for enroll in [false, true] {
         assert!(fixture.verify(enroll).is_err());
@@ -400,7 +400,7 @@ fn signed_parent_verification_fits_fixed_native_descriptor_budget() {
         drop(Journal::open(&path).unwrap());
     }
     assert_eq!(fixture.calls(), calls);
-    let root = fixture._root.path().to_path_buf();
+    let root = fixture.root.path().to_path_buf();
     drop(fixture);
     assert!(!root.exists());
     eprintln!("{CHILD_PASSED}");

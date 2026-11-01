@@ -181,9 +181,9 @@ mod stream_token_gateway_permission_tests {
             );
             for revoke in [false, true] {
                 let instruction = if revoke {
-                    Revoke::account_permission(permission.clone(), BOB_ID.clone()).into()
+                    &Revoke::account_permission(permission.clone(), BOB_ID.clone()).into()
                 } else {
-                    Grant::account_permission(permission.clone(), BOB_ID.clone()).into()
+                    &Grant::account_permission(permission.clone(), BOB_ID.clone()).into()
                 };
                 assert!(
                     Executor::Initial
@@ -247,7 +247,7 @@ mod stream_token_gateway_permission_tests {
                 .execute_instruction(
                     &mut transaction,
                     &SAMPLE_GENESIS_ACCOUNT_ID,
-                    Grant::account_permission(manage(), BOB_ID.clone()).into(),
+                    &Grant::account_permission(manage(), BOB_ID.clone()).into(),
                 )
                 .is_err(),
             "genesis identity and a height-one header cannot regain bootstrap authority"
@@ -264,7 +264,7 @@ mod stream_token_gateway_permission_tests {
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                Register::role(Role::new(role.clone(), ALICE_ID.clone()).add_permission(manage()))
+                &Register::role(Role::new(role.clone(), ALICE_ID.clone()).add_permission(manage()))
                     .into(),
             )
             .expect("manager seeds its exact capability into a role");
@@ -272,7 +272,7 @@ mod stream_token_gateway_permission_tests {
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                Revoke::account_permission(manage(), ALICE_ID.clone()).into(),
+                &Revoke::account_permission(manage(), ALICE_ID.clone()).into(),
             )
             .expect("role holder can revoke its direct management permission");
         assert!(
@@ -285,21 +285,21 @@ mod stream_token_gateway_permission_tests {
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                Grant::account_permission(scoped.clone(), BOB_ID.clone()).into(),
+                &Grant::account_permission(scoped.clone(), BOB_ID.clone()).into(),
             )
             .expect("assigned management role roots an exact configured operation scope");
         Executor::Initial
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                Revoke::account_permission(scoped, BOB_ID.clone()).into(),
+                &Revoke::account_permission(scoped, BOB_ID.clone()).into(),
             )
             .expect("assigned management role can revoke recovery authority");
         for revoke in [false, true] {
             let instruction = if revoke {
-                Revoke::account_permission(manage(), BOB_ID.clone()).into()
+                &Revoke::account_permission(manage(), BOB_ID.clone()).into()
             } else {
-                Grant::account_permission(manage(), BOB_ID.clone()).into()
+                &Grant::account_permission(manage(), BOB_ID.clone()).into()
             };
             Executor::Initial
                 .execute_instruction(&mut transaction, &ALICE_ID, instruction)
@@ -311,9 +311,9 @@ mod stream_token_gateway_permission_tests {
         }
         for revoke in [false, true] {
             let instruction = if revoke {
-                Revoke::account_role(role.clone(), BOB_ID.clone()).into()
+                &Revoke::account_role(role.clone(), BOB_ID.clone()).into()
             } else {
-                Grant::account_role(role.clone(), BOB_ID.clone()).into()
+                &Grant::account_role(role.clone(), BOB_ID.clone()).into()
             };
             Executor::Initial
                 .execute_instruction(&mut transaction, &ALICE_ID, instruction)
@@ -328,14 +328,14 @@ mod stream_token_gateway_permission_tests {
             .execute_instruction(
                 &mut transaction,
                 &BOB_ID,
-                Register::role(Role::new(empty.clone(), BOB_ID.clone())).into(),
+                &Register::role(Role::new(empty.clone(), BOB_ID.clone())).into(),
             )
             .expect("unprivileged role fixture");
         for revoke in [false, true] {
             let instruction = if revoke {
-                Revoke::role_permission(manage(), empty.clone()).into()
+                &Revoke::role_permission(manage(), empty.clone()).into()
             } else {
-                Grant::role_permission(manage(), empty.clone()).into()
+                &Grant::role_permission(manage(), empty.clone()).into()
             };
             assert!(
                 Executor::Initial
@@ -350,7 +350,7 @@ mod stream_token_gateway_permission_tests {
                 .execute_instruction(
                     &mut transaction,
                     &BOB_ID,
-                    Grant::account_permission(manage(), BOB_ID.clone()).into(),
+                    &Grant::account_permission(manage(), BOB_ID.clone()).into(),
                 )
                 .is_err(),
             "revoked former holder cannot restore its capability"
@@ -393,7 +393,7 @@ mod stream_token_gateway_permission_tests {
                 .execute_instruction(
                     &mut transaction,
                     &unregistered,
-                    Grant::account_permission(permission.clone(), BOB_ID.clone()).into()
+                    &Grant::account_permission(permission.clone(), BOB_ID.clone()).into()
                 )
                 .is_err()
         );
@@ -416,7 +416,7 @@ mod stream_token_gateway_permission_tests {
                 .execute_instruction(
                     &mut transaction,
                     &ALICE_ID,
-                    Grant::account_permission(permission, BOB_ID.clone()).into()
+                    &Grant::account_permission(permission, BOB_ID.clone()).into()
                 )
                 .is_err(),
             "partial policy state cannot root issuance"
@@ -434,9 +434,9 @@ mod stream_token_gateway_permission_tests {
             let permission = operate(policy.qualification.gateway_id);
             for revoke in [false, true] {
                 let instruction = if revoke {
-                    Revoke::account_permission(permission.clone(), BOB_ID.clone()).into()
+                    &Revoke::account_permission(permission.clone(), BOB_ID.clone()).into()
                 } else {
-                    Grant::account_permission(permission.clone(), BOB_ID.clone()).into()
+                    &Grant::account_permission(permission.clone(), BOB_ID.clone()).into()
                 };
                 Executor::Initial.execute_instruction(&mut transaction, &ALICE_ID, instruction)
                     .expect("configured manager administers recovery capability independently of admission interval");
@@ -461,7 +461,7 @@ mod stream_token_gateway_permission_tests {
             .execute_instruction(
                 &mut transaction,
                 &ALICE_ID,
-                Grant::account_permission(exact.clone(), BOB_ID.clone()).into(),
+                &Grant::account_permission(exact.clone(), BOB_ID.clone()).into(),
             )
             .unwrap();
         let role: RoleId = "gateway_exact_operators".parse().unwrap();
@@ -469,7 +469,7 @@ mod stream_token_gateway_permission_tests {
             .execute_instruction(
                 &mut transaction,
                 &BOB_ID,
-                Register::role(
+                &Register::role(
                     Role::new(role.clone(), BOB_ID.clone()).add_permission(exact.clone()),
                 )
                 .into(),
@@ -477,9 +477,9 @@ mod stream_token_gateway_permission_tests {
             .unwrap();
         for revoke in [true, false] {
             let instruction = if revoke {
-                Revoke::role_permission(exact.clone(), role.clone()).into()
+                &Revoke::role_permission(exact.clone(), role.clone()).into()
             } else {
-                Grant::role_permission(exact.clone(), role.clone()).into()
+                &Grant::role_permission(exact.clone(), role.clone()).into()
             };
             Executor::Initial
                 .execute_instruction(&mut transaction, &BOB_ID, instruction)
@@ -501,7 +501,7 @@ mod stream_token_gateway_permission_tests {
                     .execute_instruction(
                         &mut transaction,
                         &BOB_ID,
-                        Revoke::account_permission(exact.clone(), BOB_ID.clone()).into(),
+                        &Revoke::account_permission(exact.clone(), BOB_ID.clone()).into(),
                     )
                     .unwrap();
                 assert!(
@@ -510,9 +510,9 @@ mod stream_token_gateway_permission_tests {
             }
             for revoke in [false, true] {
                 let instruction = if revoke {
-                    Revoke::account_permission(exact.clone(), account(73)).into()
+                    &Revoke::account_permission(exact.clone(), account(73)).into()
                 } else {
-                    Grant::account_permission(exact.clone(), account(73)).into()
+                    &Grant::account_permission(exact.clone(), account(73)).into()
                 };
                 Executor::Initial
                     .execute_instruction(&mut transaction, &BOB_ID, instruction)
@@ -523,14 +523,14 @@ mod stream_token_gateway_permission_tests {
                 );
                 for permission in [other.clone(), manage()] {
                     let account_instruction = if revoke {
-                        Revoke::account_permission(permission.clone(), account(73)).into()
+                        &Revoke::account_permission(permission.clone(), account(73)).into()
                     } else {
-                        Grant::account_permission(permission.clone(), account(73)).into()
+                        &Grant::account_permission(permission.clone(), account(73)).into()
                     };
                     let role_instruction = if revoke {
-                        Revoke::role_permission(permission, role.clone()).into()
+                        &Revoke::role_permission(permission, role.clone()).into()
                     } else {
-                        Grant::role_permission(permission, role.clone()).into()
+                        &Grant::role_permission(permission, role.clone()).into()
                     };
                     for instruction in [account_instruction, role_instruction] {
                         assert!(
@@ -545,9 +545,9 @@ mod stream_token_gateway_permission_tests {
         }
         for revoke in [false, true] {
             let instruction = if revoke {
-                Revoke::account_role(role.clone(), account(73)).into()
+                &Revoke::account_role(role.clone(), account(73)).into()
             } else {
-                Grant::account_role(role.clone(), account(73)).into()
+                &Grant::account_role(role.clone(), account(73)).into()
             };
             Executor::Initial
                 .execute_instruction(&mut transaction, &BOB_ID, instruction)

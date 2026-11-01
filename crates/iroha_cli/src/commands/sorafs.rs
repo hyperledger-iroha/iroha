@@ -9483,9 +9483,7 @@ fn file_is_executable(path: &Path) -> bool {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::metadata(path)
-            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            .unwrap_or(false)
+        fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
     }
     #[cfg(not(unix))]
     {
@@ -9876,7 +9874,7 @@ fn transparency_privacy_aggregate_canary_probe_json(
 }
 fn load_sorafs_json_payload(path: &Path, label: &str) -> Result<Vec<u8>> {
     let bytes = fs::read(path)
-        .wrap_err_with(|| format!("failed to read {label} payload `{}`", path.display(),))?;
+        .wrap_err_with(|| format!("failed to read {label} payload `{}`", path.display()))?;
     if bytes.is_empty() {
         return Err(eyre!(
             "{label} payload `{}` must not be empty",
@@ -12279,9 +12277,9 @@ mod gateway_tests {
         let config = assert_sorafs_config_snippet_is_schema_valid(&rendered);
         assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
         assert_eq!(config.gateway.rate_limit.ban, Some(Duration::from_secs(30)));
-        assert_eq_compact! { config.gateway.acme.renewal_window => Duration::from_secs(30 * 24 * 60 * 60) };
-        assert_eq_compact! { config.gateway.acme.retry_backoff => Duration::from_secs(30 * 60) };
-        assert_eq_compact! { config.gateway.acme.retry_jitter => Duration::from_secs(5 * 60) };
+        assert_eq_compact! { config.gateway.acme.renewal_window => Duration::from_hours(30 * 24) };
+        assert_eq_compact! { config.gateway.acme.retry_backoff => Duration::from_mins(30) };
+        assert_eq_compact! { config.gateway.acme.retry_jitter => Duration::from_mins(5) };
         assert!(rendered.contains("[sorafs.gateway]"));
         assert!(!rendered.contains("[torii.sorafs_gateway]"));
         assert!(rendered.contains("gateway-a.example.com"));
@@ -12296,7 +12294,7 @@ mod gateway_tests {
         ));
         let config = assert_sorafs_config_snippet_is_schema_valid(fixture);
         assert_eq!(config.gateway.rate_limit.window, Duration::from_secs(60));
-        assert_eq_compact! { config.gateway.rate_limit.ban => Some(Duration::from_secs(10 * 60)) };
+        assert_eq_compact! { config.gateway.rate_limit.ban => Some(Duration::from_mins(10)) };
         assert!(config.gateway.direct_mode.is_some());
     }
     #[test]

@@ -672,7 +672,8 @@ pub struct AdoptionRecordV1 {
     pub committee: [u8; 32],
     /// The foundation's initial selection.
     pub selection: SelectionId,
-    /// Hash of the certified transaction that authorized the adoption.
+    /// Identity of the governance record that authorized the adoption or, for a network whose node
+    /// configuration alone authorized it (Taira), the record that ratifies this anchor.
     #[norito(json = "crate::json_helpers::fixed_bytes_hex")]
     pub authorization: [u8; 32],
 }

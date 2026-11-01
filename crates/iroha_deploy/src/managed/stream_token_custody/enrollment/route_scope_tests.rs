@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 fn assert_same(actual: &RetainedCustodyEnrollment, expected: &RetainedCustodyEnrollment) {
     assert_eq!(actual.bytes(), expected.bytes());
-    assert!(actual.statement() == expected.statement());
+    assert_eq!(actual.statement(), expected.statement());
     assert_eq!(actual.record_digest(), expected.record_digest());
     assert_eq!(actual.finalized(), expected.finalized());
 }

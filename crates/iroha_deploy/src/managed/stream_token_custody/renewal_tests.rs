@@ -414,7 +414,10 @@ fixture.options.deadline,
     let state = current.current().unwrap();
     assert_eq!(state.control().active_head.unwrap().sequence, 2);
     assert_eq!(state.control().next_sequence, 3);
-    assert!(state.record().active_enrollment.as_ref().unwrap() != &initial_bytes);
+    assert_ne!(
+        state.record().active_enrollment.as_ref().unwrap(),
+        &initial_bytes
+    );
     let Action::Enroll {
         validity,
         enrollment,

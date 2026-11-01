@@ -8,7 +8,7 @@ fn execute_initial_soracloud(
     crate::executor::Executor::Initial.execute_instruction(
         state_transaction,
         authority,
-        instruction.into(),
+        &instruction.into(),
     )
 }
 

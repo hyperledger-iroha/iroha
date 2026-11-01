@@ -384,7 +384,7 @@ fn read_secret_file(path: &Path) -> Result<KaigiSecret> {
     {
         use std::os::unix::fs::PermissionsExt as _;
         ensure!(
-            metadata.permissions().mode() & 0o077 == 0,
+            metadata.permissions().mode().trailing_zeros() >= 6,
             "Kaigi secret file {} must be accessible only by its owner (chmod 600)",
             path.display()
         );

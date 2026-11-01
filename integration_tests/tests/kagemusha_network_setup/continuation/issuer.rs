@@ -14,6 +14,10 @@ use iroha_fs::PrivateDirectory;
 use std::borrow::Cow;
 use toml::Table;
 
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "MAX_TOML_SOURCE_BYTES is 1 MiB, which every supported usize holds."
+)]
 const CONFIG_MAX: usize = MAX_TOML_SOURCE_BYTES as usize;
 
 /// The original in-memory node-local selection retained across the final network restart.
@@ -218,7 +222,7 @@ pub(super) fn run(
             && committed_height(network)? == registered.height,
         "same four live validators at the authenticated registration height required"
     );
-    let peer_index = command["peer_index"].as_u64().unwrap() as usize;
+    let peer_index = usize::try_from(command["peer_index"].as_u64().unwrap()).unwrap();
     let configuration = PathBuf::from(command["configuration"]["path"].as_str().unwrap());
     let configuration_sha = command["configuration"]["sha256"]
         .as_str()

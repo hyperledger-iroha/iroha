@@ -103,7 +103,12 @@ fn every_registration_mix_is_identical_across_worker_schedules() {
         .registered_segments
         .iter()
         .enumerate()
-        .map(|(index, registration)| fixture(registration.segment.constraint_count, index as u8))
+        .map(|(index, registration)| {
+            fixture(
+                registration.segment.constraint_count,
+                u8::try_from(index).unwrap(),
+            )
+        })
         .collect::<Vec<_>>();
     let expected = fixtures
         .iter()
@@ -180,7 +185,10 @@ fn streamed_mixture_clears_products_carries_and_completed_blocks_on_every_exit()
 #[test]
 #[ignore = "release-only isolated scalar versus widened composition-mix timings"]
 fn composition_mix_cost_diagnostic() {
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     for width in [90, 593, 1024, 2145] {
         let (residues, alphas) = fixture(width, 73);
         let iterations = (1 << 24) / width;

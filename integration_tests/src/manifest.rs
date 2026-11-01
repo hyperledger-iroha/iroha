@@ -134,6 +134,10 @@ mod tests {
     }
 
     #[test]
+    #[expect(
+        clippy::used_underscore_binding,
+        reason = "The test inspects the grant that production code retains only for its drop."
+    )]
     fn original_pool_remains_reserved_until_graph_and_owner_are_dropped() {
         let cumulative = 4096;
         let pool = AllocationBudget::new(ManifestEncodingBudget::pool_bytes(cumulative).unwrap());

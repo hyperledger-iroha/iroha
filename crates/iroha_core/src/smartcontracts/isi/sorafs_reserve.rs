@@ -249,6 +249,7 @@ where
 {
     decode_state_with_current(bytes, label, None, None)
 }
+#[cfg(test)]
 fn decode_state_for_current<T>(
     bytes: &[u8],
     label: &str,

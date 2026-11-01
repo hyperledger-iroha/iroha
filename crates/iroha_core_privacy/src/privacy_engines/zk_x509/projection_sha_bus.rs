@@ -133,7 +133,7 @@ pub(super) fn push_residues_v1<A: PolynomialAirFieldV1>(
     current_aux: &[A; ZK_X509_PROJECTION_AUX_WIDTH_V1],
     next_aux: &[A; ZK_X509_PROJECTION_AUX_WIDTH_V1],
     fixed: &[A; ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1],
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
     residues: &mut Vec<A>,
 ) {
     residues.push(fixed[FIX_PACK_FIRST].mul(current[REGION_BEFORE]));

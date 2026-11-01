@@ -50,7 +50,7 @@ fn transfer(
             FeePaymentIntent::authority(Vec::new(), None),
             Metadata::default(),
         )
-        .with_time_to_live(Duration::from_secs(660)),
+        .with_time_to_live(Duration::from_mins(11)),
     )?;
     let quote = client.quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })?;
     ensure!(
@@ -109,36 +109,36 @@ fn committed_transfer(
             Instant::now() < deadline,
             "exact transfer did not become visible on this validator"
         );
-        if let Some(status) = reader.get_transaction_status_response_local(transaction.hash())? {
-            if let Some(height) = applied_transfer_height(&status)? {
-                // The signed exact-details route checks the input/output identity. Only
-                // canonical absence is retried; malformed, unauthorized and other errors fail.
-                let details = match reader.get_transaction_details(expected.hash()) {
-                    Ok(details) => Some(details),
-                    Err(QueryError::Validation(ValidationFail::QueryFailed(
-                        QueryExecutionFail::NotFound,
-                    ))) => None,
-                    Err(error) => return Err(error.into()),
-                };
-                if let Some(details) = details {
-                    let entry = details.transaction;
-                    ensure!(
-                        entry.entrypoint_hash() == &expected.hash()
-                            && entry.entrypoint() == &expected
-                            && entry.result().is_ok(),
-                        "exact signed transfer did not apply"
-                    );
-                    // Status supplies only an untrusted bounded locator. Authenticate the
-                    // whole prefix against provisioned genesis before using its carrier.
-                    let verified = certified_tip(network, client, height)?;
-                    ensure!(
-                        entry.block_hash() == &verified.block().hash()
-                            && entry.verify_inclusion_in_block(verified.block()),
-                        "invalid exact transfer carrier"
-                    );
-                    verified.verify_committed_transaction(&network.network_id(), &entry)?;
-                    return Ok((entry, verified));
-                }
+        if let Some(status) = reader.get_transaction_status_response_local(transaction.hash())?
+            && let Some(height) = applied_transfer_height(&status)?
+        {
+            // The signed exact-details route checks the input/output identity. Only
+            // canonical absence is retried; malformed, unauthorized and other errors fail.
+            let details = match reader.get_transaction_details(expected.hash()) {
+                Ok(details) => Some(details),
+                Err(QueryError::Validation(ValidationFail::QueryFailed(
+                    QueryExecutionFail::NotFound,
+                ))) => None,
+                Err(error) => return Err(error.into()),
+            };
+            if let Some(details) = details {
+                let entry = details.transaction;
+                ensure!(
+                    entry.entrypoint_hash() == &expected.hash()
+                        && entry.entrypoint() == &expected
+                        && entry.result().is_ok(),
+                    "exact signed transfer did not apply"
+                );
+                // Status supplies only an untrusted bounded locator. Authenticate the
+                // whole prefix against provisioned genesis before using its carrier.
+                let verified = certified_tip(network, client, height)?;
+                ensure!(
+                    entry.block_hash() == &verified.block().hash()
+                        && entry.verify_inclusion_in_block(verified.block()),
+                    "invalid exact transfer carrier"
+                );
+                verified.verify_committed_transaction(&network.network_id(), &entry)?;
+                return Ok((entry, verified));
             }
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -221,7 +221,7 @@ fn selected_genesis(network: &Network) -> Result<SumeragiFinalityVerifier> {
     );
     Ok(SumeragiFinalityVerifier::new(
         genesis.block(),
-        &network.chain_id().to_string(),
+        network.chain_id().as_ref(),
         validators,
     )?)
 }
@@ -249,7 +249,7 @@ fn certified_tip(network: &Network, client: &Client, height: u64) -> Result<Veri
             NonZeroU64::new(next).expect("positive bounded height"),
             verifier.root_scope(),
         )?;
-        let verified = verifier.verify(&proof)?;
+        let verified_block = verifier.verify(&proof)?;
         let members: BTreeSet<_> = proof
             .committee
             .iter()
@@ -260,7 +260,7 @@ fn certified_tip(network: &Network, client: &Client, height: u64) -> Result<Veri
             "finality committee differs from provisioned validators"
         );
         if next > 1 {
-            let certificate = verified
+            let certificate = verified_block
                 .block()
                 .commit_certificate()
                 .ok_or_else(|| eyre!("certified successor lacks embedded certificate"))?;
@@ -287,11 +287,15 @@ fn certified_tip(network: &Network, client: &Client, height: u64) -> Result<Veri
             Instant::now() < deadline,
             "contiguous native finality exceeded deadline"
         );
-        tip = Some(verified);
+        tip = Some(verified_block);
     }
     tip.ok_or_else(|| eyre!("empty verified prefix"))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The transcript check receives each verified block, transaction and balance input explicitly."
+)]
 fn check_transcript(
     network: &Network,
     verified: &VerifiedSumeragiBlock,

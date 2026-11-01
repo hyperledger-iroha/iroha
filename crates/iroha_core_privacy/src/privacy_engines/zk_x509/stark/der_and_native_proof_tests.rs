@@ -24,9 +24,8 @@ impl rand::TryRng for MaxValueRng {
         Ok(u64::MAX)
     }
     fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-        Ok({
-            destination.fill(0xFF);
-        })
+        destination.fill(0xFF);
+        Ok(())
     }
 }
 #[test]

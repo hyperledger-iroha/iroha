@@ -311,22 +311,27 @@ async fn prepare_action(
 }
 
 async fn cold_reopen_preparation(prepare_only: bool) {
-    let mut native = NativeFinalityFixture::start("private-onecall-cold-context");
-    let mut builder =
-        client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
-    builder.network_id = native.network_id();
-    builder.chain = native.chain_id().parse().unwrap();
-    let client = builder.build().unwrap();
-    let (proof, original_intent) = context(&client);
-    let genesis_verifier = native.verifier();
-    let block = native.block_with_submitted_work(native.next_header());
-    let finality =
-        native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
-    let client = client
-        .to_builder()
-        .http_transport(Arc::new(FinalityTransport(finality)))
-        .build()
-        .unwrap();
+    // The native fixture only builds the finality transport; scoping it here keeps it out of
+    // the state this scenario holds across its awaits.
+    let (client, proof, original_intent, genesis_verifier) = {
+        let mut native = NativeFinalityFixture::start("private-onecall-cold-context");
+        let mut builder =
+            client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
+        builder.network_id = native.network_id();
+        builder.chain = native.chain_id().parse().unwrap();
+        let client = builder.build().unwrap();
+        let (proof, original_intent) = context(&client);
+        let genesis_verifier = native.verifier();
+        let block = native.block_with_submitted_work(native.next_header());
+        let finality =
+            native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+        let client = client
+            .to_builder()
+            .http_transport(Arc::new(FinalityTransport(finality)))
+            .build()
+            .unwrap();
+        (client, proof, original_intent, genesis_verifier)
+    };
     let root = tempfile::tempdir().unwrap();
     let journals = root.path().join("journals");
     let artifacts = root.path().join("artifacts");
@@ -1234,7 +1239,8 @@ async fn private_prepare_pending_prefix_reopens_beyond_read_budget_without_a_car
 
 async fn cold_prefix_preparation(prepare_only: bool) {
     const SELECTED: u64 = 70;
-    let mut native = NativeFinalityFixture::start("private-pending-prefix");
+    // The scenario keeps its native fixture across every await; keep it on the heap.
+    let mut native = Box::new(NativeFinalityFixture::start("private-pending-prefix"));
     let genesis = native.verifier();
     let mut builder = client_with_base_url(&"http://prefix.invalid/".parse().unwrap()).to_builder();
     builder.network_id = native.network_id();
@@ -1282,8 +1288,10 @@ async fn cold_prefix_preparation(prepare_only: bool) {
     let mut original_round = None;
     for (budget, end) in [(64, 65), (4, 69)] {
         let operation = reopen();
-        let mut options = PrivateSettlementRunOptions::default();
-        options.max_finality_proof_reads = budget;
+        let options = PrivateSettlementRunOptions {
+            max_finality_proof_reads: budget,
+            ..PrivateSettlementRunOptions::default()
+        };
         assert!(matches!(
             prepare_action(&operation, &options, prepare_only).await,
             Err(OneCallPrivateSettlementError::Capacity)
@@ -1382,9 +1390,12 @@ async fn cold_prefix_preparation(prepare_only: bool) {
         ordinal: 0,
     };
     let store = FilePrivateSettlementArtifacts::open(&artifact_path, &[41; 32]).unwrap();
-    let foreign = NativeFinalityFixture::new();
     store
-        .publish_finality(key, &foreign.checkpoint(), request.0.max_artifact_bytes)
+        .publish_finality(
+            key,
+            &NativeFinalityFixture::new().checkpoint(),
+            request.0.max_artifact_bytes,
+        )
         .unwrap();
     assert!(matches!(
         prepare_action(

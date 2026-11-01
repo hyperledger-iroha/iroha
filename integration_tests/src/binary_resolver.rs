@@ -15,9 +15,7 @@ use std::{
 pub fn iroha_program() -> eyre::Result<ResolvedProgram> {
     if resolve_release_prebuilt_binary(BinaryKind::Iroha)?.is_some() {
         // Program admission also authenticates any explicit TEST_NETWORK_BIN_IROHA override.
-        return iroha_test_network::Program::Iroha
-            .resolve()
-            .map_err(Into::into);
+        return iroha_test_network::Program::Iroha.resolve();
     }
     prepare_iroha_cli_test_environment();
     iroha_test_network::Program::Iroha.resolve()
@@ -33,13 +31,11 @@ pub fn iroha_program() -> eyre::Result<ResolvedProgram> {
 pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<ResolvedProgram> {
     if resolve_release_prebuilt_binary(BinaryKind::Iroha)?.is_some() {
         // Program admission also authenticates any explicit TEST_NETWORK_BIN_IROHA override.
-        return iroha_test_network::Program::Iroha
-            .resolve()
-            .map_err(Into::into);
+        return iroha_test_network::Program::Iroha.resolve();
     }
     prepare_iroha_cli_test_environment();
     if let Some(path) = find_existing_cli_binary_path() {
-        return resolve_development_binary(&path).map_err(Into::into);
+        return resolve_development_binary(&path);
     }
     iroha_test_network::Program::Iroha.resolve()
 }

@@ -52,6 +52,10 @@ impl Probe {
     }
 
     /// Prove the actual executor observed this source exactly once.
+    #[expect(
+        clippy::unused_self,
+        reason = "the receiver proves the guard that owns this thread-local observation is still alive"
+    )]
     pub(crate) fn assert_observed_once(&self) {
         OBSERVATION.with_borrow(|slot| {
             assert_eq!(slot.as_ref().expect("active observation").calls, 1);

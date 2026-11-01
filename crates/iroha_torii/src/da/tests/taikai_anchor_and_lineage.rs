@@ -2495,7 +2495,7 @@ fn taikai_trm_lineage_guard_never_steals_an_aged_live_lock() {
         .expect("guard")
         .expect("enabled");
     let lock_path = taikai_lock_path(spool_dir);
-    let stale_at = SystemTime::now() - Duration::from_secs(24 * 60 * 60);
+    let stale_at = SystemTime::now() - Duration::from_hours(24);
     let stale_times = std::fs::FileTimes::new()
         .set_accessed(stale_at)
         .set_modified(stale_at);

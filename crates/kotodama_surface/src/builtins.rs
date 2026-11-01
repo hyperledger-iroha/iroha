@@ -2915,8 +2915,8 @@ impl Builtin {
             | Self::SoracloudAppendJournal
             | Self::SoracloudPublishCheckpoint
             | Self::SoracloudReadConfig
-            | Self::SoracloudReadSecretEnvelope => signature.with_names(&["request"]),
-            Self::PresentX509 => signature.with_names(&["request"]),
+            | Self::SoracloudReadSecretEnvelope
+            | Self::PresentX509 => signature.with_names(&["request"]),
             Self::GetPrivateInput => signature.with_names(&["index"]),
             Self::Path => signature.with_names(&["path", "key"]),
             Self::Sm2Verify => {

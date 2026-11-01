@@ -609,9 +609,6 @@ fn append_canonical_block_scalars_v1(
         return Err(ZkAmsMkheErrorV1::InvalidPhase23Fold);
     }
     for encoded in bytes.as_chunks::<32>().0 {
-        let encoded: &[u8; 32] = encoded
-            .try_into()
-            .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?;
         destination.push(
             Scalar::from_be_bytes_exact_ref(encoded)
                 .map_err(|_| ZkAmsMkheErrorV1::InvalidPhase23Fold)?,

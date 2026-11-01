@@ -169,7 +169,7 @@ fn early_attestations_with_attached_producer_keep_complete_native_proofs() {
         let (_, release) = attest_tip_released(&chain, [81; 32]).unwrap();
         assert!(retained_attestation_releasable(chain.state(), &release));
 
-        let tip = NonZeroUsize::new(height as usize).unwrap();
+        let tip = NonZeroUsize::new(usize::try_from(height).unwrap()).unwrap();
         chain.kura().corrupt_native_frame_for_test(tip);
         assert!(
             attest_tip(&chain, [82; 32]).is_err(),

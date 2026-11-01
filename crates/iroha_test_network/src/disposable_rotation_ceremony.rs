@@ -3024,8 +3024,7 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
             .unwrap();
         let expected = budget.try_reserve_bytes(retained_bytes).unwrap_err();
         let error = merge_publications(session, &[], &crypto, &budget)
-            .err()
-            .expect("actual original pool is fully occupied");
+            .expect_err("actual original pool is fully occupied");
         let Some(GlobalThresholdBeaconSessionError::Admission(actual)) =
             error.downcast_ref::<GlobalThresholdBeaconSessionError>()
         else {

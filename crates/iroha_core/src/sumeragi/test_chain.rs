@@ -2281,7 +2281,7 @@ fn fixture_bootstrap_state(
         (state, kura)
     } else {
         let kura = Kura::blank_kura_for_testing();
-        let mut state = State::try_new_with_chain_and_network_id_with_default_telemetry(
+        let state = State::try_new_with_chain_and_network_id_with_default_telemetry(
             world.sccp_committee_generations.allocation_budget().clone(),
             world,
             Arc::clone(&kura),

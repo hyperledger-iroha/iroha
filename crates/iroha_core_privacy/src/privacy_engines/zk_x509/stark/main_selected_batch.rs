@@ -637,7 +637,7 @@ fn prune_batch_v1(values: &mut [F], offset: usize, destinations: &[F], root: F, 
             .as_chunks_mut::<WIDTH_V1>()
             .0
             .iter_mut()
-            .zip(odd.chunks_exact_mut(WIDTH_V1))
+            .zip(odd.as_chunks_mut::<WIDTH_V1>().0.iter_mut())
         {
             for (even, odd) in even.iter_mut().zip(odd) {
                 let left = *even;

@@ -1,5 +1,6 @@
 //! Sponsored account-onboarding clean-break contract tests.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{
     body::{Body, to_bytes},
     extract::connect_info::ConnectInfo,
@@ -51,8 +52,6 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-#[path = "fixtures.rs"]
-mod fixtures;
 const ONBOARDING_API_TOKEN: &str = "torii-onboarding-test-token-32-bytes";
 const ONBOARDING_WRONG_SCOPE_API_TOKEN: &str = "torii-onboarding-wrong-scope-token";
 const ONBOARDING_SIGNER_PATH: &str = "/runtime-only/onboarding-test-signer.key";
@@ -414,11 +413,11 @@ fn mutation_binding(
         json_entry("execution_expires_at_unix_ms", &expires_at_unix_ms),
     ])
 }
-fn onboarding_prepare_request(receipt: norito::json::Value) -> norito::json::Value {
+fn onboarding_prepare_request(receipt: &norito::json::Value) -> norito::json::Value {
     onboarding_prepare_request_with_expiry(receipt, u64::MAX)
 }
 fn onboarding_prepare_request_with_expiry(
-    receipt: norito::json::Value,
+    receipt: &norito::json::Value,
     expires_at_unix_ms: u64,
 ) -> norito::json::Value {
     let plan_hash: iroha_crypto::Hash =
@@ -442,7 +441,7 @@ fn onboarding_prepare_request_with_expiry(
             "fee_payment",
             &iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         ),
-        json_entry("receipt", &receipt),
+        json_entry("receipt", receipt),
     ])
 }
 fn onboarding_http_request(
@@ -628,7 +627,7 @@ async fn sponsored_onboarding_receipt_binds_exact_network_and_active_signer() {
     for retired in ["chain", "chainId", "chain_id"] {
         assert!(!body.contains_key(retired));
     }
-    let prepare = onboarding_prepare_request(plan.payload.clone());
+    let prepare = onboarding_prepare_request(&plan.payload);
     for (context, replay) in [
         (&foreign_genesis, "same-label foreign-genesis"),
         (&rotated_signer, "retired onboarding signer"),
@@ -676,7 +675,7 @@ async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys()
     let response = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(genesis),
+        &onboarding_prepare_request(&genesis),
     )
     .await;
     assert_eq!(
@@ -699,7 +698,7 @@ async fn sponsored_onboarding_receipt_rejects_genesis_and_retired_network_keys()
             let response = send_onboarding_request(
                 &context.app,
                 "/v1/accounts/onboard/prepare",
-                &onboarding_prepare_request(mutated),
+                &onboarding_prepare_request(&mutated),
             )
             .await;
             assert_eq!(
@@ -742,7 +741,7 @@ async fn sponsored_onboarding_submit_rejects_old_and_tampered_envelopes() {
     let prepared = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(plan.payload),
+        &onboarding_prepare_request(&plan.payload),
     )
     .await;
     assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.raw_body);
@@ -824,14 +823,14 @@ async fn sponsored_onboarding_prepared_submit_is_idempotent_until_certified_exec
     let candidate_a = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(plan.payload.clone()),
+        &onboarding_prepare_request(&plan.payload),
     )
     .await;
     tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     let prepared = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(plan.payload.clone()),
+        &onboarding_prepare_request(&plan.payload),
     )
     .await;
     assert_eq!(
@@ -921,7 +920,7 @@ async fn sponsored_onboarding_prepared_submit_is_idempotent_until_certified_exec
     let still_preparable = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(plan.payload.clone()),
+        &onboarding_prepare_request(&plan.payload),
     )
     .await;
     assert_eq!(
@@ -996,7 +995,7 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enter
     let context = build_onboarding_test_context_at(
         0xA1,
         0xD1,
-        now.checked_sub(Duration::from_secs(33 * 60 * 60)).unwrap(),
+        now.checked_sub(Duration::from_hours(33)).unwrap(),
     );
     let anchor = context
         .state
@@ -1004,7 +1003,7 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enter
         .latest_block()
         .expect("funded canonical history read")
         .expect("committed anchor");
-    assert!(anchor.header().creation_time() + Duration::from_secs(32 * 60 * 60) < now);
+    assert!(anchor.header().creation_time() + Duration::from_hours(32) < now);
     let target = AccountId::new(
         checked_key_pair(
             0xDA,
@@ -1052,7 +1051,7 @@ async fn sponsored_onboarding_fresh_receipt_prepares_after_idle_anchor_and_enter
     let prepared = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(plan.payload),
+        &onboarding_prepare_request(&plan.payload),
     )
     .await;
     assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.raw_body);
@@ -1080,7 +1079,7 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
     let context = build_onboarding_test_context_at(
         0xA1,
         0xD1,
-        now.checked_sub(Duration::from_secs(33 * 60 * 60)).unwrap(),
+        now.checked_sub(Duration::from_hours(33)).unwrap(),
     );
     let anchor_hash = context
         .state
@@ -1139,7 +1138,7 @@ async fn sponsored_onboarding_rejects_signed_expired_receipt_without_block_progr
     )
     .expect("expired fixture retains exact semantic and instruction closure");
     let encoded = norito::json::to_value(&receipt).expect("encode signed expired receipt");
-    let bound = onboarding_prepare_request(encoded);
+    let bound = onboarding_prepare_request(&encoded);
     // The active binding cannot exceed its signed receipt. Both a faithfully expired
     // binding and an attempted extension must fail before preparing any transaction.
     let mut extended = bound.clone();
@@ -1188,7 +1187,7 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
     let context = build_onboarding_test_context_at(
         0xA1,
         0xD1,
-        now.checked_sub(Duration::from_secs(33 * 60 * 60)).unwrap(),
+        now.checked_sub(Duration::from_hours(33)).unwrap(),
     );
     let target = AccountId::new(
         checked_key_pair(0xD9, Algorithm::Ed25519, "derive expiry target")
@@ -1201,7 +1200,7 @@ async fn expired_onboarding_envelopes_with_distinct_signed_hashes_fail_closed() 
     let prepared = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(plan.payload),
+        &onboarding_prepare_request(&plan.payload),
     )
     .await;
     assert_eq!(prepared.status, StatusCode::OK, "{}", prepared.raw_body);
@@ -1374,7 +1373,7 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     let conflicting_prepared = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(conflicting_plan.payload.clone()),
+        &onboarding_prepare_request(&conflicting_plan.payload),
     )
     .await;
     assert_eq!(
@@ -1434,7 +1433,7 @@ async fn sponsored_onboarding_stale_create_receipt_returns_redacted_conflict() {
     let stale = send_onboarding_request(
         &context.app,
         "/v1/accounts/onboard/prepare",
-        &onboarding_prepare_request(original_plan.payload.clone()),
+        &onboarding_prepare_request(&original_plan.payload),
     )
     .await;
     assert_eq!(stale.status, StatusCode::CONFLICT, "{}", stale.raw_body);

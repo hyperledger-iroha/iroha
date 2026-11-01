@@ -54,8 +54,8 @@ mod signed_attachment_refusal {
         assert!(!app.state.has_committed_entrypoint(tx.hash_as_entrypoint()));
     }
     async fn assert_retry_response(error: Error, format: crate::utils::ResponseFormat) {
-        assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
         use tower::ServiceExt as _;
+        assert_eq!(error.status_code(), StatusCode::SERVICE_UNAVAILABLE);
         // Move the exact error through the real outer HTTP error middleware.
         // The test-only slot supplies a one-shot response, without cloning its owner.
         let error = Arc::new(Mutex::new(Some(error)));

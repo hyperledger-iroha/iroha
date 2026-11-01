@@ -13263,14 +13263,17 @@ impl<'state> StateBlock<'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Returns the world view associated with this block scope.
     #[inline]
@@ -13927,21 +13930,22 @@ impl<'state> StateBlock<'state> {
         .map_err(|error| {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
         })?;
-        let mut private_changed = false;
-        if let Some(pending) = private.pending_update
+        let limits_due = if let Some(pending) = private.pending_update
             && pending.effective_at_height == incoming_height
         {
             private.current_limits = pending.next_limits;
             private.pending_update = None;
-            private_changed = true;
-        }
-        if private
+            true
+        } else {
+            false
+        };
+        let drain_due = private
             .protocol_closure_drain
-            .is_some_and(|drain| drain.effective_at_height == incoming_height)
-        {
+            .is_some_and(|drain| drain.effective_at_height == incoming_height);
+        if drain_due {
             private.protocol_closure_drain = None;
-            private_changed = true;
         }
+        let private_changed = limits_due || drain_due;
         // Prepare the exact retained successor before mutating either committed owner.
         // An absent extension remains absent during untouched baseline replay.
         let successor = if private_changed {
@@ -14672,14 +14676,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
         iroha_data_model::block::consensus::PublicLaneStakingPolicyError,
     > {
-        if let Some(original) = self.genesis_staking_policy {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_staking_policy()
-        }
+        self.genesis_staking_policy.map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_staking_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
 
     /// Borrow the exact ordinary predecessor fee policy without a local mirror.
@@ -14716,14 +14723,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Return whether execution is currently inside a scheduled or data-trigger body.
     #[inline]
@@ -15127,7 +15137,7 @@ impl<'state> StateQueryView<'state> {
             self.parameters_before_latest_block
                 .get()
                 .as_ref()
-                .unwrap_or(self.world.parameters.get())
+                .unwrap_or_else(|| self.world.parameters.get())
         } else {
             self.world.parameters.get()
         };
@@ -23605,16 +23615,13 @@ impl WorldTransaction<'_, '_> {
             if is_consensus_owned_custom_parameter(id) {
                 continue;
             }
-            let replace = match old_defaults.get(id) {
-                None => true,
-                Some(previous) => {
-                    previous != next
-                        && candidate
-                            .custom()
-                            .get(id)
-                            .is_none_or(|current| current == previous)
-                }
-            };
+            let replace = old_defaults.get(id).is_none_or(|previous| {
+                previous != next
+                    && candidate
+                        .custom()
+                        .get(id)
+                        .is_none_or(|current| current == previous)
+            });
             if replace {
                 let prepared = candidate.prepare_custom_parameter(next, pool)?;
                 candidate = prepared
@@ -43963,21 +43970,6 @@ impl StateTransaction<'_, '_> {
                 ) {
                     continue;
                 }
-                // A suspended callback must not reject the unrelated transaction whose data
-                // event matched it. The event is consumed; restoring the runtime never replays
-                // events skipped while this incarnation's consent was stale or restricted.
-                match crate::smartcontracts::isi::triggers::check_trigger_runtime(
-                    action.metadata(),
-                    action.executable(),
-                    &self.world,
-                    self._curr_block.height().get(),
-                ) {
-                    Ok(()) => {}
-                    Err(Error::Runtime(_)) => continue,
-                    // A local refusal is not a governance suspension. Retain its execution
-                    // deferral and refuse this attempt without consuming a committed event.
-                    Err(error) => return Err(ValidationFail::from(error).into()),
-                }
                 (action.executable().clone(), action.authority().clone())
             };
             if self.data_trigger_firings_in_tx >= MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
@@ -44424,7 +44416,7 @@ impl StateTransaction<'_, '_> {
         crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             self,
             None,
         )
@@ -44569,19 +44561,6 @@ impl StateTransaction<'_, '_> {
         _step_index: u32,
         nft_seq_base_override: Option<u64>,
     ) -> Result<ExecutionStep, TransactionRejectionReason> {
-        self.world
-            .triggers
-            .inspect_by_id(id, |action| {
-                crate::smartcontracts::isi::triggers::check_trigger_runtime(
-                    action.metadata(),
-                    executable,
-                    &self.world,
-                    self._curr_block.height().get(),
-                )
-            })
-            .ok_or_else(|| Error::from(FindError::Trigger(id.clone())))
-            .and_then(core::convert::identity)
-            .map_err(ValidationFail::from)?;
         let (res, _outcome_override): (_, Option<TriggerCompletedOutcome>) = match executable {
             ExecutableRef::Instructions(instructions) => {
                 let instruction_groups = std::collections::BTreeMap::from([(
@@ -44683,11 +44662,7 @@ impl StateTransaction<'_, '_> {
                             iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                                 instruction,
                             ) => {
-                                executor.execute_instruction(
-                                    self,
-                                    authority,
-                                    instruction.clone(),
-                                )?;
+                                executor.execute_instruction(self, authority, instruction)?;
                                 executed_instructions.push(instruction.clone());
                             }
                             iroha_data_model::transaction::ExecutableBatchItem::ContractCall(
@@ -44991,7 +44966,7 @@ impl StateTransaction<'_, '_> {
                     crate::validation_fee::enforce_opaque_deferred_instruction_views(
                         artifacts.queued_instruction_views(),
                         artifacts.queued_instruction_authority_count(),
-                        artifacts.queued_instruction_views(),
+                        &artifacts.queued_instruction_views(),
                         self,
                         runtime_origin,
                     )?;
@@ -45295,7 +45270,7 @@ impl StateTransaction<'_, '_> {
                                 crate::validation_fee::enforce_opaque_deferred_instruction_views(
                                     artifacts.queued_instruction_views(),
                                     artifacts.queued_instruction_authority_count(),
-                                    artifacts.queued_instruction_views(),
+                                    &artifacts.queued_instruction_views(),
                                     self,
                                     runtime_origin,
                                 )?;
@@ -45357,7 +45332,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<ExecutionStep, ValidationFail> {
         let executor = self.world.executor.clone();
         for instruction in &instructions {
-            executor.execute_instruction(self, authority, instruction.clone())?;
+            executor.execute_instruction(self, authority, instruction)?;
         }
         Ok(instructions.into())
     }

@@ -195,7 +195,8 @@ fn stopped_owner_deadline(deadline: Instant) -> Result<()> {
 #[cfg(any(target_os = "linux", all(test, unix)))]
 fn stopped_cgroup_custody(path: &Path) -> Result<()> {
     require_root_directory(path, false, "stopped Inrou cgroup")?;
-    if u64::try_from(rustix::fs::statfs(path)?.f_type).ok() != Some(0x6367_7270) {
+    // `f_type` is signed on Linux and unsigned on other Unix hosts; widen losslessly.
+    if i128::from(rustix::fs::statfs(path)?.f_type) != 0x6367_7270 {
         return Err(eyre!(
             "stopped Inrou hierarchy is not the kernel cgroup-v2 filesystem"
         ));

@@ -91,7 +91,7 @@ impl GoldilocksFp4V1 {
     #[must_use]
     pub fn from_le_bytes(bytes: [u8; 32]) -> Option<Self> {
         let mut coefficients = [0_u64; 4];
-        for (coefficient, chunk) in coefficients.iter_mut().zip(bytes.as_chunks::<8>().0.iter()) {
+        for (coefficient, chunk) in coefficients.iter_mut().zip(bytes.as_chunks::<8>().0) {
             *coefficient = u64::from_le_bytes(*chunk);
         }
         Self::new(coefficients)

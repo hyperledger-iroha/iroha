@@ -85,7 +85,10 @@ fn union_plan_uses_exact_existing_roles_streams_and_six_native_endpoints() {
         );
         for segment in 0..4 {
             let sha = layout
-                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+                .registered_segment(
+                    SegmentAdapterIdV1::Sha256CallBus,
+                    u16::try_from(segment).unwrap(),
+                )
                 .unwrap();
             assert_eq!(sha.column_chunks, 2);
             assert_eq!(plan.sha_projection[segment][lane].group, sha.trace_group);

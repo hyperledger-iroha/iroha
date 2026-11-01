@@ -1,4 +1,11 @@
-//! Grouped Torii Nexus, SoraFS, contract, and app surface integration tests.
+//! Grouped Torii Nexus, `SoraFS`, contract, and app surface integration tests.
+
+#[path = "../../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;
+#[path = "../fixtures.rs"]
+mod fixtures;
+#[path = "../common/norito_rpc_harness.rs"]
+mod norito_rpc_harness;
 
 #[path = "../contracts_call_integration.rs"]
 mod contracts_call_integration;

@@ -7,11 +7,11 @@ use eyre::{Result, ensure, eyre};
 use norito::json;
 
 /// Maximum byte length of a validator configuration covered by a receipt.
-pub(crate) const LIMIT: u64 = 1024 * 1024;
+pub const LIMIT: u64 = 1024 * 1024;
 /// Schema prefix shared by the host mutation and its portable evidence verifier.
-pub(crate) const PREFIX: &str = "taira.validator-config-retirement";
+pub const PREFIX: &str = "taira.validator-config-retirement";
 /// Ordered public Taira validator cohort used by the remote operation and its receipts.
-pub(crate) const VALIDATOR_SLUGS: [&str; 4] = [
+pub const VALIDATOR_SLUGS: [&str; 4] = [
     "taira-validator-1",
     "taira-validator-2",
     "taira-validator-3",
@@ -19,25 +19,25 @@ pub(crate) const VALIDATOR_SLUGS: [&str; 4] = [
 ];
 
 /// Read one required receipt field.
-pub(crate) fn field<'a>(value: &'a json::Value, name: &str) -> Result<&'a json::Value> {
+pub fn field<'a>(value: &'a json::Value, name: &str) -> Result<&'a json::Value> {
     value
         .get(name)
         .ok_or_else(|| eyre!("config retirement receipt field missing: {name}"))
 }
 /// Read one required receipt string without coercion.
-pub(crate) fn text<'a>(value: &'a json::Value, name: &str) -> Result<&'a str> {
+pub fn text<'a>(value: &'a json::Value, name: &str) -> Result<&'a str> {
     field(value, name)?
         .as_str()
         .ok_or_else(|| eyre!("config retirement receipt text differs: {name}"))
 }
 /// Read the explicit ordered validator receipt array.
-pub(crate) fn rows(value: &json::Value) -> Result<&Vec<json::Value>> {
+pub fn rows(value: &json::Value) -> Result<&Vec<json::Value>> {
     field(value, "rows")?
         .as_array()
         .ok_or_else(|| eyre!("config retirement rows differ"))
 }
 /// Require the complete expected field set, including absence of unknown fields.
-pub(crate) fn exact_fields(value: &json::Value, names: &[&str]) -> Result<()> {
+pub fn exact_fields(value: &json::Value, names: &[&str]) -> Result<()> {
     let map = value
         .as_object()
         .ok_or_else(|| eyre!("config retirement object differs"))?;
@@ -48,7 +48,7 @@ pub(crate) fn exact_fields(value: &json::Value, names: &[&str]) -> Result<()> {
     Ok(())
 }
 /// Validate the bounded Linux original-file custody stamp recorded by the host.
-pub(crate) fn stamp_value(value: &json::Value) -> Result<&Vec<json::Value>> {
+pub fn stamp_value(value: &json::Value) -> Result<&Vec<json::Value>> {
     let row = value
         .as_array()
         .ok_or_else(|| eyre!("config retirement stamp differs"))?;
@@ -68,7 +68,7 @@ pub(crate) fn stamp_value(value: &json::Value) -> Result<&Vec<json::Value>> {
 }
 
 /// Derive canonical remote Linux names without applying the verifier host's path rules.
-pub(crate) fn config_paths(plan: &json::Value, role: &str) -> Result<(String, String, String)> {
+pub fn config_paths(plan: &json::Value, role: &str) -> Result<(String, String, String)> {
     let deployment = field(plan, "deployment")?;
     let operation = text(plan, "operation")?;
     let release = text(deployment, "config_release")?;
@@ -94,11 +94,7 @@ pub(crate) fn config_paths(plan: &json::Value, role: &str) -> Result<(String, St
 }
 
 /// Authenticate one operation receipt against its retained plan and ordered cohort.
-pub(crate) fn validate_receipt(
-    receipt: &json::Value,
-    plan: &json::Value,
-    kind: &str,
-) -> Result<()> {
+pub fn validate_receipt(receipt: &json::Value, plan: &json::Value, kind: &str) -> Result<()> {
     exact_fields(
         receipt,
         &["schema", "operation", "source_commit", "network_id", "rows"],
@@ -158,15 +154,15 @@ pub(crate) fn validate_receipt(
         if kind == "installed" {
             let installed = field(row, "installed_stamp")?;
             stamp_value(installed)?;
-            if !changed {
-                ensure!(
-                    installed == field(row, "before_stamp")?,
-                    "no-op retirement changed config custody"
-                );
-            } else {
+            if changed {
                 ensure!(
                     same_renamed_file(installed, field(row, "staged_stamp")?)?,
                     "installed config is not the prepared sibling"
+                );
+            } else {
+                ensure!(
+                    installed == field(row, "before_stamp")?,
+                    "no-op retirement changed config custody"
                 );
             }
         }
@@ -178,7 +174,7 @@ pub(crate) fn validate_receipt(
 }
 
 /// Compare original Linux file stamps, permitting only rename's ctime transition.
-pub(crate) fn same_renamed_file(a: &json::Value, b: &json::Value) -> Result<bool> {
+pub fn same_renamed_file(a: &json::Value, b: &json::Value) -> Result<bool> {
     let a = stamp_value(a)?;
     let b = stamp_value(b)?;
     // Rename changes ctime, but neither inode nor data/permissions/mtime.
@@ -186,7 +182,7 @@ pub(crate) fn same_renamed_file(a: &json::Value, b: &json::Value) -> Result<bool
 }
 
 /// Join the only supported config metadata transition without changing peer trust.
-pub(crate) fn validate_retirement_records(
+pub fn validate_retirement_records(
     prepared: &json::Value,
     installed: &json::Value,
     plan: &json::Value,

@@ -1049,12 +1049,9 @@ impl InrouProbeScope {
 // Both coordinated operations already require Unix-only host facilities. Admit that
 // boundary before staging artifacts, reading client authority or contacting a node.
 fn require_inrou_coordinator_platform() -> Result<()> {
-    #[cfg(unix)]
-    {
+    if cfg!(unix) {
         Ok(())
-    }
-    #[cfg(not(unix))]
-    {
+    } else {
         Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
             "Taira Inrou coordinated staging and canary operations require the Unix host coordinator and inherited-descriptor protocol",

@@ -16,7 +16,7 @@ use tokio::task::spawn_blocking;
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
-    start_custom_network(NetworkBuilder::new(), context).await
+    Box::pin(start_custom_network(NetworkBuilder::new(), context)).await
 }
 async fn start_custom_network(
     builder: NetworkBuilder,
@@ -76,7 +76,10 @@ fn wait_for_asset_value(
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn two_non_intersecting_execution_paths() -> Result<()> {
-    let Some(network) = start_network(stringify!(two_non_intersecting_execution_paths)).await?
+    let Some(network) = Box::pin(start_network(stringify!(
+        two_non_intersecting_execution_paths
+    )))
+    .await?
     else {
         return Ok(());
     };
@@ -455,8 +458,11 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
 /// - quotas or fee-based consumption (#5440)
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cat_depth_and_mouse_depth() -> Result<()> {
-    let Some(network) =
-        start_custom_network(NetworkBuilder::new(), stringify!(cat_depth_and_mouse_depth)).await?
+    let Some(network) = Box::pin(start_custom_network(
+        NetworkBuilder::new(),
+        stringify!(cat_depth_and_mouse_depth),
+    ))
+    .await?
     else {
         return Ok(());
     };

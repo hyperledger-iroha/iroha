@@ -44,6 +44,14 @@ use iroha_pasta::{Ep, Eq, Fp, Fq};
 use iroha_plonk::{ProverConfig, ProverError, create_proof, prove_circuit};
 use rayon::prelude::*;
 
+/// Lowercase hexadecimal spelling of `bytes`.
+fn lower_hex(bytes: &[u8]) -> String {
+    bytes.iter().fold(String::new(), |mut hex, byte| {
+        let _ = write!(hex, "{byte:02x}");
+        hex
+    })
+}
+
 #[test]
 #[ignore = "20 cases with real proofs; run in release"]
 fn relation_checks_as_real_proofs() {
@@ -1129,10 +1137,7 @@ fn compact_send_descriptor_support_inventory() {
     assert_eq!(protocol.plan().rotations(), &[0, 1, -1, -6]);
     assert_eq!(protocol.plan().sets().len(), 5);
     assert_eq!(
-        Sha256::digest(binding.encoded())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
+        lower_hex(&Sha256::digest(binding.encoded())),
         "3caa2db67ee50fa917ea344d967c477b5f9122b5a6225533033568fd6a6ea24d"
     );
 
@@ -1167,10 +1172,7 @@ fn compact_send_descriptor_support_inventory() {
         })
         .collect();
     assert_eq!(
-        Sha256::digest(&packed)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
+        lower_hex(&Sha256::digest(&packed)),
         "298f11fbfd998fad9de3239fd15c12487710b741466bba82693e8f96e175594c"
     );
     assert_eq!(
@@ -1198,14 +1200,8 @@ fn compact_send_descriptor_support_inventory() {
     );
     println!(
         "COMPACT_SEND_SOURCE descriptor={} selectors={} source={:?} queries={:?} groups={:?} selector_map={selector_map:?}",
-        Sha256::digest(binding.encoded())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-        Sha256::digest(packed)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
+        lower_hex(&Sha256::digest(binding.encoded())),
+        lower_hex(&Sha256::digest(packed)),
         fingerprint.digest(),
         protocol.queries(),
         protocol.plan().slots()
@@ -1302,14 +1298,8 @@ fn compact_send_source_probe() {
     );
     println!(
         "COMPACT_SOURCE_PROBE descriptor={} selector_bits={} permutation={:?} source={:?}",
-        Sha256::digest(binding.encoded())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
-        Sha256::digest(packed)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
+        lower_hex(&Sha256::digest(binding.encoded())),
+        lower_hex(&Sha256::digest(packed)),
         source.tables.permutation().mapping_digest(),
         fingerprint.digest()
     );

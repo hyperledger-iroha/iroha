@@ -1396,26 +1396,20 @@ mod tests {
             self.base.credit(credit, payment)
         }
     }
-    fn handoff_wallet() -> (
+    /// Wallet handle, exchange origin, selected and unrelated review tokens, the review table
+    /// and the injected handoff faults.
+    type HandoffFixture = (
         u64,
         u64,
         u64,
         u64,
         Arc<Mutex<Tokens<OriginBound<&'static str>>>>,
         Arc<HandoffFaults>,
-    ) {
+    );
+    fn handoff_wallet() -> HandoffFixture {
         handoff_wallet_kind(CapabilityKind::Financial)
     }
-    fn handoff_wallet_kind(
-        kind: CapabilityKind,
-    ) -> (
-        u64,
-        u64,
-        u64,
-        u64,
-        Arc<Mutex<Tokens<OriginBound<&'static str>>>>,
-        Arc<HandoffFaults>,
-    ) {
+    fn handoff_wallet_kind(kind: CapabilityKind) -> HandoffFixture {
         use std::sync::atomic::AtomicUsize;
         let faults = Arc::new(HandoffFaults::default());
         let reviews = Arc::new(Mutex::new(Tokens::default()));

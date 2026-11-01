@@ -1,7 +1,6 @@
 //! Router-level test for GET /v1/sumeragi/params
 #[cfg(feature = "telemetry")]
-#[path = "fixtures.rs"]
-mod fixtures;
+use crate::fixtures;
 #[cfg(feature = "telemetry")]
 use axum::{
     body::Body,
@@ -235,7 +234,7 @@ async fn sumeragi_params_endpoint_shape() {
     ] {
         assert!(v.get(k).is_some(), "missing key {k}");
     }
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -250,7 +249,7 @@ async fn sumeragi_params_endpoint_honors_norito_accept_header() {
     );
     let body = collect_body(resp).await;
     assert!(!body.is_empty(), "Norito response body should not be empty");
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -267,7 +266,7 @@ async fn sumeragi_params_endpoint_prefers_json_when_quality_is_higher() {
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert!(v.get("block_time_ms").is_some());
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -286,7 +285,7 @@ async fn sumeragi_params_endpoint_prefers_norito_on_equal_quality() {
     );
     let body = collect_body(resp).await;
     assert!(!body.is_empty(), "Norito response body should not be empty");
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -299,7 +298,7 @@ async fn sumeragi_params_endpoint_treats_wildcard_accept_as_json() {
     let body = collect_body(resp).await;
     let v: norito::json::Value = norito::json::from_slice(&body).unwrap();
     assert!(v.get("commit_time_ms").is_some());
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -315,7 +314,7 @@ async fn sumeragi_params_endpoint_rejects_zero_quality_supported_formats() {
     let body = collect_body(resp).await;
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("unsupported Accept header"));
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -327,7 +326,7 @@ async fn sumeragi_params_endpoint_rejects_invalid_accept_quality() {
     let body = collect_body(resp).await;
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("invalid q-value"));
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -339,7 +338,7 @@ async fn sumeragi_params_endpoint_rejects_unsupported_accept_header() {
     let body = collect_body(resp).await;
     let text = String::from_utf8_lossy(&body);
     assert!(text.contains("unsupported Accept header"));
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -363,7 +362,7 @@ async fn configuration_endpoint_includes_confidential_gas() {
     ] {
         assert!(gas.get(key).is_some(), "confidential_gas missing key {key}");
     }
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -388,7 +387,7 @@ async fn configuration_endpoint_rejects_unsigned_requests() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_signature_missing")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -419,7 +418,7 @@ async fn configuration_endpoint_rejects_replayed_operator_signature() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_signature_replay")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -443,7 +442,7 @@ async fn configuration_endpoint_rejects_non_node_operator_key() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_key_not_allowed")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -470,7 +469,7 @@ async fn configuration_endpoint_rejects_invalid_operator_timestamp_header() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_signature_invalid")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -490,7 +489,7 @@ async fn configuration_endpoint_accepts_query_when_signature_covers_query() {
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, protocol_default_gas());
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -518,7 +517,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_query() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_signature_bad")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -548,7 +547,7 @@ async fn configuration_endpoint_rejects_signature_bound_to_different_method() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_signature_bad")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -565,7 +564,7 @@ async fn configuration_endpoint_unversioned_path_is_not_registered() {
     );
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::NOT_FOUND);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -593,7 +592,7 @@ async fn configuration_endpoint_reports_the_committed_confidential_gas_schedule(
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, expected);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -622,7 +621,7 @@ async fn configuration_endpoint_rejects_confidential_gas_update_via_post() {
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -643,7 +642,7 @@ async fn configuration_endpoint_accepts_vendor_json_content_type() {
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -667,7 +666,7 @@ async fn configuration_endpoint_accepts_json_update_without_content_type() {
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_eq!(dto.logger.level, iroha_data_model::Level::DEBUG);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -685,7 +684,7 @@ async fn configuration_endpoint_rejects_post_body_tampering() {
         v.get("code").and_then(norito::json::Value::as_str),
         Some("operator_signature_bad")
     );
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -696,7 +695,7 @@ async fn configuration_endpoint_rejects_signed_non_json_content_type() {
     let req = signed_post_configuration(&harness, body_bytes.clone(), &body_bytes, "text/plain");
     let resp = harness.app.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -718,7 +717,7 @@ async fn configuration_endpoint_rejects_update_without_required_logger() {
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -740,7 +739,7 @@ async fn configuration_endpoint_rejects_invalid_logger_level_and_preserves_gas()
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -768,7 +767,7 @@ async fn configuration_endpoint_rejects_incomplete_confidential_gas_and_preserve
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 #[cfg(feature = "telemetry")]
 #[tokio::test]
@@ -790,8 +789,7 @@ async fn configuration_endpoint_rejects_malformed_json_update() {
     let body = collect_body(resp).await;
     let dto: Configuration = norito::json::from_slice(&body).unwrap();
     assert_confidential_gas_matches(dto.confidential_gas, initial_gas);
-    harness.shutdown().await;
+    Box::pin(harness.shutdown()).await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

@@ -253,6 +253,13 @@ impl BindingInvocation {
                 return Err(ExecutionAttemptError::Deferred(invariant()));
             }
             bank.last_read = Some(identity);
+            #[cfg_attr(
+                not(test),
+                expect(
+                    clippy::while_let_loop,
+                    reason = "test builds count each traversal before borrowing the current row"
+                )
+            )]
             loop {
                 #[cfg(test)]
                 {
@@ -578,6 +585,10 @@ pub mod observation {
             });
             Self
         }
+        #[expect(
+            clippy::unused_self,
+            reason = "the receiver proves the guard that owns this thread-local observation is still alive"
+        )]
         pub(crate) fn release_and_refuse_replacement(&self) {
             CURRENT.with(|current| {
                 let mut current = current.borrow_mut();
@@ -586,6 +597,10 @@ pub mod observation {
                 drop(original.held.take());
             });
         }
+        #[expect(
+            clippy::unused_self,
+            reason = "the receiver proves the guard that owns this thread-local observation is still alive"
+        )]
         pub(crate) fn snapshot(&self) -> (usize, bool) {
             CURRENT.with(|current| {
                 let current = current.borrow();

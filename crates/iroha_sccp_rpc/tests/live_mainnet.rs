@@ -513,10 +513,10 @@ fn ton_bootstrap_and_advance_verify() {
 #[test]
 #[ignore = "reads a locally retained verifier-input capture; no network access"]
 fn replay_captured_verifier_inputs() {
-    let path = std::env::var_os("SCCP_LIVE_REPLAY_FILE").expect("set SCCP_LIVE_REPLAY_FILE");
-    let mut json = String::new();
     // Bound this developer input too; a larger capture needs explicit review before replay.
     const MAX_CAPTURE_BYTES: u64 = 16 * 1024 * 1024;
+    let path = std::env::var_os("SCCP_LIVE_REPLAY_FILE").expect("set SCCP_LIVE_REPLAY_FILE");
+    let mut json = String::new();
     fs::File::open(&path)
         .expect("open capture")
         .take(MAX_CAPTURE_BYTES + 1)

@@ -13,7 +13,7 @@ struct RequestJournals {
     configure: StreamTokenCustodyConfigureRequest,
     enroll: StreamTokenCustodyEnrollRequest,
     // Release all original native owners before deleting their temporary root on Windows.
-    _root: tempfile::TempDir,
+    root: tempfile::TempDir,
 }
 impl RequestJournals {
     fn new() -> Self {
@@ -44,7 +44,7 @@ impl RequestJournals {
             transport,
             configure,
             enroll,
-            _root: root,
+            root,
         }
     }
     fn name(enroll: bool) -> &'static OsStr {
@@ -408,7 +408,7 @@ fn parent_retirement_refuses_equal_bytes_replacement_and_retries_original_owner(
     let calls = fixture.calls();
     let before = [false, true].map(|enroll| files(&fixture.path(enroll)));
     let identity = fixture.parent.identity().unwrap();
-    let displaced = fixture._root.path().join("displaced-parent");
+    let displaced = fixture.root.path().join("displaced-parent");
     fs::rename(fixture.parent.path(), &displaced).unwrap();
     let replacement = PrivateDirectory::open_or_create(fixture.parent.path()).unwrap();
     assert_ne!(replacement.identity().unwrap(), identity);
@@ -533,7 +533,7 @@ fn parent_retirement_fits_fixed_native_descriptor_budget() {
         drop(Journal::open(&path).unwrap());
     }
     assert_eq!(fixture.calls(), calls);
-    let root = fixture._root.path().to_path_buf();
+    let root = fixture.root.path().to_path_buf();
     drop(fixture);
     assert!(!root.exists());
     eprintln!("{CHILD_PASSED}");

@@ -158,7 +158,7 @@ impl FinalityDecodeWorkspace {
     }
 
     #[cfg(test)]
-    pub(crate) fn note_target_cost(&self, context: &DecodeBudgetContext) {
+    pub(crate) fn note_target_cost(context: &DecodeBudgetContext) {
         cost_observation::record("target", context.consumed_allocated_bytes());
     }
 

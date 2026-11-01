@@ -346,7 +346,7 @@ pub async fn prepare(
 /// above the nearest retained prefix, under its own heavy-query admission and route
 /// deadline, until the tip is within one step; then it follows the tip. Every step is
 /// an ordinary authenticated read, and client reads resume from each completed one.
-pub(crate) async fn keep_prefix_ladder_warm(
+pub async fn keep_prefix_ladder_warm(
     app: SharedAppState,
     shutdown: ShutdownSignal,
 ) -> ToriiCriticalWorkerExit {
@@ -486,4 +486,4 @@ where
 mod tests;
 
 #[cfg(test)]
-pub(crate) use tests::maximum_paid_chain_for_testing;
+pub use tests::maximum_paid_chain_for_testing;

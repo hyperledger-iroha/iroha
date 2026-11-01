@@ -1,5 +1,6 @@
 //! Router-level regressions for the read-only Nexus lifecycle status surface.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -17,8 +18,6 @@ use iroha_data_model::nexus::LaneLifecycleStatusV1;
 use iroha_model_base::topology::LaneId;
 use iroha_torii_shared::route_catalog::core::NEXUS_LIFECYCLE_GET;
 use std::{collections::BTreeSet, sync::Arc};
-#[path = "fixtures.rs"]
-mod fixtures;
 struct NexusHarness {
     app: iroha_torii::TestApiRouterRuntime,
     queue: Arc<Queue>,

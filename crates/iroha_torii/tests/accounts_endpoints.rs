@@ -1,5 +1,6 @@
 //! Smoke tests for Torii accounts endpoints.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::extract::connect_info::ConnectInfo;
 use axum::http::Request;
 use http::StatusCode;
@@ -7,8 +8,6 @@ use iroha_core::state::World;
 use iroha_data_model::{Registrable, account::Account, domain::Domain};
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
-#[path = "fixtures.rs"]
-mod fixtures;
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // test builds complex state; splitting would reduce clarity
 async fn accounts_endpoints_exist() {

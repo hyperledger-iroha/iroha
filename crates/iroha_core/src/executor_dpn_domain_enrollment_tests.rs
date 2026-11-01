@@ -126,7 +126,7 @@ mod dpn_domain_enrollment_tests {
         let mut tx = block.transaction();
         let grant = Grant::account_permission(Permission::from(DpnUser), f.customer.clone());
         super::super::Executor::Initial
-            .execute_instruction(&mut tx, &f.registrar, grant.into())
+            .execute_instruction(&mut tx, &f.registrar, &grant.into())
             .unwrap();
         let account_query = QueryRequest::Singular(
             data_model_query::account::prelude::FindAccountById::new(f.customer.clone()).into(),
@@ -149,7 +149,7 @@ mod dpn_domain_enrollment_tests {
                 .execute_instruction(
                     &mut tx,
                     &f.registrar,
-                    Grant::account_permission(permission, f.customer.clone()).into(),
+                    &Grant::account_permission(permission, f.customer.clone()).into(),
                 )
                 .expect_err("scoped enrollment cannot grant other roles or malformed DpnUser");
         }
@@ -157,7 +157,7 @@ mod dpn_domain_enrollment_tests {
             .execute_instruction(
                 &mut tx,
                 &f.registrar,
-                Revoke::account_permission(Permission::from(DpnUser), f.customer.clone()).into(),
+                &Revoke::account_permission(Permission::from(DpnUser), f.customer.clone()).into(),
             )
             .expect_err("grant capability is not revocation authority");
         let role_query = QueryRequest::Start(QueryWithParams {
@@ -282,7 +282,8 @@ mod dpn_domain_enrollment_tests {
                 .execute_instruction(
                     &mut tx,
                     &f.registrar,
-                    Grant::account_permission(Permission::from(DpnUser), f.customer.clone()).into(),
+                    &Grant::account_permission(Permission::from(DpnUser), f.customer.clone())
+                        .into(),
                 )
                 .expect_err(failure);
             assert!(
@@ -321,14 +322,14 @@ mod dpn_domain_enrollment_tests {
             .execute_instruction(
                 &mut tx,
                 &f.admin,
-                Grant::account_permission(token.clone(), f.customer.clone()).into(),
+                &Grant::account_permission(token.clone(), f.customer.clone()).into(),
             )
             .unwrap();
         super::super::Executor::Initial
             .execute_instruction(
                 &mut tx,
                 &f.admin,
-                Revoke::account_permission(token.clone(), f.customer.clone()).into(),
+                &Revoke::account_permission(token.clone(), f.customer.clone()).into(),
             )
             .unwrap();
         tx.world
@@ -354,7 +355,7 @@ mod dpn_domain_enrollment_tests {
             .execute_instruction(
                 &mut tx,
                 &f.registrar,
-                Grant::account_role(role, f.customer).into(),
+                &Grant::account_role(role, f.customer).into(),
             )
             .expect_err("role grants do not use scoped recipient exception");
     }
@@ -411,7 +412,7 @@ mod dpn_domain_enrollment_tests {
                 .execute_instruction(
                     &mut tx,
                     &f.admin,
-                    Revoke::account_permission(token.clone(), f.registrar.clone()).into(),
+                    &Revoke::account_permission(token.clone(), f.registrar.clone()).into(),
                 )
                 .unwrap();
         }

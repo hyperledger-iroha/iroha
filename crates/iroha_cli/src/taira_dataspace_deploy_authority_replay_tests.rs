@@ -74,12 +74,13 @@ impl Fixture {
         let chain_id = config.chain_id.clone();
         config.consensus_mode = SumeragiConsensusMode::Npos;
         let npos = SumeragiNposParameters::default();
-        config.genesis_parameters = vec![
+        // Keep the constructor's authored staking policy; NPoS genesis requires it.
+        config.genesis_parameters.extend([
             Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
                 npos.epoch_length_blocks,
             )),
             Parameter::Custom(npos.into_custom_parameter()),
-        ];
+        ]);
         let mut chain = CertifiedTestChain::start(config).unwrap();
         let keys = (0xC1..=0xC4)
             .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))

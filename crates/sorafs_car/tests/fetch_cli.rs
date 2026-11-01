@@ -44,10 +44,13 @@ const PROVIDER_ADMISSION_FIXTURES: &str = "fixtures/sorafs_manifest/provider_adm
 const PROVIDER_SIGNING_KEY_BYTES: [u8; 32] = [0x21; 32];
 const TEST_NETWORK_ID_ARG: &str =
     "--network-id=a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1";
+/// The canonical fixture directory: the fetch CLI refuses paths with parent traversal.
 fn fixture_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
         .join(PROVIDER_ADMISSION_FIXTURES)
+        .canonicalize()
+        .expect("canonical provider admission fixtures")
 }
 fn load_fixture_advert(name: &str) -> ProviderAdvertV1 {
     let path = fixture_dir().join(name);
@@ -819,11 +822,9 @@ fn fetch_cli_streaming_outputs_fail_on_corruption() {
         stderr.contains("retry budget exhausted"),
         "stderr should mention retry exhaustion, got: {stderr}"
     );
-    let metadata = fs::metadata(&output_path).expect("output metadata");
-    assert_eq!(
-        metadata.len(),
-        0,
-        "streamed file should remain empty on failure"
+    assert!(
+        !output_path.exists(),
+        "a failed fetch must publish no output, not even an empty file"
     );
 }
 #[test]
@@ -955,9 +956,7 @@ fn fetch_cli_accepts_fixture_advert_with_admission() {
     // The admission fixture advertises a 32-byte maximum range; without manifest bytes the CLI
     // uses the default chunk profile, so keep this acceptance plan to one canonical chunk.
     let payload = write_payload(&payload_path, 8);
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("fixtures/sorafs_manifest/provider_admission");
+    let fixture_dir = fixture_dir();
     let advert_path = fixture_dir.join("advert_v1.to");
     let fixture_advert = load_fixture_advert("advert_v1.to");
     let plan_path = write_plan_for_payload_with_profile(
@@ -1148,9 +1147,7 @@ fn fetch_cli_rejects_fixture_advert_without_admission() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = write_payload(&payload_path, 6 * 1024);
-    let fixture_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("fixtures/sorafs_manifest/provider_admission");
+    let fixture_dir = fixture_dir();
     let advert_path = fixture_dir.join("advert_v1.to");
     let admission_dir = tempdir.path().join("admission");
     fs::create_dir(&admission_dir).expect("create admission dir");

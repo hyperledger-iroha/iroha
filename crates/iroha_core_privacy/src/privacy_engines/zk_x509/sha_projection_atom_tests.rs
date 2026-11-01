@@ -140,6 +140,7 @@ fn structural_constant_singletons_use_sparse_atoms_and_preserve_ranges() {
     )
     .unwrap();
     let column = projection_bus::FIX_LENGTH_V1;
+    let atom_column = u16::try_from(column).unwrap();
     let last = ZK_X509_SHA_SEGMENT_ROWS_V1 - 1;
     let mut output = StructuralBuilderV1::new_v1(domain, 0).unwrap();
     output.push_constant_v1(0, column, 0, 1, F::ONE).unwrap();
@@ -153,9 +154,9 @@ fn structural_constant_singletons_use_sparse_atoms_and_preserve_ranges() {
     assert_eq!(
         schedule.atoms_v1(),
         &[
-            ZkX509FixedAlgebraicAtomV1::sparse_v1(column as u16, 0, F::ONE).unwrap(),
-            ZkX509FixedAlgebraicAtomV1::affine_v1(column as u16, 8, 16, F(3), F::ZERO).unwrap(),
-            ZkX509FixedAlgebraicAtomV1::sparse_v1(column as u16, last as u64, F(7)).unwrap(),
+            ZkX509FixedAlgebraicAtomV1::sparse_v1(atom_column, 0, F::ONE).unwrap(),
+            ZkX509FixedAlgebraicAtomV1::affine_v1(atom_column, 8, 16, F(3), F::ZERO).unwrap(),
+            ZkX509FixedAlgebraicAtomV1::sparse_v1(atom_column, last as u64, F(7)).unwrap(),
         ],
     );
     for (row, expected) in [
@@ -181,7 +182,7 @@ fn structural_constant_singletons_use_sparse_atoms_and_preserve_ranges() {
     // The wrapper chooses the canonical atom; the kernel still refuses a
     // degenerate affine representation of the same singleton.
     assert_eq!(
-        ZkX509FixedAlgebraicAtomV1::affine_v1(column as u16, 0, 1, F::ONE, F::ZERO),
+        ZkX509FixedAlgebraicAtomV1::affine_v1(atom_column, 0, 1, F::ONE, F::ZERO),
         Err(ZkX509FixedAlgebraicErrorV1::InvalidAtom)
     );
 }

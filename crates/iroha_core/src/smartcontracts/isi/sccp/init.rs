@@ -15,7 +15,7 @@ use crate::state::{StateReadOnly as _, StateTransaction, WorldReadOnly};
 use iroha_data_model::{
     account::AccountId,
     isi::sccp::InitializeSccpV1,
-    sccp::params::{SccpParameterContextV1, SccpParametersError, SccpParametersV1},
+    sccp::params::{SccpParameterContextV1, SccpParametersV1},
 };
 use iroha_sccp::v1::committee::{MAX_COMMITTEE_SIZE, MIN_COMMITTEE_SIZE};
 
@@ -173,7 +173,7 @@ mod tests {
     use iroha_data_model::{
         bridge::SccpNetworkV1,
         parameter::{Parameter, system::SumeragiNposParameters},
-        sccp::registry::SCCP_ROUTE_NETWORKS_V1,
+        sccp::{params::SccpParametersError, registry::SCCP_ROUTE_NETWORKS_V1},
     };
     use mv::storage::StorageReadOnly as _;
 
@@ -418,7 +418,7 @@ mod tests {
     fn the_parameter_table_defers_only_the_parliament_latency() {
         let state = blank_state();
         let mut block = state.block(header(1));
-        let mut stx = block.transaction();
+        let stx = block.transaction();
         let defaults = SccpParametersV1::taira_default();
         assert_eq!(check_parameters(&stx, &defaults), Ok(()));
         // The hold's own ceiling and the joint validity floor are checked here.

@@ -130,8 +130,7 @@ async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &
         .iter()
         .map(|peer| {
             peer.best_effort_block_height()
-                .map(|height| height.total)
-                .unwrap_or(0)
+                .map_or(0, |height| height.total)
         })
         .collect::<Vec<_>>();
     let fallback_seed = NEXT_SUBMIT_PEER_INDEX.fetch_add(1, Ordering::Relaxed);
@@ -202,7 +201,7 @@ async fn time_trigger_scenarios() -> Result<()> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        let result = async {
+        let result = Box::pin(async {
             let Some(network) = sandbox::start_network_async_or_skip(
                 NetworkBuilder::new().with_default_block_cadence(),
                 stringify!(time_trigger_scenarios),
@@ -217,7 +216,7 @@ async fn time_trigger_scenarios() -> Result<()> {
             pre_commit_trigger_should_be_executed_scenario(&network, &test_client).await?;
             mint_nft_for_every_user_every_1_sec_scenario(&network, &test_client).await?;
             Ok(())
-        }
+        })
         .await;
         match result {
             Ok(()) => return Ok(()),
@@ -254,7 +253,7 @@ async fn mint_asset_after_3_sec_scenario(
         let mut target_height = network
             .peers()
             .iter()
-            .filter_map(|peer| peer.best_effort_block_height())
+            .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
             .map(|height| height.total)
             .max()
             .unwrap_or(0);
@@ -377,7 +376,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             let mut target_height = network
                 .peers()
                 .iter()
-                .filter_map(|peer| peer.best_effort_block_height())
+                .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
                 .map(|height| height.total)
                 .max()
                 .unwrap_or(0);
@@ -489,21 +488,17 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
         ];
-        let register_accounts = accounts
-            .iter()
-            .skip(1)
-            .cloned()
-            .map(|account_id| Register::account(Account::new(account_id.clone())))
-            .collect::<Vec<_>>();
         let mut target_height = network
             .peers()
             .iter()
-            .filter_map(|peer| peer.best_effort_block_height())
+            .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
             .map(|height| height.total)
             .max()
             .unwrap_or(0);
-        let register_accounts = register_accounts
-            .into_iter()
+        let register_accounts = accounts
+            .iter()
+            .skip(1)
+            .map(|account_id| Register::account(Account::new(account_id.clone())))
             .map(InstructionBox::from)
             .collect::<Vec<_>>();
         submit_all_with_context(
@@ -630,7 +625,7 @@ async fn submit_sample_isi_on_every_block_commit(
     let initial_height = network
         .peers()
         .iter()
-        .filter_map(|peer| peer.best_effort_block_height())
+        .filter_map(iroha_test_network::NetworkPeer::best_effort_block_height)
         .map(|height| height.total)
         .max()
         .unwrap_or(0);

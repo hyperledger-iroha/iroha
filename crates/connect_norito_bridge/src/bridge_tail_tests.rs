@@ -7,7 +7,7 @@ mod signed_transaction_fixture_tests {
         account::AccountId,
         block::BlockHeader,
         isi::Log,
-        transaction::{SignedTransaction, TransactionBuilder},
+        transaction::{Executable, SignedTransaction, TransactionBuilder},
     };
     use iroha_version::codec::{DecodeVersioned as _, EncodeVersioned as _};
     use std::time::Duration;
@@ -132,7 +132,7 @@ mod signed_transaction_fixture_tests {
         assert_eq!(signed.encode_versioned(), bytes);
     }
     #[test]
-    fn signed_transaction_decoder_rejects_registered_type_name_alias() {
+    fn signed_transaction_decoder_reads_a_type_name_as_an_unregistered_wire_id() {
         let _scope = super::test_support::ChainDiscriminantScope::enter(FIXTURE_CHAIN_DISCRIMINANT);
         let keypair = fixture_key_pair();
         let authority = AccountId::new(keypair.public_key().clone());
@@ -157,16 +157,27 @@ mod signed_transaction_fixture_tests {
         );
 
         assert_ne!(alternate, canonical);
-        let error = SignedTransaction::decode_all_versioned(&alternate)
-            .expect_err("canonical V1 decoding must reject the concrete type-name alias");
-        assert!(
-            matches!(error, iroha_version::error::Error::NoritoCodec(_)),
-            "alias rejection must remain a codec failure: {error}"
+        // A concrete type name is no alias of the registered `iroha.log`: it is a wire ID this
+        // release does not register, so it decodes to the opaque envelope that keeps its own
+        // bytes (`specs/live_runtime_upgrades.md` §5.2), a different transaction that execution
+        // refuses.
+        let decoded = SignedTransaction::decode_all_versioned(&alternate)
+            .expect("an unregistered wire ID decodes to its opaque envelope");
+        assert_eq!(
+            decode_signed_transaction(&alternate).expect("the opaque wire is canonical"),
+            decoded
         );
-        assert!(
-            decode_signed_transaction(&alternate).is_err(),
-            "the bridge must reject every noncanonical instruction alias"
-        );
+        let Executable::Instructions(instructions) = decoded.instructions() else {
+            panic!("the instructions stay an instruction list");
+        };
+        let [instruction] = &instructions[..] else {
+            panic!("one instruction");
+        };
+        let opaque = instruction
+            .as_opaque()
+            .expect("the type name never decodes as the registered instruction");
+        assert_eq!(opaque.wire_id(), std::any::type_name::<Log>());
+        assert_ne!(decoded.hash(), transaction.hash());
     }
     #[test]
     fn generated_signed_transaction_versioned_bytes_prefix_bare_payload() {

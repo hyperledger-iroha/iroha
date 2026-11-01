@@ -43,6 +43,7 @@ pub(super) fn from_originals(
     release: Vec<u8>,
     service_origin: Vec<u8>,
 ) -> Result<Scopes> {
+    use KagemushaEnrollmentPermitScopeRoleV1 as Role;
     exact_text(&audience, 512)?;
     let origin = exact_text(&service_origin, 2048)?;
     let url = reqwest::Url::parse(origin).map_err(|_| eyre!("HTTPS scope origin required"))?;
@@ -77,7 +78,6 @@ pub(super) fn from_originals(
     } else {
         return Err(eyre!("scope origin host required"));
     }
-    use KagemushaEnrollmentPermitScopeRoleV1 as Role;
     let operator_digest = kagemusha_enrollment_permit_scope_digest_v1(Role::Fi, &audience)?;
     let release_digest = kagemusha_enrollment_permit_scope_digest_v1(Role::Release, &release)?;
     let service_origin_digest =

@@ -181,9 +181,7 @@ fn full_prefix_returns_original_allocation_and_clears_populated_failure_paths() 
                 assert_eq!(values.len(), 64);
                 assert!(values.iter().any(|value| *value != F::ZERO));
                 reached.set(true);
-                if unwind {
-                    panic!("full prefix populated-owner unwind");
-                }
+                assert!(!unwind, "full prefix populated-owner unwind");
                 Err(AggregateStarkErrorV1::AllocationFailure)
             };
             let (result, erased) = inspection::observe_v1(|| {
@@ -265,8 +263,8 @@ fn full_prefix_registered_domains_keep_every_output_and_mask_tail() {
         let native_values = (0..1usize << native)
             .map(|index| F((index * 17 + 13) as u64))
             .collect::<Vec<_>>();
-        let mask = (0..1816)
-            .map(|index| F((index * 29 + 7) as u64))
+        let mask = (0..1816_u64)
+            .map(|index| F(index * 29 + 7))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),

@@ -77,7 +77,7 @@ impl PeerPaths {
     }
 }
 
-/// SoraFS storage root of one peer, where storage providers keep their attestation custody.
+/// `SoraFS` storage root of one peer, where storage providers keep their attestation custody.
 pub(super) fn sorafs_storage_dir(root: &Path, index: usize) -> PathBuf {
     PeerPaths::new(root, index, false).state.join("sorafs")
 }

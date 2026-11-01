@@ -95,7 +95,7 @@ impl ContinuationPreparation {
         &mut self,
         state: &(impl StateReadOnly + ?Sized),
         header: &BlockHeader,
-        supplied: Option<FinalizedGlobalThresholdBeaconPulseV1>,
+        supplied: Option<&FinalizedGlobalThresholdBeaconPulseV1>,
         expected: GlobalThresholdBeaconPulseContextV1,
     ) -> Attempt<()> {
         super::require_successor_cut(state, header)?;
@@ -113,7 +113,7 @@ impl ContinuationPreparation {
             state.block_hashes(),
             current,
             height,
-            supplied,
+            supplied.copied(),
             Some(expected),
         )
         .map_err(ScheduleError::Epoch)?;
@@ -254,6 +254,10 @@ impl ContinuationLease {
     #[allow(
         unsafe_code,
         reason = "only fixed scalar fields change; original graph/ledger move unchanged"
+    )]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the pulse is transferred into the retained native execution inputs"
     )]
     pub(crate) fn complete(
         mut self,

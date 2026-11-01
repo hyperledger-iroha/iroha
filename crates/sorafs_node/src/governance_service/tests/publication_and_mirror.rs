@@ -448,8 +448,8 @@ fn ipip_499_chacha20_bytes(seed: &[u8], length: usize) -> Vec<u8> {
     let key = iroha_crypto::sha256(seed);
     let mut initial = [0_u32; 16];
     initial[..4].copy_from_slice(&[0x6170_7865, 0x3320_646e, 0x7962_2d32, 0x6b20_6574]);
-    for (word, bytes) in initial[4..12].iter_mut().zip(key.chunks_exact(4)) {
-        *word = u32::from_le_bytes(bytes.try_into().expect("SHA-256 word"));
+    for (word, bytes) in initial[4..12].iter_mut().zip(key.as_chunks::<4>().0) {
+        *word = u32::from_le_bytes(*bytes);
     }
     let mut output = vec![0_u8; length];
     for (counter, output_block) in output.chunks_mut(64).enumerate() {

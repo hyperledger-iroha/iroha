@@ -36,7 +36,7 @@ fn app_routed_read_deadline_response() -> Response {
 fn routed_read_canonical_auth() -> Option<Option<crate::app_auth::CanonicalRequestReplayAdmission>>
 {
     APP_ROUTED_READ_HTTP_ADMISSION
-        .try_with(|admission| admission.canonical_auth.get().cloned())
+        .try_with(|admission| admission.canonical_auth.get().copied())
         .ok()
         .flatten()
 }
@@ -45,7 +45,7 @@ fn remember_routed_read_canonical_auth(
     verified: Option<&crate::app_auth::CanonicalRequestReplayAdmission>,
 ) {
     let _ = APP_ROUTED_READ_HTTP_ADMISSION.try_with(|admission| {
-        let _ = admission.canonical_auth.set(verified.cloned());
+        let _ = admission.canonical_auth.set(verified.copied());
     });
 }
 #[cfg(feature = "app_api")]

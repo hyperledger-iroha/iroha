@@ -231,10 +231,7 @@ fn source_path_at(unit: &EditorUnit, range: SourceRange) -> Option<(String, Sour
     };
     let mut path = name.clone();
     let mut terminal = first.range;
-    loop {
-        let Some(separator) = tokens.next() else {
-            break;
-        };
+    while let Some(separator) = tokens.next() {
         if !matches!(separator.kind, TokenKind::ColonColon) {
             break;
         }

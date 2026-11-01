@@ -11,7 +11,9 @@ pub(super) struct AuthenticatedEntry {
 pub(super) enum LocatedOutcome {
     Absent,
     Pending,
-    Found(AuthenticatedEntry),
+    // A verified entry is about 18 KiB; boxing keeps it out of every observation future
+    // that holds a located entry across a later await.
+    Found(Box<AuthenticatedEntry>),
 }
 impl LocatedOutcome {
     pub(super) fn found(self) -> Option<(VerifiedSumeragiBlock, CommittedTransaction)> {
@@ -390,7 +392,9 @@ impl SettlementLedger {
             let context = lock(&state)?;
             let context = context.as_ref().ok_or(PrivateSettlementError::Binding)?;
             let walk = Walk::load(&custody, &selected, &request, context)?;
-            let found = walk.saved_entry(&request, context, phase, identity.as_ref())?;
+            let found = walk
+                .saved_entry(&request, context, phase, identity.as_ref())?
+                .map(Box::new);
             Ok::<_, PrivateSettlementError>((walk, found))
         })
         .await?;
@@ -498,7 +502,7 @@ impl SettlementLedger {
             walk = advanced;
             if let Some(result) = result {
                 let entry = result?;
-                return Ok(LocatedOutcome::Found(entry));
+                return Ok(LocatedOutcome::Found(Box::new(entry)));
             }
         }
     }

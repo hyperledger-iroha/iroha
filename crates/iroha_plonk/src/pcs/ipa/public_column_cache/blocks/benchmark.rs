@@ -1,5 +1,6 @@
 //! Explicit same-process arithmetic diagnostic on SHA-pinned native public columns.
 
+use std::fmt::Write as _;
 use std::{collections::BTreeMap, path::PathBuf, time::Instant};
 
 use super::*;
@@ -25,8 +26,10 @@ fn read_case(directory: &std::path::Path, slots: usize) -> Columns {
     assert_eq!(
         Sha256::digest(&encoded)
             .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>(),
+            .fold(String::new(), |mut hex, byte| {
+                let _ = write!(hex, "{byte:02x}");
+                hex
+            }),
         expected
     );
     // The hash-pinned diagnostic includes every canonical byte of two large
@@ -358,7 +361,7 @@ fn actual_table_hashes(
             } else {
                 for chunk in column.chunks(256) {
                     CancellationToken::checkpoint(cancellation)?;
-                    for (value, slot) in chunk.iter().zip(buffer.chunks_exact_mut(32)) {
+                    for (value, slot) in chunk.iter().zip(buffer.as_chunks_mut::<32>().0) {
                         slot.copy_from_slice(&value.to_repr());
                     }
                     let canonical = &buffer[..chunk.len() * 32];

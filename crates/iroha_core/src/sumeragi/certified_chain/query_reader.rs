@@ -536,7 +536,7 @@ impl QueryCertifiedChain<'_> {
             )
         })?;
         #[cfg(test)]
-        workspace.note_target_cost(&target);
+        crate::sumeragi::finality::FinalityDecodeWorkspace::note_target_cost(&target);
         progress()?;
         let wire = (raw.len() as u64, Hash::new(raw.as_slice()));
         let mut staged = StagedQueryFrame::new(committed, payload, Some(raw), wire, self.budget())?;
@@ -575,7 +575,7 @@ impl QueryCertifiedChain<'_> {
             workspace.stage(|| {
                 let header = next.frame.reconstruct_header()?;
                 let prepared = context.prepare_advance_source(
-                    prefix.borrowed(),
+                    &mut prefix.borrowed(),
                     next.source(header.as_ref()),
                     None,
                     (true, self.query_cache.lock().as_mut()),
@@ -603,7 +603,7 @@ impl QueryCertifiedChain<'_> {
                 context.prepare_certificate_source(source, &prefix.authority, None, None, None)?
             } else {
                 prepared = context.prepare_advance_source(
-                    prefix.borrowed(),
+                    &mut prefix.borrowed(),
                     source,
                     None,
                     (true, self.query_cache.lock().as_mut()),

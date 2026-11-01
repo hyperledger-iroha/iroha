@@ -158,7 +158,7 @@ fn sized_request(
 
 fn require_fixed_parameters(parameters: &Parameters) -> Result<()> {
     ensure!(parameters.transaction().max_tx_bytes().get() == SIGNED_FRAME_CAP as u64);
-    ensure!(parameters.sumeragi().max_block_bytes.get() == BLOCK_PAYLOAD_CAP as u32);
+    ensure!(u32::try_from(BLOCK_PAYLOAD_CAP) == Ok(parameters.sumeragi().max_block_bytes.get()));
     ensure!(
         iroha_data_model::parameter::system::BLOCK_PAYLOAD_NON_TRANSACTION_RESERVE_BYTES == 65_536
     );
@@ -236,6 +236,7 @@ async fn refuse_one_over_http(
     transaction: &SignedTransaction,
     deadline: Instant,
 ) -> Result<()> {
+    const MAX_ERROR_BYTES: usize = 65_536;
     ensure!(shape(transaction)?.0 == SIGNED_FRAME_CAP + 1);
     // Send the actual SDK-signed V1 wire directly to preserve the structured HTTP
     // refusal. The public SDK submit report erases that envelope into display text.
@@ -273,7 +274,6 @@ async fn refuse_one_over_http(
         !response.headers().contains_key("retry-after"),
         "permanent signed-size refusal must not invite a capacity retry"
     );
-    const MAX_ERROR_BYTES: usize = 65_536;
     let mut body = Vec::new();
     while let Some(chunk) =
         tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), response.chunk())
@@ -354,7 +354,7 @@ fn exact_payment(
             && fee.schedule.instruction_count == 1
     );
     let payload = verified.block().resultless_proposal_wire_len()?;
-    ensure!(payload <= BLOCK_PAYLOAD_CAP && payload >= SIGNED_FRAME_CAP - 40);
+    ensure!((SIGNED_FRAME_CAP - 40..=BLOCK_PAYLOAD_CAP).contains(&payload));
     Ok(signed)
 }
 
@@ -366,10 +366,7 @@ fn check_balances(
     transferred: u32,
     deadline: Instant,
 ) -> Result<()> {
-    ensure!(matches!(
-        (attempts, transferred),
-        (0, 0) | (1, 0) | (2, 250_000)
-    ));
+    ensure!(matches!((attempts, transferred), (0 | 1, 0) | (2, 250_000)));
     for peer in network.validators() {
         let payer_client = peer
             .client_for(payer, key(0x76).private_key().clone())
@@ -558,7 +555,7 @@ fn fixed_maximum_payment_and_rejection_survive_http_rs16_kura_and_receipt_recove
                 )?;
                 let verified = trusted.verify(&proof)?;
                 exact_payment(&verified, hash)?;
-                let expected_context = &mut contexts[(height - 2) as usize];
+                let expected_context = &mut contexts[usize::try_from(height - 2)?];
                 ensure!(
                     expected_context.is_none_or(|expected| expected == verified.context_id()),
                     "validators disagree on certified decision"

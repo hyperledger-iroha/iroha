@@ -391,7 +391,7 @@ impl MainAwaitingJointOpeningsV1<'_> {
         #[cfg(test)]
         let mut encoding_completion = CompletionPhaseV1::default();
         let result = self.finish_observed_v1(
-            &binding,
+            binding,
             #[cfg(test)]
             &mut encoding_completion,
         );

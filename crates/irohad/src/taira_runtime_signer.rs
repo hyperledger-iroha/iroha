@@ -413,6 +413,7 @@ fn verify_consumed_key_file(
 }
 
 /// Initial link-count admission for the two concrete private-record carriers.
+#[derive(Clone, Copy)]
 enum PrivateRecordLinkPolicy {
     /// Runtime signer records retain their one-shot launch pathname until consumed.
     Named,

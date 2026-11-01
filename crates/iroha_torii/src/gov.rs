@@ -1787,7 +1787,7 @@ fn verify_governed_contract_manifest_signature(
     let frame_bytes = context.with(|| {
         norito::canonical_frame_len(&manifest.signature_payload())
             .map_err(BoundedEncodeError::from)
-            .map_err(&encode_error)
+            .map_err(encode_error)
     })?;
     if frame_bytes > max_frame_bytes {
         return Err(ExecutionAttemptError::Deferred(
@@ -1800,7 +1800,7 @@ fn verify_governed_contract_manifest_signature(
     let payload = context.with(|| {
         manifest
             .signature_payload_bytes(&context, max_frame_bytes)
-            .map_err(&encode_error)
+            .map_err(encode_error)
     })?;
     let result = provenance
         .signature

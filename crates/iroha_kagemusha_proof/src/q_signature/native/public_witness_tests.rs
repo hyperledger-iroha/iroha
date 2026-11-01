@@ -33,7 +33,7 @@ fn decode_signatures(public: &Frame, slots: usize) -> Result<Vec<SignatureWitnes
         .as_chunks::<SLOT_WORDS>()
         .0
         .iter()
-        .zip(public[0].chunks_exact(SLOT_WORDS))
+        .zip(public[0].as_chunks::<SLOT_WORDS>().0)
     {
         let digest = Fp::from_repr(words[0].to_repr())
             .into_option()
@@ -42,7 +42,7 @@ fn decode_signatures(public: &Frame, slots: usize) -> Result<Vec<SignatureWitnes
             return Err("nonboolean verdict");
         }
         let mut integers = [[0_u64; 4]; 4];
-        for (integer, pair) in integers.iter_mut().zip(raw[1..9].chunks_exact(2)) {
+        for (integer, pair) in integers.iter_mut().zip(raw[1..9].as_chunks::<2>().0) {
             for (half, word) in pair.iter().enumerate() {
                 if word[16..].iter().any(|byte| *byte != 0) {
                     return Err("limb above 128 bits");
@@ -353,8 +353,11 @@ fn genuine_load_signature_public_inverse_native_proof_parity() {
                 path.display(),
                 sha2::Sha256::digest(&encoded)
                     .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
+                    .fold(String::new(), |mut hex, byte| {
+                        use core::fmt::Write as _;
+                        let _ = write!(hex, "{byte:02x}");
+                        hex
+                    })
             );
         }
         let original = key.artifact_bytes_v2().unwrap();

@@ -654,13 +654,13 @@ fn fx_usage_preparation_original_pool_refusal_refunds_and_retries_identical_inpu
     assert!(original.allocator_refusal().is_none());
     assert!(refused.take_execution_deferral().is_none());
     assert!(refused.is_execution_deferred());
-    let wakes = Arc::new(Wakes::default());
-    let waker = Waker::from(Arc::clone(&wakes));
+    let wake_count = Arc::new(Wakes::default());
+    let waker = Waker::from(Arc::clone(&wake_count));
     let mut context = Context::from_waker(&waker);
     assert_eq!(registration.poll_wait(release, &mut context), Poll::Pending);
     drop(foreign_occupied);
     assert_eq!(
-        wakes.0.load(Ordering::SeqCst),
+        wake_count.0.load(Ordering::SeqCst),
         0,
         "foreign pool release cannot satisfy this refusal"
     );
@@ -668,7 +668,7 @@ fn fx_usage_preparation_original_pool_refusal_refunds_and_retries_identical_inpu
     drop(occupied);
     // Credits are reusable immediately, but callbacks cannot run while the
     // enclosing World still owns its physical writers.
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    assert_eq!(wake_count.0.load(Ordering::SeqCst), 0);
     assert_eq!(registration.poll_wait(release, &mut context), Poll::Pending);
     assert_eq!(original_pool.reserved_bytes(), reserved_before);
     drop(refused);
@@ -725,9 +725,9 @@ fn fx_usage_preparation_original_pool_refusal_refunds_and_retries_identical_inpu
         Quantity::from(760_u32)
     );
     drop(retry);
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 0);
+    assert_eq!(wake_count.0.load(Ordering::SeqCst), 0);
     drop(block);
-    assert_eq!(wakes.0.load(Ordering::SeqCst), 1);
+    assert_eq!(wake_count.0.load(Ordering::SeqCst), 1);
     assert_eq!(
         registration.poll_wait(release, &mut context),
         Poll::Ready(())

@@ -319,12 +319,8 @@ fn decode_response_chunk(
         return Err(ZkAmsMkheErrorV1::InvalidWireEncoding);
     }
     let mut output = [0_i64; super::super::super::WITNESS_CHUNK_COEFFICIENTS_V1];
-    for (coefficient, encoded) in output.iter_mut().zip(bytes.chunks_exact(8)) {
-        *coefficient = i64::from_be_bytes(
-            encoded
-                .try_into()
-                .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-        );
+    for (coefficient, encoded) in output.iter_mut().zip(bytes.as_chunks::<8>().0) {
+        *coefficient = i64::from_be_bytes(*encoded);
     }
     Ok(output)
 }

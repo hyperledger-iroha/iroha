@@ -716,43 +716,44 @@ impl RateLimiter {
         self.allow_cost(key, 1).await
     }
     /// Returns true if allowed after consuming `cost` tokens, false if limited.
-    #[allow(clippy::unused_async)]
-    pub async fn allow_cost(&self, key: &str, cost: u64) -> bool {
-        if self.inner.disabled {
-            return true;
-        }
-        self.inner
-            .shard_for(key)
-            .lock()
-            .allow_cost(key, cost, Instant::now())
+    pub fn allow_cost(&self, key: &str, cost: u64) -> impl Future<Output = bool> {
+        std::future::ready(
+            self.inner.disabled
+                || self
+                    .inner
+                    .shard_for(key)
+                    .lock()
+                    .allow_cost(key, cost, Instant::now()),
+        )
     }
     /// Consume a weighted cost capped to this limiter's configured burst.
     ///
     /// This preserves relative weighting whenever the burst can accommodate it while ensuring a
     /// positive, otherwise-valid burst cannot make an endpoint permanently unserviceable. A
     /// disabled limiter still allows without allocating a bucket.
-    #[allow(clippy::unused_async)]
-    pub async fn allow_cost_capped_to_burst(&self, key: &str, cost: u64) -> bool {
-        if self.inner.disabled {
-            return true;
-        }
-        self.inner
-            .shard_for(key)
-            .lock()
-            .allow_cost_capped_to_burst(key, cost, Instant::now())
+    pub fn allow_cost_capped_to_burst(&self, key: &str, cost: u64) -> impl Future<Output = bool> {
+        std::future::ready(
+            self.inner.disabled
+                || self.inner.shard_for(key).lock().allow_cost_capped_to_burst(
+                    key,
+                    cost,
+                    Instant::now(),
+                ),
+        )
     }
     /// Atomically consumes `count` tokens for one key.
     ///
     /// Rejection leaves the bucket unchanged, including when `count` exceeds the configured burst.
-    #[allow(clippy::unused_async)]
-    pub async fn allow_repeated(&self, key: &str, count: usize) -> bool {
-        if self.inner.disabled || count == 0 {
-            return true;
-        }
-        self.inner
-            .shard_for(key)
-            .lock()
-            .allow_repeated(key, count, Instant::now())
+    pub fn allow_repeated(&self, key: &str, count: usize) -> impl Future<Output = bool> {
+        std::future::ready(
+            self.inner.disabled
+                || count == 0
+                || self
+                    .inner
+                    .shard_for(key)
+                    .lock()
+                    .allow_repeated(key, count, Instant::now()),
+        )
     }
     /// Atomically consumes the requested token count for every supplied key.
     ///
@@ -760,7 +761,6 @@ impl RateLimiter {
     /// combined count overflows, exceeds the configured burst, or lacks available tokens, every
     /// bucket remains unchanged.
     #[cfg(test)]
-    #[allow(clippy::unused_async)]
     pub async fn allow_many_repeated<I, K>(&self, charges: I) -> bool
     where
         I: IntoIterator<Item = (K, usize)>,
@@ -779,8 +779,19 @@ impl RateLimiter {
     /// protects its buckets from bounded-capacity eviction. Calling [`RateLimitReservation::commit`]
     /// finalizes the charge; dropping it refunds every key as one atomic operation. If any charge
     /// cannot be reserved, no bucket is changed.
-    #[allow(clippy::unused_async)]
-    pub async fn reserve_many_repeated<I, K>(&self, charges: I) -> Option<RateLimitReservation>
+    pub fn reserve_many_repeated<I, K>(
+        &self,
+        charges: I,
+    ) -> impl Future<Output = Option<RateLimitReservation>>
+    where
+        I: IntoIterator<Item = (K, usize)>,
+        K: AsRef<str>,
+    {
+        std::future::ready(self.reserve_many_repeated_now(charges))
+    }
+
+    /// Reserve every charge immediately; see [`Self::reserve_many_repeated`].
+    fn reserve_many_repeated_now<I, K>(&self, charges: I) -> Option<RateLimitReservation>
     where
         I: IntoIterator<Item = (K, usize)>,
         K: AsRef<str>,
@@ -847,13 +858,14 @@ impl RateLimiter {
         })
     }
     #[cfg(test)]
-    #[allow(clippy::unused_async)]
-    pub(crate) async fn bucket_count(&self) -> usize {
-        self.inner
-            .shards
-            .iter()
-            .map(|shard| shard.lock().buckets.len())
-            .sum()
+    pub(crate) fn bucket_count(&self) -> impl Future<Output = usize> {
+        std::future::ready(
+            self.inner
+                .shards
+                .iter()
+                .map(|shard| shard.lock().buckets.len())
+                .sum(),
+        )
     }
 }
 impl FixedKeyRateLimiter {
@@ -876,7 +888,6 @@ impl FixedKeyRateLimiter {
         }
     }
     /// Consume one token for a known key.
-    #[allow(clippy::unused_async)]
     pub(crate) async fn allow(&self, key: &str) -> bool {
         self.allow_repeated(key, 1).await
     }
@@ -884,13 +895,13 @@ impl FixedKeyRateLimiter {
     ///
     /// Missing keys are rejected without insertion. Rejection never consumes a
     /// partial debit, including when `count` exceeds the configured burst.
-    #[allow(clippy::unused_async)]
-    pub(crate) async fn allow_repeated(&self, key: &str, count: usize) -> bool {
+    pub(crate) fn allow_repeated(&self, key: &str, count: usize) -> impl Future<Output = bool> {
         let mut shard = self.inner.shard_for(key).lock();
-        if self.inner.disabled {
-            return shard.buckets.contains_key(key);
-        }
-        shard.allow_repeated(key, count, Instant::now())
+        std::future::ready(if self.inner.disabled {
+            shard.buckets.contains_key(key)
+        } else {
+            shard.allow_repeated(key, count, Instant::now())
+        })
     }
     #[cfg(test)]
     fn bucket_count(&self) -> usize {
@@ -1130,11 +1141,7 @@ pub fn has_trusted_forwarded_header(
     let Some(value) = values.next() else {
         return false;
     };
-    value
-        .to_str()
-        .ok()
-        .is_some_and(|value| !value.trim().is_empty())
-        && values.next().is_none()
+    value.to_str().is_ok_and(|value| !value.trim().is_empty()) && values.next().is_none()
 }
 /// Configuration for the pre-authentication connection gate.
 #[derive(Debug, Clone)]
@@ -1680,7 +1687,7 @@ mod tests {
             !limiter.inner.shard_for("slow-principal").lock().allow_cost(
                 "slow-principal",
                 1,
-                Instant::now() + Duration::from_secs(86_400),
+                Instant::now() + Duration::from_hours(24),
             )
         );
         assert!(limiter.allow("different-principal").await);

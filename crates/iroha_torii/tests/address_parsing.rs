@@ -1,5 +1,6 @@
 //! Ensure Torii account endpoints accept canonical I105 account path segments.
 #![cfg(all(feature = "app_api", feature = "telemetry"))]
+use crate::fixtures;
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -24,8 +25,6 @@ use prometheus::core::Collector;
 use std::sync::Arc;
 use tower::ServiceExt as _;
 use urlencoding::encode;
-#[path = "fixtures.rs"]
-mod fixtures;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const I105_PREFIX: u16 = 0x002A;
@@ -1309,7 +1308,7 @@ fn build_test_router() -> (fixtures::CommittedToriiRouterRuntime, Arc<Metrics>, 
         &cfg.common.key_pair,
         Vec::new(),
         None,
-        TimeSource::new_system(),
+        &TimeSource::new_system(),
     );
     let state = native_chain.state().clone();
     let kura = native_chain.kura().clone();
@@ -1446,5 +1445,4 @@ fn counter_total(counter: &prometheus::IntCounterVec) -> u64 {
         .sum()
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

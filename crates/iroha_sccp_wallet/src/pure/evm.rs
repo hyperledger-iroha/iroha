@@ -1363,7 +1363,7 @@ mod tests {
         private
             .write_atomic(
                 "large.key",
-                &vec![b'0'; MAX_KEY_FILE_BYTES + 1],
+                &[b'0'; MAX_KEY_FILE_BYTES + 1],
                 iroha_fs::PublishMode::CreateNew,
             )
             .unwrap();
@@ -1412,14 +1412,15 @@ mod tests {
             EvmSigningKey::load(&path),
             Err(KeyFileError::Permissions { .. })
         ));
-        for unsafe_mode in [0o500, 0o1600] {
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(unsafe_mode))
-                .expect("unsafe mode");
+        for unsafe_mode in [0o500_u16, 0o1600] {
+            std::fs::set_permissions(
+                &path,
+                std::fs::Permissions::from_mode(u32::from(unsafe_mode)),
+            )
+            .expect("unsafe mode");
             assert_eq!(
                 EvmSigningKey::load(&path).map(|key| key.address()),
-                Err(KeyFileError::Permissions {
-                    mode: unsafe_mode as u16,
-                })
+                Err(KeyFileError::Permissions { mode: unsafe_mode })
             );
         }
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).expect("mode");

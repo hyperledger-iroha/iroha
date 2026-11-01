@@ -1276,10 +1276,7 @@ pub(crate) fn same_file_snapshot(left: &std::fs::Metadata, right: &std::fs::Meta
         && left.modified().ok() == right.modified().ok()
 }
 /// Whether two metadata snapshots name the same filesystem object.
-pub(crate) fn same_file_identity(
-    left: &iroha_fs::FileMetadata,
-    right: &iroha_fs::FileMetadata,
-) -> bool {
+pub fn same_file_identity(left: &iroha_fs::FileMetadata, right: &iroha_fs::FileMetadata) -> bool {
     left.identity() == right.identity()
 }
 /// Whether two snapshots describe the same unchanged single-link regular input file.

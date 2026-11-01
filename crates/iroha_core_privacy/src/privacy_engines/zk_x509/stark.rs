@@ -634,8 +634,8 @@ impl From<P256AggregateAdapterErrorV1> for ZkX509StarkErrorV1 {
         match error {
             P256AggregateAdapterErrorV1::Resource => Self::AllocationFailure,
             P256AggregateAdapterErrorV1::Phase => Self::TranscriptMismatch,
-            P256AggregateAdapterErrorV1::Source => Self::P256Witness,
-            P256AggregateAdapterErrorV1::Topology
+            P256AggregateAdapterErrorV1::Source
+            | P256AggregateAdapterErrorV1::Topology
             | P256AggregateAdapterErrorV1::Challenge
             | P256AggregateAdapterErrorV1::Constraint => Self::P256Witness,
         }
@@ -3386,7 +3386,7 @@ fn build_projection_trace_material_v1(
     trace: ZkX509ProjectionTraceV1,
     base_columns: Vec<Vec<F>>,
     fixed_columns: Vec<Vec<F>>,
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
 ) -> Result<ProjectionTraceMaterialV1, ZkX509StarkErrorV1> {
     let aux = build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, challenges)?;
     if aux.rows.len() != layout.trace_size() {
@@ -5474,7 +5474,7 @@ fn projection_constraint_residues_v1<
     current_aux: &[A],
     next_aux: &[A],
     fixed: &[A],
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
 ) -> Result<Vec<A>, ZkX509StarkErrorV1> {
     let current_base: &[A; ZK_X509_PROJECTION_BASE_WIDTH_V1] = current_base
         .try_into()
@@ -5507,7 +5507,7 @@ fn projection_composition_lanes_v1(
     base_lde: &[Vec<F>],
     aux_lde: &[Vec<F>],
     fixed_lde: &[Vec<F>],
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
     alphas: &[Vec<E>],
 ) -> Result<Vec<Vec<Vec<E>>>, ZkX509StarkErrorV1> {
     if alphas.len() != SECURITY_LANES
@@ -5571,7 +5571,7 @@ fn projection_composition_lanes_v1(
 #[cfg(test)]
 fn validate_projection_base_constraints_v1(
     material: &ProjectionTraceMaterialV1,
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
 ) -> Result<(), ZkX509StarkErrorV1> {
     let rows = material.layout.trace_size();
     for index in 0..rows {
@@ -5602,7 +5602,7 @@ fn projection_quotient_value_v1(
     current_aux: &[F],
     next_aux: &[F],
     fixed: &[F],
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
     alphas: &[E],
 ) -> Result<E, ZkX509StarkErrorV1> {
     let residues = projection_constraint_residues_v1(
@@ -6146,9 +6146,9 @@ pub fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRng>(
         trace,
         base_columns,
         fixed_columns,
-        projection_challenges,
+        &projection_challenges,
     )?;
-    validate_projection_base_constraints_v1(&material, projection_challenges)?;
+    validate_projection_base_constraints_v1(&material, &projection_challenges)?;
     let aux_lde = masked_lde_columns_v1(&material.aux_columns, layout, rng)?;
     let aux_tree = row_tree_v1(
         AUX_LEAF_DOMAIN,
@@ -6167,7 +6167,7 @@ pub fn prove_zk_x509_projection_segmented_stark_v1_with_rng<R: TryRng>(
         &base_lde,
         &aux_lde,
         &fixed_lde,
-        projection_challenges,
+        &projection_challenges,
         &alphas[0],
     )?;
     let mut composition_trees = Vec::with_capacity(SECURITY_LANES);
@@ -8911,7 +8911,7 @@ impl<'a, 'source> MainLog19ProverConstraintSourceV1<'a, 'source> {
                     &self.p256_challenges,
                 )?)
             }
-        };
+        }
         if residues.len() != registration.segment.constraint_count {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
         }
@@ -10860,7 +10860,7 @@ impl<'a> MainProjectionTraceGroupSourceV1<'a> {
         let aux = build_zk_x509_projection_aux_trace_v1(
             &self.trace.base,
             &self.trace.fixed,
-            post_base.projection(),
+            &post_base.projection(),
         )?;
         if aux.rows.len() != self.registration.segment.trace_size() {
             return Err(ZkX509StarkErrorV1::ProjectionWitness);
@@ -10975,7 +10975,7 @@ impl MainProjectionProverConstraintSourceV1 {
             opening.aux_current,
             opening.aux_next,
             fixed,
-            self.challenges,
+            &self.challenges,
             alphas,
         )
     }
@@ -11168,7 +11168,7 @@ impl MainProjectionVerifierConstraintSourceV1 {
             opening.aux_current,
             opening.aux_next,
             &fixed.current,
-            self.challenges,
+            &self.challenges,
         )
     }
     #[cfg(test)]
@@ -11229,7 +11229,7 @@ impl MainProjectionVerifierConstraintSourceV1 {
             opening.aux_current,
             opening.aux_next,
             current,
-            self.challenges,
+            &self.challenges,
         )
     }
 }

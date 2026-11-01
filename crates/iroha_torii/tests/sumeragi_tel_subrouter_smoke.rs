@@ -1,5 +1,6 @@
 //! Smoke test that Torii does not expose retired Sumeragi telemetry routes.
 #![cfg(feature = "telemetry")]
+use crate::fixtures;
 use axum::{extract::ConnectInfo, http::Request};
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
@@ -12,7 +13,6 @@ use iroha_core::{
 use iroha_torii::{MaybeTelemetry, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _;
-mod fixtures;
 fn signed_loopback_get(
     cfg: &iroha_config::parameters::actual::Root,
     uri: &'static str,
@@ -94,5 +94,4 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

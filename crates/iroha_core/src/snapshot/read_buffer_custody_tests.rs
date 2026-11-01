@@ -360,7 +360,7 @@ async fn snapshot_read_buffer_maker_retains_the_original_startup_pool() {
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
-        upgrade_checkpoint: Default::default(),
+        upgrade_checkpoint: iroha_config::parameters::user::SnapshotUpgradeCheckpoint::default(),
     };
     let startup_pool = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let occupied = startup_pool.try_reserve_bytes(64).unwrap();
@@ -467,7 +467,7 @@ async fn snapshot_maker_first_tick_exports_recovered_state_without_new_work() {
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
-        upgrade_checkpoint: Default::default(),
+        upgrade_checkpoint: iroha_config::parameters::user::SnapshotUpgradeCheckpoint::default(),
     };
     let budget = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let mut maker = SnapshotMaker::from_config(&config, state, key, budget.clone()).unwrap();
@@ -532,7 +532,7 @@ async fn snapshot_read_buffer_maker_gc_refusal_retries_the_same_pending_state() 
         resources: SnapshotResourcePolicy::default(),
         verification_public_key: None,
         signing_private_key: None,
-        upgrade_checkpoint: Default::default(),
+        upgrade_checkpoint: iroha_config::parameters::user::SnapshotUpgradeCheckpoint::default(),
     };
     let budget = AllocationBudget::new(config.max_read_buffer_bytes.get());
     let mut maker =

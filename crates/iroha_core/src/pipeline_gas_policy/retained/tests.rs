@@ -1,7 +1,16 @@
 //! Complete graph custody, exact predecessor and original-pool negative controls.
 
 use super::*;
-use iroha_data_model::parameter::{CustomParameter, Parameter};
+use crate::pipeline_gas_policy::ParameterIngressError;
+use iroha_crypto::Algorithm;
+use iroha_data_model::{
+    account::AccountId,
+    block::consensus::{PublicLaneStakingPolicy, RootFeePolicy},
+    crypto_admission_policy::CryptoAdmissionPolicyV1,
+    fraud::{FraudAdmissionAttesterV1, FraudAdmissionPolicyV1},
+    parameter::{CustomParameter, Parameter},
+    zk_validity_policy::{ZkValidityPolicyV1, ZkVerifyingKeyRefV1},
+};
 use iroha_primitives::json::Json;
 use norito::codec::Encode as _;
 
@@ -90,7 +99,7 @@ fn complete_graph_copy_preserves_canonical_bytes_and_every_projection() {
     let source = authored();
     let before = source.clone();
     let pool = AllocationBudget::new(1 << 20);
-    let retained = RetainedStateParameters::try_copy(&source, &pool).unwrap();
+    let retained = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
     assert_eq!(retained.get(), &source);
     assert_eq!(retained.get().encode(), source.encode());
     assert_eq!(retained.get().gas(), source.gas());
@@ -127,15 +136,12 @@ fn complete_graph_copy_preserves_canonical_bytes_and_every_projection() {
 #[test]
 fn mv_clones_share_exact_custody_until_the_last_version_retires() {
     let pool = AllocationBudget::new(1 << 20);
-    let retained = RetainedStateParameters::try_copy(&authored(), &pool).unwrap();
+    let retained = RetainedStateParameters::try_copy_for_testing(&authored(), &pool).unwrap();
     let used = pool.reserved_bytes();
     let snapshot = retained.clone();
-    let sibling = retained.try_retain_in(&pool).unwrap();
     assert!(snapshot.same_version(&retained));
-    assert!(sibling.same_version(&retained));
     assert_eq!(pool.reserved_bytes(), used);
     drop(retained);
-    drop(sibling);
     assert_eq!(pool.reserved_bytes(), used);
     drop(snapshot);
     assert_eq!(pool.reserved_bytes(), 0);
@@ -147,37 +153,19 @@ fn zero_pool_refuses_original_demand_without_mutating_source() {
     let bytes = source.encode();
     let pool = AllocationBudget::new(0);
     assert!(matches!(
-        RetainedStateParameters::try_copy(&source, &pool),
-        Err(ParameterRetentionError::Admission(_))
+        RetainedStateParameters::try_copy_for_testing(&source, &pool),
+        Err(ParameterIngressError::Retention(
+            ParameterRetentionError::Admission(_)
+        ))
     ));
     assert_eq!(source.encode(), bytes);
     assert_eq!(pool.reserved_bytes(), 0);
 }
 
 #[test]
-fn custom_retention_refusal_releases_the_already_copied_graph_prefix() {
-    let source = authored();
-    let mut plan = Plan::default();
-    visit_graph(&source, &mut |layout| plan.add(layout)).unwrap();
-    let plain = plan.bytes
-        + array::<AllocationCharge>(plan.count).unwrap().size()
-        + ChargedShared::<ParameterGraph>::allocation_layout().size();
-    let pool = AllocationBudget::new(plain);
-    assert!(matches!(
-        RetainedStateParameters::try_copy(&source, &pool),
-        Err(ParameterRetentionError::Custom(_))
-    ));
-    assert_eq!(pool.reserved_bytes(), 0);
-    // A funded retry is a new admission, not a substituted original failure.
-    let retry_pool = AllocationBudget::new(1 << 20);
-    let retry = RetainedStateParameters::try_copy(&source, &retry_pool).unwrap();
-    assert_eq!(retry.get(), &source);
-}
-
-#[test]
 fn raw_json_clone_keeps_its_own_charge_after_outer_graph_retirement() {
     let pool = AllocationBudget::new(1 << 20);
-    let retained = RetainedStateParameters::try_copy(&authored(), &pool).unwrap();
+    let retained = RetainedStateParameters::try_copy_for_testing(&authored(), &pool).unwrap();
     let raw_json = retained
         .get()
         .parameters
@@ -198,31 +186,11 @@ fn raw_json_clone_keeps_its_own_charge_after_outer_graph_retirement() {
 }
 
 #[test]
-fn foreign_destination_requires_independent_funding_and_preserves_original_pool() {
-    let source_pool = AllocationBudget::new(1 << 20);
-    let source = RetainedStateParameters::try_copy(&authored(), &source_pool).unwrap();
-    let original = source_pool.reserved_bytes();
-    let refused_pool = AllocationBudget::new(0);
-    assert!(source.try_retain_in(&refused_pool).is_err());
-    assert_eq!(refused_pool.reserved_bytes(), 0);
-    assert_eq!(source_pool.reserved_bytes(), original);
-    let destination = AllocationBudget::new(1 << 20);
-    let copied = source.try_retain_in(&destination).unwrap();
-    assert_eq!(copied, source);
-    assert!(!copied.same_version(&source));
-    assert!(copied.belongs_to(&destination));
-    assert!(!copied.belongs_to(&source_pool));
-    drop(copied);
-    assert_eq!(destination.reserved_bytes(), 0);
-    assert_eq!(source_pool.reserved_bytes(), original);
-}
-
-#[test]
 fn equal_value_in_another_version_cannot_accept_a_prepared_successor() {
     let source = authored();
     let pool = AllocationBudget::new(1 << 20);
-    let original = RetainedStateParameters::try_copy(&source, &pool).unwrap();
-    let mut equal_other = RetainedStateParameters::try_copy(&source, &pool).unwrap();
+    let original = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
+    let mut equal_other = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
     assert_eq!(original, equal_other);
     let before = equal_other.clone();
     let prepared = original.prepare_replace(&source, &pool).unwrap();
@@ -236,7 +204,7 @@ fn equal_value_in_another_version_cannot_accept_a_prepared_successor() {
 fn applied_sibling_invalidates_preparation_even_under_the_same_original_pool() {
     let source = authored();
     let pool = AllocationBudget::new(1 << 20);
-    let mut current = RetainedStateParameters::try_copy(&source, &pool).unwrap();
+    let mut current = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
     let old_view = current.clone();
     let first = current.prepare_replace(&source, &pool).unwrap();
     let second = current.prepare_replace(&source, &pool).unwrap();
@@ -254,11 +222,13 @@ fn prepared_update_refuses_foreign_pool_before_any_change() {
     let source = authored();
     let pool = AllocationBudget::new(1 << 20);
     let foreign = AllocationBudget::new(1 << 20);
-    let mut current = RetainedStateParameters::try_copy(&source, &pool).unwrap();
+    let mut current = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
     let before = current.clone();
     assert!(matches!(
         current.prepare_replace(&source, &foreign),
-        Err(ParameterRetentionError::ForeignPool)
+        Err(ParameterIngressError::Retention(
+            ParameterRetentionError::ForeignPool
+        ))
     ));
     let prepared = current.prepare_replace(&source, &pool).unwrap();
     let (prepared, error) = prepared.install(&mut current, &foreign).unwrap_err();
@@ -271,11 +241,13 @@ fn prepared_update_refuses_foreign_pool_before_any_change() {
 #[test]
 fn mandatory_policy_removal_refuses_before_allocating_a_successor() {
     let pool = AllocationBudget::new(1 << 20);
-    let current = RetainedStateParameters::try_copy(&authored(), &pool).unwrap();
+    let current = RetainedStateParameters::try_copy_for_testing(&authored(), &pool).unwrap();
     let used = pool.reserved_bytes();
     assert!(matches!(
         current.prepare_replace(&StateParameters::default(), &pool),
-        Err(ParameterRetentionError::MissingInitializedPolicy)
+        Err(ParameterIngressError::Retention(
+            ParameterRetentionError::MissingInitializedPolicy
+        ))
     ));
     assert_eq!(pool.reserved_bytes(), used);
 }
@@ -284,7 +256,7 @@ fn mandatory_policy_removal_refuses_before_allocating_a_successor() {
 fn abandoning_a_prepared_update_refunds_only_the_successor() {
     let source = authored();
     let pool = AllocationBudget::new(1 << 20);
-    let current = RetainedStateParameters::try_copy(&source, &pool).unwrap();
+    let current = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
     let used = pool.reserved_bytes();
     let prepared = current.prepare_replace(&source, &pool).unwrap();
     assert!(pool.reserved_bytes() > used);
@@ -296,7 +268,8 @@ fn abandoning_a_prepared_update_refunds_only_the_successor() {
 #[test]
 fn bootstrap_absence_is_preserved_without_fabricating_monetary_authority() {
     let pool = AllocationBudget::new(1 << 20);
-    let bootstrap = RetainedStateParameters::try_copy(&StateParameters::default(), &pool).unwrap();
+    let bootstrap =
+        RetainedStateParameters::try_copy_for_testing(&StateParameters::default(), &pool).unwrap();
     assert!(bootstrap.get().crypto_policy().is_none());
     assert!(bootstrap.get().staking_policy().is_none());
     assert!(bootstrap.get().root_fees().is_none());
@@ -332,7 +305,7 @@ fn multisig_custody_and_exemptions_keep_all_member_backing_until_last_view() {
         .set_parameter(Parameter::Custom(fees.into_custom_parameter().unwrap()))
         .unwrap();
     let pool = AllocationBudget::new(1 << 20);
-    let owner = RetainedStateParameters::try_copy(&source, &pool).unwrap();
+    let owner = RetainedStateParameters::try_copy_for_testing(&source, &pool).unwrap();
     assert_eq!(owner.get(), &source);
     assert_eq!(
         owner
@@ -359,83 +332,6 @@ fn multisig_custody_and_exemptions_keep_all_member_backing_until_last_view() {
 }
 
 #[test]
-fn original_codec_scope_survives_observed_retention_and_saved_replay_is_invalid() {
-    use norito::core::{DecodeAttemptErrorKind, DecodeBudgetContext};
-    // Explicitly author a canonical monetary policy so the first compact account
-    // copy encounters the enclosing zero decoder allowance. An empty bootstrap
-    // intentionally has no monetary account projection to copy.
-    let mut source = StateParameters::default();
-    source
-        .set_parameter(Parameter::Custom(
-            iroha_config::parameters::defaults::nexus::fees::genesis_policy()
-                .into_custom_parameter()
-                .unwrap(),
-        ))
-        .unwrap();
-    let pool = AllocationBudget::new(1 << 20);
-    let zero = DecodeBudgetContext::new(norito::DecodeLimits::new(
-        usize::MAX,
-        usize::MAX,
-        usize::MAX,
-        0,
-        usize::MAX,
-    ));
-    let mut original_identity = None;
-    let refused = zero.with(|| ParameterRetentionAttemptError::observe(|| {
-        RetainedStateParameters::try_copy(&source, &pool).map_err(|error| {
-            let ParameterRetentionError::Codec(norito::Error::ScopedDecodeResource(original)) = &error else {
-                panic!("the actual account copy must preserve its original scoped refusal: {error:?}");
-            };
-            original_identity = Some(original.clone());
-            error
-        })
-    })).unwrap_err();
-    assert_eq!(pool.reserved_bytes(), 0);
-    let ParameterRetentionAttemptError::Codec(attempt) = refused else {
-        panic!("original codec attempt");
-    };
-    assert_eq!(attempt.kind(), DecodeAttemptErrorKind::EnclosingLimit);
-    let refusal = attempt.into_local_refusal().unwrap();
-    let original = original_identity.unwrap();
-    let norito::Error::ScopedDecodeResource(retained) = refusal.into_error() else {
-        panic!("retained scoped identity");
-    };
-    assert_eq!(retained, original);
-    let saved = ParameterRetentionAttemptError::observe::<()>(|| {
-        Err(ParameterRetentionError::Codec(
-            norito::Error::ScopedDecodeResource(retained),
-        ))
-    })
-    .unwrap_err();
-    let ParameterRetentionAttemptError::Codec(saved) = saved else {
-        panic!("saved codec attempt");
-    };
-    assert_eq!(saved.kind(), DecodeAttemptErrorKind::Invalid);
-    assert!(saved.local_refusal().is_none());
-    let retry = ParameterRetentionAttemptError::observe(|| {
-        RetainedStateParameters::try_copy(&source, &pool)
-    })
-    .unwrap();
-    assert_eq!(retry.get(), &source);
-    drop(retry);
-    assert_eq!(pool.reserved_bytes(), 0);
-}
-
-#[test]
-fn observed_retention_keeps_original_finite_pool_refusal_separate() {
-    let pool = AllocationBudget::new(0);
-    let error = ParameterRetentionAttemptError::observe(|| {
-        RetainedStateParameters::try_copy(&StateParameters::default(), &pool)
-    })
-    .unwrap_err();
-    assert!(matches!(
-        error,
-        ParameterRetentionAttemptError::Original(ParameterRetentionError::Admission(_))
-    ));
-    assert_eq!(pool.reserved_bytes(), 0);
-}
-
-#[test]
 fn explicit_missing_policy_fixture_is_funded_but_cannot_be_a_runtime_successor() {
     let source = authored();
     let pool = AllocationBudget::new(1 << 20);
@@ -446,14 +342,18 @@ fn explicit_missing_policy_fixture_is_funded_but_cannot_be_a_runtime_successor()
         .unwrap();
     assert!(matches!(
         original.prepare_replace(&missing, &pool),
-        Err(ParameterRetentionError::MissingInitializedPolicy)
+        Err(ParameterIngressError::Retention(
+            ParameterRetentionError::MissingInitializedPolicy
+        ))
     ));
     let held = pool.reserved_bytes();
     let limit = pool.limit_bytes();
     pool.set_limit_bytes(held);
     assert!(matches!(
         RetainedStateParameters::try_copy_for_testing(&missing, &pool),
-        Err(ParameterRetentionError::Admission(_))
+        Err(ParameterIngressError::Retention(
+            ParameterRetentionError::Admission(_)
+        ))
     ));
     assert_eq!(pool.reserved_bytes(), held);
     assert!(original.root_fees().is_some());

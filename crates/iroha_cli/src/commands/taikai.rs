@@ -2069,11 +2069,13 @@ impl EdgeSummary {
     }
 }
 fn build_edge_rng(seed: Option<u64>) -> Result<StdRng> {
-    match seed {
-        Some(seed) => Ok(StdRng::seed_from_u64(seed)),
-        None => StdRng::try_from_rng(&mut rand::rngs::SysRng)
-            .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}")),
-    }
+    seed.map_or_else(
+        || {
+            StdRng::try_from_rng(&mut rand::rngs::SysRng)
+                .map_err(|err| eyre!("failed to seed Taikai edge drift RNG from OS entropy: {err}"))
+        },
+        |seed| Ok(StdRng::seed_from_u64(seed)),
+    )
 }
 fn jittered_drift<R: RngExt + ?Sized>(base: i32, jitter_ms: u32, rng: &mut R) -> i32 {
     if jitter_ms == 0 {

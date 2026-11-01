@@ -81,7 +81,7 @@ fn source_materialization_binds_all_three_assets_and_preserves_authored_staking_
         payload.insert("min_validator_stake".into(), norito::json!("17.25"));
         payload.insert("max_stake_shares_per_validator".into(), norito::json!(19));
         payload.insert("max_pending_unbonds_per_share".into(), norito::json!(3));
-        payload.insert("unbonding_delay_ms".into(), norito::json!(123456));
+        payload.insert("unbonding_delay_ms".into(), norito::json!(123_456));
         payload.insert("max_slash_bps".into(), norito::json!(4321));
         payload.insert("slash_sink_account_id".into(), alternate_sink);
         let mut expected_payload = norito::json::Value::Object(payload.clone());

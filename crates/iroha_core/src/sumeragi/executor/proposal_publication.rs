@@ -191,7 +191,8 @@ impl Worker<'_> {
                     returned_refusal: None,
                     amx_legs: None,
                     uid_bindings: None,
-                    successor_context: Default::default(),
+                    successor_context:
+                        crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                     policy_decode_controls: None,
                     parent_service:
                         super::super::certified_chain::ParentServicePreparation::default(),
@@ -270,7 +271,8 @@ mod tests {
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
-                successor_context: Default::default(),
+                successor_context:
+                    crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,
                 parent_service:
                     super::super::super::certified_chain::ParentServicePreparation::default(),

@@ -31,6 +31,26 @@ fn fixture() -> (
     )
 }
 
+/// Check a proof-free request against the already admitted current compiled/committed tuple.
+fn request_admitted(
+    archive: &[u8],
+    profile: &PrivacyCompiledProfileSnapshotV1,
+    protocol_limits: &PrivacyProtocolLimitsV1,
+    limits: &PrivacyConsensusLimitsV1,
+    expected_network: &[u8; 32],
+) -> bool {
+    let Some(request) = decode_request(archive) else {
+        return false;
+    };
+    crate::privacy_construction::request_matches_profile(
+        &request,
+        profile,
+        protocol_limits,
+        limits,
+        expected_network,
+    )
+}
+
 #[test]
 fn request_construction_and_inspection_bind_actual_context_without_proof_bytes() {
     let (request, _, _, _) = fixture();

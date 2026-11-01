@@ -77,7 +77,7 @@ fn syscall_words(output: &CompileOutput, number: u32) -> usize {
         .as_chunks::<4>()
         .0
         .iter()
-        .filter(|bytes| u32::from_le_bytes((*bytes).try_into().unwrap()) == word)
+        .filter(|bytes| u32::from_le_bytes(**bytes) == word)
         .count()
 }
 #[test]

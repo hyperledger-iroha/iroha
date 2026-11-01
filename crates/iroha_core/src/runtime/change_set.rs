@@ -590,25 +590,31 @@ fn scheduled_records(
 }
 
 /// Admit a runtime-upgrade proposal to SORA Parliament: the notice the committed policy requires,
-/// frozen for the proposal, and the committed time of admission. A change set to schedule needs
-/// the endorsements the committed provenance policy requires.
+/// frozen for the proposal, and the committed time of admission.
+///
+/// `provenance` is `Some` for an endorsed proposal (the release addition
+/// `ProposeEndorsedRuntimeUpgradeProposal`): a change set to schedule then needs the endorsements
+/// the committed provenance policy requires. The baseline `ProposeRuntimeUpgradeProposal` passes
+/// `None` and executes as the frozen baseline does, without a provenance check.
 ///
 /// # Errors
-/// The policy is not committed, a change set to schedule fails admission or its provenance
-/// falls short, or a change set to cancel is not scheduled.
+/// The policy is not committed, a change set to schedule fails admission or an endorsed
+/// proposal's provenance falls short, or a change set to cancel is not scheduled.
 pub fn admit_proposal(
     action: &RuntimeUpgradeActionV1,
-    provenance: &[ChangeSetEndorsementV1],
+    provenance: Option<&[ChangeSetEndorsementV1]>,
     state_transaction: &crate::state::StateTransaction<'_, '_>,
 ) -> Result<(RuntimeNoticeV1, u64), Error> {
     let policy = committed_policy(crate::state::WorldReadOnly::parameters(
         &state_transaction.world,
     ))?;
-    check_provenance(
-        action,
-        provenance,
-        crate::state::WorldReadOnly::parameters(&state_transaction.world),
-    )?;
+    if let Some(provenance) = provenance {
+        check_provenance(
+            action,
+            provenance,
+            crate::state::WorldReadOnly::parameters(&state_transaction.world),
+        )?;
+    }
     let now_ms = block_ms(state_transaction);
     match action {
         RuntimeUpgradeActionV1::Schedule(change_set) => {

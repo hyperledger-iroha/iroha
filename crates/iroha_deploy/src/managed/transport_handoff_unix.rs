@@ -5,17 +5,20 @@ impl Connection {
         authenticate_peer(&self.0)?;
         #[cfg(any(target_os = "linux", target_os = "android"))]
         {
-            Ok(rustix::net::sockopt::socket_peercred(&self.0)
+            let pid = rustix::net::sockopt::socket_peercred(&self.0)
                 .map_err(std::io::Error::from)?
                 .pid
                 .as_raw_nonzero()
-                .get() as u32)
+                .get();
+            u32::try_from(pid)
+                .map_err(|_| Error::Invalid("managed Unix peer PID is invalid".into()))
         }
         #[cfg(target_os = "macos")]
         {
             use std::os::fd::AsRawFd as _;
             let mut pid: libc::pid_t = 0;
-            let mut length = std::mem::size_of_val(&pid) as libc::socklen_t;
+            let mut length = libc::socklen_t::try_from(std::mem::size_of_val(&pid))
+                .map_err(|_| Error::Invalid("managed Unix peer PID length is invalid".into()))?;
             #[allow(
                 unsafe_code,
                 reason = "getsockopt reads the live Unix peer PID into a valid bounded output"
@@ -32,10 +35,13 @@ impl Connection {
             if result != 0 {
                 return Err(std::io::Error::last_os_error().into());
             }
-            if length as usize != std::mem::size_of_val(&pid) || pid <= 0 {
+            if length as usize != std::mem::size_of_val(&pid) {
                 return Err(Error::Invalid("managed Unix peer PID is invalid".into()));
             }
-            Ok(pid as u32)
+            u32::try_from(pid)
+                .ok()
+                .filter(|pid| *pid != 0)
+                .ok_or_else(|| Error::Invalid("managed Unix peer PID is invalid".into()))
         }
         #[cfg(not(any(target_os = "linux", target_os = "android", target_os = "macos")))]
         Err(Error::Invalid(
@@ -190,7 +196,8 @@ fn validate_tcp_listener(listener: &std::net::TcpListener) -> Result<()> {
         // Only the first u_int8_t, tcpi_state, is needed. Read its documented prefix
         // directly: libc's full record expands C bitfields and differs from Darwin's ABI.
         let mut state = 0_u8;
-        let mut length = std::mem::size_of_val(&state) as libc::socklen_t;
+        let mut length = libc::socklen_t::try_from(std::mem::size_of_val(&state))
+            .map_err(|_| Error::Invalid("managed TCP state length is invalid".into()))?;
         #[allow(
             unsafe_code,
             reason = "getsockopt initializes the bounded TCP state output before its state byte is read"
@@ -376,7 +383,6 @@ mod listener_handoff_tests {
             .unwrap(),
             1
         );
-        drop(ancillary);
         drop(descriptors);
         drop(originals);
         assert!(receiver.receive_tcp_listeners(8).is_err());

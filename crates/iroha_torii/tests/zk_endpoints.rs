@@ -103,7 +103,7 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
             .world
             .executor()
             .clone()
-            .execute_instruction(&mut transaction, &owner, instruction)
+            .execute_instruction(&mut transaction, &owner, &instruction)
             .expect("seed instruction must succeed");
     }
     transaction.apply();
@@ -156,7 +156,7 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
     );
     assert_eq!(
         v.get("evaluated_block_height")
-            .and_then(|value| value.as_u64()),
+            .and_then(norito::json::native::Value::as_u64),
         Some(1)
     );
     assert_eq!(

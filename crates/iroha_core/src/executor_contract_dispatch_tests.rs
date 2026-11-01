@@ -286,7 +286,7 @@ seiyaku DispatchRoles {
         .execute_instruction(
             &mut tx,
             &authority,
-            Grant::account_permission(malformed_permission.clone(), authority.clone()).into(),
+            &Grant::account_permission(malformed_permission.clone(), authority.clone()).into(),
         )
         .expect_err("native Grant rejects the recognized malformed permission before mutation");
     assert!(
@@ -434,7 +434,7 @@ fn execute_instruction_with_ivm() {
     let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
     let instruction = Register::domain(Domain::new(domain_id.clone())).into();
     executor
-        .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
+        .execute_instruction(&mut state_tx, &ALICE_ID.clone(), &instruction)
         .expect("execution");
     assert!(state_tx.world.domains.get(&domain_id).is_some());
 }
@@ -756,7 +756,7 @@ fn executor_validation_consumes_fuel_budget() {
     let base_fuel = state_tx.world.parameters.get().executor().fuel.get();
     let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
     executor
-        .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
+        .execute_instruction(&mut state_tx, &ALICE_ID.clone(), &instruction)
         .expect("execution");
     let remaining = state_tx.executor_fuel_remaining;
     assert!(
@@ -784,7 +784,7 @@ fn executor_validation_rejects_when_budget_exhausted() {
     state_tx.executor_fuel_remaining = 0;
     let instruction: InstructionBox = Log::new(Level::INFO, "executor fuel".to_owned()).into();
     let err = executor
-        .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
+        .execute_instruction(&mut state_tx, &ALICE_ID.clone(), &instruction)
         .expect_err("expected fuel exhaustion");
     assert!(
         matches!(err, ValidationFail::TooComplex),
@@ -990,7 +990,7 @@ fn certified_originals_permission_grant_and_revoke_require_current_global_root()
             .execute_instruction(
                 &mut tx,
                 caller,
-                Grant::account_permission(originals.clone(), reader.clone()).into(),
+                &Grant::account_permission(originals.clone(), reader.clone()).into(),
             )
             .expect_err("an unprivileged signer cannot create original-read authority");
     }
@@ -998,7 +998,7 @@ fn certified_originals_permission_grant_and_revoke_require_current_global_root()
         .execute_instruction(
             &mut tx,
             &root,
-            Grant::account_permission(originals.clone(), reader.clone()).into(),
+            &Grant::account_permission(originals.clone(), reader.clone()).into(),
         )
         .expect("an existing global read root may grant narrower original reads");
     assert!(authority_has_permission(&tx.world, &reader, &originals).unwrap());
@@ -1006,7 +1006,7 @@ fn certified_originals_permission_grant_and_revoke_require_current_global_root()
         .execute_instruction(
             &mut tx,
             &reader,
-            Grant::account_permission(originals.clone(), stranger.clone()).into(),
+            &Grant::account_permission(originals.clone(), stranger.clone()).into(),
         )
         .expect_err("a narrow reader cannot delegate its capability");
     for caller in [&reader, &stranger] {
@@ -1014,7 +1014,7 @@ fn certified_originals_permission_grant_and_revoke_require_current_global_root()
             .execute_instruction(
                 &mut tx,
                 caller,
-                Revoke::account_permission(originals.clone(), reader.clone()).into(),
+                &Revoke::account_permission(originals.clone(), reader.clone()).into(),
             )
             .expect_err("only a current global read root can revoke");
     }
@@ -1022,21 +1022,21 @@ fn certified_originals_permission_grant_and_revoke_require_current_global_root()
         .execute_instruction(
             &mut tx,
             &root,
-            Grant::account_permission(global, reader.clone()).into(),
+            &Grant::account_permission(global, reader.clone()).into(),
         )
         .expect_err("the global read root remains genesis-only and nondelegable");
     executor
         .execute_instruction(
             &mut tx,
             &reader,
-            Unregister::account(stranger.clone()).into(),
+            &Unregister::account(stranger.clone()).into(),
         )
         .expect_err("a certified-original reader gains no write permission");
     executor
         .execute_instruction(
             &mut tx,
             &root,
-            Revoke::account_permission(originals.clone(), reader.clone()).into(),
+            &Revoke::account_permission(originals.clone(), reader.clone()).into(),
         )
         .expect("current global read root revokes its narrow grant");
     assert!(!authority_has_permission(&tx.world, &reader, &originals).unwrap());
@@ -1975,7 +1975,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
     for id in reserved {
         for authority in [&generic_admin, &sccp_proposer] {
             let error = super::Executor::Initial
-                .execute_instruction(&mut state_transaction, authority, set_custom(id))
+                .execute_instruction(&mut state_transaction, authority, &set_custom(id))
                 .expect_err("reserved parameters must not be set through SetParameter");
             assert!(
                 matches!(error, ValidationFail::NotPermitted(_)),
@@ -1987,7 +1987,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
         .execute_instruction(
             &mut state_transaction,
             &sccp_proposer,
-            set_custom("unrelated_parameter"),
+            &set_custom("unrelated_parameter"),
         )
         .expect_err("the SCCP route proposal permission must not authorize generic parameters");
     assert!(
@@ -2005,7 +2005,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
         .execute_instruction(
             &mut state_transaction,
             &generic_admin,
-            set_custom("unrelated_parameter"),
+            &set_custom("unrelated_parameter"),
         )
         .expect("a generic parameter administrator can set an unrelated custom parameter");
     assert!(state_transaction.world.sccp_parameters().is_none());
@@ -2021,7 +2021,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
         )
     };
     let error = super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &generic_admin, propose())
+        .execute_instruction(&mut state_transaction, &generic_admin, &propose())
         .expect_err("generic parameter authority must not authorize SCCP proposals");
     assert!(
         matches!(
@@ -2048,7 +2048,7 @@ fn initial_executor_separates_sccp_proposal_authority_from_parameter_governance(
     .expect("SCCP proposer permission passes the instruction authority check");
     let events = state_transaction.world.internal_event_buf.len();
     let error = super::Executor::Initial
-        .execute_instruction(&mut state_transaction, &sccp_proposer, propose())
+        .execute_instruction(&mut state_transaction, &sccp_proposer, &propose())
         .expect_err("SCCP proposer permission cannot open the unavailable binding-ballot gate");
     assert!(
         matches!(
@@ -2582,7 +2582,7 @@ fn migration_and_upgrade_keep_one_original_refusal_until_state_terminal() {
                 .execute_instruction(
                     &mut tx,
                     &ALICE_ID,
-                    iroha_data_model::isi::Upgrade::new(raw).into(),
+                    &iroha_data_model::isi::Upgrade::new(raw).into(),
                 )
                 .expect_err("real Upgrade must stop");
         } else {

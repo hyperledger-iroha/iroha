@@ -868,7 +868,6 @@ impl<'a> PenaltyApplier<'a> {
                             (lane_id, validator),
                             slash_id,
                             amount.get(),
-                            block_header.creation_time_ms,
                             &liability,
                             share_keys,
                         )
@@ -1167,7 +1166,6 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                         (action.lane_id, &action.validator),
                         action.slash_id,
                         &action.amount,
-                        now_ms,
                         &liability,
                         share_keys,
                     )?,
@@ -1178,7 +1176,6 @@ fn apply_npos_consensus_effects_to_transaction_inner(
                             (action.lane_id, &action.validator),
                             action.slash_id,
                             &action.amount,
-                            now_ms,
                             &liability,
                             share_keys,
                         )?;
@@ -3672,7 +3669,6 @@ mod tests {
                 &validator,
                 key,
                 &Quantity::from(10_000_u64),
-                2_000,
             )
             .expect("the canonical penalty fixture must admit its derived slash");
         }

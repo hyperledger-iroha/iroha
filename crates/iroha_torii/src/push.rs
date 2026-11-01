@@ -58,7 +58,7 @@ const FCM_SCOPE: &str = "https://www.googleapis.com/auth/firebase.messaging";
 const APNS_SANDBOX_ENDPOINT: &str = "https://api.sandbox.push.apple.com";
 const APNS_PRODUCTION_ENDPOINT: &str = "https://api.push.apple.com";
 const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
-const MAX_BACKOFF: Duration = Duration::from_secs(60 * 60);
+const MAX_BACKOFF: Duration = Duration::from_hours(1);
 const DISPATCH_TICK: Duration = Duration::from_secs(5);
 // Push persistence is local best-effort state, but every record remains resident
 // after startup. These source-local ceilings bound both directory work and the
@@ -3008,10 +3008,10 @@ mod tests {
 
     #[tokio::test]
     async fn push_worker_genesis_bootstrap_waits_for_authenticated_successor_and_shutdown() {
+        use iroha_core::sumeragi::test_chain::CertifiedTestChain;
         // Retain unrelated constructor EBR generations while measuring only the
         // original reader/capture owners and their exact synchronous refunds.
         let _constructor_retirement = crossbeam_epoch::pin();
-        use iroha_core::sumeragi::test_chain::CertifiedTestChain;
         for restarted in [false, true] {
             for publish_successor in [false, true] {
                 let mut chain = CertifiedTestChain::start(native_push_genesis_config()).unwrap();

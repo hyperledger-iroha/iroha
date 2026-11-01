@@ -4,7 +4,9 @@
 fn canonical_frame_atoms_match_exact_shape_counts_and_native_input_rows() {
     const FRAME_WIDTH: usize = 16;
     let preceding_columns: [usize; 4] = [55_703, 64_091, 34_614, 45_994];
-    for disclosed_attributes in 0..=4 {
+    for (disclosed_attributes, expected_atom_counts) in
+        SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1.iter().enumerate()
+    {
         let shape = ZkX509ShaCallPublicShapeV1 {
             disclosed_attributes,
         };
@@ -34,8 +36,8 @@ fn canonical_frame_atoms_match_exact_shape_counts_and_native_input_rows() {
                 let mut add = |row: u64, value: F| {
                     let row = usize::try_from(row).unwrap();
                     assert!(row < ZK_X509_SHA_SEGMENT_ROWS_V1);
-                    let cells = frame_rows.entry(row).or_insert([F::ZERO; FRAME_WIDTH]);
-                    cells[local] = cells[local].add(value);
+                    let row_cells = frame_rows.entry(row).or_insert([F::ZERO; FRAME_WIDTH]);
+                    row_cells[local] = row_cells[local].add(value);
                 };
                 match atom {
                     ZkX509FixedAlgebraicAtomV1::Affine {
@@ -68,10 +70,7 @@ fn canonical_frame_atoms_match_exact_shape_counts_and_native_input_rows() {
                 }
             }
             assert_eq!(before_frame, preceding_columns[segment]);
-            assert_eq!(
-                child.atoms_v1().len(),
-                SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1[disclosed_attributes][segment]
-            );
+            assert_eq!(child.atoms_v1().len(), expected_atom_counts[segment]);
             assert!(child.atoms_v1().len() <= ZK_X509_SHA_FIXED_ALGEBRAIC_MAX_ATOMS_V1);
             for call in calls
                 .calls()

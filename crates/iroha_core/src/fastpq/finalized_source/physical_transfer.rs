@@ -40,6 +40,10 @@ pub struct PhysicalTransferLocation {
 
 /// Finite local scan limits for one selection, not consensus or proof admission policy.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_field_names,
+    reason = "every field is an upper bound, named like the matching scan limits elsewhere"
+)]
 pub struct PhysicalTransferScan {
     /// Bound on the complete source inventory scanned for unique call identity.
     pub(crate) max_source_entries: u32,

@@ -432,11 +432,11 @@ fn commitments_open_and_reconstruct_with_112_byte_leaf_commitments() {
                     .as_chunks::<32>()
                     .0
                     .iter()
-                    .zip(seeds.chunks_exact(32))
+                    .zip(seeds.as_chunks::<32>().0)
                     .enumerate()
                 {
                     if index == usize::from(same) {
-                        assert_eq!(slot, [0u8; 32]);
+                        assert_eq!(*slot, [0u8; 32]);
                     } else {
                         assert_eq!(slot, seed);
                     }

@@ -164,6 +164,12 @@ pub fn live_allocations_during<T>(
     capacity: usize,
     work: impl FnOnce() -> T,
 ) -> (T, LiveAllocationStats) {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            ACTIVE.with(|active| active.set(ptr::null_mut()));
+        }
+    }
     assert!(
         capacity.is_power_of_two(),
         "live census capacity must be a power of two"
@@ -176,12 +182,6 @@ pub fn live_allocations_during<T>(
         entries: vec![Entry::default(); capacity].into_boxed_slice(),
         stats: LiveAllocationStats::default(),
     };
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            ACTIVE.with(|active| active.set(ptr::null_mut()));
-        }
-    }
     ACTIVE.with(|active| active.set(&raw mut census));
     let reset = Reset;
     let result = work();

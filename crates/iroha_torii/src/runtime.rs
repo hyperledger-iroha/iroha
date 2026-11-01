@@ -90,7 +90,7 @@ pub struct NodeSmCapabilities {
     pub default_hash: String,
     /// Exact committed ordinary signing policy, in canonical algorithm tag order.
     pub allowed_signing: Vec<String>,
-    /// Node-local SM2 generation DistID; the omitted IVM operand uses the fixed protocol constant.
+    /// Node-local SM2 generation `DistID`; the omitted IVM operand uses the fixed protocol constant.
     pub sm2_distid_default: String,
     /// Whether the OpenSSL/Tongsuo preview backend is toggled on.
     pub openssl_preview: bool,
@@ -1372,8 +1372,7 @@ fn validate_projection_partition_id(partition_id: u32) -> Result<(), crate::Erro
 fn current_unix_seconds() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs())
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_secs())
 }
 fn signed_transaction_schema_hash_hex() -> String {
     hex::encode(norito::schema::identity::frame_hash::<SignedTransaction>())
@@ -1508,10 +1507,6 @@ pub async fn handle_runtime_abi_hash(
 ///
 /// # Errors
 /// Returns an error if the committed selection or a change-set identity cannot be encoded.
-#[expect(
-    clippy::unused_async,
-    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
-)]
 pub async fn handle_runtime_upgrades_list(
     state: Arc<iroha_core::state::State>,
 ) -> Result<RuntimeUpgradesListResponse, crate::Error> {
@@ -1600,9 +1595,17 @@ fn runtime_proposal_draft(
     action: iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1,
     provenance: Vec<iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1>,
 ) -> ProposeUpgradeResponse {
-    let boxed: iroha_data_model::isi::InstructionBox =
-        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action, provenance }
-            .into();
+    // Without endorsements the baseline proposal suffices; endorsements travel only in the
+    // release addition's endorsed proposal, which a root executes once a change set activates it.
+    let boxed: iroha_data_model::isi::InstructionBox = if provenance.is_empty() {
+        iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal { action }.into()
+    } else {
+        iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal {
+            action,
+            provenance,
+        }
+        .into()
+    };
     ProposeUpgradeResponse {
         ok: true,
         tx_instructions: vec![instruction_box_to_tx_instr(&boxed)],
@@ -1645,27 +1648,19 @@ pub struct RuntimeProposeUpgradeRequest {
 /// POST /v1/runtime/upgrades/propose — draft the SORA Parliament proposal that schedules the
 /// change set in the body with its endorsements (`specs/live_runtime_upgrades.md` §6). Admission,
 /// including the provenance check, happens when the signed proposal executes.
-#[expect(
-    clippy::unused_async,
-    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
-)]
 pub async fn handle_runtime_propose_upgrade(
     NoritoJson(request): NoritoJson<RuntimeProposeUpgradeRequest>,
-) -> Result<ProposeUpgradeResponse, crate::Error> {
-    Ok(runtime_proposal_draft(
+) -> ProposeUpgradeResponse {
+    runtime_proposal_draft(
         iroha_data_model::runtime::lifecycle::RuntimeUpgradeActionV1::Schedule(request.change_set),
         request.provenance,
-    ))
+    )
 }
 /// POST /v1/runtime/upgrades/cancel/{id} — draft the SORA Parliament proposal that withdraws
 /// a scheduled change set.
 ///
 /// # Errors
 /// Returns an error when the identifier is not 32 bytes of hex.
-#[expect(
-    clippy::unused_async,
-    reason = "HTTP handlers retain a Future interface for route registration and shared async callers"
-)]
 pub async fn handle_runtime_cancel_upgrade(
     Path(id): Path<String>,
 ) -> Result<ProposeUpgradeResponse, crate::Error> {
@@ -2575,19 +2570,21 @@ mod tests {
             "provenance is required, even when empty"
         );
 
-        let response = handle_runtime_propose_upgrade(NoritoJson(request))
-            .await
-            .expect("draft");
+        let response = handle_runtime_propose_upgrade(NoritoJson(request)).await;
         let [draft] = response.tx_instructions.as_slice() else {
             panic!("one drafted instruction");
         };
         let framed = hex::decode(&draft.payload_hex).expect("framed instruction hex");
         let decoded = iroha_data_model::isi::decode_instruction_from_pair(&draft.wire_id, &framed)
             .expect("canonical instruction");
+        assert_eq!(
+            draft.wire_id,
+            "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"
+        );
         let proposal = decoded
             .as_any()
-            .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
-            .expect("a runtime-upgrade proposal");
+            .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
+            .expect("an endorsed runtime-upgrade proposal");
         assert_eq!(
             proposal.action,
             RuntimeUpgradeActionV1::Schedule(change_set)

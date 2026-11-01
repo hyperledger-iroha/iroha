@@ -238,7 +238,7 @@ fn receive_listeners(
 }
 
 /// Read the exact managed configuration addresses in reservation order: Torii, then P2P.
-pub(crate) fn expected_addresses(prepared: &PreparedLocalnet) -> Result<Vec<SocketAddr>> {
+pub fn expected_addresses(prepared: &PreparedLocalnet) -> Result<Vec<SocketAddr>> {
     if prepared.peers.len() != PEER_COUNT {
         return Err(invalid(
             "managed listener custody requires exactly four validators",

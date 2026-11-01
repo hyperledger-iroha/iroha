@@ -1882,11 +1882,7 @@ fn logical_operators_emit_control_flow_instead_of_eager_bitwise_ops() {
         .as_chunks::<4>()
         .0
         .iter()
-        .map(|chunk| {
-            instruction::wide::opcode(u32::from_le_bytes(
-                chunk.try_into().expect("instruction word"),
-            ))
-        })
+        .map(|chunk| instruction::wide::opcode(u32::from_le_bytes(*chunk)))
         .collect::<Vec<_>>();
     assert!(
         opcodes.contains(&instruction::wide::control::BNE),
@@ -2466,7 +2462,7 @@ kotoage fn main() authorize(FixtureAccess) {{
         .0
         .iter()
         .filter(|word| {
-            let word = u32::from_le_bytes((*word).try_into().expect("instruction word"));
+            let word = u32::from_le_bytes(**word);
             instruction::wide::opcode(word) == instruction::wide::memory::LDLIT
                 && quantity_literal_indices.contains(&instruction::wide::literal_index(word))
         })
@@ -3046,8 +3042,8 @@ fn debug_info_emits_full_width_pointer_codec_and_complete_access() {
         .as_chunks::<4>()
         .0
         .iter()
-        .filter(|word| *word == needle || *word == pointer_codec || *word == publish_needle)
-        .map(|word| *word)
+        .filter(|word| **word == needle || **word == pointer_codec || **word == publish_needle)
+        .copied()
         .collect();
     // The synchronous pointer codec validates the original owned public TLV.
     // String logging needs no conversion; numeric logging must encode the full
@@ -7605,6 +7601,10 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
             Builtin::EscrowResolveDispute,
             "ledger::escrow::resolve_dispute(offer, buyer_amount: amount, seller_amount: amount)",
         ),
+        (
+            Builtin::PresentX509,
+            "let _queued = ledger::credentials::present_x509(request: evidence)",
+        ),
         // Non-ledger builtins whose registry set must also match codegen.
         (
             Builtin::VerifySignature,
@@ -8364,7 +8364,7 @@ fn literal_scalar_and_tuple_map_keys_keep_exact_canonical_child_hints() {
         .iter()
         .enumerate()
         .filter_map(|(index, bytes)| {
-            let word = u32::from_le_bytes(bytes.try_into().unwrap());
+            let word = u32::from_le_bytes(*bytes);
             (instruction::wide::opcode(word) == instruction::wide::memory::LDLIT
                 && instruction::wide::literal_index(word) == literal_index)
                 .then_some(index as u64 * 4)

@@ -518,10 +518,7 @@ const ROOTS: &[Root] = &[
             r"iroha:world-state:profile:lthash16:v1\0",
             r"iroha:world-state:root:v1\0",
             r"iroha:world-state:schema:field:v1\0",
-            r"iroha:world-state:schema:no-key:v1\0",
             r"iroha:world-state:schema:selection:v1\0",
-            r"iroha:world-state:schema:start:v1\0",
-            r"iroha:world-state:schema:value:v1\0",
         ],
         evidence: &[
             (

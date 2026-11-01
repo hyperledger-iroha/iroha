@@ -644,6 +644,7 @@ impl_direct_instruction_box!(crate::isi::governance::ProposeContractLifecycleGov
 impl_direct_instruction_box!(crate::isi::governance::ProposeContractEmergencyHold);
 impl_direct_instruction_box!(crate::isi::governance::ProposeGlobalDataTriggerPermissionGovernance);
 impl_direct_instruction_box!(crate::isi::governance::ProposeRuntimeUpgradeProposal);
+impl_direct_instruction_box!(crate::isi::governance::ProposeEndorsedRuntimeUpgradeProposal);
 impl_direct_instruction_box!(crate::isi::governance::ProposeSccpRouteGovernance);
 impl_direct_instruction_box!(crate::isi::governance::ProposeSorafsProviderGovernance);
 impl_direct_instruction_box!(crate::isi::governance::ProposeValidationFeePolicy);

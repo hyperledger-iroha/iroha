@@ -345,16 +345,8 @@ impl ShardedCache {
             _ => desired_shards.clamp(1, total_capacity),
         };
         let shard_count = shard_count.max(1);
-        let base = if shard_count == 0 {
-            0
-        } else {
-            total_capacity / shard_count
-        };
-        let remainder = if shard_count == 0 {
-            0
-        } else {
-            total_capacity % shard_count
-        };
+        let base = total_capacity / shard_count;
+        let remainder = total_capacity % shard_count;
         let mut shards = Vec::with_capacity(shard_count);
         for idx in 0..shard_count {
             let mut cap = base;

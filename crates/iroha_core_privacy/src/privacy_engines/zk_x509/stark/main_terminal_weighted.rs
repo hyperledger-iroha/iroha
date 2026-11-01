@@ -1120,9 +1120,10 @@ mod tests {
             (12 * (1 << 19) + 384 + 4) * 8 + (2 * ((1 << 19) + 1816) + 1816) * 32 + 16 * 1024;
         assert_eq!(payload, independent);
         let buffers = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
-        let ceiling =
-            super::super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1
-                as usize;
+        let ceiling = usize::try_from(
+            super::super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
+        )
+        .unwrap();
         let public_owners = MainTerminalLinkPlanV1::public_owner_charge_v1()
             + main_key_joins::MainKeyJoinPlanV1::public_owner_charge_v1()
             + main_sha_union::MainShaUnionPlanV1::public_owner_charge_v1();

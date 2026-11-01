@@ -59,10 +59,9 @@ impl<F: PastaField> Parameters<F> {
             .iter_mut()
             .chain(result.mds.iter_mut())
             .flatten()
-            .zip(F::PARAMETERS.chunks_exact(32))
+            .zip(F::PARAMETERS.as_chunks::<32>().0)
         {
-            *cell = Option::from(F::from_repr(bytes.try_into().expect("constant width")))
-                .expect("pinned canonical parameter");
+            *cell = Option::from(F::from_repr(*bytes)).expect("pinned canonical parameter");
         }
         result
     }

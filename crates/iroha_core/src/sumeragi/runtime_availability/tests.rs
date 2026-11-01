@@ -91,7 +91,7 @@ fn descending_global_authority_rechecks_original_sources_with_linear_frame_work(
             "every original parent must be read"
         );
     }
-    let maximum = 2 * (TIP as usize - 1);
+    let maximum = 2 * (usize::try_from(TIP).unwrap() - 1);
     assert!(
         counts.frames.len() <= maximum,
         "descending global authority must not restart at the tip for each original parent: {} frames exceed {maximum}",
@@ -145,7 +145,7 @@ fn global_startup_history_reads_original_frames_linearly_and_keeps_header_order(
         (2..=TIP).collect::<Vec<_>>(),
         "Init retains its original ascending header order",
     );
-    let maximum = 2 * (TIP as usize - 1);
+    let maximum = 2 * (usize::try_from(TIP).unwrap() - 1);
     assert!(
         counts.frames.len() <= maximum,
         "startup must read descending original parents without repeating the tip: {} frames exceed {maximum}",

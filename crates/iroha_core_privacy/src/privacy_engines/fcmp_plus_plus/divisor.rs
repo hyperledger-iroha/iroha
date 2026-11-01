@@ -387,10 +387,7 @@ impl<F: ProofScalar> ReducedPolynomial<F> {
                 .filter(|((row, _), _)| *row == y_power)
                 .map(|((_, degree), coefficient)| (*degree, *coefficient))
                 .collect::<BTreeMap<_, _>>();
-            loop {
-                let Some((&degree, &coefficient)) = row.last_key_value() else {
-                    break;
-                };
+            while let Some((&degree, &coefficient)) = row.last_key_value() {
                 if degree < denominator_degree {
                     break;
                 }

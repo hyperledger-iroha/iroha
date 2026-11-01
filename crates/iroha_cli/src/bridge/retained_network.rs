@@ -155,7 +155,7 @@ impl WindowsIdentity {
                     .as_ref()
                     .is_none_or(|sid| raw_hex(sid, 8, 68))
                 && raw_hex(&self.dacl, 8, u16::MAX as usize)
-                && self.attributes <= u64::from(u32::MAX),
+                && u32::try_from(self.attributes).is_ok(),
             "native public input identity shape is invalid"
         );
         Ok(())

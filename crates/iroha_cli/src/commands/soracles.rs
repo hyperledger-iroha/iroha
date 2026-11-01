@@ -1199,7 +1199,7 @@ fn prune_unreferenced_files(
             if !path.is_file() || referenced.contains(&path) {
                 continue;
             }
-            let bytes_freed = path.metadata().map(|m| m.len()).unwrap_or(0);
+            let bytes_freed = path.metadata().map_or(0, |m| m.len());
             report.pruned_files.push(PrunedFile {
                 path: path.display().to_string(),
                 bundle: bundle_label.to_string(),
@@ -2112,7 +2112,7 @@ mod tests {
         let tmp = TempDir::new().expect("tmpdir");
         let now = SystemTime::now();
         let old_time = now
-            .checked_sub(Duration::from_secs(172_800))
+            .checked_sub(Duration::from_hours(48))
             .expect("time travel");
         let old_secs = now_unix(old_time).expect("unix time");
         let fresh_secs = now_unix(now).expect("unix time");
@@ -2164,7 +2164,7 @@ mod tests {
         let tmp = TempDir::new().expect("tmpdir");
         let now = SystemTime::now();
         let old_time = now
-            .checked_sub(Duration::from_secs(200 * 86_400))
+            .checked_sub(Duration::from_hours(200 * 24))
             .expect("time travel");
         let old_secs = now_unix(old_time).expect("unix time");
         let dispute_bundle = write_test_bundle(

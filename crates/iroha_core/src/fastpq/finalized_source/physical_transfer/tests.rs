@@ -89,7 +89,9 @@ fn source(
         })
         .collect();
     let proposal = chain.proposal(None, transactions);
-    let mut pending = chain.begin_proposal(proposal, Default::default()).unwrap();
+    let mut pending = chain
+        .begin_proposal(proposal, iroha_sumeragi::types::ControlWitness::default())
+        .unwrap();
     pending.prepare(Signers::Quorum).unwrap();
     pending.publish(Signers::Quorum).unwrap();
     let original = pending.take_finalized_fastpq_source().unwrap();
@@ -501,7 +503,6 @@ fn physical_transfer_needs_no_optional_archive_or_fresh_allocation_capacity() {
     let fact = original.physical_transfer(location, enough).unwrap();
     assert!(std::ptr::eq(fact.original(), &raw const original));
     assert_eq!(pool.reserved_bytes(), pool.limit_bytes());
-    drop(fact);
     drop(blocker);
     assert!(original.physical_transfer(location, enough).is_ok());
 }

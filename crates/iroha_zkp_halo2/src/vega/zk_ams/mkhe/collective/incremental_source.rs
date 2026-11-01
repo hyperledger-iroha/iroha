@@ -2067,13 +2067,13 @@ impl StreamingCollectiveLimbReaderV1 {
             }
             for (destination, encoded) in destination[filled..filled + take_coefficients]
                 .iter_mut()
-                .zip(scratch[..read].chunks_exact(core::mem::size_of::<u64>()))
+                .zip(
+                    scratch[..read]
+                        .as_chunks::<{ core::mem::size_of::<u64>() }>()
+                        .0,
+                )
             {
-                let residue = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?,
-                );
+                let residue = u64::from_be_bytes(*encoded);
                 if residue >= modulus {
                     return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
                 }

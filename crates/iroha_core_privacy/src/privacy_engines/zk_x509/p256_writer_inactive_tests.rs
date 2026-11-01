@@ -445,9 +445,6 @@ fn selected_writer_columns_match_every_flat_offset_and_public_tuple() {
 #[test]
 fn selected_writer_stream_keeps_source_shape_and_terminal_refusals() {
     use super::super::p256_value_bus::{P256ValueBusBaseCellV1, P256ValueBusEndpointV1};
-    let schedule = Arc::new(P256CrossTraceWriterSourceFixedV1 {
-        multiplicities: vec![0; P256_CROSS_TRACE_VALUE_CELLS_V1],
-    });
     fn make_stream<'a>(
         endpoint: &'a P256ValueBusBaseEndpointTraceV1,
         schedule: &Arc<P256CrossTraceWriterSourceFixedV1>,
@@ -466,6 +463,9 @@ fn selected_writer_stream_keeps_source_shape_and_terminal_refusals() {
             checkpoints: None,
         }
     }
+    let schedule = Arc::new(P256CrossTraceWriterSourceFixedV1 {
+        multiplicities: vec![0; P256_CROSS_TRACE_VALUE_CELLS_V1],
+    });
     // Both public slots are inactive; the original source range/canonicality
     // validation must still reject malformed private cells before emitting.
     let invalid = P256ValueBusBaseEndpointTraceV1 {

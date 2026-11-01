@@ -82,6 +82,10 @@ pub fn ownership_challenge_v1(
 /// proof-construction failure. No partial proof is returned. The caller retains
 /// ownership of `rng`; failed construction may consume a prefix of its entropy.
 #[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "Consuming the witness clears its private inputs on success and every failure."
+)]
 pub(crate) fn prove_credential_v1_with_rng<R: TryCryptoRng>(
     statement: &IrohaZkX509StarkP256StatementV1,
     authoritative_state: &PrivacyZkX509AuthoritativeStateV1,

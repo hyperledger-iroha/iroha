@@ -1,5 +1,6 @@
 //! Torii Space Directory manifest endpoint tests.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{Router, http::Request, response::IntoResponse as _, routing::post};
 use base64::Engine as _;
 use hex::ToHex;
@@ -28,8 +29,6 @@ use norito::codec::Decode;
 use norito::json::{self, Value};
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 fn checked_space_directory_ed25519_key_fixture() -> KeyPair {
     KeyPair::try_random_with_algorithm(Algorithm::Ed25519)
         .expect("generate checked space directory Ed25519 fixture keypair")
@@ -63,10 +62,7 @@ fn cbdc_manifest_entry(
             max_amount: Some(Quantity::from(max_amount)),
             window: AllowanceWindow::PerDay,
         }),
-        notes: match notes {
-            Some(notes) => Some(notes.into()),
-            None => None,
-        },
+        notes: notes.map(std::convert::Into::into),
     }
 }
 async fn decode_unsigned_transaction_draft(

@@ -1465,11 +1465,11 @@ fn check_result_scope(
     committed: &CommittedBlock,
     root_scope: SumeragiRootScope,
 ) -> Result<(), ChainReadError> {
-    check_projected_result_scope(CheckedFrameRef::from_original(committed), root_scope)
+    check_projected_result_scope(&CheckedFrameRef::from_original(committed), root_scope)
 }
 
 fn check_projected_result_scope(
-    frame: CheckedFrameRef<'_>,
+    frame: &CheckedFrameRef<'_>,
     root_scope: SumeragiRootScope,
 ) -> Result<(), ChainReadError> {
     if root_scope != SumeragiRootScope::Global && frame.active_result {
@@ -1539,7 +1539,7 @@ impl PrefixVerifierContext {
         >,
     ) -> Result<PreparedAdvance, ExecutionAttemptError<ChainReadError>> {
         self.prepare_advance_source(
-            PrefixRef::from_original(prefix),
+            &mut PrefixRef::from_original(prefix),
             CertificateSource::Original(committed),
             artifacts,
             query_cache,
@@ -1550,7 +1550,7 @@ impl PrefixVerifierContext {
 
     fn prepare_advance_source(
         &self,
-        prefix: PrefixRef<'_>,
+        prefix: &mut PrefixRef<'_>,
         source: CertificateSource<'_>,
         artifacts: Option<PrefixArtifacts>,
         query_cache: (bool, Option<&mut QueryCacheOwner>),
@@ -1562,7 +1562,7 @@ impl PrefixVerifierContext {
         let (query, cache) = query_cache;
         let frame = source.frame();
         let height = frame.parent.height;
-        if frame.parent.root_scope != prefix.tip.root_scope || !frame.extends(prefix.tip) {
+        if frame.parent.root_scope != prefix.tip.root_scope || !frame.extends(&prefix.tip) {
             return Err(ChainReadError::Discontinuous { height }.into());
         }
         let malformed = |reason: String| ChainReadError::Committee { height, reason };
@@ -1658,7 +1658,7 @@ impl PrefixVerifierContext {
         };
         let certificate =
             self.prepare_certificate_source(source, &authority, Some(config), artifacts, budget)?;
-        verify_projected_boundary_source(frame, prefix.tip, authority.projection())?;
+        verify_projected_boundary_source(&frame, &prefix.tip, authority.projection())?;
         if query {
             query_reader::admit_schedule(frame.schedule, height)?;
             query_reader::admit_height_config(prefix.authority.material(), height)?;
@@ -1745,7 +1745,7 @@ impl PrefixVerifierContext {
         commit_qc: &Qc,
     ) -> Result<(), ChainReadError> {
         self.verify_commit_qc_source(
-            CheckedFrameRef::from_original(committed),
+            &CheckedFrameRef::from_original(committed),
             authority,
             commit_qc,
         )
@@ -1753,7 +1753,7 @@ impl PrefixVerifierContext {
 
     fn verify_commit_qc_source(
         &self,
-        frame: CheckedFrameRef<'_>,
+        frame: &CheckedFrameRef<'_>,
         authority: AuthorityRef<'_>,
         commit_qc: &Qc,
     ) -> Result<(), ChainReadError> {
@@ -1858,7 +1858,7 @@ impl PrefixVerifierContext {
         budget: Option<&iroha_allocation::AllocationBudget>,
     ) -> Result<CertificateVerdict, VerificationReadError> {
         let frame = source.frame();
-        check_projected_result_scope(frame, self.root_scope)?;
+        check_projected_result_scope(&frame, self.root_scope)?;
         let height = frame.parent.height;
         let malformed = |reason: String| ChainReadError::Malformed { height, reason };
         let certificate = frame
@@ -1889,7 +1889,7 @@ impl PrefixVerifierContext {
             .map_err(|error| verification_codec_error(height, error))?;
             (PrefixQc::Decoded(qc), None)
         };
-        self.verify_commit_qc_source(frame, authority, &commit_qc)?;
+        self.verify_commit_qc_source(&frame, authority, &commit_qc)?;
         // Parent-authenticated parameters and authority also bind the original signed row
         // table. A valid CommitQC alone does not certify possession of these payload bytes.
         let config = config.ok_or_else(|| {
@@ -1917,15 +1917,15 @@ fn verify_boundary_source(
     authority: AuthorityRef<'_>,
 ) -> Result<(), ChainReadError> {
     verify_projected_boundary_source(
-        CheckedFrameRef::from_original(certified),
-        ParentProjection::from_original(parent),
+        &CheckedFrameRef::from_original(certified),
+        &ParentProjection::from_original(parent),
         authority,
     )
 }
 
 fn verify_projected_boundary_source(
-    certified: CheckedFrameRef<'_>,
-    parent: ParentProjection,
+    certified: &CheckedFrameRef<'_>,
+    parent: &ParentProjection,
     authority: AuthorityRef<'_>,
 ) -> Result<(), ChainReadError> {
     let height = certified.parent.height;
@@ -1964,27 +1964,6 @@ fn verify_projected_boundary_source(
         }
     }
     Ok(())
-}
-
-fn verify_availability(
-    committed: &CommittedBlock,
-    config: &iroha_sumeragi::types::HeightConfig,
-    crypto: &dyn iroha_sumeragi::crypto::Crypto,
-    prepared: Option<(
-        iroha_sumeragi::availability::AvailabilityFrame,
-        iroha_sumeragi::availability::PayloadBytes,
-    )>,
-    admit_scratch: &mut dyn FnMut(usize) -> Result<(), ExecutionDeferred>,
-    budget: Option<&iroha_allocation::AllocationBudget>,
-) -> Result<(), VerificationReadError> {
-    verify_availability_source(
-        CertificateSource::Original(committed),
-        config,
-        crypto,
-        prepared,
-        admit_scratch,
-        budget,
-    )
 }
 
 fn verify_availability_source(

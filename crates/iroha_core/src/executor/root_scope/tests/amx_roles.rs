@@ -70,7 +70,7 @@ fn every_amx_coordinator_instruction_rejects_private_execution_before_proof_deco
     let before = tx.world.sumeragi_amx.get().clone();
     for instruction in instructions {
         let expected = "AMX coordinator requires the authenticated global root";
-        let result = Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, instruction.clone());
+        let result = Executor::Initial.execute_instruction(&mut tx, &ALICE_ID, &instruction);
         assert!(matches!(result, Err(ValidationFail::NotPermitted(reason)) if reason == expected));
         let result = Executor::Initial.execute_borrowed_overlay_instruction(
             &mut tx,

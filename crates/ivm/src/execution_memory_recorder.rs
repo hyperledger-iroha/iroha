@@ -1139,7 +1139,7 @@ mod tests {
                     .steps
                     .records()
                     .iter()
-                    .zip(fetched.chunks_exact(4))
+                    .zip(fetched.as_chunks::<4>().0)
                 {
                     assert!(contract.is_instruction_boundary(step.before.pc - first_pc));
                     let instruction = step.instruction.unwrap().to_le_bytes();

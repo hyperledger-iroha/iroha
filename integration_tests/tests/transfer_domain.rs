@@ -725,14 +725,14 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
         .find(|domain| domain.id() == &foo_domain)
         .expect("Failed to execute Iroha Query");
     assert_eq!(domain.owned_by(), &user1);
-    let users = client
+    let users_domain_record = client
         .client()
         .query(FindDomains::new())
         .execute_all()?
         .into_iter()
         .find(|domain| domain.id() == &users_domain)
         .expect("Failed to execute Iroha Query");
-    assert_eq!(users.owned_by(), &user1);
+    assert_eq!(users_domain_record.owned_by(), &user1);
     // Client authority is "alice@wonderlang".
     // `foo_domain` is owned by `user1@users`.
     // Alice has no rights to `user1` or `foo_domain`.

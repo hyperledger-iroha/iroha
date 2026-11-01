@@ -273,7 +273,10 @@ impl Scheduler {
         if !Arc::ptr_eq(&self.0, &permit.scheduler.0) {
             return Err(ArchiveAdmissionErrorV1::Foreign);
         }
-        self.resolve_archive(permit.attempt, None, resolution, true)
+        let settled = self.resolve_archive(permit.attempt, None, resolution, true);
+        // Settling consumes the one-use permit after its resolution is recorded.
+        drop(permit);
+        settled
     }
 
     pub(in crate::kagemusha_wallet_state_v1) fn reconciling_archive(

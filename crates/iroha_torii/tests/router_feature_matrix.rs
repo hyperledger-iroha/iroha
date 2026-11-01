@@ -4,6 +4,7 @@
 //! instantiated under different compile-time feature combinations (`telemetry/app_api/connect`,
 //! etc.). Each cfg-gated block runs only when the corresponding feature is enabled.
 #![allow(clippy::too_many_lines)]
+use crate::fixtures;
 use axum::http::{Request, StatusCode, Uri};
 use iroha_core::{
     kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
@@ -14,8 +15,6 @@ use iroha_torii_shared::route_catalog;
 use norito::json;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
-#[path = "fixtures.rs"]
-mod fixtures;
 /// Candidate paths that may expose an `OpenAPI` document.
 const OPENAPI_CANDIDATES: &[&str] = &[
     "/openapi.json",
@@ -603,5 +602,4 @@ async fn router_exposes_operator_endpoints_with_operator_telemetry_profile() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

@@ -1,4 +1,4 @@
-//! Four-validator generic game-session release gate, using RaceV1 only as an application adapter.
+//! Four-validator generic game-session release gate, using `RaceV1` only as an application adapter.
 //!
 //! This starts real peers and never substitutes a verifier or marks a profile qualified.
 //! Zero-stake sessions exercise retained inputs, disputes, restart, and genuine native proof
@@ -192,7 +192,7 @@ async fn assert_replicas(
     expected: &GameSessionRecordV1,
     expected_running: usize,
 ) -> Result<()> {
-    timeout(Duration::from_secs(120), async {
+    Box::pin(timeout(Duration::from_secs(120), async {
         loop {
             let running: Vec<_> = network.peers().iter().filter(|peer| peer.is_running()).collect();
             ensure!(running.len() == expected_running, "unexpected live validator count");
@@ -205,12 +205,12 @@ async fn assert_replicas(
                     "generic game record: validators={expected_running}, revision={}, phase={:?}, record_hash={root}, dispute_root={}",
                     expected.revision, expected.phase, expected.dispute_root
                 );
-                assert_finalized_state_convergence(network, &running).await?;
+                Box::pin(assert_finalized_state_convergence(network, &running)).await?;
                 return Ok::<(), eyre::Report>(());
             }
             sleep(Duration::from_millis(100)).await;
         }
-    })
+    }))
     .await
     .map_err(|_| eyre!("validators did not converge on exact retained game state"))?
 }
@@ -387,11 +387,11 @@ async fn assert_finalized_state_convergence(
         .timeout(Duration::from_secs(10))
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
-    timeout(Duration::from_secs(90), async {
+    Box::pin(timeout(Duration::from_secs(90), async {
         loop {
             let mut roots = Vec::new();
             for peer in peers {
-                roots.push(finalized_state_observation(&http, peer, height, network).await?);
+                roots.push(Box::pin(finalized_state_observation(&http, peer, height, network)).await?);
             }
             if roots.iter().all(Option::is_some) {
                 let expected = roots[0].expect("all roots present");
@@ -403,7 +403,7 @@ async fn assert_finalized_state_convergence(
             }
             sleep(Duration::from_millis(100)).await;
         }
-    }).await.map_err(|_| eyre!("same-height finalized native execution convergence timed out"))?
+    })).await.map_err(|_| eyre!("same-height finalized native execution convergence timed out"))?
 }
 
 /// Submit the original application challenge under current native consensus and compare the
@@ -412,7 +412,7 @@ async fn challenge_and_converge(
     network: &Network,
     certified: &GameSessionRecordV1,
 ) -> Result<GameSessionRecordV1> {
-    assert_replicas(network, certified, 4).await?;
+    Box::pin(assert_replicas(network, certified, 4)).await?;
     submit_instruction(&network.peers()[0].client(), challenge(certified), fees()).await?;
     let selected = record(&network.peers()[0].client(), certified.session_id).await?;
     ensure!(
@@ -421,7 +421,7 @@ async fn challenge_and_converge(
             && selected.pending_certificate == certified.pending_certificate,
         "native challenge rewrote accepted gameplay evidence"
     );
-    assert_replicas(network, &selected, 4).await?;
+    Box::pin(assert_replicas(network, &selected, 4)).await?;
     Ok(selected)
 }
 
@@ -485,7 +485,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
     .ok_or_else(|| {
         eyre!("four-validator release gate cannot succeed with sandbox startup skipped")
     })?;
-    let result = timeout(Duration::from_secs(1_200), async {
+    let result = Box::pin(timeout(Duration::from_mins(20), async {
         let mut context = network.peers()[0].client().client().to_builder();
         // Allow actual native verification on development-profile validator binaries.
         context.transaction_status_timeout = Duration::from_secs(120);
@@ -538,7 +538,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             "first wallet changed"
         );
         ensure!(started.liability.is_zero(), "free game created a liability");
-        assert_replicas(&network, &started, 4).await?;
+        Box::pin(assert_replicas(&network, &started, 4)).await?;
 
         // The first certified checkpoint comes from exact native simulation.
         let replay = RaceReplayV1 {
@@ -603,7 +603,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             fees(),
         ).await?;
         let certified = record(&client, session_id).await?;
-        let selected = challenge_and_converge(&network, &certified).await?;
+        let selected = Box::pin(challenge_and_converge(&network, &certified)).await?;
         ensure!(
             selected.phase == GamePhaseV1::SelectingCheckpoint,
             "challenge not applied"
@@ -734,10 +734,10 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
                 && resolved.terminal_at_height.is_none(),
             "unproved technical win was settled"
         );
-        assert_replicas(&network, &resolved, 3).await?;
+        Box::pin(assert_replicas(&network, &resolved, 3)).await?;
 
         restarted.start_checked(layers.iter(), None).await?;
-        assert_replicas(&network, &resolved, 4).await?;
+        Box::pin(assert_replicas(&network, &resolved, 4)).await?;
         for late in [
             InstructionBox::from(RevealGameInputsV1 {
                 reveal: reveals[1].clone(),
@@ -754,7 +754,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             record(&client, session_id).await? == resolved,
             "late evidence changed resolved history"
         );
-        assert_replicas(&network, &resolved, 4).await?;
+        Box::pin(assert_replicas(&network, &resolved, 4)).await?;
 
         // The consensus round reserves ticks 6..12, but removal at its start leaves a
         // sole racer. RaceV1 therefore terminates at tick 6 before any of those controls
@@ -862,7 +862,7 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
                 && settlement_height <= height(&client).await?,
             "settlement height is not committed"
         );
-        assert_replicas(&network, &settled, 4).await?;
+        Box::pin(assert_replicas(&network, &settled, 4)).await?;
         for peer in network.peers() {
             let receipt = verification(&peer.client(), verification_id).await?;
             ensure!(
@@ -878,13 +878,13 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
             "duplicate proof settlement succeeded"
         );
         ensure!(record(&client, session_id).await? == settled, "duplicate settlement changed result");
-        assert_replicas(&network, &settled, 4).await?;
+        Box::pin(assert_replicas(&network, &settled, 4)).await?;
         eprintln!(
             "native execution consensus settlement: height={settlement_height} receipt={verification_id} settlement_and_convergence_ms={}",
             settlement_started.elapsed().as_millis()
         );
         Ok::<(), eyre::Report>(())
-    })
+    }))
     .await;
     network.shutdown().await;
     result

@@ -160,7 +160,10 @@ async fn zk_verify_batch_endpoint_accepts_norito_vec_and_returns_statuses() {
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
@@ -211,7 +214,10 @@ async fn zk_verify_batch_endpoint_accepts_json_array_and_returns_mixed_statuses(
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
@@ -233,7 +239,10 @@ async fn zk_verify_batch_norito_accepts_empty_batch() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     assert_eq!(
         v.get("statuses").and_then(|x| x.as_array()).map(Vec::len),
         Some(0)
@@ -288,7 +297,10 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         v.get("error").and_then(|x| x.as_str()),
         Some("batch_too_large")
@@ -321,7 +333,10 @@ async fn zk_verify_batch_endpoint_enforces_diagnostic_limits() {
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
@@ -345,7 +360,10 @@ async fn zk_verify_batch_json_classifies_decode_errors_per_entry() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
@@ -413,7 +431,10 @@ async fn zk_verify_batch_json_applies_open_verify_limits() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
@@ -547,13 +568,23 @@ async fn zk_verify_batch_json_rejects_oversized_batch_before_decode() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         v.get("error").and_then(|x| x.as_str()),
         Some("batch_too_large")
     );
-    assert_eq!(v.get("max").and_then(|x| x.as_u64()), Some(1));
-    assert_eq!(v.get("actual").and_then(|x| x.as_u64()), Some(2));
+    assert_eq!(
+        v.get("max").and_then(norito::json::native::Value::as_u64),
+        Some(1)
+    );
+    assert_eq!(
+        v.get("actual")
+            .and_then(norito::json::native::Value::as_u64),
+        Some(2)
+    );
 }
 #[tokio::test]
 async fn zk_verify_batch_json_rejects_impossible_or_oversized_base64_before_decode() {
@@ -601,13 +632,23 @@ async fn zk_verify_batch_rejects_oversized_body_before_norito_decode() {
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         v.get("error").and_then(|x| x.as_str()),
         Some("body_too_large")
     );
-    assert_eq!(v.get("max").and_then(|x| x.as_u64()), Some(4));
-    assert_eq!(v.get("actual").and_then(|x| x.as_u64()), Some(5));
+    assert_eq!(
+        v.get("max").and_then(norito::json::native::Value::as_u64),
+        Some(4)
+    );
+    assert_eq!(
+        v.get("actual")
+            .and_then(norito::json::native::Value::as_u64),
+        Some(5)
+    );
 }
 #[tokio::test]
 async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
@@ -625,7 +666,10 @@ async fn zk_verify_batch_norito_applies_per_entry_diagnostic_limits() {
         true,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())
@@ -663,7 +707,10 @@ async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(false)
+    );
     assert_eq!(
         v.get("statuses").and_then(|x| x.as_array()).map(Vec::len),
         Some(0)
@@ -677,7 +724,10 @@ async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(false)
+    );
     let v = post_batch_with_limits(
         br#"["unterminated""#.to_vec(),
         "application/json",
@@ -687,7 +737,10 @@ async fn zk_verify_batch_returns_false_for_invalid_typed_bodies() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(false));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(false)
+    );
 }
 #[tokio::test]
 async fn zk_verify_batch_json_accepts_empty_batch() {
@@ -698,7 +751,10 @@ async fn zk_verify_batch_json_accepts_empty_batch() {
         false,
     )
     .await;
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     assert_eq!(
         v.get("statuses").and_then(|x| x.as_array()).map(Vec::len),
         Some(0)
@@ -721,7 +777,9 @@ async fn zk_verify_batch_endpoint_rejects_goldilocks_field_as_ipa_group() {
     .await;
     // The batch was decoded; its individual entry remains an unsupported-backend error.
     assert_eq!(
-        value.get("ok").and_then(|entry| entry.as_bool()),
+        value
+            .get("ok")
+            .and_then(norito::json::native::Value::as_bool),
         Some(true)
     );
     let statuses = value

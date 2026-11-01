@@ -1,5 +1,5 @@
 #![cfg(feature = "app_api")]
-//! Public-contract tests for the chain-authoritative SoraFS repair API.
+//! Public-contract tests for the chain-authoritative `SoraFS` repair API.
 use iroha_torii::openapi::generate_spec;
 use iroha_torii_shared::route_catalog::contracts_and_verification_keys as routes;
 use norito::json::Value;

@@ -56,7 +56,7 @@ fn find_asset_total_quantity() -> Result<()> {
         test_total_quantity(
             &test_client,
             &accounts,
-            quantity_definition,
+            &quantity_definition,
             "quantity".to_owned(),
             NumericSpec::default(),
             &Quantity::one(),
@@ -67,7 +67,7 @@ fn find_asset_total_quantity() -> Result<()> {
         test_total_quantity(
             &test_client,
             &accounts,
-            fixed_definition,
+            &fixed_definition,
             "fixed".to_owned(),
             NumericSpec::default(),
             &Quantity::one(),
@@ -87,7 +87,7 @@ fn find_asset_total_quantity() -> Result<()> {
 fn test_total_quantity(
     test_client: &Client,
     accounts: &[AccountId; 5],
-    definition_id: AssetDefinitionId,
+    definition_id: &AssetDefinitionId,
     definition_name: String,
     asset_spec: NumericSpec,
     initial_value: &Quantity,
@@ -142,7 +142,7 @@ fn test_total_quantity(
                 Ok(defs) => {
                     if let Some(def) = defs
                         .into_iter()
-                        .find(|asset_definition| asset_definition.id() == &definition_id)
+                        .find(|asset_definition| asset_definition.id() == definition_id)
                     {
                         return Ok(def.total_quantity().clone());
                     }
@@ -267,7 +267,7 @@ fn test_total_quantity(
     assert!(
         remaining_assets
             .iter()
-            .all(|asset| asset.id().definition() != &definition_id),
+            .all(|asset| asset.id().definition() != definition_id),
         "expected assets for {definition_id} to be removed after unregister"
     );
     Ok(())

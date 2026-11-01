@@ -460,7 +460,7 @@ fn cached_composition_matches_direct_oracle_for_every_registration() {
                             let expected = map_main_sha_source_error_v1(
                                 crate::privacy_engines::zk_x509::sha_word_stark::ZkX509ShaWordStarkErrorV1::Topology.into(),
                             );
-                            assert!(result.unwrap().unwrap_err() == expected);
+                            assert_eq!(result.unwrap().unwrap_err(), expected);
                         }
                         // The sink is the last clearing owner in the observed
                         // closure. Require its exact result/sums/carries Drop records,

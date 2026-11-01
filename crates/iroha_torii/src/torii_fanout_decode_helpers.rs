@@ -166,10 +166,6 @@ enum QueryMemoryProfile {
 /// Native finality selects its separate closed frame/graph profile only on original GET
 /// admission; it never reinterprets an inherited signed-query envelope.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    clippy::struct_field_names,
-    reason = "Byte units are explicit for every independently admitted allocation phase."
-)]
 struct QueryFanoutMemoryEnvelope {
     profile: QueryMemoryProfile,
     working_set_bytes: usize,
@@ -899,7 +895,7 @@ fn query_fanout_slot_count(
 }
 fn take_nonzero_generation(counter: &AtomicU64) -> Option<u64> {
     counter
-        .fetch_update(
+        .try_update(
             AtomicOrdering::Relaxed,
             AtomicOrdering::Relaxed,
             |current| (current != 0).then(|| current.checked_add(1)).flatten(),

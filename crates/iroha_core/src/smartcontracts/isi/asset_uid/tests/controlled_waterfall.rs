@@ -22,7 +22,7 @@ fn run(
     Executor::Initial.execute_instruction_with_contract_runtime_context(
         tx,
         &context.contract_subject,
-        instruction.into(),
+        &instruction.into(),
         Some(context),
     )
 }

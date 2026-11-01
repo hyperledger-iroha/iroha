@@ -3,6 +3,7 @@ use super::*;
 
 #[test]
 fn scope_preimages_match_native_roles_and_known_answers() {
+    use KagemushaEnrollmentPermitScopeRoleV1 as Role;
     let audience = b"community-operator".to_vec();
     let release = b"\0selected release\xff".to_vec();
     let origin = b"https://wallet.example:8443".to_vec();
@@ -10,7 +11,6 @@ fn scope_preimages_match_native_roles_and_known_answers() {
     assert_eq!(selected.audience, audience);
     assert_eq!(selected.release, release);
     assert_eq!(selected.service_origin, origin);
-    use KagemushaEnrollmentPermitScopeRoleV1 as Role;
     // These are the exact role/preimage pairs used by EnrollmentConfigV1::scopes.
     for (actual, role, original, expected) in [
         (

@@ -31,14 +31,14 @@ const MAX_FIELD_REJECTION_ATTEMPTS_V1: usize = 65_536;
 // residual has analytic remainder below 2^-252.  Including its arithmetic and
 // both final products, total evaluation error stays below 2^16 Q256 ulps,
 // i.e. below 2^-240.
-const FRACTION_TABLE_BITS_V1: usize = 12;
+const FRACTION_TABLE_BITS_V1: u32 = 12;
 const FRACTION_TABLE_LEN_V1: usize = 1 << FRACTION_TABLE_BITS_V1;
 const MAX_DECAY_INTEGER_V1: usize = 128;
 const UNIT_DECAY_SERIES_TERMS_V1: usize = 96;
 const FRACTION_STEP_SERIES_TERMS_V1: usize = 32;
 const RESIDUAL_DECAY_SERIES_TERMS_V1: usize = 16;
-const Q128_FRACTION_BITS_V1: usize = 128;
-const Q256_FRACTION_BITS_V1: usize = 256;
+const Q128_FRACTION_BITS_V1: u32 = 128;
+const Q256_FRACTION_BITS_V1: u32 = 256;
 /// Signed fixed-point value whose magnitude is encoded with 128 fraction bits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct SignedQ128V1 {
@@ -59,8 +59,7 @@ impl SignedQ128V1 {
     fn from_i64(value: i64) -> Self {
         Self::new(
             value.is_negative(),
-            U256::from_u128(u128::from(value.unsigned_abs()))
-                .shl_vartime((Q128_FRACTION_BITS_V1) as u32),
+            U256::from_u128(u128::from(value.unsigned_abs())).shl_vartime(Q128_FRACTION_BITS_V1),
         )
     }
     fn negated(self) -> Self {
@@ -265,7 +264,7 @@ where
         .ok_or(JindoSamplingErrorV1::ArithmeticOverflow)?;
     let magnitude = exponent_numerator.unsigned_abs();
     // |e|/(2 sigma^2) = 2|e|/SIGMA_TWICE^2.
-    let scaled = U512::from_u128(magnitude).shl_vartime((Q256_FRACTION_BITS_V1 + 1) as u32);
+    let scaled = U512::from_u128(magnitude).shl_vartime(Q256_FRACTION_BITS_V1 + 1);
     let denominator = U512::from_u128(denominator);
     let nonzero = Option::<NonZero<U512>>::from(NonZero::new(denominator))
         .ok_or(JindoSamplingErrorV1::ArithmeticOverflow)?;
@@ -276,16 +275,16 @@ where
         quotient
     };
     let decay = decay_q256_v1(exponent_q256);
-    let five = U512::from_u64(5).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let five = U512::from_u64(5).shl_vartime(Q256_FRACTION_BITS_V1);
     let six = Option::<NonZero<Limb>>::from(NonZero::new(Limb::from_u32(6)))
         .ok_or(JindoSamplingErrorV1::ArithmeticOverflow)?;
     let five_six = five.div_rem_limb(six).0;
     let threshold = if exponent_numerator <= 0 {
         q256_mul_round_v1(decay, five_six)
     } else if decay <= five_six {
-        U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32)
+        U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1)
     } else {
-        let scaled: U1024 = U1024::from(&five_six).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+        let scaled: U1024 = U1024::from(&five_six).shl_vartime(Q256_FRACTION_BITS_V1);
         let divisor = U1024::from(&decay);
         let nonzero = Option::<NonZero<U1024>>::from(NonZero::new(divisor))
             .ok_or(JindoSamplingErrorV1::InvalidAcceptanceThreshold)?;
@@ -386,10 +385,10 @@ fn gaussian_exponent_q256_v1(
 ) -> Result<U512, JindoSamplingErrorV1> {
     let delta_q128 = absolute_delta_q128_v1(candidate, center);
     let squared_delta_q256: U512 = delta_q128.concatenating_mul(&delta_q128);
-    if squared_delta_q256.bits_vartime() > U512::BITS - Q128_FRACTION_BITS_V1 as u32 {
+    if squared_delta_q256.bits_vartime() > U512::BITS - Q128_FRACTION_BITS_V1 {
         return Err(JindoSamplingErrorV1::SampleOutOfRange);
     }
-    let numerator = squared_delta_q256.shl_vartime((Q128_FRACTION_BITS_V1) as u32);
+    let numerator = squared_delta_q256.shl_vartime(Q128_FRACTION_BITS_V1);
     let sigma_q64 = U128::from_u128(width.sigma_q64());
     let sigma_squared_q128: U256 = sigma_q64.concatenating_mul(&sigma_q64);
     let denominator = U512::from(&sigma_squared_q128.shl_vartime(1));
@@ -410,8 +409,8 @@ fn q256_mul_round_v1(left: U512, right: U512) -> U512 {
     // below 2^513 and therefore exact in U1024.
     let product: U1024 = left.concatenating_mul(&right);
     let rounded = product
-        .wrapping_add(&U1024::ONE.shl_vartime((Q256_FRACTION_BITS_V1 - 1) as u32))
-        .shr_vartime((Q256_FRACTION_BITS_V1) as u32);
+        .wrapping_add(&U1024::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - 1))
+        .shr_vartime(Q256_FRACTION_BITS_V1);
     let (low, high) = rounded.split();
     debug_assert_eq!(high, U512::ZERO);
     low
@@ -433,7 +432,7 @@ fn q256_div_small_round_v1(value: U512, divisor: u64) -> U512 {
         .0
 }
 fn small_decay_q256_v1(value: U512, terms: usize) -> U512 {
-    let one = U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let one = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1);
     let mut sum = one;
     let mut term = one;
     for index in 1..=terms {
@@ -457,7 +456,7 @@ fn small_decay_q256_v1(value: U512, terms: usize) -> U512 {
 fn integer_decay_table_q256_v1() -> &'static [U512; MAX_DECAY_INTEGER_V1 + 1] {
     static TABLE: OnceLock<[U512; MAX_DECAY_INTEGER_V1 + 1]> = OnceLock::new();
     TABLE.get_or_init(|| {
-        let one = U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+        let one = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1);
         let decay_one = small_decay_q256_v1(one, UNIT_DECAY_SERIES_TERMS_V1);
         let mut table = [U512::ZERO; MAX_DECAY_INTEGER_V1 + 1];
         table[0] = one;
@@ -472,8 +471,8 @@ fn fraction_decay_table_q256_v1() -> &'static [U512; FRACTION_TABLE_LEN_V1] {
     TABLE.get_or_init(build_fraction_decay_table_q256_v1)
 }
 fn build_fraction_decay_table_q256_v1() -> Box<[U512; FRACTION_TABLE_LEN_V1]> {
-    let one = U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1) as u32);
-    let step = U512::ONE.shl_vartime((Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1) as u32);
+    let one = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1);
+    let step = U512::ONE.shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
     let decay_step = small_decay_q256_v1(step, FRACTION_STEP_SERIES_TERMS_V1);
     // The 256 KiB public table stays on the heap throughout initialization
     // and publication; no fixed array passes through a native caller's stack.
@@ -499,10 +498,9 @@ fn decay_q256_v1(value: U512) -> U512 {
     }
     let fraction_word = (u16::from(bytes[32]) << 4) | u16::from(bytes[33] >> 4);
     let fraction_index = usize::from(fraction_word);
-    let integer_part =
-        U512::from_u64(u64::from(integer_byte)).shl_vartime((Q256_FRACTION_BITS_V1) as u32);
+    let integer_part = U512::from_u64(u64::from(integer_byte)).shl_vartime(Q256_FRACTION_BITS_V1);
     let fraction_part = U512::from_u64(u64::from(fraction_word))
-        .shl_vartime((Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1) as u32);
+        .shl_vartime(Q256_FRACTION_BITS_V1 - FRACTION_TABLE_BITS_V1);
     let residual = value
         // Integer and fractional parts are extracted from `value` itself, so
         // both subtractions are ordered and exact.

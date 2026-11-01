@@ -51,13 +51,15 @@ fn typed_controlled_lock_calls_compile_to_four_distinct_effects() {
 #[test]
 fn controlled_lock_open_rejects_wrong_quantity_and_deadline_types() {
     for (original, replacement) in [
+        // Positional arguments must precede named ones, so each wrongly typed value
+        // stays in its positional slot.
         (
             "key, source, destination, asset_definition, amount,",
-            "key, source, destination, asset_definition, amount: true,",
+            "key, source, destination, asset_definition, true,",
         ),
         (
             "release_until_ms, cancel_not_before_ms, expires_at_ms",
-            "release_until_ms: true, cancel_not_before_ms, expires_at_ms",
+            "true, cancel_not_before_ms, expires_at_ms",
         ),
     ] {
         let source = SOURCE.replace(original, replacement);

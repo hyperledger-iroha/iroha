@@ -1,5 +1,6 @@
 //! Integration tests for Torii subscription endpoints.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::{
     body::Body,
     extract::connect_info::ConnectInfo,
@@ -48,8 +49,6 @@ use iroha_torii::{MaybeTelemetry, OnlinePeersProvider, Torii, json_entry, json_o
 use mv::storage::StorageReadOnly;
 use std::{net::SocketAddr, num::NonZeroU64, str::FromStr as _, sync::Arc};
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 struct SubscriptionHarness {
     app: iroha_torii::TestApiRouterRuntime,
     state: Arc<State>,
@@ -535,5 +534,4 @@ async fn subscription_cancel_route_requires_exact_tagged_mode() {
     harness.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

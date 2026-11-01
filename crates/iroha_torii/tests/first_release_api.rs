@@ -438,5 +438,4 @@ fn build_router() -> iroha_torii::TestApiRouterRuntime {
         .expect("test Torii router initializes")
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

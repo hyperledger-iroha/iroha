@@ -4123,13 +4123,15 @@ mod tests {
     }
     #[test]
     fn composite_children_are_pinned_and_reject_order_width_and_substitution_attacks() {
-        for disclosed_attributes in 0..=4 {
+        for (disclosed_attributes, expected_atom_counts) in
+            SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1.iter().enumerate()
+        {
             let schedule = schedule(disclosed_attributes);
             assert_eq!(
                 core::array::from_fn(|segment| {
                     schedule.children_v1()[segment].atoms_v1().len()
                 }),
-                SHA_FIXED_ALGEBRAIC_CHILD_ATOM_COUNTS_V1[disclosed_attributes],
+                *expected_atom_counts,
             );
             assert!(
                 schedule.children_v1().iter().all(|child| {

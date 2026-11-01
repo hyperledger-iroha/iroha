@@ -217,7 +217,9 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
     let common = 22;
     let rows = 1usize << common;
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-    let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+    let cap =
+        usize::try_from(super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+            .unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
     assert!(metal_goldilocks_transform_extra_payload_v1(rows, 8).unwrap() <= available);

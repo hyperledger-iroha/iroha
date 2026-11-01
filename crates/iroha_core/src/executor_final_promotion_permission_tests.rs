@@ -356,7 +356,7 @@ mod final_promotion_permission_tests {
                     Grant::account_permission(exact.clone(), BOB_ID.clone()).into()
                 };
                 Executor::Initial
-                    .execute_instruction(&mut transaction, &ALICE_ID, change)
+                    .execute_instruction(&mut transaction, &ALICE_ID, &change)
                     .expect("exact assigned role holder delegates or revokes");
                 assert_delegated_action_matrix(&transaction, &BOB_ID, required, !revoke);
                 for other in [Capability::Manage, Capability::Operate, Capability::Check]
@@ -388,7 +388,7 @@ mod final_promotion_permission_tests {
                     Grant::account_role(role.clone(), BOB_ID.clone()).into()
                 };
                 Executor::Initial
-                    .execute_instruction(&mut transaction, &ALICE_ID, change)
+                    .execute_instruction(&mut transaction, &ALICE_ID, &change)
                     .expect("exact assigned role is delegable and revocable");
                 assert_delegated_action_matrix(&transaction, &BOB_ID, required, !revoke);
             }

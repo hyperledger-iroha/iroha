@@ -35,7 +35,7 @@ impl<T: Write> RunArgs<T> for Args {
         let json: norito::json::Value = norito::json::from_slice(&bytes)?;
         drop(bytes);
         let consensus_mode = json.get("consensus_mode");
-        if consensus_mode.is_none() || consensus_mode.is_some_and(norito::json::Value::is_null) {
+        if consensus_mode.is_none_or(norito::json::Value::is_null) {
             return Err(eyre!(
                 "genesis manifest missing consensus_mode; regenerate with `kagami genesis generate --consensus-mode <mode>`"
             ));

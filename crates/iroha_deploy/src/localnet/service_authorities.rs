@@ -851,7 +851,7 @@ fn append_service_accounts(
             builder = builder.append_instruction(Register::account(account.clone()));
         }
     }
-    builder.build_raw().map_err(Into::into)
+    builder.build_raw()
 }
 
 impl GeneratedAuthorities {

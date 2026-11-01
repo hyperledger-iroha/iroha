@@ -320,16 +320,6 @@ fn has_policy_for_definition_attempt(
     Ok(true)
 }
 
-pub fn identity_for_exact(
-    world: &impl WorldReadOnly,
-    definition: &AssetDefinitionId,
-    dataspace: DataSpaceId,
-    account: &AccountId,
-) -> Result<Option<RetailIdentityAttestationV1>, String> {
-    identity_for_exact_attempt(world, None, definition, dataspace, account)
-        .map_err(ReadError::into_string)
-}
-
 /// Read an identity attestation while preserving original transaction-local decode failures.
 pub fn identity_for_exact_in_transaction(
     world: &WorldTransaction<'_, '_>,

@@ -1311,6 +1311,7 @@ fn is_time_sensitive_instruction_type(type_id: TypeId) -> bool {
         iroha_data_model::isi::governance::ProposeContractEmergencyHold,
         iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
         iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal,
+        iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal,
         iroha_data_model::isi::governance::ProposeSccpRouteGovernance,
         iroha_data_model::isi::governance::ProposeSorafsProviderGovernance,
         iroha_data_model::isi::governance::ProposeValidationFeePolicy,
@@ -1782,7 +1783,7 @@ impl<'tx> AcceptedTransaction<'tx> {
         tx.payload().validate_fee_payment_intent().map_err(|err| {
             Self::signature_admission_failure(
                 tx,
-                TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
+                &TransactionSignatureError::InvalidFeePaymentIntent(err.to_string()),
             )
         })?;
         Ok(())
@@ -1804,7 +1805,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     ) -> Result<(), AcceptTransactionFail> {
         match signature_check {
             SignatureCheck::Override(result) => {
-                return result.map_err(|error| Self::signature_admission_failure(tx, error));
+                return result.map_err(|error| Self::signature_admission_failure(tx, &error));
             }
             SignatureCheck::PrecheckedSingleEd25519 if Self::has_single_ed25519_signature(tx) => {
                 return Ok(());
@@ -1828,7 +1829,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             .map_err(|err| {
                 Self::signature_admission_failure(
                     tx,
-                    match err {
+                    &match err {
                         iroha_crypto::Error::UnsupportedImplementation(original) => {
                             TransactionSignatureError::UnsupportedImplementation(original)
                         }
@@ -1838,7 +1839,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             });
         }
         tx.verify_signature()
-            .map_err(|err| Self::signature_admission_failure(tx, err))
+            .map_err(|err| Self::signature_admission_failure(tx, &err))
     }
     fn ensure_signing_allowed(
         tx: &SignedTransaction,
@@ -1979,9 +1980,9 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// Preserve local implementation absence before constructing a completed signature verdict.
     pub(crate) fn signature_admission_failure(
         tx: &SignedTransaction,
-        err: TransactionSignatureError,
+        err: &TransactionSignatureError,
     ) -> AcceptTransactionFail {
-        match Self::signature_rejection_code(&err) {
+        match Self::signature_rejection_code(err) {
             Ok(code) => AcceptTransactionFail::SignatureVerification(
                 SignatureVerificationFail::new(tx.signature().clone(), code, err.to_string()),
             ),
@@ -2132,7 +2133,7 @@ impl<'tx> AcceptedTransaction<'tx> {
     /// # Errors
     ///
     /// See [`AcceptTransactionFail`].
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(crate) fn validate_with_now_with_signature_result_and_prepared_metadata(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,
@@ -2182,7 +2183,7 @@ impl<'tx> AcceptedTransaction<'tx> {
             Some(prepared),
         )
     }
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn validate_with_now_and_signature_check(
         tx: &SignedTransaction,
         expected_network_id: &NetworkId,
@@ -4037,6 +4038,10 @@ fn tx_contains_runtime_upgrade_instruction(tx: &SignedTransaction) -> bool {
             || instruction
                 .as_any()
                 .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
+                .is_some()
+            || instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
                 .is_some()
     };
     match tx.instructions() {
@@ -7983,10 +7988,7 @@ pub mod tests {
             authority,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([ProposeRuntimeUpgradeProposal {
-            action,
-            provenance: Vec::new(),
-        }])
+        .with_instructions([ProposeRuntimeUpgradeProposal { action }])
         .sign(keypair.private_key());
         let prepared = AcceptedTransaction::prepare_signed_metadata(&signed);
         assert_eq!(prepared.entrypoint_hash, signed.hash_as_entrypoint());
@@ -9237,6 +9239,8 @@ pub mod tests {
             TypeId::of::<AttestRuntimeSupportV1>(),
             TypeId::of::<ContainRuntimeV1>(),
             TypeId::of::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>(),
+            TypeId::of::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>(
+            ),
             TypeId::of::<iroha_data_model::isi::governance::ProposeSorafsProviderGovernance>(),
             TypeId::of::<
                 iroha_data_model::isi::governance::ProposeGlobalDataTriggerPermissionGovernance,
@@ -9298,7 +9302,6 @@ pub mod tests {
         );
         let runtime_upgrade = ProposeRuntimeUpgradeProposal {
             action: crate::runtime::change_set::test_support::schedule(test_network_id(), 42),
-            provenance: Vec::new(),
         };
         assert!(super::is_time_sensitive_instruction(&InstructionBox::from(
             runtime_upgrade

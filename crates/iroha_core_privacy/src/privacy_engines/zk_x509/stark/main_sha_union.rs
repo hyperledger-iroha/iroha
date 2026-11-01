@@ -86,8 +86,8 @@ impl MainShaUnionPlanV1 {
                 SegmentAdapterIdV1::Sha256CallBus,
                 u16::try_from(index).map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?,
             )?;
-            for lane in 0..4 {
-                sha_projection[index][lane] = column(
+            for (lane, target) in sha_projection[index].iter_mut().enumerate() {
+                *target = column(
                     sha,
                     super::super::super::sha_call_bus_stark::projection_bus::AUX_START_V1 + lane,
                 )?;

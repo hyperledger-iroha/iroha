@@ -2580,7 +2580,7 @@ fn es256_signature_verify_rejects_high_s_signature_material() {
     }
     assert_eq!(borrow, 0);
     let high_s = P256Signature::from_slice(&high_s_bytes).expect("high-S signature");
-    assert!(high_s.normalize_s() != high_s);
+    assert_ne!(high_s.normalize_s(), high_s);
     let err = verify_signature(
         OperatorWebAuthnAlgorithm::Es256,
         public_key.as_bytes(),

@@ -4,15 +4,15 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_network::{NetworkBuilder, ensure_domain_setup_for_network};
 #[tokio::test]
 async fn all_peers_submit_genesis() -> eyre::Result<()> {
-    multiple_genesis_peers(4, 4).await
+    Box::pin(multiple_genesis_peers(4, 4)).await
 }
 #[tokio::test]
 async fn multiple_genesis_4_peers_3_genesis() -> eyre::Result<()> {
-    multiple_genesis_peers(4, 3).await
+    Box::pin(multiple_genesis_peers(4, 3)).await
 }
 #[tokio::test]
 async fn multiple_genesis_4_peers_2_genesis() -> eyre::Result<()> {
-    multiple_genesis_peers(4, 2).await
+    Box::pin(multiple_genesis_peers(4, 2)).await
 }
 async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre::Result<()> {
     if let Some(probe) = sandbox::start_network_async_or_skip(

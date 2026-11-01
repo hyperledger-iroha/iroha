@@ -73,8 +73,8 @@ fn same_inputs_for_another_intent(
     let inputs = core::array::from_fn(|index| {
         AtomicPrivateSettlementInputSecretV1::new(
             secrets[index],
-            index as u32,
-            &core::array::from_fn(|level| [0x40 + level as u8; 32]),
+            u32::try_from(index).unwrap(),
+            &core::array::from_fn(|level| [0x40 + u8::try_from(level).unwrap(); 32]),
         )
         .unwrap()
     });
@@ -446,20 +446,12 @@ fn stage_complete(
     wallet: &FilePrivateSettlementWallet,
     fixture: &mut super::test_fixture::Fixture,
 ) {
-    for (index, (opening, authorized)) in fixture
-        .openings
-        .drain(..)
-        .zip(fixture.authorized.drain(..))
-        .enumerate()
+    for ((ordinal, terms), (opening, authorized)) in (0_u8..)
+        .zip(&fixture.terms)
+        .zip(fixture.openings.drain(..).zip(fixture.authorized.drain(..)))
     {
         wallet
-            .stage_authorized(
-                &fixture.intent,
-                index as u8,
-                &fixture.terms[index],
-                opening,
-                authorized,
-            )
+            .stage_authorized(&fixture.intent, ordinal, terms, opening, authorized)
             .unwrap();
     }
 }
@@ -468,10 +460,10 @@ fn claim_complete(
     fixture: &super::test_fixture::Fixture,
     round: Digest32,
 ) {
-    for (index, terms) in fixture.terms.iter().enumerate() {
+    for (ordinal, terms) in (0_u8..).zip(&fixture.terms) {
         drop(
             wallet
-                .reserve_or_reopen(round, &fixture.intent, index as u8, terms)
+                .reserve_or_reopen(round, &fixture.intent, ordinal, terms)
                 .unwrap(),
         );
     }
@@ -544,9 +536,9 @@ fn verified_success_consumes_all_original_legs_atomically_and_reopens_only_as_co
         completed,
         "same verified success is a read-only idempotent cleanup retry"
     );
-    for (index, terms) in fixture.terms.iter().enumerate() {
+    for (ordinal, terms) in (0_u8..).zip(&fixture.terms) {
         assert!(matches!(
-            reopened.reserve_or_reopen(round, &fixture.intent, index as u8, terms),
+            reopened.reserve_or_reopen(round, &fixture.intent, ordinal, terms),
             Err(OneCallPrivateSettlementError::WalletCustody(
                 Error::Consumed
             ))

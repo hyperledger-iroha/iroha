@@ -668,7 +668,10 @@ mod tests {
     fn production_transform_selects_only_admitted_metal_backend() {
         let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
         let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
-        let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+        let cap = usize::try_from(
+            super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1,
+        )
+        .unwrap();
         let available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
         let evaluator = MainTraceCosetEvaluatorV1::new_v1(&layout, 288_345_698).unwrap();
         assert_eq!(

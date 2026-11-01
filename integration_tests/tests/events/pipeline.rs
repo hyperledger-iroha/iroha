@@ -161,13 +161,19 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     // Verify files exist
     assert!(
         hashes_path.exists(),
-        "blocks.hashes not found at {hashes_path:?}"
+        "blocks.hashes not found at {}",
+        hashes_path.display()
     );
     assert!(
         index_path.exists(),
-        "blocks.index not found at {index_path:?}"
+        "blocks.index not found at {}",
+        index_path.display()
     );
-    assert!(data_path.exists(), "blocks.data not found at {data_path:?}");
+    assert!(
+        data_path.exists(),
+        "blocks.data not found at {}",
+        data_path.display()
+    );
     // Wait for Kura writer to flush the new block to disk
     let expected_hash_bytes = 2 * 32;
     let expected_index_bytes = 2 * 16;

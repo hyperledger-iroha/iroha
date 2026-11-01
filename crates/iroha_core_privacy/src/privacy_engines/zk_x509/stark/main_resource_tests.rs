@@ -754,7 +754,11 @@ fn complete_main_work_inventory_includes_quotients_and_all_native_replays() {
         // unspent remainder retains a public fixed coefficient prefix; later
         // stripes recover the remaining suffix in place.
         let retained_fixed = cache
-            .fixed_prefix_columns_v1(n as usize, fixed as usize, stripes as usize)
+            .fixed_prefix_columns_v1(
+                usize::try_from(n).unwrap(),
+                usize::try_from(fixed).unwrap(),
+                usize::try_from(stripes).unwrap(),
+            )
             .unwrap() as u64;
         fixed_recovery_iffts += (fixed - retained_fixed) * (stripes - 1);
         fixed_recovery_butterflies += (fixed - retained_fixed)

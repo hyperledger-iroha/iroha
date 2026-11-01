@@ -1,6 +1,5 @@
 //! Router-level regression tests for `/v1/configuration`.
-#[path = "common/norito_rpc_harness.rs"]
-mod norito_rpc_harness;
+use crate::norito_rpc_harness;
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;

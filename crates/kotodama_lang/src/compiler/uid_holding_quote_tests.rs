@@ -16,7 +16,7 @@ fn quote_field_source(field: &str, value_type: &str) -> String {
         .replace("-> AssetUidHoldingQuote", &format!("-> {value_type}"))
         .replace(
             &format!("ledger::asset::uid_holding_quote({QUOTE_ARGUMENTS})"),
-            &format!("let quote = ledger::asset::uid_holding_quote({QUOTE_ARGUMENTS});\n        quote.{field}"),
+            &format!("let holding = ledger::asset::uid_holding_quote({QUOTE_ARGUMENTS});\n        holding.{field}"),
         )
 }
 

@@ -357,10 +357,7 @@ mod native {
         }
     }
 
-    pub(crate) fn connect_until(
-        directory: &PrivateDirectory,
-        deadline: Instant,
-    ) -> Result<Connection> {
+    pub fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> Result<Connection> {
         let deadline = deadline.min(Instant::now() + IO_TIMEOUT);
         remaining_io(deadline)?;
         let ipc = ipc_directory(directory, false)?;
@@ -1362,7 +1359,7 @@ mod native {
     }
 }
 
-pub(crate) use native::{Listener, connect_until, detach, request_as};
+pub use native::{Listener, connect_until, detach, request_as};
 
 pub fn supported() -> Result<()> {
     if cfg!(any(unix, windows)) {

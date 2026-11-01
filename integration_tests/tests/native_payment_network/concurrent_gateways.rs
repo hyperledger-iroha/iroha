@@ -80,10 +80,10 @@ impl WorkflowStorage for RendezvousStorage {
             .and_then(|operation| operation.attempts.last())
             .and_then(|attempt| attempt.identity);
         self.inner.compare_and_store(id, expected, record)?;
-        if let Some(identity) = signed {
-            if !self.arrived.swap(true, Ordering::SeqCst) {
-                self.rendezvous.arrive(identity)?;
-            }
+        if let Some(identity) = signed
+            && !self.arrived.swap(true, Ordering::SeqCst)
+        {
+            self.rendezvous.arrive(identity)?;
         }
         Ok(())
     }

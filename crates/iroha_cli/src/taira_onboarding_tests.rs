@@ -194,7 +194,7 @@ fn rendering_preserves_native_review_fields_and_json_document() {
         "onboard submit",
         "Network: network",
         "Address profile: 369",
-        "Expires at (Unix ms): 120_000",
+        "Expires at (Unix ms): 120000",
         "Fee intent: {}",
     ] {
         assert!(rendered.contains(field), "missing {field}");

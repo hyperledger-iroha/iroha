@@ -96,10 +96,11 @@ fn run() -> Outcome {
 /// Package version plus the source revision this build recorded, when it recorded one.
 fn version_text() -> &'static str {
     let version = env!("CARGO_PKG_VERSION");
-    match BUILD_SOURCE_ID.or(option_env!("VERGEN_GIT_SHA")) {
-        Some(source) => Box::leak(format!("{version} (source {source})").into_boxed_str()),
-        None => version,
-    }
+    BUILD_SOURCE_ID
+        .or(option_env!("VERGEN_GIT_SHA"))
+        .map_or(version, |source| {
+            Box::leak(format!("{version} (source {source})").into_boxed_str())
+        })
 }
 
 // Flush every ordinary command result, retaining its original error if output also fails.

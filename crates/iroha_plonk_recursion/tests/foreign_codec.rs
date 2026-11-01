@@ -77,7 +77,7 @@ impl Decode {
     fn instances(&self) -> Vec<Fp> {
         let mut out = vec![Fp::from(u64::from(self.length))];
         for chunk in self.bytes.as_chunks::<32>().0 {
-            out.extend(bytes_to_limbs(&*chunk).map(Fp::from_u128));
+            out.extend(bytes_to_limbs(chunk).map(Fp::from_u128));
         }
         let (valid, xy, u) = self.native();
         out.push(Fp::from(u64::from(valid)));

@@ -931,7 +931,7 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     let_row! { error = catch_unwind(AssertUnwindSafe(|| { let _block = state.block(header); })) .expect_err("missed protocol schedule must abort block construction") };
     let_row! { panic_text = error .downcast_ref::<String>() .map(String::as_str) .or_else(|| error.downcast_ref::<&str>().copied()) .unwrap_or("") };
     assert!(
-        panic_text.contains("persisted privacy protocol policy table is invalid at block height 400")
+        panic_text.contains("privacy protocol policy schedule is invalid")
             && panic_text.contains("effective height 399 is not after committed height 399"),
         "{panic_text}"
     );
@@ -1474,7 +1474,7 @@ ledger::nft::create_for_all_users();
     let_row! { executable = ExecutableRef::Batch(ConstVec::from(vec![ ExecutableBatchItem::ContractCall(invocation.clone()), ExecutableBatchItem::ContractCall(invocation), ])) };
     let trigger_id: TriggerId = "sequential_nft_batch".parse().expect("valid trigger id");
     let ExecutableRef::Batch(items) = &executable else { unreachable!("fixture is a batch") };
-    let mut trigger = crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger::new(
+    let trigger = crate::smartcontracts::isi::triggers::specialized::SpecializedTrigger::new(
         trigger_id.clone(),
         crate::smartcontracts::isi::triggers::specialized::SpecializedAction::new(
             Executable::Batch(items.clone()),
@@ -1483,7 +1483,6 @@ ledger::nft::create_for_all_users();
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
         ).expect("valid registered batch fixture"),
     );
-    capture_fixture_trigger_runtime(&mut trigger, &state_transaction.world);
     assert!(state_transaction.world.triggers.add_by_call_trigger(trigger).unwrap());
     let_row! { event = ExecuteTriggerEvent { trigger_id: trigger_id.clone(), authority: contract_authority.clone(), args: Json::default(), } };
     let accounts = state_transaction.accounts_snapshot();
@@ -26614,7 +26613,7 @@ vec![
     }
     for index in 0..=MAX_DATA_TRIGGER_FIRINGS_PER_TRANSACTION {
         let authority = authorities[index / 64].clone();
-        let mut trigger = Trigger::new(
+        let trigger = Trigger::new(
             format!("bounded_fanout_{index}")
                 .parse()
                 .expect("valid trigger id"),
@@ -26633,7 +26632,6 @@ vec![
         )
         .try_into()
         .expect("data trigger specializes");
-        capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
         assert!(
             transaction
                 .world
@@ -26690,7 +26688,7 @@ vec![
         }
         .into(),
     );
-    let mut trigger = Trigger::new(
+    let trigger = Trigger::new(
         "multi_drain_firing_cap"
             .parse()
             .expect("valid trigger id"),
@@ -26709,7 +26707,6 @@ vec![
     )
     .try_into()
     .expect("data trigger specializes");
-    capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
     assert!(
         transaction
             .world
@@ -26808,7 +26805,7 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
         .into(),
     );
     for index in 0..64 {
-        let mut trigger = Trigger::new(
+        let trigger = Trigger::new(
             format!("lazy_scan_{index}").parse().expect("valid trigger id"),
             Action::new(
                 Vec::<InstructionBox>::new(),
@@ -26825,7 +26822,6 @@ state_test! { sync data_trigger_matching_scans_large_event_batches_lazily
         )
         .try_into()
         .expect("data trigger specializes");
-        capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
         assert!(
             transaction
                 .world
@@ -26895,7 +26891,7 @@ state_test! { sync data_trigger_index_scan_is_charged_before_max_population_allo
             .into(),
         );
         for trigger_index in 0_u8..64 {
-            let mut trigger = Trigger::new(
+            let trigger = Trigger::new(
                 format!("metered_population_{authority_seed}_{trigger_index}")
                     .parse()
                     .expect("valid trigger id"),
@@ -26916,7 +26912,6 @@ state_test! { sync data_trigger_index_scan_is_charged_before_max_population_allo
             )
             .try_into()
             .expect("data trigger specializes");
-            capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
             assert!(
                 transaction
                     .world
@@ -26971,7 +26966,7 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
         }
         .into(),
     );
-    let mut trigger = Trigger::new(
+    let trigger = Trigger::new(
         "gas_bounded_data_trigger"
             .parse()
             .expect("valid trigger id"),
@@ -26990,7 +26985,6 @@ state_test! { sync data_trigger_filter_recheck_and_firing_share_the_block_gas_bu
     )
     .try_into()
     .expect("data trigger specializes");
-    capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
     assert!(
         transaction
             .world
@@ -27040,7 +27034,7 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
         }
         .into(),
     );
-    let mut trigger = Trigger::new(
+    let trigger = Trigger::new(
         "native_instruction_gas_trigger"
             .parse()
             .expect("valid trigger id"),
@@ -27062,7 +27056,6 @@ state_test! { sync native_trigger_instructions_are_not_an_unmetered_execution_pa
     )
     .try_into()
     .expect("data trigger specializes");
-    capture_fixture_trigger_runtime(&mut trigger, &transaction.world);
     assert!(
         transaction
             .world

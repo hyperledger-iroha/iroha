@@ -226,8 +226,10 @@ async fn supervised_file_open_and_zero_read_recovery_do_not_provision() {
         host.take(ticket).unwrap(),
         NativePrivateSettlementOutcome::Opened
     ));
-    let mut options = PrivateSettlementRunOptions::default();
-    options.max_finality_proof_reads = 0;
+    let options = PrivateSettlementRunOptions {
+        max_finality_proof_reads: 0,
+        ..PrivateSettlementRunOptions::default()
+    };
     for command in [
         NativePrivateSettlementCommand::Prepared,
         NativePrivateSettlementCommand::Recover,
@@ -391,8 +393,10 @@ async fn explicit_native_stage_is_bound_idempotent_and_preserved_by_cold_recover
         host.take(original).unwrap(),
         NativePrivateSettlementOutcome::Opened
     ));
-    let mut options = PrivateSettlementRunOptions::default();
-    options.max_finality_proof_reads = 0;
+    let options = PrivateSettlementRunOptions {
+        max_finality_proof_reads: 0,
+        ..PrivateSettlementRunOptions::default()
+    };
     let call = host
         .start(
             original.session(),
@@ -486,7 +490,7 @@ async fn complete_file_budget_refuses_before_any_custody_publication() {
     let total = files.len()
         + std::fs::read_dir(directory)
             .unwrap()
-            .map(|entry| entry.unwrap().metadata().unwrap().len() as usize)
+            .map(|entry| usize::try_from(entry.unwrap().metadata().unwrap().len()).unwrap())
             .sum::<usize>();
     let mut narrow = limits();
     narrow.maximum_original_bytes = NonZeroUsize::new(total - 1).unwrap();

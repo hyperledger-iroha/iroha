@@ -2145,7 +2145,6 @@ impl Queue {
     }
     /// Reconstruct refreshed manifests from the static baseline and committed additions.
     fn refreshed_lane_manifest_registry(
-        &self,
         registry_cfg: &LaneRegistry,
         state: &State,
     ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
@@ -2167,7 +2166,7 @@ impl Queue {
         registry_cfg: LaneRegistry,
         state: Arc<State>,
     ) {
-        let initial = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+        let initial = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
             Ok(registry) => registry,
             Err(err) => {
                 iroha_logger::warn!(reason = %err, "refusing to install incomplete initial lane-manifest snapshot");
@@ -2186,7 +2185,7 @@ impl Queue {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let registry = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+            let registry = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
                 Ok(registry) => registry,
                 Err(err) => {
                     iroha_logger::warn!(reason = %err, "refusing lane-manifest hot reload without exact active-lane coverage");
@@ -2279,6 +2278,10 @@ impl Queue {
                 || instruction
                     .as_any()
                     .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
                     .is_some()
         };
         match tx.as_accepted().executable() {
@@ -4014,14 +4017,15 @@ impl Queue {
                         err: Error::Deferred(original),
                     });
                 }
-                let plan = match routing_plan {
-                    Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
-                    None => self
-                        .router
-                        .read()
-                        .try_route_plan_with_view(&tx, &view)
-                        .and_then(|plan| Self::resolve_view_routing_plan(plan, &view)),
-                };
+                let plan = routing_plan.map_or_else(
+                    || {
+                        self.router
+                            .read()
+                            .try_route_plan_with_view(&tx, &view)
+                            .and_then(|plan| Self::resolve_view_routing_plan(plan, &view))
+                    },
+                    |plan| self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
+                );
                 let plan = match plan {
                     Ok(plan) => plan,
                     Err(error) => {
@@ -6914,7 +6918,7 @@ pub mod tests {
             authority_keypair,
             ..
         } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -7077,7 +7081,7 @@ pub mod tests {
             authority_keypair,
             ..
         } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -7956,7 +7960,6 @@ pub mod tests {
     }
     #[test]
     fn manifest_hot_reload_rejects_semantic_drift_atomically() {
-        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         fn registry(path: &str, validator: AccountId, quorum: u32) -> LaneManifestRegistryHandle {
             let rules = GovernanceRules {
                 validators: vec![validator],
@@ -7979,6 +7982,7 @@ pub mod tests {
                 status,
             )])))
         }
+        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (alice, _) = gen_account_in("wonderland");

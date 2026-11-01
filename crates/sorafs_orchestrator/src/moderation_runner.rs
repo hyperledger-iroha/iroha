@@ -935,14 +935,12 @@ fn extract_features(
         } else {
             bigram_denominator
         };
-        *value = if denominator == 0 {
-            0
-        } else {
-            value
-                .checked_mul(u64::from(MODERATION_REPRO_MAX_BPS))
-                .ok_or(ModerationRunnerError::ArithmeticOverflow)?
-                / denominator
-        };
+        // A zero denominator has no observations, so its count is zero as well.
+        *value = value
+            .checked_mul(u64::from(MODERATION_REPRO_MAX_BPS))
+            .ok_or(ModerationRunnerError::ArithmeticOverflow)?
+            .checked_div(denominator)
+            .unwrap_or(0);
     }
     Ok(counts)
 }

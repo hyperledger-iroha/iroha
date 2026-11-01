@@ -615,7 +615,7 @@ fn query_memory_parser_geometry_matches_runtime_complete_phases() {
     );
     for (aggregate, ceiling, content) in [
         (
-            config::QUERY_FANOUT_MIN_POOL_BYTES_V1 as usize,
+            usize::try_from(config::QUERY_FANOUT_MIN_POOL_BYTES_V1).unwrap(),
             48_000_000,
             64_000_000,
         ),

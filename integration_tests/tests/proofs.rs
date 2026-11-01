@@ -1,8 +1,7 @@
 //! Integration smoke test: submit a proof attachment and query its record via Torii.
+use crate::proof_fixtures::confidential_attachment;
 use eyre::{Report, Result};
 use integration_tests::sandbox;
-#[path = "proof_fixtures.rs"]
-mod proof_fixtures;
 use iroha_data_model::{
     isi::verifying_keys,
     permission::Permission,
@@ -11,7 +10,6 @@ use iroha_data_model::{
 };
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
-use proof_fixtures::confidential_attachment;
 use reqwest::Client as HttpClient;
 use std::{convert::TryFrom as _, str::FromStr as _, time::Duration};
 #[path = "proofs/fastpq_finalized_transcripts.rs"]
@@ -296,9 +294,7 @@ async fn submit_proof_and_query_record() -> Result<()> {
             {
                 break Ok((backend_got, proof_hash_got, status_got));
             }
-            Ok((_backend_got, _proof_hash_got, status_got))
-                if status_got == iroha_data_model::proof::ProofStatus::Rejected =>
-            {
+            Ok((_, _, iroha_data_model::proof::ProofStatus::Rejected)) => {
                 break Err(Report::msg("proof record reached Rejected status"));
             }
             Ok(_) => {
@@ -327,9 +323,9 @@ async fn submit_proof_and_query_record() -> Result<()> {
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-    .or_else(|err| match last_err {
-        Some(last_err) => Err(err.wrap_err(last_err)),
-        None => Err(err),
+    .map_err(|err| match last_err {
+        Some(last_err) => err.wrap_err(last_err),
+        None => err,
     });
     let Some((backend_got, proof_hash_got, status_got)) =
         sandbox::handle_result(snapshot, "submit_proof_and_query_record::fetch_record")?

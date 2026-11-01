@@ -506,7 +506,7 @@ impl SccpJournalRoot {
                 let parent = root
                     .parent()
                     .filter(|path| !path.as_os_str().is_empty())
-                    .unwrap_or(Path::new("."));
+                    .unwrap_or_else(|| Path::new("."));
                 let name = root
                     .file_name()
                     .ok_or_else(|| JournalError::Unsafe(root.to_owned()))?;
@@ -1211,6 +1211,8 @@ mod tests {
 
     #[test]
     fn malformed_and_unsafe_records_remain_distinct_from_initial_absence() {
+        use std::io::Write as _;
+
         let (_temporary, root) = root();
         let network = root.network(&network_id(0x11)).unwrap();
         let flow = network.flow(&flow()).unwrap();
@@ -1220,13 +1222,11 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let maximum = usize::try_from(MAX_RECORD_BYTES).unwrap();
         let mut large = directory
-            .create_retained_private(OPERATION_FILE, MAX_RECORD_BYTES as usize + 2)
+            .create_retained_private(OPERATION_FILE, maximum + 2)
             .unwrap();
-        use std::io::Write as _;
-        large
-            .write_all(&vec![0; MAX_RECORD_BYTES as usize + 1])
-            .unwrap();
+        large.write_all(&vec![0; maximum + 1]).unwrap();
         drop(large);
         assert!(matches!(
             read_private_file(&directory, OPERATION_FILE),
@@ -1622,15 +1622,18 @@ mod tests {
     #[test]
     fn unsafe_directories_are_refused() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let open = dir.path().join("open");
+        // The retained root reports its canonical path; macOS temporary directories live
+        // under the `/var` symlink.
+        let base = dir.path().canonicalize().expect("canonical tempdir");
+        let open = base.join("open");
         fs::create_dir(&open).expect("mkdir");
         fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).expect("chmod");
         assert_eq!(
             SccpJournalRoot::open(&open),
             Err(JournalError::Unsafe(open.clone()))
         );
-        let link = dir.path().join("link");
-        let private = dir.path().join("private");
+        let link = base.join("link");
+        let private = base.join("private");
         fs::create_dir(&private).expect("mkdir");
         fs::set_permissions(&private, fs::Permissions::from_mode(0o700)).expect("chmod");
         symlink(&private, &link).expect("symlink");

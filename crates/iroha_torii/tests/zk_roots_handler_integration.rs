@@ -150,7 +150,7 @@ fn seeded_zk_roots_state(
             stx.world
                 .executor()
                 .clone()
-                .execute_instruction(&mut stx, &owner, instr)
+                .execute_instruction(&mut stx, &owner, &instr)
                 .unwrap();
         }
         iroha_data_model::isi::SetAssetDefinitionAlias::bind(
@@ -195,7 +195,7 @@ fn seeded_zk_roots_state(
         .unwrap_or_default();
     (state, asset_def_id, asset_alias.to_owned(), roots_all)
 }
-fn zk_roots_router(state: Arc<State>) -> Router {
+fn zk_roots_router(state: &Arc<State>) -> Router {
     Router::new().route(
         "/v1/zk/roots",
         post({
@@ -215,7 +215,7 @@ fn zk_roots_router(state: Arc<State>) -> Router {
 async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     let (state, _asset_def_id, asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 5);
-    let app = zk_roots_router(state.clone());
+    let app = zk_roots_router(&state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", &asset_alias.clone()),
         iroha_torii::json_entry("max", &0u64),
@@ -275,7 +275,7 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
 async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
     let (state, asset_def_id, _asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(10_usize), 2);
-    let app = zk_roots_router(state.clone());
+    let app = zk_roots_router(&state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", &asset_def_id.to_string()),
         iroha_torii::json_entry("max", &10u64),
@@ -327,7 +327,7 @@ async fn zk_roots_endpoint_returns_all_roots_when_request_exceeds_history() {
 async fn zk_roots_endpoint_bounds_nonzero_max_by_cap() {
     let (state, _asset_def_id, asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 5);
-    let app = zk_roots_router(state.clone());
+    let app = zk_roots_router(&state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", &asset_alias),
         iroha_torii::json_entry("max", &10u64),
@@ -369,7 +369,7 @@ async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
     let (state, asset_def_id, _asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 0);
     assert!(roots_all.is_empty());
-    let app = zk_roots_router(state);
+    let app = zk_roots_router(&state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", &asset_def_id.to_string()),
         iroha_torii::json_entry("max", &0u64),
@@ -404,7 +404,7 @@ async fn zk_roots_endpoint_returns_profile_defined_empty_root() {
 async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
     let (state, _asset_def_id, asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 4);
-    let app = zk_roots_router(state.clone());
+    let app = zk_roots_router(&state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", &format!("  {asset_alias}  ")),
         iroha_torii::json_entry("max", &1u64),
@@ -439,7 +439,7 @@ async fn zk_roots_endpoint_accepts_trimmed_alias_literal() {
 async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
     let (state, _asset_def_id, asset_alias, roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 4);
-    let app = zk_roots_router(state.clone());
+    let app = zk_roots_router(&state);
     let expected = iroha_torii::handle_v1_zk_roots(
         state.clone(),
         Some(http::HeaderValue::from_static(NORITO_MIME_TYPE)),
@@ -480,7 +480,7 @@ async fn zk_roots_endpoint_negotiates_norito_for_non_empty_payload() {
 async fn zk_roots_endpoint_returns_406_for_unsupported_accept_header() {
     let (state, asset_def_id, _asset_alias, _roots_all) =
         seeded_zk_roots_state(nonzero!(3_usize), 2);
-    let app = zk_roots_router(state.clone());
+    let app = zk_roots_router(&state);
     let req_body = norito::json::to_json(&iroha_torii::json_object(vec![
         iroha_torii::json_entry("asset_id", &asset_def_id.to_string()),
         iroha_torii::json_entry("max", &2u64),

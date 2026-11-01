@@ -605,7 +605,7 @@ async fn run_key_change() -> Result<()> {
         Ok(())
     })
     .await;
-    network.shutdown_and_release().await;
+    Box::pin(network.shutdown_and_release()).await;
     result
 }
 

@@ -9,7 +9,7 @@ fn tape(round: Round, values: impl IntoIterator<Item = u64>) -> Vec<u8> {
         .into_iter()
         .zip(bytes.as_chunks_mut::<8>().0.iter_mut())
     {
-        target.copy_from_slice(&value.to_le_bytes());
+        *target = value.to_le_bytes();
     }
     bytes
 }

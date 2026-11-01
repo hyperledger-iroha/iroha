@@ -252,7 +252,7 @@ impl SuccessorContextPreparation {
         &mut self,
         state: &(impl StateReadOnly + ?Sized),
         header: &IrohaHeader,
-        supplied: Option<iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
+        supplied: Option<&iroha_data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1>,
         expected: GlobalThresholdBeaconPulseContextV1,
     ) -> Attempt<()> {
         self.recheck(state, header, &expected)?;

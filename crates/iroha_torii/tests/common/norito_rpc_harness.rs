@@ -324,5 +324,4 @@ fn sample_signed_query_roundtrips_as_a_versioned_singular_request() {
     assert_eq!(decoded.encode_versioned(), bytes);
 }
 
-#[path = "../../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

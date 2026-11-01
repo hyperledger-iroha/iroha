@@ -106,7 +106,7 @@ fn attempts_root_scope_shares_only_four_actual_walks_with_identical_native_recor
         head: &history.bodies.last().unwrap().snapshots,
     };
     let root = owned.test_attempts_root().unwrap();
-    let (_, suffix) = history
+    let ((), suffix) = history
         .root
         .read_tree_scope(|tree| -> Result<_> {
             Ok(work(|| tree.revalidate_directory(root).unwrap()))

@@ -1809,7 +1809,8 @@ impl<'s> Worker<'s> {
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
-                successor_context: Default::default(),
+                successor_context:
+                    crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,
                 parent_service: super::certified_chain::ParentServicePreparation::default(),
             });

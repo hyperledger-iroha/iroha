@@ -1,7 +1,6 @@
 //! Assert `ProofVerified` SSE JSON includes `proof_hash`, `call_hash`, `vk_ref`, `vk_commitment`, and filtering works.
 #![cfg(feature = "app_api")]
-#[path = "common/proof_events.rs"]
-mod proof_events;
+use crate::proof_events;
 use axum::{Router, routing::get};
 use futures_util::StreamExt as _;
 use norito::json;

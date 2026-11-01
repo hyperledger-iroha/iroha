@@ -22,7 +22,7 @@ impl NativeReadHttpError {
     }
     /// Return the received status without retaining a body, URL or credentials.
     #[must_use]
-    pub fn status(&self) -> u16 {
+    pub fn status(self) -> u16 {
         self.status.as_u16()
     }
 }

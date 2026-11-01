@@ -27,7 +27,7 @@ fn sigma_policy_has_all_exact_selector_recipes_and_bounded_intake() {
     assert_eq!(policy.len(), 116);
     for (i, ((kind, mask), item)) in SIGMA_CATALOG_V1
         .iter()
-        .zip(policy[6..].chunks_exact(10))
+        .zip(policy[6..].as_chunks::<10>().0)
         .enumerate()
     {
         assert_eq!(item[0], *kind);

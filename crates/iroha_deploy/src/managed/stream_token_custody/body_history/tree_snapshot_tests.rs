@@ -966,10 +966,10 @@ fn snapshot_container_closes_persistent_mutation_after_inner_error_and_retries_s
     }
     // Rename the original container after its last inner suffix has closed. The new outer
     // container fence must reject that different directory even when the inner result failed.
-    let held = store.temporary.path().join("held-snapshot-container");
+    let held_container = store.temporary.path().join("held-snapshot-container");
     let path = store.container.path().to_owned();
     let hook_path = path.clone();
-    let hook_held = held.clone();
+    let hook_held = held_container.clone();
     let hook = Box::new(move |point: &ContainerPoint| {
         if *point == ContainerPoint::NodeClosed(head) {
             fs::rename(&hook_path, &hook_held)?;
@@ -981,7 +981,7 @@ fn snapshot_container_closes_persistent_mutation_after_inner_error_and_retries_s
     });
     let (result, _, _) = observe_container(false, Some(hook), || store.snapshot.revalidate());
     fs::remove_dir(&path).unwrap();
-    fs::rename(&held, &path).unwrap();
+    fs::rename(&held_container, &path).unwrap();
     assert!(matches!(result, Err(Error::Io(_))));
     store.snapshot.revalidate().unwrap();
     // Fully restored changes within the retained bracket have the documented endpoint limit.

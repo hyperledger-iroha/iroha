@@ -4726,6 +4726,7 @@ fn authority_fee_asset_id(
         scope,
     ))
 }
+#[allow(clippy::too_many_arguments)]
 fn evaluate_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -5399,22 +5400,6 @@ fn is_reserved_multisig_role_id(role_id: &RoleId) -> bool {
             .is_some_and(|suffix| suffix.starts_with('/'))
 }
 impl Executor {
-    /// Identity of the exact installed executor code captured by deferred runtime consent.
-    /// Loaded instances, compilation caches and runtime-pool history do not affect execution
-    /// semantics and never enter this commitment. The executor data model is installed by
-    /// this same raw bytecode; later ordinary parameter and permission updates remain State.
-    pub(crate) fn runtime_consent_hash(&self) -> iroha_crypto::Hash {
-        const DOMAIN: &[u8] = b"iroha:runtime:executor-consent:v1\0";
-        match self {
-            Self::Initial => iroha_crypto::Hash::new_from_chunks(&[DOMAIN, &[0]]),
-            Self::UserProvided(loaded) => iroha_crypto::Hash::new_from_chunks(&[
-                DOMAIN,
-                &[1],
-                loaded.raw_executor.bytecode().as_ref(),
-            ]),
-        }
-    }
-
     fn resolve_pipeline_gas_asset_definition(
         state_transaction: &StateTransaction<'_, '_>,
         gas_asset_id_str: &str,
@@ -6358,7 +6343,7 @@ impl Executor {
             entry_index,
         }))
     }
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn execute_metered_instructions(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -6614,7 +6599,7 @@ impl Executor {
                             self.execute_instruction_with_contract_runtime_context(
                                 state_transaction,
                                 &queued.authority,
-                                instruction,
+                                &instruction,
                                 queued.contract_runtime_context.as_ref(),
                             )?;
                         }
@@ -6998,13 +6983,13 @@ impl Executor {
         trigger_context: Option<(&TriggerId, u64)>,
         mut attachment_frame: Option<attachment_custody::ContractCustody<'_, '_>>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        // A contract frame cannot inherit a native instruction's signed ordinal.
+        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         if let Some(frame) = attachment_frame.as_mut() {
             frame.require_original_call(call).map_err(|error| {
                 attachment_direct::custody_validation_error(state_transaction, error)
             })?;
         }
-        // A contract frame cannot inherit a native instruction's signed ordinal.
-        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
         state_transaction.current_direct_sccp_forgery = false;
@@ -7217,7 +7202,7 @@ impl Executor {
         let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             state_transaction,
             runtime_origin,
         )
@@ -7230,7 +7215,8 @@ impl Executor {
         if validation_outcome == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp {
             return Ok(ContractInvocationOutcome {
                 gas_used,
-                executed_instructions: Default::default(),
+                executed_instructions:
+                    crate::smartcontracts::ivm::host::ExecutedHostInstructions::default(),
                 next_nft_sequence,
             });
         }
@@ -8590,12 +8576,12 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
     ) -> Result<(), ValidationFail> {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             InstructionExecutionProfile::Runtime,
             None,
         )
@@ -8606,7 +8592,7 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         if contract_runtime_context.is_some() {
@@ -8615,7 +8601,7 @@ impl Executor {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             InstructionExecutionProfile::Runtime,
             contract_runtime_context,
         )
@@ -8651,13 +8637,13 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
     ) -> Result<(), ValidationFail> {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             profile,
             None,
         )
@@ -10633,31 +10619,6 @@ pub mod executor_norito {
                 Executor::Initial => {}
                 _ => panic!("expected Initial variant"),
             }
-        }
-        #[test]
-        fn runtime_consent_hash_binds_installed_code_without_runtime_cache_identity() {
-            let first = denying_executor_for_testing("consent one");
-            let same = denying_executor_for_testing("consent one");
-            let other = denying_executor_for_testing("consent two");
-            assert_eq!(first.runtime_consent_hash(), same.runtime_consent_hash());
-            assert_ne!(first.runtime_consent_hash(), other.runtime_consent_hash());
-            assert_ne!(
-                first.runtime_consent_hash(),
-                Executor::Initial.runtime_consent_hash()
-            );
-            let Executor::UserProvided(loaded) = &first else {
-                panic!("user executor")
-            };
-            let expected = first.runtime_consent_hash();
-            let parameters = iroha_data_model::parameter::SmartContractParameters::default();
-            let _lease = loaded
-                .checkout_runtime_for_gas_limit(
-                    parameters.fuel().get(),
-                    parameters.memory().get(),
-                    &executor_test_budget(),
-                )
-                .unwrap();
-            assert_eq!(first.runtime_consent_hash(), expected);
         }
         #[test]
         fn net_state_hash_binds_raw_executor_and_ignores_loaded_runtime_cache() {

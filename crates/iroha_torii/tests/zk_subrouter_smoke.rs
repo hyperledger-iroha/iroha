@@ -1,5 +1,6 @@
 //! Smoke test that ZK endpoints (verify, attachments) are exposed via the merged sub-router.
 #![cfg(feature = "app_api")]
+use crate::fixtures;
 use axum::http::Request;
 use http::StatusCode;
 use http_body_util::BodyExt as _;
@@ -11,15 +12,11 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_torii_shared::ErrorEnvelope;
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
-fn attachments_smoke_lock() -> MutexGuard<'static, ()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-        .lock()
-        .expect("attachments smoke lock")
+async fn attachments_smoke_lock() -> MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::const_new(());
+    LOCK.lock().await
 }
 fn attachment_router(
     torii: &fixtures::StandardToriiHarness,
@@ -56,7 +53,7 @@ fn assert_error_message(body: &[u8], expected_code: &str, expected_message: &str
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
-    let _guard = attachments_smoke_lock();
+    let _guard = attachments_smoke_lock().await;
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     // Minimal Torii setup (no telemetry requirement for these endpoints)
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
@@ -69,7 +66,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
     for retired_path in ["/v1/zk/verify", "/v1/zk/submit-proof"] {
         let resp = fixtures::request(
             &app,
-            fixtures::post_json_request(&(retired_path), axum::body::Body::from("{}")),
+            fixtures::post_json_request(retired_path, axum::body::Body::from("{}")),
         )
         .await
         .unwrap();
@@ -84,7 +81,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::get_request(&("/v1/zk/attachments")),
+        fixtures::get_request("/v1/zk/attachments"),
         &[],
     );
     let resp = fixtures::request(&app, request).await.unwrap();
@@ -97,7 +94,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::get_request(&("/v1/zk/attachments/placeholder-id")),
+        fixtures::get_request("/v1/zk/attachments/placeholder-id"),
         &[],
     );
     let resp = app.router().oneshot(request).await.unwrap();
@@ -110,7 +107,7 @@ async fn zk_verify_and_attachments_endpoints_exposed_by_default() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
-    let _guard = attachments_smoke_lock();
+    let _guard = attachments_smoke_lock().await;
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = false;
@@ -121,8 +118,8 @@ async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::with([domain], [account], []));
     let app = attachment_router(&torii, &cfg);
     for request in [
-        fixtures::get_request(&("/v1/zk/attachments")),
-        fixtures::get_request(&("/v1/zk/attachments/count")),
+        fixtures::get_request("/v1/zk/attachments"),
+        fixtures::get_request("/v1/zk/attachments/count"),
         fixtures::get_request(&(format!("/v1/zk/attachments/{}", "0".repeat(64)))),
         Request::builder()
             .method("DELETE")
@@ -145,7 +142,7 @@ async fn zk_attachments_endpoints_report_unavailable_when_disabled() {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests() {
-    let _guard = attachments_smoke_lock();
+    let _guard = attachments_smoke_lock().await;
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
@@ -159,14 +156,18 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::get_request(&("/v1/zk/attachments/count")),
+        fixtures::get_request("/v1/zk/attachments/count"),
         &[],
     );
     let count_resp = fixtures::request(&app, count_request).await.unwrap();
     assert_eq!(count_resp.status(), StatusCode::OK);
     let body = count_resp.into_body().collect().await.unwrap().to_bytes();
     let json: norito::json::Value = norito::json::from_slice(&body).expect("json count body");
-    assert_eq!(json.get("count").and_then(|value| value.as_u64()), Some(0));
+    assert_eq!(
+        json.get("count")
+            .and_then(norito::json::native::Value::as_u64),
+        Some(0)
+    );
     let missing_id = "0".repeat(64);
     let delete_request = fixtures::app_signed_request(
         torii.state.network_id_ref(),
@@ -193,7 +194,7 @@ async fn zk_attachments_count_and_delete_endpoints_exposed_for_signed_requests()
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests() {
-    let _guard = attachments_smoke_lock();
+    let _guard = attachments_smoke_lock().await;
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
@@ -210,10 +211,7 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
         torii.state.network_id_ref(),
         &account_id,
         &cfg.common.key_pair,
-        fixtures::post_json_request(
-            &("/v1/zk/attachments"),
-            axum::body::Body::from(body.to_vec()),
-        ),
+        fixtures::post_json_request("/v1/zk/attachments", axum::body::Body::from(body.to_vec())),
         body,
     );
     let signed_headers = signed_request.headers().clone();
@@ -302,15 +300,15 @@ async fn zk_attachments_create_roundtrip_and_replay_rejected_for_signed_requests
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn zk_attachments_endpoints_require_signed_headers_when_enabled() {
-    let _guard = attachments_smoke_lock();
+    let _guard = attachments_smoke_lock().await;
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     cfg.torii.zk_attachments_enabled = true;
     let torii = fixtures::StandardToriiHarness::new(&cfg, World::default());
     let app = attachment_router(&torii, &cfg);
     for request in [
-        fixtures::get_request(&("/v1/zk/attachments")),
-        fixtures::get_request(&("/v1/zk/attachments/count")),
+        fixtures::get_request("/v1/zk/attachments"),
+        fixtures::get_request("/v1/zk/attachments/count"),
         Request::builder()
             .method("DELETE")
             .uri(format!("/v1/zk/attachments/{}", "0".repeat(64)))

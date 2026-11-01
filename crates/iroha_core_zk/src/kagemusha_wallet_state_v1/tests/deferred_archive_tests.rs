@@ -368,7 +368,7 @@ fn intake_metadata_survives_rebased_fold_publication_without_cancelling_work() {
     // The projection-only fixture omits sequence zero and cannot start a fold. Use the
     // production commit/index path with its retained predecessor and contiguous Send tail.
     let (mut w, sent, request, original, _, _) = lifecycle::fresh_delivery_receipt();
-    let send = request.request_id;
+    let send_request = request.request_id;
     let sequence = sent.capsule.body().statement.sequence;
     w.scheduler().set_activity(true, false);
     let ControlFlow::Continue(job) = w.fold_prepare().unwrap() else {
@@ -386,7 +386,9 @@ fn intake_metadata_survives_rebased_fold_publication_without_cancelling_work() {
         )
         .unwrap();
     let selected_plan = archive::encode(&plan).unwrap();
-    let receipt = w.retain_deferred_credited(&send, &original).unwrap();
+    let receipt = w
+        .retain_deferred_credited(&send_request, &original)
+        .unwrap();
     let (_, manifest) = w.manifest().unwrap();
     let before = archive::encode(&w.deferred_archive_index(&manifest).unwrap()).unwrap();
     assert_eq!(

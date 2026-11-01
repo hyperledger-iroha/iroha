@@ -218,8 +218,11 @@ fn fp4_wire_rejects_every_noncanonical_coefficient() {
             let invalid_value = GoldilocksFp4V1 { c0, c1, c2, c3 };
             assert!(norito::to_bytes(&invalid_value).is_err());
             let mut raw = [0_u8; 32];
-            for (word, bytes) in coefficients.iter().zip(raw.chunks_exact_mut(8)) {
-                bytes.copy_from_slice(&word.to_le_bytes());
+            for (word, bytes) in coefficients
+                .iter()
+                .zip(raw.as_chunks_mut::<8>().0.iter_mut())
+            {
+                *bytes = word.to_le_bytes();
             }
             assert!(GoldilocksFp4V1::decode_from_slice(&raw).is_err());
             let framed = norito::core::frame_bare_with_header_flags::<GoldilocksFp4V1>(&raw, 0)

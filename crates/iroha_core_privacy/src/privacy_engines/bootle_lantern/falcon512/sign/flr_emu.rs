@@ -505,6 +505,10 @@ impl Flr {
     }
     // Multiplication.
     #[inline]
+    #[expect(
+        clippy::decimal_bitwise_operands,
+        reason = "pinned Falcon reference arithmetic: -1076 is the decimal zero exponent"
+    )]
     pub(crate) fn set_mul(&mut self, other: Self) {
         // Extract absolute values of mantissas, assuming non-zero
         // operands, and multiply them together.
@@ -570,6 +574,10 @@ impl Flr {
         self * self
     }
     // Division.
+    #[expect(
+        clippy::decimal_bitwise_operands,
+        reason = "pinned Falcon reference arithmetic: -1076 is the decimal zero exponent"
+    )]
     pub(crate) fn set_div(&mut self, other: Self) {
         // Extract mantissas (unsigned).
         let mut xu = (self.0 & M52) | (1u64 << 52);

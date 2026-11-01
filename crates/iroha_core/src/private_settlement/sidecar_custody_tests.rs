@@ -1,10 +1,19 @@
 // Included inside the sidecar owner's tests; native custody, not protocol qualification.
 
+fn max_record_bytes() -> usize {
+    usize::try_from(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1)
+        .expect("the sidecar record limit fits the address space")
+}
+
 #[test]
 fn sidecar_custody_uses_the_original_native_exclusive_writer_lock() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("native-writer");
-    let store = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let store = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     let original = FileIdentity::of(&store.writer_lock).unwrap();
     validate_sidecar_writer_v1(&store.staging, &store.writer_lock).unwrap();
     // Bypass the process-local lease to exercise the actual kernel ownership boundary.
@@ -18,7 +27,11 @@ fn sidecar_custody_uses_the_original_native_exclusive_writer_lock() {
     );
     drop(contender);
     drop(store);
-    let reopened = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let reopened = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     assert_eq!(FileIdentity::of(&reopened.writer_lock).unwrap(), original);
 }
 
@@ -26,7 +39,13 @@ fn sidecar_custody_uses_the_original_native_exclusive_writer_lock() {
 fn sidecar_custody_rejects_unknown_names_before_discarding_a_staged_file() {
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("staging");
-    drop(PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap());
+    drop(
+        PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .unwrap(),
+    );
     let owner = PrivateDirectory::open(&root)
         .unwrap()
         .open_child(SIDECAR_STAGING_DIRECTORY_V1)
@@ -39,7 +58,11 @@ fn sidecar_custody_rejects_unknown_names_before_discarding_a_staged_file() {
         .unwrap();
     let before = owner.entries(3).unwrap();
     assert_eq!(
-        PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap_err(),
+        PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default()
+        )
+        .unwrap_err(),
         PrivateSettlementSidecarStoreErrorV1::Corrupt
     );
     assert_eq!(owner.entries(3).unwrap(), before);
@@ -49,7 +72,11 @@ fn sidecar_custody_rejects_unknown_names_before_discarding_a_staged_file() {
     );
     owner.remove_private(".iroha-fs-01-0.tmp").unwrap();
     drop(owner);
-    let recovered = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let recovered = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     assert_eq!(
         recovered.staging.entries(1).unwrap(),
         [SIDECAR_WRITER_LOCK_FILE_V1]
@@ -62,16 +89,14 @@ fn sidecar_custody_refuses_record_hardlinks_and_missing_replace_targets() {
     let digest = fixture.sidecar.payload_digest();
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("records");
-    let store = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let store = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     store.store(fixture.sidecar).unwrap();
     let name = sidecar_file_name_v1(digest);
-    let before = store
-        .root
-        .read(
-            &name,
-            PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 as usize,
-        )
-        .unwrap();
+    let before = store.root.read(&name, max_record_bytes()).unwrap();
     assert!(
         store
             .persist_named_record_v1(&name, b"substitution", false)
@@ -92,7 +117,11 @@ fn sidecar_custody_refuses_record_hardlinks_and_missing_replace_targets() {
     ));
     drop(store);
     assert_eq!(
-        PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap_err(),
+        PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default()
+        )
+        .unwrap_err(),
         PrivateSettlementSidecarStoreErrorV1::Corrupt
     );
 }
@@ -129,10 +158,7 @@ fn sidecar_custody_recovers_a_real_promotion_prefix_at_the_configured_count_limi
     assert!(
         recovered
             .root
-            .read_optional(
-                provisional_file_name_v1(digest),
-                PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 as usize
-            )
+            .read_optional(provisional_file_name_v1(digest), max_record_bytes())
             .unwrap()
             .is_none()
     );
@@ -150,7 +176,11 @@ fn sidecar_custody_rejects_replaced_lock_and_ancestor_without_publication() {
     for substitute in ["lock", "ancestor"] {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().join("original");
-        let store = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+        let store = PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default(),
+        )
+        .unwrap();
         match substitute {
             "lock" => {
                 fs::rename(
@@ -217,7 +247,11 @@ fn sidecar_custody_rejects_retired_flat_names_and_missing_original_staging() {
             .unwrap();
         let before = owner.entries(1).unwrap();
         assert_eq!(
-            PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap_err(),
+            PrivateSettlementFileSidecarStoreV1::open(
+                &root,
+                PrivateSettlementSidecarStoreConfigV1::default()
+            )
+            .unwrap_err(),
             PrivateSettlementSidecarStoreErrorV1::Corrupt
         );
         assert_eq!(owner.entries(1).unwrap(), before);
@@ -226,7 +260,11 @@ fn sidecar_custody_rejects_retired_flat_names_and_missing_original_staging() {
     let root = temporary.path().join("missing-staging");
     let fixture = sidecar_fixture();
     let digest = fixture.sidecar.payload_digest();
-    let store = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let store = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     store.store(fixture.sidecar).unwrap();
     let original = store.read_record_v1(digest).unwrap();
     drop(store);
@@ -236,16 +274,17 @@ fn sidecar_custody_rejects_retired_flat_names_and_missing_original_staging() {
     )
     .unwrap();
     assert_eq!(
-        PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap_err(),
+        PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default()
+        )
+        .unwrap_err(),
         PrivateSettlementSidecarStoreErrorV1::Corrupt
     );
     assert!(!root.join(SIDECAR_STAGING_DIRECTORY_V1).exists());
     let owner = PrivateDirectory::open(&root).unwrap();
     let bytes = owner
-        .read(
-            sidecar_file_name_v1(digest),
-            PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 as usize,
-        )
+        .read(sidecar_file_name_v1(digest), max_record_bytes())
         .unwrap();
     assert!(
         norito::decode_canonical::<DurablePrivateSettlementSidecarV1>(&bytes).unwrap() == original
@@ -258,7 +297,11 @@ fn sidecar_custody_preserves_staging_on_unknown_or_unsafe_committed_entry() {
     let root = temporary.path().join("preserve-staging");
     let fixture = sidecar_fixture();
     let digest = fixture.sidecar.payload_digest();
-    let store = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let store = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     store.store(fixture.sidecar).unwrap();
     store
         .staging
@@ -269,7 +312,13 @@ fn sidecar_custody_preserves_staging_on_unknown_or_unsafe_committed_entry() {
     owner
         .write_atomic("unknown", b"unknown", PublishMode::CreateNew)
         .unwrap();
-    assert!(PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).is_err());
+    assert!(
+        PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default()
+        )
+        .is_err()
+    );
     let staging = owner.open_child(SIDECAR_STAGING_DIRECTORY_V1).unwrap();
     assert_eq!(
         staging.read(".iroha-fs-1-0.tmp", 7).unwrap().as_slice(),
@@ -279,7 +328,11 @@ fn sidecar_custody_preserves_staging_on_unknown_or_unsafe_committed_entry() {
     let linked = sidecar_file_name_v1(Hash::prehashed([0x98; 32]));
     fs::hard_link(root.join(sidecar_file_name_v1(digest)), root.join(&linked)).unwrap();
     assert_eq!(
-        PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap_err(),
+        PrivateSettlementFileSidecarStoreV1::open(
+            &root,
+            PrivateSettlementSidecarStoreConfigV1::default()
+        )
+        .unwrap_err(),
         PrivateSettlementSidecarStoreErrorV1::Corrupt
     );
     assert_eq!(
@@ -310,7 +363,11 @@ fn sidecar_custody_restart_preserves_authenticated_records_under_64_descriptor_l
     }
     let temporary = tempfile::tempdir().unwrap();
     let root = temporary.path().join("restart");
-    let store = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let store = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     let mut originals = Vec::new();
     for ordinal in [0, 1] {
         let fixture = sidecar_fixture_with_threshold_and_ordinal(1, ordinal);
@@ -324,7 +381,11 @@ fn sidecar_custody_restart_preserves_authenticated_records_under_64_descriptor_l
         .write_atomic(".iroha-fs-1-0.tmp", b"interrupted", PublishMode::CreateNew)
         .unwrap();
     drop(store);
-    let reopened = PrivateSettlementFileSidecarStoreV1::open(&root, Default::default()).unwrap();
+    let reopened = PrivateSettlementFileSidecarStoreV1::open(
+        &root,
+        PrivateSettlementSidecarStoreConfigV1::default(),
+    )
+    .unwrap();
     for (digest, original) in originals {
         assert!(reopened.read_record_v1(digest).unwrap() == original);
     }

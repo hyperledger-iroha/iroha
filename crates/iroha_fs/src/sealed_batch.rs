@@ -373,10 +373,10 @@ impl<const N: usize> SealedFlatBatch<N> {
             // TODO: qualify descriptor-bound native execution on Darwin and other
             // Unix hosts before enabling this launch projection there. A pathname
             // fallback would reintroduce mutable-ancestor execution authority.
-            return Err(io::Error::new(
+            Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "original-descriptor execution is not qualified on this Unix host",
-            ));
+            ))
         }
         #[cfg(any(windows, target_os = "linux", target_os = "android"))]
         {

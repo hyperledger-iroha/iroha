@@ -217,7 +217,7 @@ fn scalar_dispatch_residues(
             opening.aux_current,
             opening.aux_next,
             fixed,
-            projection.challenges,
+            &projection.challenges,
         )
         .unwrap(),
         SegmentAdapterIdV1::ByteMemory => io_constraint_residues_v1(

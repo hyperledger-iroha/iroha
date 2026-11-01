@@ -407,35 +407,32 @@ impl RetainedGeometryJournal {
             }
             #[cfg(not(windows))]
             {
-                let (file, writable) = match existing {
-                    Some(file) => {
-                        Self::verify_bytes(&file, bytes, &self.namespace.index_path)?;
-                        (file, false)
-                    }
-                    None => {
-                        #[cfg(unix)]
-                        let file = File::from(
-                            rustix::fs::openat(
-                                &self.namespace.directories[0].file,
-                                JOURNAL_TEMP_FILE_NAME,
-                                rustix::fs::OFlags::RDWR
-                                    | rustix::fs::OFlags::CREATE
-                                    | rustix::fs::OFlags::EXCL
-                                    | rustix::fs::OFlags::NOFOLLOW
-                                    | rustix::fs::OFlags::CLOEXEC,
-                                rustix::fs::Mode::from_raw_mode(0o600),
-                            )
-                            .map_err(|error| {
-                                Error::IO(error.into(), self.namespace.index_path.clone())
-                            })?,
-                        );
-                        #[cfg(not(unix))]
-                        return Err(self.error(
-                            "retained journal publication requires descriptor-relative creation",
-                        ));
-                        #[cfg(unix)]
-                        (file, true)
-                    }
+                let (file, writable) = if let Some(file) = existing {
+                    Self::verify_bytes(&file, bytes, &self.namespace.index_path)?;
+                    (file, false)
+                } else {
+                    #[cfg(unix)]
+                    let file = File::from(
+                        rustix::fs::openat(
+                            &self.namespace.directories[0].file,
+                            JOURNAL_TEMP_FILE_NAME,
+                            rustix::fs::OFlags::RDWR
+                                | rustix::fs::OFlags::CREATE
+                                | rustix::fs::OFlags::EXCL
+                                | rustix::fs::OFlags::NOFOLLOW
+                                | rustix::fs::OFlags::CLOEXEC,
+                            rustix::fs::Mode::from_raw_mode(0o600),
+                        )
+                        .map_err(|error| {
+                            Error::IO(error.into(), self.namespace.index_path.clone())
+                        })?,
+                    );
+                    #[cfg(not(unix))]
+                    return Err(self.error(
+                        "retained journal publication requires descriptor-relative creation",
+                    ));
+                    #[cfg(unix)]
+                    (file, true)
                 };
                 self.pending = Some(PendingWrite {
                     file,

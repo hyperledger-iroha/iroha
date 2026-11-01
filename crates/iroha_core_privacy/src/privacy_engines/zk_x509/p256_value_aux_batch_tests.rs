@@ -327,7 +327,7 @@ fn full_width_selected_reference(
 #[ignore = "optimized native replay cost comparison; full source construction and all value columns"]
 fn value_auxiliary_compact_projection_cost_diagnostic() {
     assert!(
-        !cfg!(debug_assertions),
+        !std::hint::black_box(cfg!(debug_assertions)),
         "run the replay diagnostic in release mode"
     );
     let mut base = p256_main_base_source_fixture_for_test_v1().unwrap();

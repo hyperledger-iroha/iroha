@@ -13,7 +13,7 @@ fn borrowed_fixed_bound_replay_matches_all_columns_and_counts_actual_constructio
         let witnesses = witnesses(&schedule);
         let fixed = ZkX509ShaBatchFixedProviderV1::new_v1(schedule.shape()).unwrap();
         let payload = fixed.allocated_heap_bytes_v1();
-        for segment in 0..ZK_X509_SHA_SEGMENT_COUNT_V1 {
+        for (segment, &physical_calls) in ZK_X509_SHA_PHYSICAL_CALL_COUNTS_V1.iter().enumerate() {
             let mut source =
                 ZkX509ShaBatchSegmentBaseSourceV1::new_v1(&schedule, &witnesses, segment).unwrap();
             let mut expected = PrivateTableV1::new(
@@ -34,10 +34,7 @@ fn borrowed_fixed_bound_replay_matches_all_columns_and_counts_actual_constructio
             });
             result.unwrap();
             assert_eq!(rows, ZK_X509_SHA_SEGMENT_ROWS_V1);
-            assert_eq!(
-                fresh_builds,
-                4 * ZK_X509_SHA_PHYSICAL_CALL_COUNTS_V1[segment]
-            );
+            assert_eq!(fresh_builds, 4 * physical_calls);
             let bound = source.bind_v1(&credential_binding(0x63)).unwrap();
             for first in (0..ZK_X509_SHA_BATCH_BASE_WIDTH_V1).step_by(8) {
                 let count = (ZK_X509_SHA_BATCH_BASE_WIDTH_V1 - first).min(8);
@@ -56,10 +53,7 @@ fn borrowed_fixed_bound_replay_matches_all_columns_and_counts_actual_constructio
                     )
                 });
                 result.unwrap();
-                assert_eq!(
-                    borrowed_builds,
-                    2 * ZK_X509_SHA_PHYSICAL_CALL_COUNTS_V1[segment]
-                );
+                assert_eq!(borrowed_builds, 2 * physical_calls);
                 for (offset, column) in actual.iter().enumerate() {
                     assert!(
                         column == &expected[first + offset],

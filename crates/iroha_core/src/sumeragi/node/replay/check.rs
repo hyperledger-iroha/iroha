@@ -160,21 +160,23 @@ impl ReplayDivergence {
             .iter()
             .map(|difference| difference.component)
             .collect();
-        match differences.into_iter().next() {
-            Some(first) => Self {
+        differences.into_iter().next().map_or_else(
+            || {
+                Self::whole(
+                    height,
+                    certified.to_string(),
+                    produced.result().map_or_else(
+                        |error| format!("unencodable result: {error}"),
+                        |result| result.to_string(),
+                    ),
+                )
+            },
+            |first| Self {
                 height,
                 first,
                 components,
             },
-            None => Self::whole(
-                height,
-                certified.to_string(),
-                produced.result().map_or_else(
-                    |error| format!("unencodable result: {error}"),
-                    |result| result.to_string(),
-                ),
-            ),
-        }
+        )
     }
 
     /// A certified block this build rejects.
@@ -623,7 +625,7 @@ pub fn result_differences(
         ResultComponent::TransactionInputs,
         &before.transaction_input_commitment,
         &after.transaction_input_commitment,
-        merkle,
+        |commitment| merkle(commitment.as_ref()),
     );
     compare(
         &mut differences,
@@ -643,14 +645,14 @@ pub fn result_differences(
         ResultComponent::TransactionOutputs,
         &before.transaction_output_commitment,
         &after.transaction_output_commitment,
-        merkle,
+        |commitment| merkle(commitment.as_ref()),
     );
     compare(
         &mut differences,
         ResultComponent::Events,
         &before.event_commitment,
         &after.event_commitment,
-        merkle,
+        |commitment| merkle(commitment.as_ref()),
     );
     compare(
         &mut differences,
@@ -727,8 +729,8 @@ fn compare<T: PartialEq + ?Sized>(
     }
 }
 
-fn merkle<T>(commitment: &Option<MerkleTreeCommitment<T>>) -> String {
-    commitment.as_ref().map_or_else(
+fn merkle<T>(commitment: Option<&MerkleTreeCommitment<T>>) -> String {
+    commitment.map_or_else(
         || "none".to_owned(),
         |commitment| format!("{} ({} leaves)", commitment.root(), commitment.leaf_count()),
     )

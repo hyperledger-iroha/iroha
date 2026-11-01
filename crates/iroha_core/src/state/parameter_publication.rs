@@ -398,8 +398,16 @@ fn direct_resource(
         }
     }
     match original {
-        E::Allocation(original) => Ok(buffer(original)),
-        E::Retention(ParameterRetentionError::Admission(original)) => Ok(original.into()),
+        E::Allocation(original)
+        | E::Retention(ParameterRetentionError::Custom(CustomParametersAdmissionError::Buffer(
+            PrepaidBufferError::Allocation(original),
+        )))
+        | E::Json(JsonRetentionError::Scratch(original)) => Ok(buffer(original)),
+        E::Retention(
+            ParameterRetentionError::Admission(original)
+            | ParameterRetentionError::Custom(CustomParametersAdmissionError::Admission(original)),
+        )
+        | E::Json(JsonRetentionError::Admission(original)) => Ok(original.into()),
         E::Retention(ParameterRetentionError::Buffer(PrepaidBufferError::Allocation(original))) => {
             Ok(buffer(original))
         }
@@ -408,14 +416,6 @@ fn direct_resource(
         )) => Ok(AllocatorRefusal::try_from(original)
             .expect("matched actual shared allocator failure")
             .into()),
-        E::Retention(ParameterRetentionError::Custom(
-            CustomParametersAdmissionError::Admission(original),
-        )) => Ok(original.into()),
-        E::Retention(ParameterRetentionError::Custom(CustomParametersAdmissionError::Buffer(
-            PrepaidBufferError::Allocation(original),
-        ))) => Ok(buffer(original)),
-        E::Json(JsonRetentionError::Admission(original)) => Ok(original.into()),
-        E::Json(JsonRetentionError::Scratch(original)) => Ok(buffer(original)),
         E::Json(JsonRetentionError::Shared(original)) => {
             Ok(AllocatorRefusal::from(original).into())
         }

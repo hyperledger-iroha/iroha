@@ -165,6 +165,7 @@ fn manifest_submit_rejects_cross_origin_redirect_before_response_output() {
             .body(r#"{"status":"ok"}"#);
     });
     let location = substituted_origin.url("/substituted-pin-register");
+    mock_publication_fee_quote(&origin, &manifest_submit_account());
     let redirect = origin.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(307)

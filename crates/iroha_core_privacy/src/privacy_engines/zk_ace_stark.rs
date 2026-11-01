@@ -1344,7 +1344,7 @@ fn public_output_words(
         .as_chunks::<8>()
         .0
         .iter()
-        .chain(public_inputs.replay_nullifier.as_chunks::<8>().0.iter())
+        .chain(public_inputs.replay_nullifier.as_chunks::<8>().0)
         .enumerate()
     {
         // Canonical digest lanes are independent Goldilocks residues encoded
@@ -3614,7 +3614,7 @@ mod tests {
             .as_chunks::<8>()
             .0
             .iter()
-            .chain(public_inputs.replay_nullifier.as_chunks::<8>().0.iter())
+            .chain(public_inputs.replay_nullifier.as_chunks::<8>().0)
             .map(|chunk| {
                 F::canonical(u64::from_le_bytes(*chunk))
                     .expect("Poseidon squeeze emits canonical Goldilocks residues")
@@ -3697,9 +3697,8 @@ mod tests {
             Ok(u64::MAX)
         }
         fn try_fill_bytes(&mut self, destination: &mut [u8]) -> Result<(), Self::Error> {
-            Ok({
-                destination.fill(0xFF);
-            })
+            destination.fill(0xFF);
+            Ok(())
         }
     }
     impl rand::TryCryptoRng for MaxValueRng {}

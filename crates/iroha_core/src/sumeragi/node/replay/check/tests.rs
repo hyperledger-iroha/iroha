@@ -307,10 +307,9 @@ fn replay_never_starts_below_the_upgrade_checkpoint() {
         let destination = genesis_destination(&chain, &seed);
         destination
             .kura()
-            .set_upgrade_checkpoint(UpgradeCheckpointV1 {
+            .set_upgrade_checkpoint(&UpgradeCheckpointV1 {
                 height: 2,
                 block_hash: chain.kura().get_block_hash(index(2)).unwrap(),
-                signer: None,
             })
             .unwrap();
         let mut replayed = Vec::new();
@@ -329,6 +328,31 @@ fn replay_never_starts_below_the_upgrade_checkpoint() {
             "{error}"
         );
         assert!(replayed.is_empty(), "nothing executes below the checkpoint");
+    });
+}
+
+#[test]
+fn the_upgrade_checkpoint_names_the_block_kura_stores_at_its_height() {
+    run(|| {
+        let (chain, _, _) = fixture();
+        let kura = chain.kura();
+        let stored = kura.get_block_hash(index(2)).unwrap();
+        let other = kura.get_block_hash(index(1)).unwrap();
+        assert!(
+            kura.set_upgrade_checkpoint(&UpgradeCheckpointV1 {
+                height: 2,
+                block_hash: other,
+            })
+            .is_err(),
+            "another chain's checkpoint"
+        );
+        assert_eq!(kura.upgrade_checkpoint(), None);
+        let checkpoint = UpgradeCheckpointV1 {
+            height: 2,
+            block_hash: stored,
+        };
+        kura.set_upgrade_checkpoint(&checkpoint).unwrap();
+        assert_eq!(kura.upgrade_checkpoint(), Some(&checkpoint));
     });
 }
 

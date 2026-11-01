@@ -140,7 +140,7 @@ struct StoredRecord {
 }
 impl StoredRecord {
     fn into_record(self) -> Result<PendingFinalityRecord, Error> {
-        fn pin(stored: StoredPin) -> Result<PendingFinalityPin, Error> {
+        fn pin(stored: &StoredPin) -> Result<PendingFinalityPin, Error> {
             Ok(PendingFinalityPin {
                 identity: stored.identity,
                 checkpoint: SumeragiFinalityCheckpoint::decode_canonical(&stored.checkpoint)?,
@@ -158,13 +158,13 @@ impl StoredRecord {
                     })
                 })
                 .transpose()?,
-            register: self.register.map(pin).transpose()?,
+            register: self.register.as_ref().map(pin).transpose()?,
             terminal: self
                 .terminal
                 .map(|stored| {
                     Ok::<_, Error>(PendingFinalityTerminal {
                         kind: stored.kind,
-                        pin: pin(stored.pin)?,
+                        pin: pin(&stored.pin)?,
                     })
                 })
                 .transpose()?,
@@ -175,6 +175,12 @@ fn encode_record(
     record: &PendingFinalityRecord,
     maximum: usize,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
+    fn pin(value: &PendingFinalityPin) -> Result<StoredPin, Error> {
+        Ok(StoredPin {
+            identity: value.identity,
+            checkpoint: value.checkpoint.encode_canonical()?,
+        })
+    }
     let mut checkpoint_bytes = 0_usize;
     for checkpoint in record
         .prefix
@@ -193,12 +199,6 @@ fn encode_record(
         if checkpoint_bytes > maximum {
             return Err(Error::Capacity);
         }
-    }
-    fn pin(value: &PendingFinalityPin) -> Result<StoredPin, Error> {
-        Ok(StoredPin {
-            identity: value.identity,
-            checkpoint: value.checkpoint.encode_canonical()?,
-        })
     }
     let stored = StoredRecord {
         prefix: record
@@ -301,7 +301,7 @@ impl FilePrivateSettlementFinality {
     }
 
     pub(crate) fn bind(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         workflow: WorkflowId,
         request: Digest32,
         verifier: &SumeragiFinalityVerifier,
@@ -310,7 +310,7 @@ impl FilePrivateSettlementFinality {
             return Err(Error::Binding);
         }
         Ok(BoundPrivateSettlementFinality {
-            owner: self.clone(),
+            owner: self,
             binding: Binding {
                 workflow: *workflow.as_bytes(),
                 request,

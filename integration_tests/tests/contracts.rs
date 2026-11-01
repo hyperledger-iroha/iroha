@@ -849,7 +849,7 @@ seiyaku DynamicAccessCounter { import permission "CanEnactGovernance" as CanEnac
     artifact
 }
 fn typed_core_query_pager_artifact() -> Vec<u8> {
-    let source = r#"
+    let source = r"
 seiyaku TypedCoreQueryPager {
   view fn accounts(int offset, int limit) authorize(anyone) -> QueryPage<AccountView> {
     ledger::query::accounts(offset: offset, limit: limit)
@@ -871,7 +871,7 @@ seiyaku TypedCoreQueryPager {
     ledger::query::nfts(offset: offset, limit: limit)
   }
 }
-"#;
+";
     kotodama_lang::compiler::Compiler::new()
         .compile_source(source)
         .expect("compile typed core-query pager program")
@@ -1170,7 +1170,7 @@ async fn verify_contract_finality_everywhere(
         })
         .collect();
     let selected =
-        SumeragiFinalityVerifier::new(&genesis, &network.chain_id().to_string(), validators)?;
+        SumeragiFinalityVerifier::new(&genesis, network.chain_id().as_ref(), validators)?;
     let deadline = Instant::now() + network.sync_timeout();
     let mut common = None;
     for peer in network.peers() {
@@ -1342,7 +1342,7 @@ async fn wait_for_tx_applied(
                                 if let Some(block_height) = pipeline_status_block_height(&payload) {
                                     return Ok(block_height);
                                 }
-                                last_kind = "Applied without block_height".to_owned();
+                                "Applied without block_height".clone_into(&mut last_kind);
                             }
                             "Rejected" => {
                                 return Err(eyre!(
@@ -1385,7 +1385,7 @@ async fn wait_for_tx_applied(
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
-pub(super) fn deploy_contract_locally_signed(
+pub fn deploy_contract_locally_signed(
     client: &iroha::blocking::Client,
     artifact: &[u8],
     contract_alias: iroha_data_model::smart_contract::ContractAlias,
@@ -1569,7 +1569,7 @@ async fn contract_state_json_value(
 ) -> Result<norito::json::Value> {
     let mut url = torii_url.join("v1/contracts/state")?;
     url.query_pairs_mut()
-        .append_pair("contract_address", &contract_address.to_string())
+        .append_pair("contract_address", contract_address.as_ref())
         .append_pair("path", path)
         .append_pair("decode", "json");
     let response = http
@@ -1642,6 +1642,10 @@ async fn wait_for_contract_applied_height(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "The snapshot mirrors each lifecycle flag of the Torii contract JSON one-to-one."
+)]
 struct ContractLifecycleSnapshot {
     version: u64,
     active: bool,
@@ -2449,6 +2453,65 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
 }
 #[tokio::test]
 async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<()> {
+    const CURSOR_PAGE_LIMIT: i64 = 3;
+    const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 8] = [
+        (
+            "negative offset",
+            "-1",
+            "1",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "negative limit",
+            "0",
+            "-1",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+        (
+            "offset-plus-limit overflow",
+            "9223372036854775807",
+            "1",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "zero limit",
+            "0",
+            "0",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "limit above the maximum",
+            "0",
+            "65",
+            "DecodeError",
+            "instruction decode error",
+        ),
+        (
+            "offset above the signed host range",
+            "9223372036854775808",
+            "1",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+        (
+            "offset above the unsigned host range",
+            "18446744073709551616",
+            "1",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+        (
+            "limit above the unsigned host range",
+            "0",
+            "18446744073709551616",
+            "AssertionFailed",
+            "assertion failed (constraint violation)",
+        ),
+    ];
     let seeded_accounts = (0..6)
         .map(|index| {
             KeyPair::try_from_seed(
@@ -2653,7 +2716,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             expected_ids.len()
         );
     }
-    const CURSOR_PAGE_LIMIT: i64 = 3;
     let mut peer_results = Vec::with_capacity(network.peers().len());
     for peer in network.peers() {
         let mut family_pages = Vec::with_capacity(families.len());
@@ -2754,64 +2816,6 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         );
         assert_typed_query_projection(all_page, view_name, expected_fields)?;
     }
-    const INVALID_PAGINATION_BOUNDS: [(&str, &str, &str, &str, &str); 8] = [
-        (
-            "negative offset",
-            "-1",
-            "1",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "negative limit",
-            "0",
-            "-1",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-        (
-            "offset-plus-limit overflow",
-            "9223372036854775807",
-            "1",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "zero limit",
-            "0",
-            "0",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "limit above the maximum",
-            "0",
-            "65",
-            "DecodeError",
-            "instruction decode error",
-        ),
-        (
-            "offset above the signed host range",
-            "9223372036854775808",
-            "1",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-        (
-            "offset above the unsigned host range",
-            "18446744073709551616",
-            "1",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-        (
-            "limit above the unsigned host range",
-            "0",
-            "18446744073709551616",
-            "AssertionFailed",
-            "assertion failed (constraint violation)",
-        ),
-    ];
     for (entrypoint, _, _, _) in &families {
         let entrypoint = *entrypoint;
         for &(bound_class, offset, limit, expected_trap, expected_message) in

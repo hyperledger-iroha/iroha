@@ -552,7 +552,7 @@ fn stream_rows(
                 indices[offset] = index;
                 stripe.fill_row(start + offset, &mut row)?;
                 for (&value, word) in row.iter().zip(packed.as_chunks_mut::<8>().0.iter_mut()) {
-                    word.copy_from_slice(&value.to_le_bytes());
+                    *word = value.to_le_bytes();
                 }
                 if let Ok(position) = queries.binary_search(&index) {
                     selected[position * WIDTH..(position + 1) * WIDTH].copy_from_slice(&row);
@@ -590,7 +590,7 @@ fn stream_rows(
     let mut rows = Vec::new();
     rows.try_reserve_exact(queries.len())
         .map_err(|_| invalid("DEEP final row opening allocation failed"))?;
-    for (&index, values) in queries.iter().zip(selected.as_chunks::<WIDTH>().0.iter()) {
+    for (&index, values) in queries.iter().zip(selected.as_chunks::<WIDTH>().0) {
         rows.push(RowOpening {
             index: u32::try_from(index)
                 .map_err(|_| invalid("DEEP row opening index exceeds u32"))?,
@@ -633,7 +633,7 @@ pub(super) fn open_cached_rows(
                 if index % replay_stripes() == stripe.stripe_index() {
                     stripe.fill_row(index / replay_stripes(), &mut row)?;
                     for (&value, word) in row.iter().zip(target.as_chunks_mut::<8>().0.iter_mut()) {
-                        word.copy_from_slice(&value.to_le_bytes());
+                        *word = value.to_le_bytes();
                     }
                 }
             }

@@ -1433,7 +1433,7 @@ impl History {
             return Err(invalid("dispatch inventory changed during inspection"));
         }
         if root_read.is_none() {
-            revalidate_directory_in_tree(root, tree.as_deref_mut())?;
+            revalidate_directory_in_tree(root, tree)?;
         }
         Ok(())
     }

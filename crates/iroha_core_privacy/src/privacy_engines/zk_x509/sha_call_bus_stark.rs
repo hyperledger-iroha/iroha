@@ -518,10 +518,12 @@ impl ZkX509ShaCallWitnessV1 {
         zeroize::Zeroize::zeroize(self.message.as_mut_slice());
         zeroize::Zeroize::zeroize(&mut self.digest);
     }
-    /// Overwrite the exact private preimage and its derived digest.
+    /// Overwrite the complete private preimage allocation and its derived digest.
     pub(crate) fn zeroize_private_v1(&mut self) {
         self.zeroize_private_cells_v1();
-        self.message.clear();
+        // A shortened or emptied message can retain private bytes past len.
+        // Vec zeroization also clears that spare capacity before releasing it.
+        zeroize::Zeroize::zeroize(&mut self.message);
     }
     #[cfg(test)]
     pub(crate) fn private_is_zeroized_v1(&self) -> bool {
@@ -4334,22 +4336,28 @@ pub fn evaluate_sha_call_terminal_constraints_v1(
     core::array::from_fn(|lane| source[lane].sub(sha[lane]))
 }
 /// Maximum typed events in the Projection-to-SHA message/digest equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_PROJECTION_EVENT_COUNT_V1: u64 = 7 * (512 + 1 + 8);
 /// Conservative numerator covering both SHA call and Projection-to-SHA lists.
 ///
 /// For fixed unequal lists the separate four-lane escape terms are bounded by
 /// `(10088/d)^4 + (3647/d)^4 <= (13735/d)^4`. This arithmetic does not establish
 /// the adaptive joint-protocol or Fiat-Shamir reduction.
+#[cfg(test)]
 pub const ZK_X509_SHA_CALL_BUS_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_CALL_EVENT_COUNT_V1 as u64 + ZK_X509_SHA_PROJECTION_EVENT_COUNT_V1;
 /// Exact algebraic collision-bound numerator for each word-memory equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_WORD_MEMORY_COLLISION_NUMERATOR_V1: u64 =
     ZK_X509_SHA_MAX_MEMORY_ROWS_V1 as u64;
 /// Exact algebraic collision-bound numerator for the three-lane base-fold bus.
+#[cfg(test)]
 pub const ZK_X509_SHA_BASE_FOLD_COLLISION_NUMERATOR_V1: u64 = 440;
 /// Independent challenge lanes used by each SHA word/call equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_COLLISION_LANES_V1: u8 = 4;
 /// Independent challenge lanes used by the SHA base-fold equality.
+#[cfg(test)]
 pub const ZK_X509_SHA_BASE_FOLD_COLLISION_LANES_V1: u8 = 3;
 /// Return conditional fixed-list collision arithmetic in diagnostic form.
 ///
@@ -4485,7 +4493,17 @@ mod tests {
             let (result, observations) = inspection::observe_v1(|| {
                 std::panic::catch_unwind(|| -> Result<(), ZkX509ShaCallBusStarkErrorV1> {
                     let scratch = zeroize::Zeroizing::new(boundary());
-                    assert!(format!("{scratch:?}").contains("redacted"));
+                    // The clearing wrapper conceals its inner Debug entirely;
+                    // different private products must have the same diagnostic.
+                    let mut other = zeroize::Zeroizing::new(boundary());
+                    other.source_start_products = [F(41); 4];
+                    other.digest_start_products = [F(43); 4];
+                    other.source_products = [F(47); 4];
+                    other.digest_products = [F(53); 4];
+                    assert_eq!(format!("{scratch:?}"), format!("{other:?}"));
+                    // Check the underlying owner's redaction independently of
+                    // the wrapper's dependency-owned diagnostic representation.
+                    assert!(format!("{:?}", &*scratch).contains("redacted"));
                     let mut products =
                         PrivateTableV1::new(Vec::with_capacity(1), clear_ca_boundary_products_v1);
                     products.push(*scratch);
@@ -4536,6 +4554,38 @@ mod tests {
         assert_eq!(witness.digest, [0; 32]);
         witness.zeroize_private_v1();
         assert!(witness.private_is_zeroized_v1());
+    }
+
+    #[test]
+    fn retained_sha_witness_erasure_clears_truncated_message_allocation() {
+        for retained_len in [0, 1, 37, 64] {
+            let mut witness = ZkX509ShaCallWitnessV1 {
+                role: ZkX509ShaCallRoleV1::CertificateTbs(0),
+                message: vec![0x5a; 64],
+                digest: [0x73; 32],
+            };
+            // Initialize even allocator-provided spare capacity before truncation,
+            // so the later inspection never reads uninitialized or freed bytes.
+            for byte in witness.message.spare_capacity_mut() {
+                byte.write(0x5a);
+            }
+            let capacity = witness.message.capacity();
+            witness.message.truncate(retained_len);
+            witness.zeroize_private_v1();
+            assert!(witness.private_is_zeroized_v1());
+            assert_eq!(witness.message.capacity(), capacity);
+            // SAFETY: every byte in this still-owned allocation was initialized
+            // above, and cleanup retains the allocation without reallocating it.
+            #[allow(unsafe_code)]
+            let allocation =
+                unsafe { core::slice::from_raw_parts(witness.message.as_ptr(), capacity) };
+            assert!(
+                allocation.iter().all(|byte| *byte == 0),
+                "private message survives cleanup after truncation to {retained_len}"
+            );
+            witness.zeroize_private_v1();
+            assert!(witness.private_is_zeroized_v1());
+        }
     }
 
     use super::*;
@@ -4728,15 +4778,19 @@ mod tests {
         };
         // These component fixtures keep private fields synthetic while using
         // the actual canonical public frame bytes required by the SHA AIR.
-        let raw_len = message
-            .len()
-            .saturating_sub(sha_rfc_framed_field_offset_v1(manifest.role).unwrap_or(0));
+        let raw_len = u16::try_from(
+            message
+                .len()
+                .saturating_sub(sha_rfc_framed_field_offset_v1(manifest.role).unwrap_or(0)),
+        )
+        .expect("fixture raw length fits u16")
+        .to_be_bytes();
         for (offset, value) in message.iter_mut().enumerate() {
             if let Some(expected) = sha_frame_byte_v1(manifest, offset) {
                 *value = match expected {
                     ShaFrameByteV1::Constant(value) => value,
-                    ShaFrameByteV1::RawLengthHigh => (raw_len >> 8) as u8,
-                    ShaFrameByteV1::RawLengthLow => raw_len as u8,
+                    ShaFrameByteV1::RawLengthHigh => raw_len[0],
+                    ShaFrameByteV1::RawLengthLow => raw_len[1],
                 };
             }
         }
@@ -5662,10 +5716,17 @@ mod tests {
                 );
                 let last = call.logical_rows() - 1;
                 let last_row = call.row(last).expect("last call row");
+                let mut next_row = last_row;
+                // The standalone call ends the original word/RFC buses, but
+                // the projection bus continues through physical padding. Its
+                // successor carries the actual post-call product, including
+                // the exact-length event on this final row, not a self-loop.
+                next_row.aux[projection_bus::AUX_START_V1..]
+                    .copy_from_slice(&call.segment_product_state.projection_products);
                 assert!(
                     evaluate_zk_x509_sha_batch_residues_v1(
                         &last_row,
-                        &last_row,
+                        &next_row,
                         word_challenges(),
                         challenges(),
                         &rfc_challenges(),
@@ -5678,6 +5739,27 @@ mod tests {
                     "disclosures {disclosed_attributes}, call {} terminal",
                     manifest.call
                 );
+                for lane in 0..ZK_X509_SHA_BUS_LANES_V1 {
+                    let mut changed = next_row;
+                    let column = projection_bus::AUX_START_V1 + lane;
+                    changed.aux[column] = changed.aux[column].add(F::ONE);
+                    assert!(
+                        evaluate_zk_x509_sha_batch_residues_v1(
+                            &last_row,
+                            &changed,
+                            word_challenges(),
+                            challenges(),
+                            &rfc_challenges(),
+                            standalone_segment_terminal(&call),
+                            &ca_call_boundaries_for_calls(&[&call]),
+                        )
+                        .expect("mutated terminal constraints")
+                        .iter()
+                        .any(|residue| *residue != F::ZERO),
+                        "disclosures {disclosed_attributes}, call {} projection lane {lane}",
+                        manifest.call
+                    );
+                }
             }
             assert_eq!(
                 observed_logical_rows, ZK_X509_SHA_MAX_LOGICAL_ROWS_V1,
@@ -6844,15 +6926,15 @@ mod tests {
         assert!(separate_numerators <= 13_735_u128.pow(4));
         let (bus_union_bits, call_bits, total_bits) = algebraic_security_bits_v1();
         assert!(
-            (bus_union_bits - 173.68803543055358).abs() < 1.0e-12,
+            (bus_union_bits - 173.688_035_430_553_58).abs() < 1.0e-12,
             "{bus_union_bits}"
         );
         assert!(
-            (call_bits - 201.0177228388035).abs() < 1.0e-12,
+            (call_bits - 201.017_722_838_803_5).abs() < 1.0e-12,
             "{call_bits}"
         );
         assert!(
-            (total_bits - 165.6504198933986).abs() < 1.0e-12,
+            (total_bits - 165.650_419_893_398_6).abs() < 1.0e-12,
             "{total_bits}"
         );
         assert!(bus_union_bits > 173.688, "{bus_union_bits}");

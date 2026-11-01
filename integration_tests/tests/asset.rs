@@ -1096,7 +1096,7 @@ mod register {
         ))
     }
     pub fn account(id: AccountId, _domain: DomainId) -> Register<Account> {
-        Register::account(Account::new(id.clone()))
+        Register::account(Account::new(id))
     }
 }
 #[cfg(test)]

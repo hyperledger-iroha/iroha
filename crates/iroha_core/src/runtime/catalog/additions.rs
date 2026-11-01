@@ -83,7 +83,19 @@ pub type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), 
 /// TODO(`specs/live_runtime_upgrades.md` §5.5): before the first addition of a World field,
 /// snapshot writers must omit, and readers default, every field the snapshot's selection does not
 /// install, so a previous release keeps reading this release's snapshots until activation.
-pub const ADDITIONS: &[Addition] = &[];
+pub const ADDITIONS: &[Addition] = &[ENDORSED_RUNTIME_UPGRADE_PROPOSAL];
+
+/// Runtime-upgrade proposals that carry the trusted release signers' endorsements
+/// (`specs/runtime_upgrades.md`, "Provenance policy"). The baseline
+/// `ProposeRuntimeUpgradeProposal` keeps its frozen layout and semantics, which check no
+/// provenance; a root that activates this addition can then restrict the baseline proposal so
+/// every scheduled change set carries endorsements.
+pub const ENDORSED_RUNTIME_UPGRADE_PROPOSAL: Addition = Addition {
+    module: "iroha.runtime.endorsed_change_set_proposal.v1",
+    instructions: &["iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"],
+    rebinds: &[],
+    storage: &[],
+};
 
 /// Additions of a hypothetical later release, claiming compiled items the real baseline holds.
 #[cfg(test)]

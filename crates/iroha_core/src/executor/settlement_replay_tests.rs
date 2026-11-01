@@ -622,7 +622,6 @@ fn fee_update_config() -> TestChainConfig {
 
 #[test]
 fn committed_fee_update_uses_predecessor_for_entire_block_and_survives_replay() {
-    use crate::state::StateReadOnly as _;
     use iroha_data_model::{isi::SetParameter, parameter::Parameter};
     let mut chain = CertifiedTestChain::start(fee_update_config()).unwrap();
     let before = chain
@@ -741,7 +740,6 @@ fn committed_fee_update_uses_predecessor_for_entire_block_and_survives_replay() 
 
 #[test]
 fn paid_root_fee_identity_updates_are_rejected_without_replacing_committed_custody() {
-    use crate::state::StateReadOnly as _;
     use iroha_data_model::{isi::SetParameter, parameter::Parameter};
     for change_currency in [true, false] {
         let mut chain = CertifiedTestChain::start(fee_update_config()).unwrap();

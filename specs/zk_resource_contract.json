@@ -3999,7 +3999,7 @@
         {
           "stage": "follower",
           "path": "crates/iroha_core/src/smartcontracts/isi/privacy.rs",
-          "contains": "if age > ZK_X509_MAX_CRL_AGE_SECONDS_V1 {"
+          "contains": "&& age > ZK_X509_MAX_CRL_AGE_SECONDS_V1"
         },
         {
           "stage": "follower",
@@ -13027,9 +13027,9 @@
         "candidates": {
           "source": "specs/fhe_bgv_cost_summary.json",
           "values": {
-            "bgv.f257.n14.q6x50.p2x60": 1572940,
-            "bgv.f257.n16.q22x50.p2x60": 23068844,
-            "bgv.f257.n16.q32x50.p2x60": 33554668
+            "bgv.f257.n14.q6x50.p2x60": 1228876,
+            "bgv.f257.n16.q22x50.p2x60": 18022572,
+            "bgv.f257.n16.q32x50.p2x60": 26214636
           }
         }
       },
@@ -20915,7 +20915,7 @@
               "PUSH_STORAGE_LIMITS"
             ],
             "exprs": {
-              "MAX_BACKOFF": "Duration::from_secs(60 * 60)",
+              "MAX_BACKOFF": "Duration::from_hours(1)",
               "MAX_PUSH_DEVICES": "4 * 1024",
               "MAX_PUSH_QUEUE_JOBS": "4 * MAX_PUSH_DEVICES",
               "MAX_PUSH_DEVICE_RECORD_BYTES": "64 * 1024",
@@ -22146,8 +22146,8 @@
               "default_lane_epoch_capacity"
             ],
             "exprs": {
-              "default_capacity": "NonZeroUsize::new(Self::DEFAULT_CAPACITY).map_or(NonZeroUsize::MIN, |capacity| capacity)",
-              "default_lane_epoch_capacity": "NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY) .map_or(NonZeroUsize::MIN, |capacity| capacity)"
+              "default_capacity": "NonZeroUsize::new(Self::DEFAULT_CAPACITY).unwrap_or(NonZeroUsize::MIN)",
+              "default_lane_epoch_capacity": "NonZeroUsize::new(Self::DEFAULT_LANE_EPOCH_CAPACITY).unwrap_or(NonZeroUsize::MIN)"
             }
           },
           {
@@ -25522,7 +25522,7 @@
             "exprs": {
               "MAX_LEAD": "16",
               "MAX_ADVANCE": "1_024",
-              "MAX_COVERAGE_AGE": "Duration::from_secs(30 * 60)",
+              "MAX_COVERAGE_AGE": "Duration::from_mins(30)",
               "SCRUB_CHUNK": "128"
             },
             "path": "crates/iroha_core/src/sumeragi/finality/retained.rs",
@@ -26157,12 +26157,6 @@
           "reason": "Minimums. A decoder that needs at least so many bytes before it reads a header or a magic number; a list that needs at least two or three entries (inputs, signers, endpoints, lineage steps, tally options, carriers); a configured value that must reach a least size. A minimum refuses too little: it is no byte, count or work ceiling. Where the minimum is the start of a tested range (`(2..=MAX).contains(..)`) or a sum of fixed widths (`37 + 16 + 2`), the whole comparison is recorded; a named ceiling at the end of such a range has its own entry (one is the listed rs16.max_chunk_count, read back from a stored certificate).",
           "files": [
             {
-              "path": "crates/iroha_core/src/fastpq/mod.rs",
-              "sites": {
-                "bytes.len() >= 8": 1
-              }
-            },
-            {
               "path": "crates/iroha_core/src/kura.rs",
               "sites": {
                 "stage.marker.count < 2": 1
@@ -26643,8 +26637,7 @@
             {
               "path": "crates/iroha_torii/src/sorafs/pop_api.rs",
               "sites": {
-                "self.worker_interval > Duration::from_secs(60 * 60)": 1,
-                "self.max_finalized_time_skew > Duration::from_secs(5 * 60)": 1
+                "self.max_finalized_time_skew > Duration::from_mins(5)": 1
               }
             },
             {
@@ -27337,7 +27330,7 @@
             {
               "path": "crates/iroha_torii/src/contract_sources.rs",
               "sites": {
-                "&code_hash.chars().take(8)": 1,
+                "code_hash.chars().take(8)": 1,
                 "..code_hash.len().min(8)": 1
               }
             },
@@ -28005,7 +27998,7 @@
           ]
         },
         {
-          "reason": "Shape ceilings in the node, each of one record, file or loop: nesting depths (the private-instruction review, a recovery record, the fee-reward head tree); search and index ceilings in Kura's own files; ceilings on the configuration, paths and output of the read-only evidence reader and of the fee-reward evidence tool, and the child directory name of the KAGEMUSHA issuer-journal initialization tool; snapshot field sizes; manifest and outcome shapes of a game session; request shapes of the retail-fee service; a ticket, a signer and a chain identifier; the execution results and outputs a driver retains; and the rejection-tail and self-claim instruction counts. Each is compared where it is written. None is a transaction, block, frame or generic proof byte ceiling.",
+          "reason": "Shape ceilings in the node, each of one record, file or loop: nesting depths (the private-instruction review, a recovery record, the fee-reward head tree); search and index ceilings in Kura's own files; ceilings on the configuration, paths and output of the read-only evidence reader (its Unix and Windows store readers) and of the fee-reward evidence tool, and the child directory name of the KAGEMUSHA issuer-journal initialization tool; snapshot field sizes; manifest and outcome shapes of a game session; request shapes of the retail-fee service; a ticket, a signer and a chain identifier; the execution results and outputs a driver retains; and the rejection-tail and self-claim instruction counts. Each is compared where it is written. None is a transaction, block, frame or generic proof byte ceiling.",
           "files": [
             {
               "path": "crates/iroha_core/src/bin/validation_fee_rewards_evidence_verify.rs",
@@ -28057,6 +28050,14 @@
                 "self.max_decode_allocation_bytes <= 512 * 1024 * 1024": 1,
                 "self.max_output_bytes <= 256 * 1024 * 1024": 1,
                 "self.max_store_data_bytes <= 2 * 1024 * 1024 * 1024": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/kura/read_only_evidence_windows.rs",
+              "sites": {
+                "components <= 63": 1,
+                "length <= 32 * 1024 * 1024": 1,
+                "store.as_os_str().encode_wide().count() <= 4096": 1
               }
             },
             {
@@ -29202,15 +29203,9 @@
               "sites": {
                 "text.len() > 255": 1
               }
-            },
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
-              "sites": {
-                "entrypoint.len() > 255": 1
-              }
             }
           ],
-          "reason": "Closed Action-frame scanner and bounded trigger-source producer field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1; the producer refuses unsupported sources without replacing invocation/schema authentication. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
+          "reason": "Closed Action-frame scanner field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
         },
         {
           "files": [
@@ -29242,26 +29237,9 @@
               "sites": {
                 "text.len() > 20": 1
               }
-            },
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
-              "sites": {
-                "raw.len() > 20": 1
-              }
             }
           ],
-          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner and producer additionally reject non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
-              "sites": {
-                "entries.len() > 3": 1
-              }
-            }
-          ],
-          "reason": "The bounded trigger-source producer admits only its audited registration metadata grammar: the paired u64 registration fields and the fixed canonical runtime-consent digest. Three is that closed field set's cardinality, not the general trigger metadata quota. Unknown fields still refuse this source path; invocation, scope authorization and lifecycle coverage remain separate."
+          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner additionally rejects non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
         },
         {
           "files": [

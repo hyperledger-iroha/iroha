@@ -2306,7 +2306,7 @@ mod tests {
             .expect("private outside file");
         fs::hard_link(
             &outside,
-            &directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1),
+            directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1),
         )
         .expect("checkpoint hard link");
         assert!(matches!(
@@ -2410,7 +2410,7 @@ mod tests {
             .commit(&second_checkpoint, Some(first))
             .expect("replace existing PoTR checkpoint");
         assert_eq!(
-            fs::read(&directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1)).unwrap(),
+            fs::read(directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1)).unwrap(),
             expected_frame
         );
         assert_eq!(
@@ -2432,7 +2432,7 @@ mod tests {
         fs::write(&outside, b"outside").expect("outside file");
         symlink(
             &outside,
-            &symlink_directory
+            symlink_directory
                 .path()
                 .join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1),
         )
@@ -2499,7 +2499,7 @@ mod tests {
         .unwrap();
         let checkpoint = empty_checkpoint(1);
         store.commit(&checkpoint, None).unwrap();
-        let bytes = fs::read(&directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1)).unwrap();
+        let bytes = fs::read(directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1)).unwrap();
         assert_eq!(store.load(8).unwrap().0, Some(checkpoint.clone()));
         assert_eq!(
             norito::decode_from_bytes::<PotrTrackerCheckpointV1>(&bytes).unwrap(),
@@ -2517,7 +2517,7 @@ mod tests {
             Err(norito::Error::SchemaMismatch)
         ));
         fs::write(
-            &directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1),
+            directory.path().join(POTR_TRACKER_CHECKPOINT_FILE_NAME_V1),
             &foreign,
         )
         .unwrap();

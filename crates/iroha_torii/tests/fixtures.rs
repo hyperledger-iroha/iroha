@@ -106,7 +106,7 @@ pub fn commit_genesis_fixture(
     signer: &KeyPair,
     instructions: Vec<iroha_data_model::prelude::InstructionBox>,
     validator_keys: Option<Vec<KeyPair>>,
-    time_source: iroha_primitives::time::TimeSource,
+    time_source: &iroha_primitives::time::TimeSource,
 ) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
     let time_ms =
         u64::try_from(time_source.get_unix_time().as_millis()).expect("fixture time fits");
@@ -407,6 +407,7 @@ pub fn operator_signed_request(
     mut request: Request<Body>,
     body_bytes: &[u8],
 ) -> Request<Body> {
+    const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
     use std::time::{SystemTime, UNIX_EPOCH};
     let ts_ms: u64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -418,7 +419,6 @@ pub fn operator_signed_request(
     let mut nonce_bytes = [0_u8; 12];
     nonce_bytes[..8].copy_from_slice(&nonce_counter.to_le_bytes());
     let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
-    const DOMAIN: &[u8] = b"iroha.operator.http-request.network.v1\0";
     let canonical_request =
         iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes)
             .expect("canonical operator fixture is within V1 limits");
@@ -529,5 +529,4 @@ pub fn app_signed_request(
     request
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

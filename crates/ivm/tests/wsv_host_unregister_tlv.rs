@@ -55,7 +55,7 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
 #[test]
-fn unregister_flow_with_opaque_asset_definition_dependencies() {
+fn unregister_flow_with_domain_owned_asset_definition_dependencies() {
     let alice_domain: DomainId =
         iroha_model_base::domain::DomainId::try_new("domain", "universal").unwrap();
     let bob_domain: DomainId =
@@ -137,15 +137,15 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_mint = assemble_syscalls(&[syscalls::SYSCALL_MINT_ASSET as u8]);
     vm.load_program(&prog_mint).unwrap();
     vm.run().expect("mint asset");
-    // Opaque canonical asset definition ids do not carry a domain projection,
-    // so the domain can be unregistered even while the asset definition and its
-    // balances still exist.
+    // The canonical asset definition id is opaque, but registration recorded
+    // `wonder` as its owning domain. That explicit record pins the domain while
+    // the definition exists.
     let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
     vm.memory.preload_input(0, &dom).expect("preload input");
     vm.set_register(10, Memory::INPUT_START);
     let prog_udom = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_DOMAIN as u8]);
     vm.load_program(&prog_udom).unwrap();
-    vm.run().expect("unregister opaque domain");
+    assert!(matches!(vm.run(), Err(ivm::VMError::PermissionDenied)));
     // Attempt to unregister asset def -> should fail (balances exist)
     let ad = make_asset_definition_norito_tlv(&rose);
     vm.memory.preload_input(0, &ad).expect("preload input");
@@ -184,4 +184,10 @@ fn unregister_flow_with_opaque_asset_definition_dependencies() {
     let prog_uacc = assemble_syscalls(&[syscalls::SYSCALL_UNREGISTER_ACCOUNT as u8]);
     vm.load_program(&prog_uacc).unwrap();
     vm.run().expect("unregister account");
+    // With its owned definition gone, nothing pins the domain any more.
+    let dom = make_tlv(PointerType::DomainId as u16, b"wonder");
+    vm.memory.preload_input(0, &dom).expect("preload input");
+    vm.set_register(10, Memory::INPUT_START);
+    vm.load_program(&prog_udom).unwrap();
+    vm.run().expect("unregister domain without owned records");
 }
