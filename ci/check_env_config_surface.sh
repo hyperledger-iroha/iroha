@@ -20,10 +20,10 @@ python3 scripts/inventory_env_toggles.py --json "${tmp_json}" --md "${tmp_md}"
 
 fail=false
 
-if [[ ! -f "${JSON_PATH}" ]] || ! diff -u -I '^  "generated_at":' -I '^  "root":' "${JSON_PATH}" "${tmp_json}" >/dev/null; then
+if [[ ! -f "${JSON_PATH}" ]] || ! diff -u "${JSON_PATH}" "${tmp_json}" >/dev/null; then
 	echo "env-config guard: env_var_inventory.json is stale. Regenerate with:" >&2
 	echo "  python3 scripts/inventory_env_toggles.py --json ${JSON_PATH} --md ${MD_PATH}" >&2
-	diff -u -I '^  "generated_at":' -I '^  "root":' "${JSON_PATH}" "${tmp_json}" 2>/dev/null || true
+	diff -u "${JSON_PATH}" "${tmp_json}" 2>/dev/null || true
 	fail=true
 else
 	echo "env-config guard: JSON inventory up to date."
@@ -77,7 +77,7 @@ def first_context(entry: dict) -> str:
     if not isinstance(path, dict):
         return ""
     context = path.get("context", "").strip()
-    loc = f"{path.get('path', 'unknown')}:{path.get('line', '?')}"
+    loc = path.get("path", "unknown")
     return f"{loc} — {context}" if context else loc
 
 

@@ -3,8 +3,9 @@
 async fn connect_ws_handshake_fails_when_disabled() {
     use tokio::net::TcpListener;
     // Build disabled config and Torii router
-    let cfg = minimal_actual_config(false);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(false);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");

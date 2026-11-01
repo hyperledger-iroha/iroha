@@ -3,10 +3,8 @@
 use axum::{extract::State, response::IntoResponse};
 use http_body_util::BodyExt as _;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State as CoreState, World, WorldReadOnly as _},
+    state::{World, WorldReadOnly as _},
 };
 use iroha_core_zk::{hash_vk, test_utils::native_confidential_fixture_envelope};
 use iroha_data_model::prelude::*;
@@ -22,7 +20,7 @@ use iroha_primitives::json::Json;
 use iroha_torii::{NoritoJson, ZkVoteGetTallyRequestDto, handle_v1_zk_vote_tally};
 use mv::storage::StorageReadOnly as _;
 use nonzero_ext::nonzero;
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const TALLY_FIXTURE_BACKEND: &str = "pipa-r/pasta";
@@ -52,19 +50,17 @@ fn execute_tally_component(
 }
 #[tokio::test]
 async fn vote_tally_handler_returns_finalized_tally() {
-    // Build minimal state
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let mut core_state = CoreState::new_for_testing(World::new(), kura, query);
-    core_state
-        .edit_zk_for_testing(|zk| zk.pipa_r.enabled = true)
-        .expect("fixture ZK settings install");
-    core_state
-        .edit_zk_for_testing(|zk| zk.verify_timeout = Duration::ZERO)
-        .expect("fixture ZK settings install");
-    let mut state = Arc::new(core_state);
+    // A signed genesis authenticates the crypto policy later registrations need.
+    let mut zk = iroha_core::state::default_zk_config();
+    zk.pipa_r.enabled = true;
+    zk.verify_timeout = Duration::ZERO;
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1);
+    config.zk = Some(zk);
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original tally query genesis");
+    let state = chain.state().clone();
     // Seed one finalized election via ISIs
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let eid = "election-alpha".to_string();
@@ -192,15 +188,6 @@ async fn vote_tally_handler_returns_finalized_tally() {
     block
         .commit_world_overlay_for_testing()
         .expect("seed synthetic tally query fixture");
-    let source = Arc::get_mut(&mut state).expect("unique tally fixture state");
-    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(
-        std::mem::take(&mut source.world),
-        1,
-    );
-    config.zk = Some(source.zk_snapshot());
-    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
-        .expect("original tally query genesis");
-    let state = chain.state().clone();
     let expected_view = state.view();
     let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
     let expected_hash = expected_view

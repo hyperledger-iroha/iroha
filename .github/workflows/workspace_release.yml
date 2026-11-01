@@ -162,7 +162,7 @@ jobs:
           cargo nextest run --profile release-gate --locked --offline
           --no-tests=fail
           -p mv -p iroha_allocation -p iroha_genesis -p iroha_schema_gen
-          -p iroha_sumeragi -p iroha_deploy -p iroha_config -p iroha_torii_shared
+          -p iroha_sumeragi -p iroha_deploy -p iroha_managed_ipc -p iroha_config -p iroha_torii_shared
           -p iroha_wallet -p iroha -p concread -p norito -p iroha_primitives -p iroha_data_model
           -p iroha_crypto -p iroha_p2p -p fastpq_prover -p iroha_core
           -p iroha_core_zk -p iroha_torii -p irohad_lib -p iroha_cli_lib -p iroha_kagami

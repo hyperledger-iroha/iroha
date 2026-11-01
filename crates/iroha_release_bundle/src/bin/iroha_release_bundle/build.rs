@@ -734,7 +734,7 @@ fn main() {
         *inherited.last_mut().unwrap() = "0".repeat(64).into();
         let mut denied_output = Vec::new();
         assert!(run_fixture(inherited.into_iter(), &mut denied_output).is_err());
-        assert!(denied_output.is_empty());
+        assert_eq!(denied_output, Vec::<u8>::new());
         assert_eq!(fixture.calls(), calls);
     }
 
@@ -749,7 +749,7 @@ fn main() {
             let error = run_fixture(fixture.arguments().into_iter(), &mut output)
                 .expect_err("failed native tool must refuse publication");
             assert_eq!(error.exit_code(), expected_status, "{error}");
-            assert!(output.is_empty());
+            assert_eq!(output, Vec::<u8>::new());
             assert_eq!(fixture.calls().lines().count(), expected_calls);
             assert!(
                 !fixture
@@ -777,7 +777,7 @@ fn main() {
         let error = run_fixture(fixture.arguments().into_iter(), &mut output)
             .expect_err("unsuccessful original version probe must refuse");
         assert_eq!(error.exit_code(), 23);
-        assert!(output.is_empty());
+        assert_eq!(output, Vec::<u8>::new());
         assert!(!fixture.root.path().join("home").join("calls").exists());
     }
 
@@ -798,7 +798,7 @@ fn main() {
                 .to_string()
                 .contains("nested original tool transcript differs")
         );
-        assert!(output.is_empty());
+        assert_eq!(output, Vec::<u8>::new());
         assert!(!fixture.root.path().join("home").join("calls").exists());
     }
 
@@ -824,7 +824,7 @@ fn main() {
             let mut direct = tool.command().unwrap();
             direct.arg(argument);
             let expected = capture(direct).unwrap_or_else(|error| panic!("{error}"));
-            assert!(!expected.is_empty());
+            assert_ne!(expected, Vec::<u8>::new());
             tool.require_nested_transcript(argument, &expected, capture)
                 .unwrap_or_else(|error| panic!("{error}"));
             tool.revalidate().unwrap();
@@ -839,7 +839,7 @@ fn main() {
             arguments.extend([OsString::from(option), OsString::from("untrusted")]);
             let mut output = Vec::new();
             assert!(run_fixture(arguments.into_iter(), &mut output).is_err());
-            assert!(output.is_empty());
+            assert_eq!(output, Vec::<u8>::new());
             assert_eq!(
                 std::fs::read_dir(fixture.root.path().join("cargo"))
                     .unwrap()

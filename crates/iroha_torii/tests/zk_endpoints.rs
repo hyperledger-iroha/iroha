@@ -10,7 +10,7 @@ use iroha_core::{
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
 use nonzero_ext::nonzero;
-use std::{collections::BTreeSet, sync::Arc};
+use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 const ACCOUNT_SIGNATORY: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -28,15 +28,19 @@ fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
     )
 }
 fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u64, String) {
-    // Seed the test-only World before signed genesis execution. This exercises
-    // retained readback without substituting for private ballot or tally proof
-    // admission.
-    let mut state = CoreState::new_for_testing(
-        World::default(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    // Seed the retained row after signed genesis: State construction refuses a malformed
+    // election, and the corrupt rows here exercise the read path's own refusal. This
+    // substitutes for neither private ballot nor tally proof admission.
+    let genesis_signer =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xA9; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("deterministic fixture genesis signer");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
+    config.genesis_key = genesis_signer;
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original election query genesis");
+    let state = chain.state().clone();
+    let signed_genesis = chain.genesis();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction
@@ -46,17 +50,7 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     transaction.apply();
     block
         .commit_world_overlay_for_testing()
-        .expect("seed pre-genesis election read fixture");
-    let genesis_signer =
-        iroha_crypto::KeyPair::try_from_seed(vec![0xA9; 32], iroha_crypto::Algorithm::Ed25519)
-            .expect("deterministic fixture genesis signer");
-    let mut config =
-        iroha_core::sumeragi::test_chain::TestChainConfig::new(std::mem::take(&mut state.world), 1);
-    config.genesis_key = genesis_signer;
-    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
-        .expect("original election query genesis");
-    let state = chain.state().clone();
-    let signed_genesis = chain.genesis();
+        .expect("seed election read fixture");
     let view = state.view();
     let height = u64::try_from(view.height()).expect("fixture height fits u64");
     assert_eq!(height, 1);
@@ -76,21 +70,16 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     (state, height, hash)
 }
 fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = CoreState::new_for_testing(World::new(), kura, query);
     let domain_id = DomainId::try_new("zkd", "universal").expect("domain id");
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut transaction = block.transaction();
-    for instruction in [
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1);
+    config.genesis_instructions = vec![
         Register::domain(Domain::new(domain_id)).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
+        Register::account(NewAccount::new(owner)).into(),
         Register::asset_definition(AssetDefinition::numeric(
             asset_definition_id.clone(),
             "rose".to_owned(),
@@ -98,22 +87,10 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
             None,
         ))
         .into(),
-    ] {
-        transaction
-            .world
-            .executor()
-            .clone()
-            .execute_instruction(&mut transaction, &owner, &instruction)
-            .expect("seed instruction must succeed");
-    }
-    transaction.apply();
-    block.transactions.insert_block(
-        BTreeSet::<iroha_crypto::HashOf<iroha_data_model::transaction::TransactionEntrypoint>>::new(
-        ),
-        nonzero!(1_usize),
-    );
-    let _ = block.commit();
-    (Arc::new(state), asset_definition_id.to_string())
+    ];
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original registered-asset genesis");
+    (chain.state().clone(), asset_definition_id.to_string())
 }
 #[tokio::test]
 async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_state() {

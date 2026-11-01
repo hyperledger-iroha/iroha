@@ -34,6 +34,10 @@ GENERATED_HEADER = re.compile(
     re.IGNORECASE,
 )
 CORE_DUMP_NAMES = re.compile(r"^core(?:\.\d+)?$")
+# The only tracked content an allowed_tracked_globs entry may exempt: text
+# evidence inside validation records, never a whole build or cache directory.
+EXEMPTIBLE_EVIDENCE_ROOT = "docs/validation/"
+EXEMPTIBLE_EVIDENCE_SUFFIXES = (".json", ".template", ".txt")
 EXECUTABLE_MAGICS = (
     b"\x7fELF",
     b"\xfe\xed\xfa\xce",
@@ -185,7 +189,7 @@ def _require_regular_file(root: Path, relative: str, label: str) -> None:
         raise ValidationError(f"{label} must be a regular file: {relative}")
 
 
-def _validate_policy(raw: object) -> tuple[list[str], set[str], set[str]]:
+def _validate_policy(raw: object) -> tuple[list[str], set[str], list[str], set[str]]:
     if not isinstance(raw, dict):
         raise ValidationError("policy must be a table")
     _strict_keys(
@@ -193,11 +197,13 @@ def _validate_policy(raw: object) -> tuple[list[str], set[str], set[str]]:
         allowed={
             "forbidden_tracked_globs",
             "allowed_tracked_paths",
+            "allowed_tracked_globs",
             "generated_source_extensions",
         },
         required={
             "forbidden_tracked_globs",
             "allowed_tracked_paths",
+            "allowed_tracked_globs",
             "generated_source_extensions",
         },
         label="policy",
@@ -218,6 +224,20 @@ def _validate_policy(raw: object) -> tuple[list[str], set[str], set[str]]:
             _string_list(raw["allowed_tracked_paths"], "policy.allowed_tracked_paths")
         )
     }
+    allowed_globs = [
+        _normalized_path(value, f"policy.allowed_tracked_globs[{index}]", allow_glob=True)
+        for index, value in enumerate(
+            _string_list(raw["allowed_tracked_globs"], "policy.allowed_tracked_globs")
+        )
+    ]
+    for pattern in allowed_globs:
+        if not pattern.startswith(EXEMPTIBLE_EVIDENCE_ROOT) or not pattern.endswith(
+            EXEMPTIBLE_EVIDENCE_SUFFIXES
+        ):
+            raise ValidationError(
+                "policy.allowed_tracked_globs entries may only exempt text evidence "
+                f"under {EXEMPTIBLE_EVIDENCE_ROOT}: {pattern}"
+            )
     extensions = set(
         _string_list(
             raw["generated_source_extensions"],
@@ -230,7 +250,7 @@ def _validate_policy(raw: object) -> tuple[list[str], set[str], set[str]]:
             raise ValidationError(
                 "policy.generated_source_extensions entries must be file extensions"
             )
-    return forbidden, allowed, extensions
+    return forbidden, allowed, allowed_globs, extensions
 
 
 def _validate_generated_entries(
@@ -388,11 +408,14 @@ def _forbidden_tracked_paths(
     tracked: set[str],
     forbidden: list[str],
     allowed: set[str],
+    allowed_globs: list[str],
 ) -> list[str]:
     violations = {
         path
         for path in tracked
-        if path not in allowed and any(_glob_matches(path, pattern) for pattern in forbidden)
+        if path not in allowed
+        and not any(_glob_matches(path, pattern) for pattern in allowed_globs)
+        and any(_glob_matches(path, pattern) for pattern in forbidden)
     }
     return sorted(violations)
 
@@ -441,14 +464,19 @@ def validate_repository(root: Path, manifest_path: Path) -> tuple[int, int]:
         )
 
     tracked = _git_tracked_paths(root)
-    forbidden, allowed, extensions = _validate_policy(raw["policy"])
+    forbidden, allowed, allowed_globs, extensions = _validate_policy(raw["policy"])
+    for pattern in allowed_globs:
+        if not _matching_paths(tracked, pattern):
+            raise ValidationError(
+                f"policy.allowed_tracked_globs pattern matches no tracked files: {pattern}"
+            )
     generated_outputs = _validate_generated_entries(
         raw["generated"],
         root=root,
         tracked=tracked,
     )
 
-    forbidden_paths = _forbidden_tracked_paths(tracked, forbidden, allowed)
+    forbidden_paths = _forbidden_tracked_paths(tracked, forbidden, allowed, allowed_globs)
     if forbidden_paths:
         rendered = "\n  ".join(forbidden_paths)
         raise ValidationError(f"forbidden generated/build artifacts are tracked:\n  {rendered}")

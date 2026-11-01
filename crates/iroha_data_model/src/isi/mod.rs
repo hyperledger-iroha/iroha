@@ -282,6 +282,14 @@ impl_direct_instruction_box!(crate::isi::asset_fi_context::AssertAssetFiTransfer
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::BindRetailIdentityV1);
 impl_direct_instruction_box!(crate::isi::retail_daily_limit::RetailMonetaryMovementV1);
 impl_direct_instruction_box!(
+    crate::isi::game_partition::InstallGamePartitionV1,
+    crate::isi::game_partition::RegisterGamePartitionPeerV1,
+    crate::isi::game_partition::SeedGameUnitV1,
+    crate::isi::game_partition::AdvanceGameUnitV1,
+    crate::isi::game_partition::ExportGameUnitV1,
+    crate::isi::game_partition::ImportGameUnitV1,
+);
+impl_direct_instruction_box!(
     crate::isi::sumeragi_amx::RegisterAmxDataspaceV1,
     crate::isi::sumeragi_amx::BeginAmxV1,
     crate::isi::sumeragi_amx::ExpireAmxV1,
@@ -2240,6 +2248,8 @@ pub use transparent::*;
 pub use vpn::*;
 /// Generic game session lifecycle instructions.
 pub mod game;
+/// Bounded independent-root game-unit transport.
+pub mod game_partition;
 /// Generic native NFT sales.
 pub mod nft_market;
 pub use game::*;

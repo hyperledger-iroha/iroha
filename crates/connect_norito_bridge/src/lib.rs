@@ -2066,6 +2066,44 @@ mod domain_id_ffi_tests {
     }
 }
 
+// ---------------- Canonical Name identity ----------------
+/// Validate an already canonical UTF-8 `Name` using the pinned native NFC owner.
+///
+/// This additive export leaves existing ABI-33 calling conventions unchanged.
+/// Callers must admit the symbol as well as the bridge ABI. The 255-byte input
+/// bound is checked before reading or allocating; no normalization is performed.
+/// Returns zero for valid input, one for invalid/noncanonical input, `-1` for
+/// a null pointer, `-2` for invalid UTF-8 and `-3` for a native panic.
+///
+/// # Safety
+/// A non-null `input_ptr` with a length in `1..=255` must point to that many
+/// readable bytes, which must remain unchanged for the duration of the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn connect_norito_name_validate_v1(
+    input_ptr: *const c_char,
+    input_len: c_ulong,
+) -> c_int {
+    if input_ptr.is_null() {
+        return -1;
+    }
+    if !(1..=255).contains(&input_len) {
+        return 1;
+    }
+    // The public byte bound is checked before dereferencing or allocating.
+    let bytes = unsafe { slice::from_raw_parts(input_ptr.cast::<u8>(), input_len as usize) };
+    let Ok(input) = std::str::from_utf8(bytes) else {
+        return -2;
+    };
+    std::panic::catch_unwind(|| match Name::validate_canonical(input) {
+        Ok(()) => 0,
+        Err(_) => 1,
+    })
+    .unwrap_or(-3)
+}
+
+#[cfg(test)]
+mod canonical_name_tests;
+
 // ---------------- Account address helpers ----------------
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn connect_norito_account_address_parse(

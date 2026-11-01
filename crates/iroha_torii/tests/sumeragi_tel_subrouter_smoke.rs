@@ -4,16 +4,12 @@ use crate::fixtures;
 use axum::{extract::ConnectInfo, http::Request};
 use http::StatusCode;
 use iroha_config::parameters::actual::TelemetryProfile;
-use iroha_core::{
-    kiso::KisoHandle,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    state::{State, World},
-};
+use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_torii::{MaybeTelemetry, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _;
 fn signed_loopback_get(
+    runtime: &fixtures::CommittedToriiRouterRuntime,
     cfg: &iroha_config::parameters::actual::Root,
     uri: &'static str,
 ) -> Request<axum::body::Body> {
@@ -21,7 +17,7 @@ fn signed_loopback_get(
         .uri(uri)
         .body(axum::body::Body::empty())
         .unwrap();
-    let mut request = fixtures::operator_signed_request(&cfg.common.key_pair, request, &[]);
+    let mut request = runtime.operator_signed_request(&cfg.common.key_pair, request, &[]);
     request
         .extensions_mut()
         .insert(ConnectInfo(std::net::SocketAddr::from(([127, 0, 0, 1], 0))));
@@ -30,15 +26,10 @@ fn signed_loopback_get(
 #[tokio::test]
 async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
     // Minimal Torii setup with telemetry enabled
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -49,15 +40,15 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
     let _ = peers_tx;
     let telemetry_handle = MaybeTelemetry::for_tests().with_profile(TelemetryProfile::Full);
     let torii = Torii::new_with_handle(
-        iroha_model_base::chain::ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        cfg.common.chain.clone(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
@@ -70,9 +61,12 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
         ),
     )
     .expect("valid Torii Sumeragi-telemetry fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
+    let runtime = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     let app = runtime.router();
     for retired in [
         "/v1/sumeragi/pacemaker",
@@ -86,7 +80,7 @@ async fn sumeragi_tel_subrouter_rejects_retired_endpoints() {
     ] {
         let response = app
             .clone()
-            .oneshot(signed_loopback_get(&cfg, retired))
+            .oneshot(signed_loopback_get(&runtime, &cfg, retired))
             .await
             .expect("retired route response");
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{retired}");

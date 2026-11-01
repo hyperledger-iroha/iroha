@@ -184,6 +184,7 @@
     "GetMerkleCompact",
     "GetRegisterMerkleCompact",
     "VerifyProof",
+    "PresentX509",
     "VendorExecuteInstruction",
     "VendorExecuteQuery",
     "QueryExecuteNorito",
@@ -1010,7 +1011,7 @@
     {
       "name": "emit_store64_imm",
       "sha256": "a24a5988a8ca824547c1a56a87a12b0a01747334a249178178833312393c9c59",
-      "calls": 10
+      "calls": 11
     },
     {
       "name": "emit_tuple_get",
@@ -1030,7 +1031,7 @@
     {
       "name": "emit_alloc",
       "sha256": "4680cf37d368d00ac0c2e4b9da8d94850913b9294242ca4795eb5620c5d2edf2",
-      "calls": 3
+      "calls": 4
     },
     {
       "name": "emit_pointer_to_norito",
@@ -1736,6 +1737,16 @@
     ],
     [
       "lower_surface_builtin_call",
+      "emit_alloc",
+      "emit_alloc(ctx,bytes)"
+    ],
+    [
+      "lower_surface_builtin_call",
+      "emit_store64_imm",
+      "emit_store64_imm(ctx,table,(index*8)asi16,value)"
+    ],
+    [
+      "lower_surface_builtin_call",
       "emit_binary",
       "emit_binary(ctx,BinaryOp::Mul,outgoing,two)"
     ],
@@ -1943,7 +1954,7 @@
   "map_fallback_routes": [],
   "take2_routing_sha256": "b1650954f4a7561a74585cf95f8896cbf504b7a828e957ddb4caaf2cc2d06c11",
   "source": {
-    "bytes": 425218,
-    "sha256": "4eff56137fb748dd57e21174236bcc0988aa5199029180b8e99edf636e46684a"
+    "bytes": 428057,
+    "sha256": "34027d16faaeb51258b7bb6debc7995095c55ff03a907015bf636bda965e994a"
   }
 }

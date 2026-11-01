@@ -1456,3 +1456,276 @@ fn native19_host_tiles_cost_preserves_full_outputs() {
         }
     }
 }
+
+// Test-only candidate adapter. The production CPU baseline remains the original
+// forward_with_v1; this method is never used by a prover or a device dispatcher.
+impl MainBoundedTransformPolicyV1 {
+    pub(in super::super) fn diagnostic_cpu_policy_v1(self) -> Self {
+        Self {
+            backend: None,
+            ..self
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in super::super) fn diagnostic_reused_forward_v1(
+        self,
+        columns: &mut [Vec<F>],
+        root: F,
+        retained: &mut Option<(usize, F, bool, Option<PublicPowers>)>,
+        constructors: &mut usize,
+        peak_public_payload: &mut usize,
+        mut uncertain: impl FnMut() -> bool,
+    ) -> Result<(), ZkX509StarkErrorV1> {
+        // Preserve private_with_v1's batch validation and completion order.
+        check_completion_v1(uncertain())?;
+        let rows = columns.first().map_or(0, Vec::len);
+        if columns.is_empty()
+            || columns.len() > aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+            || rows < 2
+            || !rows.is_power_of_two()
+            || rows > 1 << main_quotient_stripes::MAIN_QUOTIENT_STRIPE_LOG2_V1
+            || columns.iter().any(|column| column.len() != rows)
+            || columns
+                .iter()
+                .flatten()
+                .any(|value| F::canonical(value.0).is_none())
+            || F::canonical(root.0).is_none()
+            || root.pow(rows as u128) != F::ONE
+            || root.pow((rows / 2) as u128) == F::ONE
+            || self.columns_v1(rows) != 0
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if retained
+            .as_ref()
+            .is_some_and(|(old_rows, old_root, old_reserved, _)| {
+                *old_rows != rows
+                    || *old_root != root
+                    || *old_reserved != self.public_powers_reserved
+            })
+        {
+            return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if retained.is_none() {
+            // Lazy construction is at the first batch's original construction
+            // point. No inverse replay or second live table exists in this test.
+            let powers = self.cpu_powers_v1(rows, root)?;
+            if let Some(powers) = &powers {
+                let actual = powers
+                    .allocated_payload_bytes_v1()
+                    .map_err(map_transparent_error_v1)?;
+                if actual > SHARED_POWERS_ALLOWANCE_V1 {
+                    return Err(ZkX509StarkErrorV1::ProofTooLarge);
+                }
+                *peak_public_payload = (*peak_public_payload).max(actual);
+                *constructors += 1;
+            }
+            *retained = Some((rows, root, self.public_powers_reserved, powers));
+        }
+        let (_, _, _, powers) = retained
+            .as_ref()
+            .ok_or(ZkX509StarkErrorV1::InternalInvariant)?;
+        columns.par_iter_mut().try_for_each(|column| {
+            match powers {
+                Some(powers) => {
+                    crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_with_powers_v1(
+                        column, root, powers,
+                    )
+                }
+                None => crate::privacy_engines::transparent_stark::goldilocks_fft_coarse_v1(
+                    column, root,
+                ),
+            }
+            .map_err(map_transparent_error_v1)
+        })?;
+        check_completion_v1(uncertain())?;
+        crate::privacy_engines::zk_x509::prover_observation::completed_quotient_backend_v1(
+            false,
+            columns.len(),
+        );
+        check_completion_v1(uncertain())
+    }
+}
+
+#[test]
+fn diagnostic_reused_forward_preserves_tiny_fallback_and_refusals() {
+    for rows in [32_usize, 256] {
+        let root = goldilocks_primitive_root_v1(u8::try_from(rows.ilog2()).unwrap()).unwrap();
+        let policy = MainBoundedTransformPolicyV1 {
+            available: 0,
+            backend: None,
+            public_powers_reserved: true,
+        };
+        let original = vec![vec![F(3); rows]; 2];
+        let mut retained = None;
+        let mut constructors = 0;
+        let mut peak = 0;
+        for _ in 0..3 {
+            let mut reference = original.clone();
+            policy
+                .forward_with_v1(&mut reference, root, |_, _, _| panic!("CPU"), || false)
+                .unwrap();
+            let mut candidate = original.clone();
+            policy
+                .diagnostic_reused_forward_v1(
+                    &mut candidate,
+                    root,
+                    &mut retained,
+                    &mut constructors,
+                    &mut peak,
+                    || false,
+                )
+                .unwrap();
+            assert_eq!(candidate, reference);
+        }
+        assert_eq!(constructors, usize::from(rows >= 256));
+        assert_eq!(
+            peak,
+            if rows >= 256 {
+                PublicPowers::required_payload_bytes_v1(rows).unwrap()
+            } else {
+                0
+            }
+        );
+        // A retained table must not select an unrelated domain/root; original
+        // per-batch construction has no such cross-call state. Explicitly reject.
+        let mut candidate = original.clone();
+        assert!(
+            policy
+                .diagnostic_reused_forward_v1(
+                    &mut candidate,
+                    root.inv().unwrap(),
+                    &mut retained,
+                    &mut constructors,
+                    &mut peak,
+                    || false
+                )
+                .is_err()
+        );
+        assert_eq!(candidate, original);
+        let changed_admission = MainBoundedTransformPolicyV1 {
+            public_powers_reserved: false,
+            ..policy
+        };
+        let mut candidate = original.clone();
+        assert!(
+            changed_admission
+                .diagnostic_reused_forward_v1(
+                    &mut candidate,
+                    root,
+                    &mut retained,
+                    &mut constructors,
+                    &mut peak,
+                    || false
+                )
+                .is_err()
+        );
+        assert_eq!(
+            candidate, original,
+            "retained owner cannot outlive its public admission"
+        );
+        let mut no_table = original.clone();
+        let mut no_table_constructors = 0;
+        let mut no_table_peak = 0;
+        changed_admission
+            .diagnostic_reused_forward_v1(
+                &mut no_table,
+                root,
+                &mut None,
+                &mut no_table_constructors,
+                &mut no_table_peak,
+                || false,
+            )
+            .unwrap();
+        assert_eq!((no_table_constructors, no_table_peak), (0, 0));
+        let mut reference = original.clone();
+        changed_admission
+            .forward_with_v1(&mut reference, root, |_, _, _| panic!("CPU"), || false)
+            .unwrap();
+        assert_eq!(reference, no_table);
+        for malformed in 0..4 {
+            let mut candidate = original.clone();
+            let mut invalid_root = root;
+            match malformed {
+                0 => candidate[0][0] = F(u64::MAX),
+                1 => {
+                    candidate[1].pop();
+                }
+                2 => invalid_root = F::ONE,
+                _ => candidate.clear(),
+            }
+            let before = candidate.clone();
+            assert!(
+                policy
+                    .diagnostic_reused_forward_v1(
+                        &mut candidate,
+                        invalid_root,
+                        &mut None,
+                        &mut 0,
+                        &mut 0,
+                        || false
+                    )
+                    .is_err()
+            );
+            assert_eq!(candidate, before);
+        }
+        // Preserve all three completion observations, including the final one
+        // after the CPU backend observation; compare the real production owner.
+        // A fourth-call injection proves that success observes exactly three.
+        for fail_at in 1..=4 {
+            let mut reference_calls = 0;
+            let mut reference = original.clone();
+            let reference_result = policy.forward_with_v1(
+                &mut reference,
+                root,
+                |_, _, _| panic!("CPU"),
+                || {
+                    reference_calls += 1;
+                    reference_calls == fail_at
+                },
+            );
+            let mut candidate_calls = 0;
+            let mut candidate = original.clone();
+            let candidate_result = policy.diagnostic_reused_forward_v1(
+                &mut candidate,
+                root,
+                &mut None,
+                &mut 0,
+                &mut 0,
+                || {
+                    candidate_calls += 1;
+                    candidate_calls == fail_at
+                },
+            );
+            assert_eq!(reference_calls, fail_at.min(3));
+            assert_eq!(candidate_calls, reference_calls);
+            if fail_at <= 3 {
+                assert!(matches!(
+                    reference_result,
+                    Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+                ));
+                assert!(matches!(
+                    candidate_result,
+                    Err(ZkX509StarkErrorV1::AcceleratorCompletionUncertain)
+                ));
+            } else {
+                reference_result.unwrap();
+                candidate_result.unwrap();
+            }
+            assert_eq!(candidate, reference);
+            if fail_at == 1 {
+                assert_eq!(candidate, original);
+            }
+        }
+        let required = PublicPowers::required_payload_bytes_v1(rows).unwrap();
+        assert!(PublicPowers::new_v1(rows, root, required - 1).is_err());
+        assert!(
+            PublicPowers::new_v1(rows, root, usize::MAX)
+                .unwrap()
+                .allocated_payload_bytes_v1()
+                .unwrap()
+                <= SHARED_POWERS_ALLOWANCE_V1
+        );
+    }
+}

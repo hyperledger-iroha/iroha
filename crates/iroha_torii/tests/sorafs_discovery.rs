@@ -2064,26 +2064,27 @@ fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
 }
 
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
-    build_torii_harness_with_history(cfg, None)
+    let harness = build_certified_torii_harness(cfg);
+    // Listener authority comes from the applied signed genesis.
+    commit_pin_readback_fixture(&harness);
+    harness
 }
 
 fn build_certified_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let mut config = TestChainConfig::new(World::default(), 1_000);
     config.chain_id = cfg.common.chain.clone();
     let original = CertifiedTestChain::prepare(config).expect("original discovery genesis");
-    build_torii_harness_with_history(cfg, Some(original))
+    build_torii_harness_with_history(cfg, original)
 }
 
 fn build_torii_harness_with_history(
     cfg: &actual_cfg::Root,
-    original: Option<PreparedTestChainConfig>,
+    original: PreparedTestChainConfig,
 ) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
-    if let Some(original) = &original {
-        cfg.genesis.expected_hash = original.genesis.expected_hash();
-        cfg.genesis.public_key = original.genesis.public_key().clone();
-    }
+    cfg.genesis.expected_hash = original.genesis.expected_hash();
+    cfg.genesis.public_key = original.genesis.public_key().clone();
     isolate_discovery_persistence(&mut cfg.torii, &torii_data_dir);
     let native_signers = cfg.torii.sorafs_storage.enabled.then(|| {
         let proof = Arc::new(DiscoveryNativeTransactionSigner::for_role(
@@ -2132,25 +2133,11 @@ fn build_torii_harness_with_history(
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let chain_id = cfg.common.chain.clone();
     let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let (state, kura, native_history) = if let Some(original) = original {
-        (
-            Arc::clone(&original.state),
-            Arc::clone(&original.kura),
-            Some(Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(
-                original,
-            ))))),
-        )
-    } else {
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            network_id,
-        ));
-        (state, kura, None)
-    };
+    let state = Arc::clone(&original.state);
+    let kura = Arc::clone(&original.kura);
+    let native_history = Some(Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(
+        original,
+    )))));
     let query = state.query_handle.clone();
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;

@@ -28,7 +28,7 @@ sys.modules[SPEC.name] = validator
 SPEC.loader.exec_module(validator)
 WALLET_JNI_SYMBOLS = [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + method
-    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "snapshot")
+    for method in ("revision", "openBegin", "openFinish", "openCancel", "close", "activity", "beginExchange", "endExchange", "call", "setup", "enrollment", "enrollmentRefusal", "execute", "snapshot")
 ] + [
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_beginInstallation",
     "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletInstalledRuntimeNativeV1_registerInstallation",
@@ -353,6 +353,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
         for missing in (
             "connect_norito_bridge_abi_version",
             "connect_norito_domain_id_validate_v1",
+            "connect_norito_name_validate_v1",
             "connect_norito_validation_fee_current_policy_proof_verify_v1",
             "connect_norito_private_settlement_auditor_capsule_response_verify_with_request_v1",
             "iroha_privacy_validate_exact12_capability_manifest_v1",
@@ -579,6 +580,7 @@ class StrictNoritoBridgeValidatorTests(unittest.TestCase):
     def test_rejects_manifest_missing_current_domain_fee_settlement_or_mldsa_exports(self) -> None:
         for missing in (
             "connect_norito_domain_id_validate_v1",
+            "connect_norito_name_validate_v1",
             "connect_norito_validation_fee_current_policy_proof_request_v1",
             "connect_norito_validation_fee_current_policy_proof_verify_v1",
             "connect_norito_private_settlement_committee_proof_response_verify_v1",

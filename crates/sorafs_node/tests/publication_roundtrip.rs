@@ -12,7 +12,7 @@ use sorafs_manifest::{
     BLAKE3_256_MULTIHASH_CODE, DagCodecId, ManifestBuilder, ManifestV1, PinPolicy,
     decode_manifest_v1_canonical,
 };
-use sorafs_node::{NodeHandle, config::StorageConfig};
+use sorafs_node::{NodeHandle, NodeStorageError, config::StorageConfig, store::StorageError};
 
 fn fixture() -> (CarBuildPlan, Vec<u8>, ManifestV1, Vec<u8>) {
     let (plan, payload) = CarBuildPlan::from_files_with_profile(
@@ -215,7 +215,7 @@ fn rejected_site_inputs_leave_no_manifest_and_release_ingest_reservations() {
 }
 
 #[test]
-fn persisted_site_corruption_is_rejected_on_read_and_quarantined_on_restart() {
+fn persisted_site_corruption_remains_quarantined_after_restart() {
     let (plan, payload, manifest, _) = fixture();
     let temp = tempfile::tempdir().expect("provider tempdir");
     let storage = config(&temp.path().canonicalize().expect("canonical root"));
@@ -226,28 +226,55 @@ fn persisted_site_corruption_is_rejected_on_read_and_quarantined_on_restart() {
     let backend = node.storage().expect("backend");
     let stored = backend.manifest(&id).expect("manifest");
     let chunk = stored.chunk(0).expect("stored first chunk");
-    let digest = chunk.digest;
-    let mut bytes = fs::read(&chunk.path).expect("read persisted chunk");
+    let chunk_path = chunk.path.clone();
+    let chunk_digest = chunk.digest;
+    let mut bytes = fs::read(&chunk_path).expect("read persisted chunk");
     bytes[0] ^= 1;
-    fs::write(&chunk.path, bytes).expect("inject same-length disk corruption");
+    fs::write(&chunk_path, &bytes).expect("inject same-length disk corruption");
     assert!(node.read_payload_range(&id, 0, 1).is_err());
-    assert!(node.read_chunk_by_digest(&id, &digest).is_err());
+    assert!(node.read_chunk_by_digest(&id, &chunk_digest).is_err());
     drop(stored);
     drop(backend);
     drop(node);
-    // Startup quarantines a damaged payload for finalized native repair: its authenticated
-    // metadata is retained, and no read serves the corrupted bytes.
-    let restarted = NodeHandle::try_new(storage).expect("restart retains the damaged site");
-    let backend = restarted.storage().expect("backend");
-    assert!(
-        !backend
-            .manifest(&id)
-            .expect("repair metadata retained")
-            .payload_available(),
-        "restart cannot admit a corrupted persisted site as available"
+    // SR5 permits degraded startup with authenticated repair metadata. It must
+    // never turn the damaged payload into available bytes or successful proofs.
+    let reopened = NodeHandle::try_new(storage).expect("restart degraded provider for repair");
+    let backend = reopened.storage().expect("reopened backend");
+    let retained = backend
+        .manifest(&id)
+        .expect("retain original repair metadata");
+    assert_eq!(
+        retained.load_manifest().expect("authenticated manifest"),
+        manifest
     );
-    assert!(restarted.read_payload_range(&id, 0, 1).is_err());
-    assert!(restarted.read_chunk_by_digest(&id, &digest).is_err());
+    assert!(!retained.payload_available());
+    assert!(retained.pdp_tree().is_none());
+    assert!(matches!(
+        retained.por_tree_ref(),
+        Err(StorageError::PayloadUnavailable { .. })
+    ));
+    assert!(matches!(
+        reopened.read_payload_range(&id, 0, 1),
+        Err(NodeStorageError::Storage(
+            StorageError::PayloadUnavailable { .. }
+        ))
+    ));
+    assert!(matches!(
+        reopened.read_chunk_by_digest(&id, &chunk_digest),
+        Err(NodeStorageError::Storage(
+            StorageError::PayloadUnavailable { .. }
+        ))
+    ));
+    assert!(matches!(
+        reopened.sample_por(&id, 1, 7),
+        Err(NodeStorageError::Storage(
+            StorageError::PayloadUnavailable { .. }
+        ))
+    ));
+    assert_eq!(
+        fs::read(chunk_path).expect("retain damaged bytes for repair"),
+        bytes
+    );
 }
 
 #[test]

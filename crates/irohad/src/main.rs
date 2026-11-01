@@ -42,6 +42,7 @@ pub mod runtime_provider_registry;
 #[cfg(unix)]
 #[path = "sccp_keeper.rs"]
 mod sccp_keeper;
+mod game_partition;
 mod sccp_staking_policy;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[path = "soracloud_runtime.rs"]
@@ -4438,6 +4439,14 @@ impl Iroha {
                 supervisor.monitor(child);
             }
         }
+        // Native game-unit delivery uses committed peer pins and the existing validator
+        // identity. No operator relay key, journal or external scheduler is involved.
+        if !emergency_fast {
+            supervisor.monitor(game_partition::start(
+                Arc::clone(&state), Arc::clone(&queue),
+                config.common.key_pair.clone(), supervisor.shutdown_signal(),
+            ));
+        }
         // The SCCP keeper is a supervised task of its own and never aborts the node: its
         // public RPC delays neither block production nor any other task.
         #[cfg(unix)]
@@ -8465,7 +8474,7 @@ fn run_main_with_config_guard(
 fn adopt_managed_listeners(
     startup: &StartupArgs,
     config: &Config,
-) -> ReportResult<Option<iroha_deploy::managed::RuntimeListeners>, MainError> {
+) -> ReportResult<Option<iroha_managed_ipc::RuntimeListeners>, MainError> {
     match (
         &startup.managed_listeners,
         startup.managed_listener_deadline_ns,
@@ -8482,7 +8491,7 @@ fn adopt_managed_listeners(
                 iroha_primitives::addr::SocketAddr::Host(_) => Err(Report::new(MainError::Config)
                     .attach("managed listeners require exact numeric socket addresses")),
             };
-            iroha_deploy::managed::adopt_runtime_listeners(
+            iroha_managed_ipc::adopt_runtime_listeners(
                 directory,
                 numeric(config.network.address.value())?,
                 numeric(config.torii.address.value())?,

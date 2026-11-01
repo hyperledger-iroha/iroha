@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import importlib.util
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -16,6 +18,11 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "check_generated_artifacts.py"
+SPEC = importlib.util.spec_from_file_location("check_generated_artifacts", SCRIPT)
+assert SPEC is not None and SPEC.loader is not None
+GUARD = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = GUARD
+SPEC.loader.exec_module(GUARD)
 
 
 def _write_manifest(repo: Path, *, extra: str = "") -> None:
@@ -29,8 +36,10 @@ forbidden_tracked_globs = [
   "**/node_modules/**",
   "**/.docusaurus/**",
   "**/__pycache__/**",
+  "**/target/**",
 ]
 allowed_tracked_paths = ["dist/.gitkeep"]
+allowed_tracked_globs = []
 generated_source_extensions = [".rs", ".py"]
 
 [[generated]]
@@ -562,6 +571,107 @@ def test_forbidden_tracked_docusaurus_cache_fails(tmp_path: Path) -> None:
     assert result.returncode == 1
     assert "forbidden generated/build artifacts" in result.stderr
     assert "docs/portal/.docusaurus/client-manifest.json" in result.stderr
+
+
+def _allow_tracked_globs(repo: Path, *patterns: str) -> None:
+    manifest = repo / "generated-files.toml"
+    rendered = ", ".join(f'"{pattern}"' for pattern in patterns)
+    manifest.write_text(
+        manifest.read_text(encoding="utf-8").replace(
+            "allowed_tracked_globs = []", f"allowed_tracked_globs = [{rendered}]"
+        ),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "generated-files.toml"], cwd=repo, check=True)
+
+
+def test_allowed_glob_exempts_only_listed_text_evidence(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    capture = (
+        repo / "docs" / "validation" / "record" / "source" / "target" / "stage" / "check.py.template"
+    )
+    capture.parent.mkdir(parents=True)
+    capture.write_text("# frozen capture\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(capture)], cwd=repo, check=True)
+
+    assert _run(repo).returncode == 1
+
+    _allow_tracked_globs(repo, "docs/validation/record/source/target/**/*.template")
+    assert _run(repo).returncode == 0
+
+    output = capture.with_name("libreal.rlib")
+    output.write_text("build output\n", encoding="utf-8")
+    subprocess.run(["git", "add", str(output)], cwd=repo, check=True)
+    result = _run(repo)
+    assert result.returncode == 1
+    assert "docs/validation/record/source/target/stage/libreal.rlib" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "pattern",
+    ("**/target/**", "docs/validation/record/target/**", "src/target/**/*.template"),
+)
+def test_allowed_glob_outside_text_evidence_is_rejected(tmp_path: Path, pattern: str) -> None:
+    repo = _init_repo(tmp_path)
+    _allow_tracked_globs(repo, pattern)
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "may only exempt text evidence" in result.stderr
+
+
+def test_allowed_glob_matching_nothing_is_rejected(tmp_path: Path) -> None:
+    repo = _init_repo(tmp_path)
+    _allow_tracked_globs(repo, "docs/validation/retired/target/**/*.template")
+
+    result = _run(repo)
+
+    assert result.returncode == 1
+    assert "matches no tracked files" in result.stderr
+
+
+def test_every_exempted_repository_file_is_sealed_by_its_validation_record() -> None:
+    manifest = tomllib.loads(
+        (ROOT / "generated-files.toml").read_text(encoding="utf-8")
+    )
+    patterns = manifest["policy"]["allowed_tracked_globs"]
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "docs/validation"],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.PIPE,
+    ).stdout.decode("utf-8").split("\0")
+    exempted = [
+        path
+        for path in tracked
+        if any(GUARD._glob_matches(path, pattern) for pattern in patterns)
+    ]
+    assert exempted
+
+    def sealed_names(directory: Path) -> set[str]:
+        seal = directory / "SHA256SUMS"
+        if not seal.is_file():
+            return set()
+        return {
+            line.split(maxsplit=1)[1].removeprefix("./")
+            for line in seal.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        }
+
+    for path in exempted:
+        relative = Path(path)
+        # A record's seal names its files from the record or from the repository root.
+        assert any(
+            {
+                path,
+                path.removesuffix(".template"),
+                relative.relative_to(parent).as_posix(),
+                relative.relative_to(parent).as_posix().removesuffix(".template"),
+            }
+            & sealed_names(ROOT / parent)
+            for parent in relative.parents
+        ), path
 
 
 def test_allowed_directory_marker_passes(tmp_path: Path) -> None:

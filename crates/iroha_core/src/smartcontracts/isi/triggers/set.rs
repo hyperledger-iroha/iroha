@@ -23,6 +23,9 @@ mod contract_capture;
 mod contract_relation;
 #[path = "set_detachment.rs"]
 mod detachment;
+#[cfg(test)]
+#[path = "set_scheduled_progress.rs"]
+mod scheduled_progress_tests;
 pub(crate) use acquisition::SetBlockAcquisition;
 pub(crate) use action_relation::{ActionTable, scheduled_work as action_source_work};
 pub(crate) use authority_registry::{AUTHORITY_FIELDS, SetReadReleases};
@@ -197,6 +200,8 @@ pub enum Error {
     InvalidDataScopeAuthorization,
     /// Data trigger capacity exceeded: maximum 4096
     DataTriggerCapacity,
+    /// Time trigger capacity exceeded: maximum 4096
+    TimeTriggerCapacity,
     /// Data trigger authority `{0}` capacity exceeded: maximum 64
     DataTriggerAuthorityCapacity(AccountId),
     /// Proof-backed IVM executables cannot be registered as triggers.
@@ -204,6 +209,56 @@ pub enum Error {
 }
 /// Result type for [`Set`] operations.
 pub type Result<T, E = Error> = core::result::Result<T, E>;
+
+/// First-release bound on retained Time actions, including disabled and PreCommit actions.
+/// Registration rejects excess work before it can acquire an autonomous progress obligation.
+pub const MAX_TIME_TRIGGERS_TOTAL: usize = 4_096;
+
+/// Earliest candidate block time that includes an original scheduled invocation.
+/// Scheduled intervals are right-open; retries use their inclusive persisted deadline.
+/// A height of zero denotes a fee classification over an already captured parent.
+fn scheduled_progress_at_ms<'a>(
+    actions: impl Iterator<Item = &'a LoadedAction<TimeEventFilter>>,
+    since_ms: u64,
+    next_height: u64,
+) -> Option<u64> {
+    let registration_height = if next_height == 0 {
+        u64::MAX
+    } else {
+        next_height
+    };
+    actions
+        .filter_map(|action| {
+            let ExecutionTime::Schedule(schedule) = action.filter.0 else {
+                // PreCommit must never manufacture an idle block.
+                return None;
+            };
+            if !trigger_is_enabled(action.metadata())
+                || action.repeats.is_depleted()
+                || !trigger_was_registered_before_block(action.metadata(), registration_height)
+                || super::progress::remaining(action.metadata()) == 0
+            {
+                return None;
+            }
+            if let Some(retry) = action.retry_state {
+                return Some(retry.next_retry_at_ms);
+            }
+            let first = match schedule.period_ms {
+                Some(0) => return None,
+                Some(period) if since_ms > schedule.start_ms => {
+                    let periods = (since_ms - schedule.start_ms).div_ceil(period);
+                    schedule
+                        .start_ms
+                        .checked_add(periods.checked_mul(period)?)?
+                }
+                _ if schedule.start_ms >= since_ms => schedule.start_ms,
+                None => return None,
+                Some(_) => return None,
+            };
+            first.checked_add(1)
+        })
+        .min()
+}
 /// Revalidate a time-trigger action immediately before invocation.
 pub(crate) fn time_trigger_action_is_due(
     action: &LoadedAction<TimeEventFilter>,
@@ -1023,6 +1078,31 @@ impl json::JsonDeserialize for Set {
         let ids = ids.ok_or_else(|| json::MapVisitor::missing_field("ids"))?;
         let contracts = contracts.ok_or_else(|| json::MapVisitor::missing_field("contracts"))?;
         {
+            let history = time_triggers.history();
+            if history.current().len() > MAX_TIME_TRIGGERS_TOTAL
+                || history
+                    .iter_before_block()
+                    .take(MAX_TIME_TRIGGERS_TOTAL + 1)
+                    .count()
+                    > MAX_TIME_TRIGGERS_TOTAL
+            {
+                return Err(json::Error::InvalidField {
+                    field: "time_triggers".into(),
+                    message: format!(
+                        "incompatible first-release Time-trigger snapshot: maximum {MAX_TIME_TRIGGERS_TOTAL}; regenerate the snapshot"
+                    ),
+                });
+            }
+            for (_, action) in history.current().iter().chain(history.iter_before_block()) {
+                super::progress::validate_stored(action.metadata()).map_err(|message| {
+                    json::Error::InvalidField {
+                        field: "time_triggers".into(),
+                        message: message.into(),
+                    }
+                })?;
+            }
+        }
+        {
             let history = data_triggers.history();
             for previous in [false, true] {
                 let entries: Box<
@@ -1705,6 +1785,15 @@ pub trait SetReadOnly {
     ) -> &impl StorageReadOnly<TriggerId, LoadedAction<PipelineEventFilterBox>>;
     /// Time triggers map.
     fn time_triggers(&self) -> &impl StorageReadOnly<TriggerId, LoadedAction<TimeEventFilter>>;
+    /// Earliest scheduled Time output using this exact committed trigger set and parent time.
+    /// The registration cap bounds this scan; no executable or metadata map is cloned.
+    fn next_scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64> {
+        scheduled_progress_at_ms(
+            self.time_triggers().iter().map(|(_, action)| action),
+            since_ms,
+            next_height,
+        )
+    }
     /// Execute-by-call triggers map.
     fn by_call_triggers(
         &self,
@@ -1728,6 +1817,14 @@ pub trait SetReadOnly {
     /// count overflow, missing originals, duplicate/missing/mistyped action indexes,
     /// or active-index rows that disagree with eligible actions.
     fn validate_world_contract_rows(&self) -> core::result::Result<(), String> {
+        if self.time_triggers().len() > MAX_TIME_TRIGGERS_TOTAL {
+            return Err(format!(
+                "Time trigger capacity exceeds {MAX_TIME_TRIGGERS_TOTAL}"
+            ));
+        }
+        for (_, action) in self.time_triggers().iter() {
+            super::progress::validate_stored(action.metadata()).map_err(str::to_owned)?;
+        }
         contract_relation::validate_current(self)
     }
     /// Get original [`IvmBytecode`] for [`TriggerId`]. Returns `None` if there's no [`Trigger`]
@@ -2366,6 +2463,20 @@ impl Set {
     }
 }
 impl SetBlock<'_> {
+    /// Scheduled deadline from the exact original parent, before this block's mutations.
+    pub(crate) fn scheduled_progress_before_block_ms(
+        &self,
+        since_ms: u64,
+        next_height: u64,
+    ) -> Option<u64> {
+        scheduled_progress_at_ms(
+            self.time_triggers
+                .iter_before_block()
+                .map(|(_, action)| action),
+            since_ms,
+            next_height,
+        )
+    }
     /// Create struct to apply transaction's changes
     pub fn transaction(&mut self) -> SetTransaction<'_> {
         let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
@@ -2423,6 +2534,20 @@ impl TriggeringEventFilter for PipelineEventFilterBox {}
 impl TriggeringEventFilter for TimeEventFilter {}
 impl TriggeringEventFilter for ExecuteTriggerEventFilter {}
 impl<'block> SetTransaction<'block> {
+    /// Scheduled deadline from the original parent, including transaction preimages.
+    pub(crate) fn scheduled_progress_before_block_ms(
+        &self,
+        since_ms: u64,
+        next_height: u64,
+    ) -> Option<u64> {
+        scheduled_progress_at_ms(
+            self.time_triggers
+                .iter_before_block()
+                .map(|(_, action)| action),
+            since_ms,
+            next_height,
+        )
+    }
     /// Current transaction-local registration generation for `id`.
     ///
     /// IDs inherited from the parent block have generation zero. Every
@@ -2714,12 +2839,18 @@ impl<'block> SetTransaction<'block> {
     ///
     /// # Errors
     ///
-    /// Rejects proof-backed IVM executables, whose proof cannot be a trigger attachment.
+    /// Rejects proof-backed IVM executables and new registrations beyond
+    /// [`MAX_TIME_TRIGGERS_TOTAL`], before changing any existing obligation.
     #[inline]
     pub fn add_time_trigger(
         &mut self,
         trigger: SpecializedTrigger<TimeEventFilter>,
     ) -> Result<bool> {
+        if self.time_triggers.len() >= MAX_TIME_TRIGGERS_TOTAL
+            && self.ids.get(&trigger.id).is_none()
+        {
+            return Err(Error::TimeTriggerCapacity);
+        }
         self.add_to(trigger, TriggeringEventType::Time, |me| {
             &mut me.time_triggers
         })

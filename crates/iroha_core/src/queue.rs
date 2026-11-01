@@ -1208,6 +1208,17 @@ impl EagerAdmissionStateAccess<'_, '_> {
         self
     }
 }
+// Shared native progress is independent of installing SCCP. Its scheduled-time
+// exemption still needs the exact committed parent, never the fee horizon or wall time.
+fn exemption_needs_committed_time(
+    world: &impl WorldReadOnly,
+    payload: &TransactionPayload,
+) -> bool {
+    crate::smartcontracts::isi::sccp::keepalive::is_standalone(&payload.instructions)
+        || (crate::smartcontracts::isi::sccp::store::parameters::get(world).is_some()
+            && crate::smartcontracts::isi::sccp::admission::exempt_shape(payload).is_some())
+}
+
 impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
     fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
         self.view.execution_budget()
@@ -1260,7 +1271,9 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         // they are not fee-exempt. Ordinary inputs acquire no SCCP history.
         let pause_needs_time = matches!(transaction.instructions(), Executable::Instructions(instructions)
             if instructions.iter().any(|instruction| instruction.as_any().is::<iroha_data_model::isi::sccp::EndorseSccpFastPauseV1>()));
-        let pause_time = if pause_needs_time {
+        let pause_time = if pause_needs_time
+            || crate::smartcontracts::isi::sccp::keepalive::count(transaction.instructions()) != 0
+        {
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(self.view).map_err(
                 |error| Error::AdmissionInvariant {
                     reason: error.to_string(),
@@ -1282,6 +1295,7 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         let keepalive = crate::smartcontracts::isi::sccp::keepalive::admit(
             self.view.world(),
             transaction.payload(),
+            pause_time,
             self.next_block_height,
             u64::try_from(queue.time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
         )
@@ -1351,12 +1365,10 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<Option<FeeAdmissionReservation>, Error> {
-        // Only SCCP exemption candidates consume original committed time. Every
-        // ordinary signed input still reaches the exact Nexus fee quote below.
+        // Shared progress and SCCP exemption candidates consume original committed
+        // time. Ordinary signed inputs still reach the exact Nexus fee quote below.
         let needs_sccp_time = tx.external().is_some_and(|transaction| {
-            crate::smartcontracts::isi::sccp::store::parameters::get(self.view.world()).is_some()
-                && crate::smartcontracts::isi::sccp::admission::exempt_shape(transaction.payload())
-                    .is_some()
+            exemption_needs_committed_time(self.view.world(), transaction.payload())
         });
         let sccp_committed_time_ms = if needs_sccp_time {
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(self.view).map_err(
@@ -1408,7 +1420,8 @@ impl Queue {
     /// Retain a fresh, still-due Keepalive or retire this authority's obsolete pending source.
     /// The normal removal owner releases its pending index, routing and fee reservations.
     /// # Errors
-    /// Preserves unavailable due-work observations; no missing Parliament result is false.
+    /// Preserves unavailable clock policy. A carrier with unestablished due eligibility
+    /// is locally retired so it cannot block a fresh, independently eligible signature.
     pub fn has_fresh_pending_keepalive(
         &self,
         view: &StateView<'_>,
@@ -1438,7 +1451,14 @@ impl Queue {
         let clock =
             keepalive::clock_parameters(view.world()).map_err(|_| keepalive::DueWorkUnavailable)?;
         let stale = keepalive::needs_fresh_carrier(candidate, wall_ms, clock.due_work_max_lag_ms);
-        let retain = !stale && keepalive::due(view.world(), next_height, candidate)?;
+        let retain = !stale
+            && keepalive::due(
+                view.world(),
+                view.native_execution_tip()
+                    .map(|tip| tip.creation_time_ms()),
+                next_height,
+                candidate,
+            ) == Ok(true);
         drop(queued);
         if !retain {
             self.remove_pending_hash_locked(hash, None);
@@ -1472,7 +1492,13 @@ impl Queue {
             };
             signed.payload().creation_time_ms <= wall_ms
                 && !keepalive::needs_fresh_carrier(candidate, wall_ms, clock.due_work_max_lag_ms)
-                && keepalive::due(view.world(), height, candidate) == Ok(true)
+                && keepalive::due(
+                    view.world(),
+                    view.native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
+                    height,
+                    candidate,
+                ) == Ok(true)
         })
     }
 
@@ -3401,8 +3427,6 @@ impl Queue {
         }
         let (window, more) = self.pending_order.lock().next_window(max_scan.get());
         let mut sccp_budget = SccpExemptBlockBudgetV1::new(state_view.world());
-        let sccp_exists =
-            crate::smartcontracts::isi::sccp::store::parameters::get(state_view.world()).is_some();
         let mut sccp_committed_time_ms = None;
         let mut pending = Vec::with_capacity(window.len());
         for (incarnation, hash) in window {
@@ -3418,13 +3442,10 @@ impl Queue {
             // Ordinary work and sealed commitments cannot claim this exemption.
             // Acquire its exact original time only when a live candidate can;
             // failure retains the whole original window for the same-source retry.
-            let needs_sccp_time = sccp_exists
-                && Self::sccp_signed_transaction(tx.as_accepted().entrypoint()).is_some_and(
-                    |signed| {
-                        crate::smartcontracts::isi::sccp::admission::exempt_shape(signed.payload())
-                            .is_some()
-                    },
-                );
+            let needs_sccp_time = Self::sccp_signed_transaction(tx.as_accepted().entrypoint())
+                .is_some_and(|signed| {
+                    exemption_needs_committed_time(state_view.world(), signed.payload())
+                });
             let class = if cfg!(all(test, sumeragi_core_mutation = "HC346")) || needs_sccp_time {
                 let committed_time_ms = if let Some(original) = sccp_committed_time_ms {
                     original

@@ -404,6 +404,7 @@ test("package publishes the exact general-purpose subpath inventory", () => {
     "./petal",
     "./privacy-capabilities",
     "./privacy-x509",
+    "./private-settlement",
     "./race",
     "./smart-contract-deployment",
     "./sorafs",

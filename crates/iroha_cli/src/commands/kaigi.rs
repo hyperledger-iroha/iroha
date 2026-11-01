@@ -253,7 +253,12 @@ fn drive_private_submission<C, S: PartialEq, I>(
             continue;
         }
         match submit(context, instruction) {
-            Err(error) if attempt < PRIVATE_SUBMIT_ATTEMPTS && is_stale_private_context(&error) => {
+            Err(error) if is_stale_private_context(&error) => {
+                if attempt == PRIVATE_SUBMIT_ATTEMPTS {
+                    return Err(error.wrap_err(format!(
+                        "this action did not take effect: the call changed before it could land, so the CLI stopped after {attempt} rejected attempts, each charged its fee; run the same command to try again once the call is quieter"
+                    )));
+                }
                 attempt += 1;
                 eprintln!(
                     "the call changed before this action landed, and the rejected attempt was still charged its fee; proving again (attempt {attempt} of {PRIVATE_SUBMIT_ATTEMPTS})"
@@ -1716,11 +1721,35 @@ mod tests {
                 pauses: PRIVATE_SUBMIT_ATTEMPTS - 1
             }
         );
+        // The person reads what happened and what to do; the ledger's reason stays below it.
+        let description = crate::describe_cli_error(&crate::command_error_report(&error));
+        for plain in [
+            "did not take effect",
+            &format!("stopped after {PRIVATE_SUBMIT_ATTEMPTS} rejected attempts"),
+            "charged its fee",
+            "run the same command",
+        ] {
+            assert!(
+                description.message.contains(plain),
+                "{}",
+                description.message
+            );
+        }
+        assert_eq!(
+            description.causes.last().map(String::as_str),
+            Some(format!("Invalid smart contract: {KAIGI_STALE_ROSTER_ROOT_ERROR_V1}").as_str()),
+            "{:?}",
+            description.causes
+        );
     }
     #[test]
     fn a_rejection_for_another_reason_is_not_retried() {
         let (counts, result) = drive(&[], vec!["nullifier already used"]);
-        assert!(result.is_err());
+        let error = result.expect_err("the ledger's rejection is final");
+        assert!(
+            !error.to_string().contains("did not take effect"),
+            "{error}"
+        );
         assert_eq!(
             counts,
             Drive {

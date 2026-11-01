@@ -3,8 +3,7 @@ use axum::{Router, routing::get};
 use http_body_util::{BodyExt as _, Full};
 use iroha_config::parameters::actual::LaneConfig;
 use iroha_core::kura::{FastpqProofSnapshot, Kura, PipelineDagSnapshot, PipelineRecoverySidecar};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
+use iroha_crypto::Hash;
 use tower::ServiceExt as _; // for Router::oneshot
 #[tokio::test]
 async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
@@ -114,10 +113,26 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
                 }
             }),
         );
+    // A sidecar is exposed only for the canonical block it names, so persist a real signed block.
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(
+            iroha_core::state::World::default(),
+            1_000,
+        ),
+    )
+    .expect("original signed recovery fixture genesis");
+    let block_hash = chain.genesis().hash();
+    kura.store_block(
+        iroha_data_model::block::SharedSignedBlock::try_new(
+            chain.genesis().clone(),
+            &chain.state().ivm_execution_budget(),
+        )
+        .expect("fund original fixture block"),
+    )
+    .expect("store canonical block");
     // Prepare a sidecar for height=1
     let mut fingerprint = [0u8; 32];
     fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
-    let block_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; 32]));
     let block_hash_str = block_hash.to_string();
     let sidecar = PipelineRecoverySidecar::new(
         1,

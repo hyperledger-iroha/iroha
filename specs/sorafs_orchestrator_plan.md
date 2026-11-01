@@ -149,6 +149,8 @@ following types (non-exhaustive list of significant items):
 | `StreamFetchOutcome` | Consuming result containing receipts, reports, and the peak reserved payload-buffer size. |
 | `fetch_plan_parallel` | Primary entry point that consumes a `CarBuildPlan`, provider list, and async fetcher. |
 | `fetch_plan_parallel_with_observer` | Consuming retrieval returning `StreamFetchOutcome`, without retained payload chunks. |
+| `fetch_via_gateway` | Eager verified retrieval through ordinary public HTTPS provider inputs. |
+| `fetch_via_gateway_with_context` | Eager verified retrieval through an existing admitted `GatewayFetchContext`, including authenticated generated-local TLS. |
 | `fetch_via_gateway_to_writer` | Gateway retrieval into an empty, caller-owned seekable spool; returns `StreamFetchSession` and the verified spool. |
 | `MultiSourceError` | Error enum covering capability mismatches, retry exhaustion, disabled providers, and observer failures. |
 
@@ -162,6 +164,15 @@ helpers (with optional observers). Downstream services should depend on this cra
 rather than calling `fetch_plan_parallel` directly unless they need lower-level
 control. `OrchestratorConfig` includes a `telemetry_region` knob so SDKs can stamp
 metrics emitted by the orchestrator with deployment-specific labels.
+
+`fetch_via_gateway_with_context` consumes the gateway owner's typed context and
+shares the ordinary manifest, plan, integrity, provider-limit and deadline checks.
+It neither selects transport trust nor relaxes URL policy. For generated-local
+transport, callers first join the exact selected TLS material to a freshly
+verified native account-read provider, then construct the context through
+`GatewayFetchContext::new_with_generated_local_transport`. Context construction
+precedes the fetch session's deadline; native authority freshness remains the
+caller's responsibility for each new token and session.
 
 ## 4.2 Scoreboard builder API
 

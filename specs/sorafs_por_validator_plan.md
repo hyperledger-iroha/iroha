@@ -158,6 +158,10 @@ frame identity independently of its Rust module path.
 | `POST` | `/v1/sorafs/capacity/por-proof` | Record a provider `PorProofV1`; requires a fresh operator request signature whose Ed25519 key matches both the proof signer and the provider's current admitted advert key. |
 | `POST` | `/v1/sorafs/capacity/por-verdict` | Record an auditor `AuditVerdictV1`; every unique signature must belong to the configured operator trust set, the authenticated request signer must be one of them, and `sorafs.por.auditor_signature_threshold` must be met. |
 
+A node with no installed authoritative projection, because PoR is disabled or a
+projection was invalidated and awaits restart reconciliation, answers these
+routes with `503` and the code `sorafs_por_authority_unavailable`.
+
 The opaque status/export cursor's generation is a required non-zero field in
 the node's V5 auxiliary checkpoint, not a process-local counter. Every
 lifecycle mutation computes a checked next generation before changing state

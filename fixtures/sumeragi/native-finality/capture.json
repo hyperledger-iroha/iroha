@@ -2,43 +2,22 @@
   "format": "iroha.native-finality.checkpoint-fixture-capture",
   "version": 1,
   "chain_id": "portable-native-fixture",
-  "network_id": "hash:35CF65143A4A68370B39C0A061F990B1E5BCB31C49ED4590B3F5190980C72099#8932",
+  "network_id": "hash:D160B48E4E9F245C66BD7A0B7BA08E73A25FDBA82BB432333A4227655E25B991#E97F",
   "generator": {
     "path": "crates/iroha_data_model/src/sumeragi_finality/test_fixtures.rs",
     "source_sha256": "bf38256dd8a00d3965b178d4733a0d17e2e97313927cf7af13a908aa26652e34",
     "test": "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
     "command": [
-      "scripts/cargo_fast.sh",
-      "--target-dir",
-      "/Users/takemiyamakoto/devstuff/iroha/target/zk-current-e38-20261023",
-      "--stable-local-metadata",
-      "--incremental",
-      "--jobs",
-      "8",
-      "--",
+      "cargo",
       "test",
-      "--locked",
-      "--no-run",
-      "--lib",
-      "--message-format=json",
-      "-p",
-      "norito",
-      "-p",
-      "iroha_primitives",
-      "-p",
-      "iroha_model_base",
-      "-p",
-      "iroha_crypto",
       "-p",
       "iroha_data_model",
-      "-p",
-      "iroha_allocation",
-      "-p",
-      "mv"
+      "--lib",
+      "--no-run"
     ],
-    "compiled_harness_path": "dist/zk-delivery-handoff/reports/current-f4-foundation-build3-root-2026-10-23/bin/iroha_data_model-8b51e2f4141c7f14",
-    "compiled_harness_sha256": "53bd008d3ea29a4994a3792892424cfefc490f9409c6a6d178423104850b58f5",
-    "source_commit": "b3eff84940113dfab9b9ff98fcb6d1ac16ad6228",
+    "compiled_harness_path": "target/debug/deps/iroha_data_model-8e90a357b3a6acb9",
+    "compiled_harness_sha256": "82b9bd5941a802d8ae879f4732c785ad551544418dc33e1c0922ea1a4c514aba",
+    "source_commit": "3d7fed2bffdc157f897110cc1eb69b078629eb56",
     "result_codec_sources": [
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/commitment.rs",
@@ -50,18 +29,18 @@
       },
       {
         "path": "crates/iroha_data_model/src/block/consensus.rs",
-        "sha256": "2c2b9d883aca2f505502d93e65dc3593903e517a42f99bd9669ec6a59636edbf"
+        "sha256": "39cfc17e837dc49dba59ba817bf92e614c3f81975775526aa0ca4cf00a308d11"
       },
       {
         "path": "crates/iroha_data_model/src/block/consensus/root_scope.rs",
-        "sha256": "ad6be30e63e85fb95cf1970e7bd51abfb607348f71958a0853fa64d2057405e9"
+        "sha256": "c60b52bdfe64c27f67c79b1bb63dda8a3cca4b5c870b92c1d239ef211c28b074"
       },
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality/certified_result.rs",
         "sha256": "d8a511b261b4e76aa0ce1384762583147cf5dcbae7af26875fe4ea7adcf51de9"
       }
     ],
-    "source_tree_clean": false,
+    "source_tree_clean": true,
     "checkpoint_codec_source": {
       "path": "crates/iroha_data_model/src/sumeragi_finality/checkpoint.rs",
       "sha256": "b787cc4c2683d947d1493ec3b2080a834daa2a1e3046be1d99b3586419074143"
@@ -69,7 +48,7 @@
     "consensus_codec_sources": [
       {
         "path": "crates/iroha_data_model/src/sumeragi_finality.rs",
-        "sha256": "0c33b32254d71fead930d07344e7d43a15c4a685cdf97bc80a576663a0513cc7"
+        "sha256": "4e26d04d14244c6a5a0ee7dc1c7c2f41e4587b4e623112fbbdb09c6d1ec63935"
       },
       {
         "path": "crates/iroha_sumeragi/src/types.rs",
@@ -83,25 +62,14 @@
         "path": "crates/iroha_crypto/src/signature/bls/consensus.rs",
         "sha256": "08966d9b5e0d97a295579b63212cab3af2085f373c4a010b183c20f297b87654"
       }
-    ],
-    "build_receipt": {
-      "path": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-f4-foundation-build3-root-2026-10-23/result.json",
-      "sha256": "45029deb1deba145c35d5cf29d6b5d22790988a730818595e5ee81db2690151c"
-    },
-    "source_receipt": {
-      "path": "/Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-dm-native-capture-root-2026-10-23/source-before.json",
-      "sha256": "53c1491a6ac1e68bdcd6fb0cec1cf900e905f2b43cdcef222f72b99b90fc0b61"
-    },
-    "noncode_delta_from_compile": [
-      "specs/zk_primitive_workloads.json"
     ]
   },
   "captures": [
     {
-      "log": "dist/zk-delivery-handoff/reports/current-dm-native-capture-root-2026-10-23/checkpoint-1.log",
-      "sha256": "ada5b759b1afcce9bbc8747819b635793c7fc1a246e67f7c81c796e303fc86e2",
+      "stdout_lines": "NATIVE_CHECKPOINT_*",
+      "sha256": "b42f9d7bf1eb2b9c0865f895065eeb098469b639dd9f6c2b1f22b0a45f37309b",
       "command": [
-        "/Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-f4-foundation-build3-root-2026-10-23/bin/iroha_data_model-8b51e2f4141c7f14",
+        "target/debug/deps/iroha_data_model-8e90a357b3a6acb9",
         "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
         "--exact",
         "--ignored",
@@ -111,10 +79,10 @@
       "result": "1 passed;0failed; explicit native exporter only"
     },
     {
-      "log": "dist/zk-delivery-handoff/reports/current-dm-native-capture-root-2026-10-23/checkpoint-2.log",
-      "sha256": "ada5b759b1afcce9bbc8747819b635793c7fc1a246e67f7c81c796e303fc86e2",
+      "stdout_lines": "NATIVE_CHECKPOINT_*",
+      "sha256": "b42f9d7bf1eb2b9c0865f895065eeb098469b639dd9f6c2b1f22b0a45f37309b",
       "command": [
-        "/Users/takemiyamakoto/devstuff/iroha/dist/zk-delivery-handoff/reports/current-f4-foundation-build3-root-2026-10-23/bin/iroha_data_model-8b51e2f4141c7f14",
+        "target/debug/deps/iroha_data_model-8e90a357b3a6acb9",
         "sumeragi_finality::test_fixtures::tests::capture_native_checkpoint_fixtures",
         "--exact",
         "--ignored",
@@ -130,15 +98,15 @@
       "path": "fixtures/sumeragi/native-finality/genesis-checkpoint.nrt",
       "height": 1,
       "bytes": 21724,
-      "sha256": "71108296bd46d4d6839407821342d6ddc01b7067dd2c5c86b42f2ee54d03a7fc"
+      "sha256": "88a1f1e989b5abe0ff3dc75611a0502a7c2640cd6c173abbad1e0639d5ab35d1"
     },
     {
       "path": "fixtures/sumeragi/native-finality/height-2-checkpoint.nrt",
       "height": 2,
       "bytes": 25159,
-      "sha256": "758518085a59cae4ed5577ca0eb16f962c179edcab22f47140724c0bdc6ee96d"
+      "sha256": "56c2b4ca83d216f503e2255123232b91c3f7243bf1346645be4e480d98e59f30"
     }
   ],
   "scope": "Deterministic first-release protocol fixtures for the sole CertifiedResultV1 X || body result envelope: exact signed genesis and genuine native three-of-four BLS H2 CommitQC plus signed RS16 availability over synthetic outputs. Consensus QC and availability signatures use the sole SHA-256 allowlisted-preimage/DST_SIG suite; generic genesis signing and proofs of possession retain their distinct protocol roles. Inactive fixed headers bind the original block height and creation time. Canonical roundtrip and contiguous checkpoint page verified by the exporter. This incompatible execution-root layout and consensus suite require fresh genesis; no replay claim for previous history. No World execution, monetary effect, production custody, network liveness or release qualification claim.",
-  "captured_at_utc": "2026-10-23T10:35:49.068413+00:00"
+  "captured_at_utc": "2026-10-31T10:31:22.194651+00:00"
 }

@@ -1,16 +1,17 @@
 //! Verify that Connect routes are stable while runtime configuration controls availability.
 use axum::http::{Request, StatusCode, Uri};
 use iroha_config::{base::WithOrigin, parameters::actual as A};
-use iroha_core::{
-    kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, queue::Queue,
-    state::State,
-};
-use iroha_crypto::{Hash, HashOf};
-use iroha_data_model::block::BlockHeader;
+use iroha_core::{kiso::KisoHandle, prelude::World, query::store::LiveQueryStore, queue::Queue};
+use iroha_data_model::NetworkId;
 use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt;
+use crate::fixtures;
+/// The network of the signed genesis `build_torii` applied and bound into `cfg`.
+fn connect_network_id(cfg: &iroha_config::parameters::actual::Root) -> NetworkId {
+    NetworkId::from_genesis_hash(cfg.genesis.expected_hash)
+}
 fn request_with_loopback_connect_info(
     request: Request<axum::body::Body>,
 ) -> Request<axum::body::Body> {
@@ -30,7 +31,7 @@ async fn connect_aggregate_status(
     let uri = Uri::from_static("/v1/connect/status/aggregate");
     let headers = iroha_torii::operator_signed_request_headers(
         &cfg.common.key_pair,
-        &iroha_torii::test_utils::signed_query_network_id(),
+        &connect_network_id(cfg),
         &axum::http::Method::GET,
         &uri,
         &[],
@@ -163,9 +164,12 @@ async fn await_connect_p2p_attachment(
     }
     panic!("p2p should attach to connect bus")
 }
-fn connect_session_request_body(seed: u8) -> (String, String) {
+fn connect_session_request_body(
+    cfg: &iroha_config::parameters::actual::Root,
+    seed: u8,
+) -> (String, String) {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-    let network_id = iroha_torii::test_utils::signed_query_network_id();
+    let network_id = connect_network_id(cfg);
     let app_pk = [seed; 32];
     let nonce = [seed.wrapping_add(1); 16];
     let sid = iroha_torii_shared::connect_sdk::derive_session_id(&network_id, &app_pk, &nonce);
@@ -182,9 +186,10 @@ fn connect_session_request_body(seed: u8) -> (String, String) {
 }
 async fn create_connect_session_payload(
     app: &axum::Router,
+    cfg: &iroha_config::parameters::actual::Root,
     seed: u8,
 ) -> (String, norito::json::Value) {
-    let (sid_fixed, request_body) = connect_session_request_body(seed);
+    let (sid_fixed, request_body) = connect_session_request_body(cfg, seed);
     let response = app
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -278,9 +283,13 @@ struct ConnectAppSession {
     sid_bytes: [u8; 32],
 }
 #[cfg(feature = "ws_integration_tests")]
-async fn create_connect_app_session(app: &axum::Router, seed: u8) -> ConnectAppSession {
+async fn create_connect_app_session(
+    app: &axum::Router,
+    cfg: &iroha_config::parameters::actual::Root,
+    seed: u8,
+) -> ConnectAppSession {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
-    let (sid_fixed, payload) = create_connect_session_payload(app, seed).await;
+    let (sid_fixed, payload) = create_connect_session_payload(app, cfg, seed).await;
     let sid = payload
         .get("sid")
         .and_then(norito::json::Value::as_str)
@@ -412,10 +421,6 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
         pops: std::collections::BTreeMap::new(),
     });
     cfg.network.lane_profile = A::LaneProfile::Core;
-    cfg.genesis.public_key = checked_connect_key_fixture().public_key().clone();
-    cfg.genesis.expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
-        b"Connect gating test genesis trust anchor",
-    ));
     cfg.torii.connect = A::Connect {
         enabled: connect_enabled,
         ws_max_sessions: defaults::connect::WS_MAX_SESSIONS,
@@ -474,15 +479,28 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
     cfg.streaming.codec = A::StreamingCodec::from_defaults();
     cfg
 }
-fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Torii {
+/// Torii over an applied signed genesis, which alone establishes the listener's root scope.
+struct ConnectTorii {
+    torii: iroha_torii::Torii,
+    native_chain: iroha_core::sumeragi::test_chain::CertifiedTestChain,
+}
+impl ConnectTorii {
+    fn with_p2p(self, p2p: iroha_core::IrohaNetwork) -> Self {
+        Self {
+            torii: self.torii.with_p2p(p2p),
+            native_chain: self.native_chain,
+        }
+    }
+}
+impl std::ops::Deref for ConnectTorii {
+    type Target = iroha_torii::Torii;
+    fn deref(&self) -> &Self::Target {
+        &self.torii
+    }
+}
+fn build_torii(cfg: &mut iroha_config::parameters::actual::Root) -> ConnectTorii {
+    let native_chain = fixtures::commit_signed_genesis(cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(
-        World::default(),
-        kura.clone(),
-        query,
-    ));
     let (_mh, time_source) =
         iroha_primitives::time::TimeSource::new_mock(core::time::Duration::default());
     let queue_cfg = iroha_config::parameters::actual::Queue {
@@ -496,16 +514,16 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
     let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
     let _ = (peers_tx, time_source);
     let telemetry = iroha_torii::MaybeTelemetry::disabled();
-    iroha_torii::Torii::new_with_handle(
+    let torii = iroha_torii::Torii::new_with_handle(
         cfg.common.chain.clone(),
-        iroha_torii::test_utils::signed_query_network_id(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        Kura::blank_kura_for_testing(),
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         cfg.common.key_pair.clone(),
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
@@ -517,12 +535,17 @@ fn build_torii(cfg: &iroha_config::parameters::actual::Root) -> iroha_torii::Tor
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii Connect fixture")
+    .expect("valid Torii Connect fixture");
+    ConnectTorii {
+        torii,
+        native_chain,
+    }
 }
 #[tokio::test]
 async fn connect_endpoints_report_typed_unavailability_when_disabled() {
-    let cfg = minimal_actual_config(false);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(false);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -532,6 +555,13 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
         .oneshot(request_with_loopback_connect_info(
             Request::builder()
                 .uri(Uri::from_static("/v1/connect/ws?sid=AA&role=app"))
+                .header(axum::http::header::CONNECTION, "Upgrade")
+                .header(axum::http::header::UPGRADE, "websocket")
+                .header(axum::http::header::SEC_WEBSOCKET_VERSION, "13")
+                .header(
+                    axum::http::header::SEC_WEBSOCKET_KEY,
+                    "dGhlIHNhbXBsZSBub25jZQ==",
+                )
                 .body(axum::body::Body::empty())
                 .unwrap(),
         ))
@@ -578,8 +608,9 @@ async fn connect_endpoints_report_typed_unavailability_when_disabled() {
 }
 #[tokio::test]
 async fn connect_status_present_when_enabled() {
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -611,9 +642,10 @@ async fn connect_status_present_when_enabled() {
 }
 #[tokio::test]
 async fn connect_status_reports_exact_local_only_strategy() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::LocalOnly;
-    let torii = build_torii(&cfg);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -633,9 +665,10 @@ async fn connect_status_reports_exact_local_only_strategy() {
 }
 #[tokio::test]
 async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
-    let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
+    let torii = build_torii(&mut cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -655,10 +688,11 @@ async fn connect_status_reports_broadcast_effective_when_p2p_attached() {
 }
 #[tokio::test]
 async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_enabled = false;
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
-    let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
+    let torii = build_torii(&mut cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -678,12 +712,13 @@ async fn connect_status_reports_local_only_when_relay_disabled_with_p2p_attached
 }
 #[tokio::test]
 async fn connect_session_delete_endpoint_removes_tokens() {
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
-    let (_, payload) = create_connect_session_payload(&app, 0x24).await;
+    let (_, payload) = create_connect_session_payload(&app, &cfg, 0x24).await;
     let sid = payload
         .get("sid")
         .and_then(|x| x.as_str())
@@ -743,12 +778,13 @@ async fn connect_session_delete_endpoint_removes_tokens() {
 }
 #[tokio::test]
 async fn connect_session_status_requires_management_token() {
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
-    let (_, created) = create_connect_session_payload(&app, 0x34).await;
+    let (_, created) = create_connect_session_payload(&app, &cfg, 0x34).await;
     let sid = created
         .get("sid")
         .and_then(|x| x.as_str())
@@ -819,8 +855,9 @@ async fn connect_session_status_requires_management_token() {
 async fn connect_session_delete_rejects_ws_attach() {
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -837,7 +874,7 @@ async fn connect_session_delete_rejects_ws_attach() {
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
     // Use a second router handle for in-process REST calls.
-    let (sid_fixed, req_body) = connect_session_request_body(0x44);
+    let (sid_fixed, req_body) = connect_session_request_body(&cfg, 0x44);
     let create_resp = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -911,8 +948,9 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::client::IntoClientRequest;
     // Build enabled config and Torii router
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -930,7 +968,7 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
     // Create a session via in-process router call to obtain tokens and sid
-    let (sid_fixed, req_body) = connect_session_request_body(0x52);
+    let (sid_fixed, req_body) = connect_session_request_body(&cfg, 0x52);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -977,8 +1015,9 @@ async fn connect_ws_accepts_protocol_token() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::header};
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -994,7 +1033,7 @@ async fn connect_ws_accepts_protocol_token() {
     let addr = listener.local_addr().unwrap();
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let (sid_fixed, req_body) = connect_session_request_body(0x62);
+    let (sid_fixed, req_body) = connect_session_request_body(&cfg, 0x62);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1044,8 +1083,9 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, sleep, timeout};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -1061,7 +1101,7 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
     let addr = listener.local_addr().unwrap();
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let (sid_fixed, req_body) = connect_session_request_body(0x92);
+    let (sid_fixed, req_body) = connect_session_request_body(&cfg, 0x92);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1181,8 +1221,9 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     use tokio::net::TcpListener;
     use tokio::time::{Duration, timeout};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -1198,7 +1239,7 @@ async fn connect_ws_duplicate_frame_does_not_close_session() {
     let addr = listener.local_addr().unwrap();
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let (sid_fixed, req_body) = connect_session_request_body(0xA3);
+    let (sid_fixed, req_body) = connect_session_request_body(&cfg, 0xA3);
     let res = app2
         .clone()
         .oneshot(request_with_loopback_connect_info(
@@ -1357,10 +1398,11 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     use iroha_torii_shared::connect as proto;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     cfg.torii.connect.p2p_ttl_hops = 1;
-    let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
+    let torii = build_torii(&mut cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -1373,7 +1415,7 @@ async fn connect_ws_broadcast_relay_updates_p2p_rebroadcast_counter() {
     };
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let session = create_connect_app_session(&app2, 0xB4).await;
+    let session = create_connect_app_session(&app2, &cfg, 0xB4).await;
     // Wait until async bus attachment reports active P2P relay wiring.
     let mut relay_p2p_attached = wait_for_connect_relay_p2p_attachment(&app2, &cfg).await;
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
@@ -1425,10 +1467,11 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     use iroha_torii_shared::connect as proto;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
     cfg.torii.connect.p2p_ttl_hops = 1;
-    let torii = build_torii(&cfg);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -1442,7 +1485,7 @@ async fn connect_ws_broadcast_without_p2p_increments_skipped_rebroadcast_counter
     };
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let session = create_connect_app_session(&app2, 0xC5).await;
+    let session = create_connect_app_session(&app2, &cfg, 0xC5).await;
     let mut app_ws = open_connect_app_websocket(addr, &session).await;
     let seq1 = proto::ConnectFrameV1 {
         sid: session.sid_bytes,
@@ -1491,9 +1534,10 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     use iroha_torii_shared::connect as proto;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::LocalOnly;
-    let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
+    let torii = build_torii(&mut cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -1505,7 +1549,7 @@ async fn connect_ws_local_only_with_p2p_does_not_rebroadcast() {
     };
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let session = create_connect_app_session(&app2, 0xD6).await;
+    let session = create_connect_app_session(&app2, &cfg, 0xD6).await;
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = wait_for_connect_relay_p2p_attachment(&app2, &cfg).await;
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
@@ -1554,10 +1598,11 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     use iroha_torii_shared::connect as proto;
     use tokio::time::{Duration, sleep};
     use tokio_tungstenite::tungstenite::Message;
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = minimal_actual_config(true);
     cfg.torii.connect.relay_enabled = false;
     cfg.torii.connect.relay_strategy = A::ConnectRelayStrategy::Broadcast;
-    let torii = build_torii(&cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
+    let torii = build_torii(&mut cfg).with_p2p(iroha_core::IrohaNetwork::closed_for_tests());
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");
@@ -1569,7 +1614,7 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
     };
     let app2 = app.router();
     let server = spawn_test_server(listener, app);
-    let session = create_connect_app_session(&app2, 0xE7).await;
+    let session = create_connect_app_session(&app2, &cfg, 0xE7).await;
     // Wait for async P2P bus attachment before sending frames.
     let mut relay_p2p_attached = wait_for_connect_relay_p2p_attachment(&app2, &cfg).await;
     assert!(relay_p2p_attached, "connect relay should attach P2P bus");
@@ -1616,8 +1661,9 @@ async fn connect_ws_relay_disabled_with_p2p_does_not_rebroadcast() {
 async fn connect_ws_rejects_query_token() {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
     use tokio::net::TcpListener;
-    let cfg = minimal_actual_config(true);
-    let torii = build_torii(&cfg);
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = minimal_actual_config(true);
+    let torii = build_torii(&mut cfg);
     let app = torii
         .api_router_for_tests()
         .expect("test Torii router initializes");

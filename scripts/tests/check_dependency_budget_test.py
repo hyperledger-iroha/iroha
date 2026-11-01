@@ -800,6 +800,7 @@ def _native_policy() -> dict:
 
 WALLET_PROOF_OWNERS = ["iroha_plonk_recursion", "iroha_kagemusha_proof"]
 SHARED_NATIVE_PROOF_PRIMITIVES = ["iroha_pasta", "iroha_plonk", "iroha_plonk_gadgets"]
+VALIDATOR_DEPLOY_STACK = ["iroha_deploy", "iroha_contract_deploy", "iroha_wallet"]
 WALLET_PROOF_DENIAL_CONTEXTS = [
     "aggregate-model",
     "aggregate-model-tests",
@@ -887,6 +888,10 @@ def test_native_policy_preserves_every_original_context_and_layer() -> None:
     # keeps every original ownership, denial, feature, target and root-dev choice.
     previous_configurations = copy.deepcopy(policy["configurations"])
     previous_configurations.pop("private-settlement-native")
+    validator_denials = previous_configurations["iroha3d-without-sccp-wallet"]["forbidden_packages"]
+    for package in VALIDATOR_DEPLOY_STACK:
+        assert validator_denials.count(package) == 1
+        validator_denials.remove(package)
     previous_layers = copy.deepcopy(policy["layers"])
     assert previous_layers["node_execution"].count("iroha_private_settlement") == 1
     previous_layers["node_execution"].remove("iroha_private_settlement")
@@ -1062,6 +1067,35 @@ def test_every_shipping_selection_rejects_direct_and_transitive_plonk_oracle(con
         # the rejection above cannot be borrowed from another policy violation.
         missing_denial = copy.deepcopy(selection)
         missing_denial["forbidden_packages"].remove("iroha_plonk_oracle")
+        assert MODULE.evaluate_boundary_tree(policy, missing_denial, tree)["within_boundary"]
+
+
+@pytest.mark.parametrize("package", VALIDATOR_DEPLOY_STACK)
+def test_validator_rejects_direct_and_transitive_deploy_stack(package) -> None:
+    """Listener adoption goes through its own crate; the shipping daemon links no deploy stack."""
+
+    policy = _native_policy()
+    selection = policy["configurations"]["iroha3d-without-sccp-wallet"]
+    assert selection["package"] == "irohad"
+    assert selection.get("include_root_dev_dependencies", False) is False
+    command = MODULE.boundary_tree_command(Path("Cargo.toml"), selection, offline=True)
+    assert command[command.index("--edges") + 1] == "normal,build"
+    baseline = "0|irohad v1.0.0|\n"
+    assert MODULE.evaluate_boundary_tree(
+        policy, selection, baseline + "1|irohad_lib v1.0.0|\n2|iroha_managed_ipc v1.0.0|\n",
+    )["within_boundary"]
+    for suffix, path in [
+        (f"1|{package} v1.0.0|\n", ["irohad", package]),
+        (f"1|irohad_lib v1.0.0|\n2|{package} v1.0.0|\n", ["irohad", "irohad_lib", package]),
+    ]:
+        tree = baseline + suffix
+        report = MODULE.evaluate_boundary_tree(policy, selection, tree)
+        assert report["violations"] == [{
+            "package": package, "forbidden_package": True, "path": path,
+        }]
+        # Removing just this package denial admits the same parsed fixture.
+        missing_denial = copy.deepcopy(selection)
+        missing_denial["forbidden_packages"].remove(package)
         assert MODULE.evaluate_boundary_tree(policy, missing_denial, tree)["within_boundary"]
 
 

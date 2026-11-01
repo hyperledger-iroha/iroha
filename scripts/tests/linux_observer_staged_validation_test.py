@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import Mock,patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 import compute_workspace_source_manifest as source
 import workspace_source_keeper as custody
 import linux_observer_delivery as delivery

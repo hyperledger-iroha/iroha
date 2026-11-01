@@ -54,7 +54,7 @@ fn main() {
 }
 ''')
     program = directory / ('probe.exe' if os.name == 'nt' else 'probe')
-    command = ['rustc'] + (['+1.93.1-x86_64-pc-windows-msvc'] if os.name == 'nt' else [])
+    command = ['rustc']
     child = subprocess.Popen([*command, '--edition=2024', '-C', 'debuginfo=0', str(source), '-o', str(program)])
     assert wait_original(child) == 0
     library = Path(os.environ.get('IROHA_TEST_PROCESS_BRIDGE_LIBRARY',

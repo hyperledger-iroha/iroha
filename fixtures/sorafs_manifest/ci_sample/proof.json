@@ -6,17 +6,19 @@
   "car_size": 576,
   "chunk_count": 1,
   "chunk_digest_sha3_hex": "d2ea766eacaf9b2eab29bc6d04f31080e96af19be6194ff5dcf97c34a3fa1f04",
+  "chunk_plan_chunk_count": 1,
+  "chunk_plan_source": "fixtures/sorafs_manifest/ci_sample/chunk_plan.json",
   "chunker_handle": "sorafs.sf1@1.0.0",
   "chunker_profile_id": 1,
   "dag_codec": 113,
   "manifest_car_digest_hex": "ae5bb8b4a865ad70cbc10cbfebf5e401c5f50d94daf566bceba915c9133c71b7",
-  "manifest_digest_hex": "3a5e77d6673b68d5456bcc01e99ba93b0c8d4f1ab94f3eadc4ee02c4b934caea",
+  "manifest_digest_hex": "6bdfc99f05c636201133addfb5bc5aa75c026d691ca620e015471ef5061f415b",
   "manifest_path": "fixtures/sorafs_manifest/ci_sample/manifest.to",
   "payload_bytes": 201,
   "payload_digest_hex": "74813dc4d7de02bcba58c405e40308ec612a149d7788e35d31cf801b9686d80e",
   "pin_policy": {
     "min_replicas": 1,
-    "retention_epoch": 0,
+    "retention_epoch": 86400,
     "storage_class": "hot"
   },
   "root_cids_hex": [

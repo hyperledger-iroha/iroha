@@ -127,7 +127,7 @@ fn original_build_input_command_runs_genuine_image_without_changing_snapshot() {
     let output = original.command().unwrap().output().unwrap();
     assert!(output.status.success());
     assert_eq!(output.stdout, b"original\n");
-    assert!(output.stderr.is_empty());
+    assert_eq!(output.stderr, Vec::<u8>::new());
     original.revalidate().unwrap();
     assert_eq!(original.snapshot().unwrap(), snapshot);
 }

@@ -198,7 +198,7 @@ fn recovered_original_stays_live_through_real_process_execution_and_receipt_refu
     let process = Command::new(directory.path().join(name)).output().unwrap();
     assert_eq!(process.status.code(), Some(17));
     assert_eq!(process.stdout, b"retained-executable-probe");
-    assert!(process.stderr.is_empty());
+    assert_eq!(process.stderr, Vec::<u8>::new());
     directory.revalidate().unwrap();
     assert_eq!(executable.identity().unwrap(), identity);
     assert_eq!(executable.snapshot().unwrap(), snapshot);

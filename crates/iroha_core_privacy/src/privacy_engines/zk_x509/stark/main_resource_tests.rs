@@ -1103,3 +1103,58 @@ fn current_registration_resource_owner_plan_diagnostic() {
         main_resources::CURRENT_FULL_PROFILE_PEAK_V1
     );
 }
+
+impl ZkX509MainRegistrationShapeV1 {
+    /// Inspect the canonical public hash batches and their existing funding in tests.
+    pub(crate) fn row_hash_diagnostic_geometry_v1()
+    -> Result<(Vec<(u8, usize, usize)>, usize, usize, usize, usize), ZkX509StarkErrorV1> {
+        let layout = AggregateProofLayoutV1::for_full_profile_v1()?;
+        let buffers = main_resources::MainProverBufferPlanV1::new_v1(&layout)?;
+        Ok((
+            layout
+                .trace_groups
+                .iter()
+                .map(|group| (group.native_trace_log2, group.base_width, group.aux_width))
+                .collect(),
+            layout.common_lde_size(),
+            buffers.joined_streams,
+            buffers.replay_batch,
+            main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+        ))
+    }
+}
+
+#[test]
+fn row_hash_diagnostic_geometry_matches_original_batches_and_funding() {
+    let (groups, rows, streams, replay, runtime) =
+        ZkX509MainRegistrationShapeV1::row_hash_diagnostic_geometry_v1().unwrap();
+    assert_eq!(
+        groups.iter().map(|&(log, _, _)| log).collect::<Vec<_>>(),
+        [5, 8, 15, 16, 18, 19]
+    );
+    assert_eq!(groups.iter().map(|&(_, base, _)| base).sum::<usize>(), 3213);
+    assert_eq!(groups.iter().map(|&(_, _, aux)| aux).sum::<usize>(), 2618);
+    assert_eq!(
+        groups
+            .iter()
+            .map(|&(_, base, _)| base.div_ceil(8))
+            .sum::<usize>(),
+        404
+    );
+    assert_eq!(
+        groups
+            .iter()
+            .map(|&(_, _, aux)| aux.div_ceil(8))
+            .sum::<usize>(),
+        329
+    );
+    assert_eq!(rows, 1 << 22);
+    assert_eq!(
+        streams,
+        rows * core::mem::size_of::<
+            crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldStreamV1,
+        >()
+    );
+    assert!(replay >= 8 * rows * core::mem::size_of::<F>());
+    assert_eq!(runtime, 1 << 30);
+}

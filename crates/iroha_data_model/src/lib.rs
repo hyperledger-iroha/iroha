@@ -96,6 +96,7 @@ pub mod sccp;
 // and events are part of the canonical protocol model in every build.
 /// Application-independent game session records and signed gameplay messages.
 pub mod game;
+pub mod game_partition;
 pub mod game_resources;
 /// Governance protocol types.
 pub mod governance;

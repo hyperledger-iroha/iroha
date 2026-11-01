@@ -10,9 +10,9 @@ use http_body_util::BodyExt as _;
 use iroha_config::parameters::actual::Queue as QueueConfig;
 use iroha_core::{
     EventsSender,
-    query::store::LiveQueryStore,
     queue::{ConfigLaneRouter, Queue, QueueLimits},
     state::State,
+    sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
 };
 use iroha_data_model::nexus::LaneLifecycleStatusV1;
 use iroha_model_base::topology::LaneId;
@@ -22,6 +22,8 @@ struct NexusHarness {
     app: iroha_torii::TestApiRouterRuntime,
     queue: Arc<Queue>,
     state: Arc<State>,
+    _native_chain: CertifiedTestChain,
+    _data_dir: iroha_torii::test_utils::TestDataDirGuard,
 }
 impl NexusHarness {
     async fn shutdown(self) {
@@ -32,6 +34,7 @@ fn build_app() -> NexusHarness {
     build_app_with_api_token(None)
 }
 fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
+    let data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     if let Some(api_token) = api_token {
         cfg.torii.require_api_token = true;
@@ -42,19 +45,14 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         Vec::new(),
         Vec::<iroha_data_model::asset::AssetDefinition>::new(),
     );
-    // Core and Torii must share the fixture's explicit genesis-derived identity.
-    let network_id = iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let (mut state, kura) = State::new_with_chain_and_network_id_and_pre_genesis_nexus_for_testing(
-        world,
-        cfg.nexus.clone(),
-        LiveQueryStore::start_test(),
-        cfg.common.chain.clone(),
-        network_id,
-    );
-    state
-        .set_nexus(cfg.nexus.clone())
-        .expect("restore the fixture's exact Nexus runtime configuration");
-    let state = Arc::new(state);
+    // Core and Torii share the network identity of the applied signed genesis.
+    let mut chain_config = TestChainConfig::new(world, 1_000);
+    chain_config.chain_id = cfg.common.chain.clone();
+    chain_config.nexus = Some(cfg.nexus.clone());
+    let native_chain =
+        CertifiedTestChain::start(chain_config).expect("original lifecycle fixture genesis");
+    let state = native_chain.state().clone();
+    let kura = native_chain.kura().clone();
     let events_sender: EventsSender = tokio::sync::broadcast::channel(64).0;
     let router = Arc::new(ConfigLaneRouter::new(
         cfg.nexus.routing_policy.clone(),
@@ -82,6 +80,8 @@ fn build_app_with_api_token(api_token: Option<&str>) -> NexusHarness {
         app: torii.router(),
         queue,
         state,
+        _native_chain: native_chain,
+        _data_dir: data_dir,
     }
 }
 async fn response_bytes(response: Response) -> Vec<u8> {

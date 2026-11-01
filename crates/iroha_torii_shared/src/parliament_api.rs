@@ -479,6 +479,9 @@ mod tests {
             Some(u64::from(MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1))
         );
 
+        // The fixture lists what SDKs may draft: the timed-OVN ballot transitions that the
+        // anonymous-ballot decision retires stay out of it. Core still encodes them, so the
+        // listed transitions keep the sparse indices of the current codec.
         let expected_public = [
             (0, "EscalateRisk", true, 0),
             (1, "CompleteQualification", false, 1),
@@ -490,16 +493,7 @@ mod tests {
             (7, "AdvanceBodyPhase", true, 7),
             (8, "RecordAttemptAbsence", true, 8),
             (9, "EndorsePublicFinding", true, 9),
-            (10, "RegisterBallotAttempt", true, 10),
-            (11, "CloseBallotRegistration", true, 11),
-            (12, "FreezeBallotSurvivors", true, 12),
-            (13, "FreezeTimedOvnCorpus", true, 13),
-            (14, "BeginBallotOpeningBatch", true, 14),
-            (15, "FailBallotNoResult", true, 15),
-            (16, "FinalizeOpenedBallot", true, 16),
             (17, "RecordInvitationResponse", true, 20),
-            (18, "RegisterBallotParticipant", true, 21),
-            (19, "RecordBallotDropout", true, 22),
             (20, "FailPublicFindingNoResult", true, 23),
             (21, "RegisterInitialSortition", false, 24),
         ];
@@ -584,25 +578,37 @@ mod tests {
             ParliamentNoResultKindV1::ConfirmationJuryCapacityUnavailable,
             ParliamentNoResultKindV1::RandomnessRedrawBudgetExhausted,
         ];
-        let fixture_no_result_kinds = fixture
-            .get("no_result_kinds")
-            .and_then(json::Value::as_array)
-            .expect("closed no-result inventory");
-        assert_eq!(fixture_no_result_kinds.len(), no_result_kinds.len());
-        for (index, (entry, kind)) in fixture_no_result_kinds
-            .iter()
-            .zip(no_result_kinds)
-            .enumerate()
-        {
+        for (index, kind) in no_result_kinds.into_iter().enumerate() {
             assert_eq!(
                 kind.encode(),
                 u32::try_from(index)
                     .expect("no-result index fits u32")
                     .to_le_bytes()
             );
+        }
+        let expected_no_result_kinds = [
+            (0, "PublicFindingQuorumUnreachable"),
+            (1, "PublicFindingDeadlineExpired"),
+            (7, "SortitionRetriesExhausted"),
+            (8, "ConfirmationJuryCapacityUnavailable"),
+            (9, "RandomnessRedrawBudgetExhausted"),
+        ];
+        let fixture_no_result_kinds = fixture
+            .get("no_result_kinds")
+            .and_then(json::Value::as_array)
+            .expect("closed no-result inventory");
+        assert_eq!(
+            fixture_no_result_kinds.len(),
+            expected_no_result_kinds.len()
+        );
+        for (entry, (index, tag)) in fixture_no_result_kinds.iter().zip(expected_no_result_kinds) {
             assert_eq!(
                 entry.get("norito_index").and_then(json::Value::as_u64),
-                Some(u64::try_from(index).expect("index fits u64"))
+                Some(index)
+            );
+            assert_eq!(
+                entry.get("json_tag").and_then(json::Value::as_str),
+                Some(tag)
             );
         }
 
@@ -666,7 +672,7 @@ mod tests {
             .get("certificate_result_roots")
             .and_then(json::Value::as_array)
             .expect("certificate result root inventory");
-        assert_eq!(roots.len(), 6);
+        assert_eq!(roots.len(), 4);
         for root in roots {
             assert_eq!(root.get("bytes").and_then(json::Value::as_u64), Some(32));
             assert_eq!(

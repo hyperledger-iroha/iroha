@@ -6,11 +6,8 @@
 use axum::http::{Request, StatusCode, Uri, header::CONTENT_TYPE};
 use std::sync::Arc;
 // use iroha_config::base::WithOrigin; // unused in this smoke test
-use iroha_core::{
-    kiso::KisoHandle, kura::Kura, prelude::World, query::store::LiveQueryStore, state::State,
-};
-use iroha_model_base::chain::ChainId;
-use iroha_model_base::peer::PeerId;
+use iroha_core::{kiso::KisoHandle, prelude::World, query::store::LiveQueryStore};
+use iroha_data_model::account::AccountId;
 use tower::ServiceExt as _; // for Router::oneshot
 // use iroha_primitives::addr::socket_addr; // unused in this smoke test
 use crate::fixtures;
@@ -38,13 +35,8 @@ async fn app_api_router_smoke() {
     cfg.torii.webhooks_enabled = true;
     cfg.torii.operator_signatures.enabled = true;
     cfg.torii.operator_signatures.allow_node_key = true;
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -55,15 +47,15 @@ async fn app_api_router_smoke() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new_with_handle(
-        ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        cfg.common.chain.clone(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
@@ -75,10 +67,14 @@ async fn app_api_router_smoke() {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii app API fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
+    .expect("valid Torii app API fixture")
+    .with_local_peer_id(native_chain.validators()[0].0.clone());
+    let runtime = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     let app = runtime.router();
     for path in ["/v1/soracloud/status", "/v1/soracloud/apps/status"] {
         let response = app
@@ -177,7 +173,7 @@ async fn app_api_router_smoke() {
         app.clone(),
         Request::builder()
             .uri(Uri::from_static(
-                "/v1/accounts/bogus_account_id/assets?offset=0",
+                "/v1/accounts/bogus_account_id/assets?limit=1",
             ))
             .body(axum::body::Body::empty())
             .unwrap(),
@@ -229,8 +225,8 @@ async fn app_api_router_smoke() {
             .unwrap_or("");
         assert!(ct.contains("text/event-stream"));
     }
-    // 2c) App API: GET /v1/gov/stream — endpoint exists; allow OK/429.
-    let resp_gov_sse = app
+    // 2c) App API: GET /v1/gov/stream — a canonical account signature admits the stream.
+    let unsigned_gov_sse = app
         .clone()
         .oneshot(
             Request::builder()
@@ -238,6 +234,21 @@ async fn app_api_router_smoke() {
                 .body(axum::body::Body::empty())
                 .unwrap(),
         )
+        .await
+        .unwrap();
+    assert_eq!(unsigned_gov_sse.status(), StatusCode::UNAUTHORIZED);
+    let resp_gov_sse = app
+        .clone()
+        .oneshot(fixtures::app_signed_request(
+            &runtime.network_id(),
+            &AccountId::new(cfg.common.key_pair.public_key().clone()),
+            &cfg.common.key_pair,
+            Request::builder()
+                .uri(Uri::from_static("/v1/gov/stream"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+            &[],
+        ))
         .await
         .unwrap();
     assert!(!matches!(
@@ -252,7 +263,8 @@ async fn app_api_router_smoke() {
             .unwrap_or("");
         assert!(ct.contains("text/event-stream"));
     }
-    // 2d) App API: GET /v1/telemetry/live — endpoint exists; allow OK/429/403.
+    // 2d) App API: GET /v1/telemetry/live — endpoint exists; allow OK/429, or 503 while the
+    // telemetry profile withholds it.
     let resp_telemetry_live = app
         .clone()
         .oneshot(
@@ -267,7 +279,7 @@ async fn app_api_router_smoke() {
     {
         assert!(matches!(
             resp_telemetry_live.status(),
-            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::FORBIDDEN
+            StatusCode::OK | StatusCode::TOO_MANY_REQUESTS | StatusCode::SERVICE_UNAVAILABLE
         ));
         if resp_telemetry_live.status() == StatusCode::OK {
             let ct = resp_telemetry_live
@@ -327,7 +339,7 @@ async fn app_api_router_smoke() {
     );
     assert_route_is_not_auth_denied(
         app.clone(),
-        fixtures::operator_signed_request(
+        runtime.operator_signed_request(
             &cfg.common.key_pair,
             Request::builder()
                 .uri(Uri::from_static("/v1/webhooks"))
@@ -343,7 +355,7 @@ async fn app_api_router_smoke() {
         app.clone(),
         Request::builder()
             .uri(Uri::from_static(
-                "/v1/assets/bogus%23wonderland/holders?offset=0",
+                "/v1/assets/bogus%23wonderland/holders?limit=1",
             ))
             .body(axum::body::Body::empty())
             .unwrap(),
@@ -357,7 +369,7 @@ async fn app_api_router_smoke() {
 }"#;
     assert_route_is_not_auth_denied(
         app.clone(),
-        fixtures::operator_signed_request(
+        runtime.operator_signed_request(
             &cfg.common.key_pair,
             Request::builder()
                 .method("POST")
@@ -476,13 +488,8 @@ async fn contract_routes_honor_api_token_requirement() {
     let mut cfg = mk_minimal_root_cfg();
     cfg.torii.require_api_token = true;
     cfg.torii.api_tokens = vec![API_TOKEN.to_owned()].into();
+    let native_chain = fixtures::commit_signed_genesis(&mut cfg, World::default(), Vec::new());
     let (kiso, _child) = KisoHandle::start(cfg.clone());
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let mut world = World::default();
-    fixtures::seed_peer(&mut world, local_peer_id.clone());
-    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
     let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
     let queue = Arc::new(iroha_core::queue::Queue::from_config(
@@ -493,15 +500,15 @@ async fn contract_routes_honor_api_token_requirement() {
     let _ = peers_tx;
     let da_receipt_signer = cfg.common.key_pair.clone();
     let torii = iroha_torii::Torii::new_with_handle(
-        ChainId::from("test-chain"),
-        iroha_torii::test_utils::signed_query_network_id(),
+        cfg.common.chain.clone(),
+        native_chain.network_id(),
         kiso,
         cfg.torii.clone(),
         queue,
         tokio::sync::broadcast::channel(1).0,
         LiveQueryStore::start_test(),
-        kura,
-        state,
+        native_chain.kura().clone(),
+        native_chain.state().clone(),
         da_receipt_signer,
         iroha_torii::OnlinePeersProvider::new(peers_rx),
         None,
@@ -513,10 +520,14 @@ async fn contract_routes_honor_api_token_requirement() {
             &iroha_torii::test_utils::private_settlement_test_node_key(),
         ),
     )
-    .expect("valid Torii app API fixture");
-    let runtime = torii
-        .api_router_for_tests()
-        .expect("test Torii router initializes");
+    .expect("valid Torii app API fixture")
+    .with_local_peer_id(native_chain.validators()[0].0.clone());
+    let runtime = fixtures::CommittedToriiRouterRuntime::new(
+        torii
+            .api_router_for_tests()
+            .expect("test Torii router initializes"),
+        native_chain,
+    );
     let app = runtime.router();
     for (method, path) in [
         ("POST", "/v1/contracts/deploy"),
@@ -541,39 +552,31 @@ async fn contract_routes_honor_api_token_requirement() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
     }
-    assert_route_is_not_auth_denied(
-        app.clone(),
-        Request::builder()
-            .method("POST")
-            .uri(Uri::from_static("/v1/contracts/call"))
-            .header("x-api-token", API_TOKEN)
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
-    )
-    .await;
-    assert_route_is_not_auth_denied(
-        app.clone(),
-        Request::builder()
-            .method("POST")
-            .uri(Uri::from_static("/v1/contracts/view"))
-            .header("x-api-token", API_TOKEN)
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
-    )
-    .await;
-    assert_route_is_not_auth_denied(
-        app.clone(),
-        Request::builder()
-            .method("POST")
-            .uri(Uri::from_static("/v1/contracts/view/batch"))
-            .header("x-api-token", API_TOKEN)
-            .header(axum::http::header::CONTENT_TYPE, "application/json")
-            .body(axum::body::Body::from("{}"))
-            .unwrap(),
-    )
-    .await;
+    // Contract calls and views also require a canonical account signature.
+    let account_id = AccountId::new(cfg.common.key_pair.public_key().clone());
+    for path in [
+        "/v1/contracts/call",
+        "/v1/contracts/view",
+        "/v1/contracts/view/batch",
+    ] {
+        assert_route_is_not_auth_denied(
+            app.clone(),
+            fixtures::app_signed_request(
+                &runtime.network_id(),
+                &account_id,
+                &cfg.common.key_pair,
+                Request::builder()
+                    .method("POST")
+                    .uri(path)
+                    .header("x-api-token", API_TOKEN)
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .body(axum::body::Body::from("{}"))
+                    .unwrap(),
+                b"{}",
+            ),
+        )
+        .await;
+    }
     assert_route_is_not_auth_denied(
         app.clone(),
         Request::builder()

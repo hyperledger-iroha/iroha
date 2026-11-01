@@ -212,6 +212,20 @@ WAVE_TWO_TARGETS = (
         root="numeric_abi_encoding_allocations.rs",
         modules=(),
     ),
+    # Each installs a failing global allocator, which also needs its own test process.
+    WaveTwoTarget(
+        package="crates/iroha_primitives",
+        target="json_retained_allocation",
+        root="json_retained_allocation.rs",
+        modules=(),
+        required_features=("json",),
+    ),
+    WaveTwoTarget(
+        package="crates/iroha_primitives",
+        target="numeric_retained_allocation",
+        root="numeric_retained_allocation.rs",
+        modules=(),
+    ),
     WaveTwoTarget(
         package="crates/iroha_zkp_halo2",
         target="vega_engine_reachability",
@@ -283,6 +297,8 @@ WAVE_TWO_SOURCE_PATHS = (
     'crates/iroha_primitives/tests/addr_parsing.rs',
     'crates/iroha_primitives/tests/numeric_inspect.rs',
     'crates/iroha_primitives/tests/numeric_abi_encoding_allocations.rs',
+    'crates/iroha_primitives/tests/json_retained_allocation.rs',
+    'crates/iroha_primitives/tests/numeric_retained_allocation.rs',
     'crates/iroha_primitives/tests/ui.rs',
     'crates/iroha_zkp_halo2/tests/vega_engine_reachability.rs',
     'crates/iroha_zkp_halo2/tests/vega_microsoft_cross_conformance.rs',
@@ -311,8 +327,9 @@ SERIAL_CALL = "    let _serial = crate::serial_guard();\n"
 
 
 def _test_tables(manifest: str) -> list[str]:
+    # A comment above the next table is not part of this one.
     return [
-        table.strip()
+        re.sub(r"(?m)^#.*\n?", "", table).strip()
         for table in re.findall(r"(?ms)^\[\[test\]\]\n(.*?)(?=^\[|\Z)", manifest)
     ]
 
@@ -593,6 +610,7 @@ class WaveThreeAggregate:
 
 WAVE_THREE_TARGETS = (
     ("crates/iroha", "tx_ttl", "tx_ttl.rs"),
+    ("crates/iroha", "sdk_phase_tree_measurement", "sdk_phase_tree_measurement.rs"),
     ("crates/iroha_p2p", "mod", "mod.rs"),
     ("crates/norito_derive", "strict_json", "strict_json.rs"),
     ("crates/norito_derive", "ui", "ui.rs"),
@@ -636,6 +654,7 @@ WAVE_THREE_AGGREGATES = (
 
 WAVE_THREE_TOP_LEVEL_RS = {
     "crates/iroha": (
+        "sdk_phase_tree_measurement.rs",
         "sm_signing.rs",
         "tx_ttl.rs",
     ),
@@ -652,6 +671,7 @@ WAVE_THREE_TOP_LEVEL_RS = {
 
 WAVE_THREE_SOURCE_PATHS = (
     'crates/iroha_p2p/tests/production_source_reachability.rs',
+    'crates/iroha/tests/sdk_phase_tree_measurement.rs',
     'crates/iroha/tests/sm_signing.rs',
     'crates/iroha/tests/tx_ttl.rs',
     'crates/iroha_p2p/tests/mod.rs',

@@ -1986,18 +1986,24 @@ def test_node_local_validity_limits_are_checked_against_the_typed_catalogs() -> 
     assert len(catalogs["execution_policy_digest_v1"]["fields"]) == 15
     assert len(catalogs["zk_consensus_policy_hash"]["fields"]) == 45
     assert len(catalogs["nexus_consensus_policy_v1"]["fields"]) == 4
-    # The execution-policy digest binds 157 fields: fraud is one exact typed policy,
+    # The execution-policy digest binds 152 fields: fraud is one exact typed policy,
     # and ten committee sizes come from a loop. Ordinary signing admission now has
     # the separate committed CryptoAdmissionPolicyV1 owner, so the four retired
-    # node-local crypto fields are absent from this digest.
+    # node-local crypto fields are absent from this digest, and the runtime-upgrade
+    # provenance policy left with the manifest records it admitted.
     execution_source = (ROOT / catalogs["execution_policy_digest_v1"]["path"]).read_text(encoding="utf-8")
     execution_fields = CHECKER["catalog_fields"](execution_source, catalogs["execution_policy_digest_v1"], "t")
-    assert len(execution_fields) == 157
+    assert len(execution_fields) == 152
     assert {
         "crypto.default_hash",
         "crypto.allowed_signing",
         "crypto.sm2_distid_default",
         "crypto.allowed_curve_ids",
+        "governance.runtime_upgrade_provenance.mode",
+        "governance.runtime_upgrade_provenance.require_sbom",
+        "governance.runtime_upgrade_provenance.require_slsa",
+        "governance.runtime_upgrade_provenance.signature_threshold",
+        "governance.runtime_upgrade_provenance.trusted_signers",
     }.isdisjoint(execution_fields)
     assert "governance.fma_committee_size" in execution_fields
     # The Nexus digest is not a catalog of identities only: it is the third catalog.
@@ -2363,6 +2369,7 @@ def test_catalog_field_reader(tmp_path: Path) -> None:
         "catalogs: `execution_output_policy_v1` is checked against the source",
         "catalogs: `fastpq_source_policy_v1` is checked against the source",
         "catalogs: `fraud_admission_policy_v1` is checked against the source",
+        "catalogs: `private_settlement_validity_v1` is checked against the source",
     ]
     assert [(catalog["id"], field) for catalog, field in unlisted] == [
         ("zk_consensus_policy_hash", "pipa_r.max_proof_bytes"),
@@ -4822,10 +4829,12 @@ def test_every_term_of_the_path_crates_is_pinned_with_the_limits_it_is_part_of()
     assert len(excluded_terms) >= 40, len(excluded_terms)
     # Terms are followed into the other crates of the workspace.
     assert outside >= 30, outside
-    assert terms["crates/iroha_primitives/src/json.rs"]["MAX_JSON_BYTES"] == [
-        "crates/iroha_core/src/compliance/mod.rs: LANE_COMPLIANCE_POLICY_MAX_FIELD_BYTES",
-        "crates/iroha_data_model/src/nexus/runtime_catalog.rs: MAX_NEXUS_RUNTIME_CATALOG_BYTES",
+    assert terms["crates/sorafs_manifest/src/pop_credentials.rs"]["POP_MEMBERSHIP_PROOF_MAX_BYTES_V1"] == [
+        "crates/iroha_core/src/smartcontracts/isi/sorafs_moderation.rs: PROOF_LIMITS",
+        "crates/iroha_torii/src/sorafs/pop_api.rs: POP_PROOF_REQUEST_MAX_BYTES_V1",
     ]
+    # A constant the compared code names directly is imported and listed, not a term.
+    assert "MAX_JSON_BYTES" in imported["crates/iroha_primitives/src/json.rs"]
     assert bound(CONTRACT, "transaction.json_document_max_bytes")["owner"]["symbol"] == "MAX_JSON_BYTES"
     # This imported term has a dedicated fixed-geometry classification. Pin its
     # exact owner, expressions, consumer and reason instead of relabelling it.
@@ -4849,9 +4858,22 @@ def test_every_term_of_the_path_crates_is_pinned_with_the_limits_it_is_part_of()
         "generic frame-sizing ceiling transport.max_committee_size; neither is a "
         "local tuning knob."
     )
+    # The fixed BLS key width in the query committee's allocation geometry is pinned the same way.
+    bls_term = ("crates/iroha_crypto/src/signature/bls/consensus.rs", "PUBLIC_KEY_LEN")
+    bls_holder, bls_reason = holders[bls_term]
+    assert bls_holder["symbols"] == ["PUBLIC_KEY_LEN"]
+    assert bls_holder["exprs"] == {"PUBLIC_KEY_LEN": "48"}
+    assert bls_holder["term_of"] == {
+        "PUBLIC_KEY_LEN": ["crates/iroha_core/src/sumeragi/crypto.rs: maximum_query_committee_allocation_bytes"]
+    }
+    assert excluded_terms[bls_term] == bls_holder["term_of"]["PUBLIC_KEY_LEN"]
+    assert bls_reason.startswith(
+        "Closed native BLS authority allocation geometry, not a new request or protocol ceiling."
+    )
+    assert "The 48-byte constant is the fixed canonical BLS-normal compressed public-key width" in bls_reason
     # Every other term retains the general term classification.
     for key in excluded_terms:
-        if key != geometry_term:
+        if key not in (geometry_term, bls_term):
             assert holders[key][1].startswith("Terms of excluded limits"), key
     # The cases a reviewer would try: a term of a product limit, of a limit function, of a
     # limit of another crate and of another term.

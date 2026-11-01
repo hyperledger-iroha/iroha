@@ -20,7 +20,7 @@ WORKFLOW_BUILD = (
     "run: dotnet build Hyperledger.Iroha.Sdk.sln -c Release --no-restore "
     "-warnaserror"
 )
-WORKFLOW_TEST = "run: dotnet test Hyperledger.Iroha.Sdk.sln -c Release --no-build"
+WORKFLOW_TEST = "run: dotnet test --solution Hyperledger.Iroha.Sdk.sln -c Release --no-build"
 WORKFLOW_PACK = (
     "run: dotnet pack src/Hyperledger.Iroha.Sdk/Hyperledger.Iroha.Sdk.csproj "
     "-c Release --no-build --output artifacts/packages"

@@ -4972,6 +4972,7 @@ dependencies = [
  "iroha_executor_data_model",
  "iroha_fs",
  "iroha_genesis",
+ "iroha_managed_ipc",
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_operation_journal",
@@ -4996,7 +4997,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "time",
- "tokio",
  "toml",
  "url",
  "windows-sys 0.61.2",
@@ -5275,6 +5275,26 @@ name = "iroha_macro"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_derive",
+]
+
+[[package]]
+name = "iroha_managed_ipc"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "blake3",
+ "hex",
+ "iroha_fs",
+ "iroha_primitives",
+ "libc",
+ "norito",
+ "rand 0.10.3",
+ "rustix 1.1.6",
+ "socket2",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "windows-sys 0.61.2",
+ "zeroize",
 ]
 
 [[package]]
@@ -6142,6 +6162,7 @@ dependencies = [
  "iroha_genesis",
  "iroha_i18n",
  "iroha_logger",
+ "iroha_managed_ipc",
  "iroha_model_base",
  "iroha_musubi_service",
  "iroha_operation_journal",
@@ -10661,6 +10682,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tokio-rustls",
  "toml",
  "tonic",
  "tonic-prost",

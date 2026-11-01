@@ -659,8 +659,11 @@ def test_first_release_requires_only_current_kotlin_jni_namespace() -> None:
             raise AssertionError("foreign legacy namespace escaped current ownership")
 
 
-def test_native_domain_admission_is_required_for_both_c_deliverables() -> None:
-    missing = "connect_norito_domain_id_validate_v1"
+@pytest.mark.parametrize("missing", [
+    "connect_norito_domain_id_validate_v1",
+    "connect_norito_name_validate_v1",
+])
+def test_native_identity_admission_is_required_for_both_c_deliverables(missing: str) -> None:
     for sdk in ("c-jni", "csharp"):
         assert MODULE.REQUIRED_SYMBOLS[sdk].count(missing) == 1
         library = types.SimpleNamespace(**{
@@ -673,7 +676,7 @@ def test_native_domain_admission_is_required_for_both_c_deliverables() -> None:
             except MODULE.ArtifactContractError as error:
                 assert str(error) == "native C ABI artifact is missing required symbols: " + missing
             else:
-                raise AssertionError("native probe accepted missing canonical domain admission")
+                raise AssertionError("native probe accepted missing canonical identity admission")
 
 
 def test_current_fee_artifact_contract_requires_real_native_owners_and_rejects_retired_quote() -> None:
@@ -725,6 +728,7 @@ def test_current_inventory_is_exact_for_posix_and_windows() -> None:
             assert inventories[sdk] == MODULE.REQUIRED_SYMBOLS[sdk]
             assert len(inventories[sdk]) == len(set(inventories[sdk]))
             assert "connect_norito_domain_id_validate_v1" in inventories[sdk]
+            assert "connect_norito_name_validate_v1" in inventories[sdk]
             expected = MODULE.KAGEMUSHA_WALLET_C_EXPORTS + (
                 MODULE.KAGEMUSHA_WALLET_JNI_EXPORTS + MODULE.KAGEMUSHA_LOAD_ORIGINAL_JNI_EXPORTS if sdk == "c-jni" else ()
             )

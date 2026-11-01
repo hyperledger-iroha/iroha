@@ -12,6 +12,7 @@ use iroha_test_samples::ALICE_ID;
 #[allow(clippy::too_many_lines)]
 async fn account_query_subrouter_exposes_endpoints() {
     // Minimal Torii setup
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let account_id = ALICE_ID.clone();
     let domain_id: iroha_model_base::domain::DomainId =

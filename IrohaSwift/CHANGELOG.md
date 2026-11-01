@@ -4,6 +4,14 @@ All notable changes to `IrohaSwift` are documented in this file.
 
 ## [Unreleased]
 
+- 2026-10-31: Privacy capability manifest tests consume Core's canonical fixture,
+  including pending consensus and protocol resource-limit updates. Private-settlement
+  validity remains in its separate committed policy.
+
+- 2026-10-31: `ToriiParliamentAPIV1` layout tables state Core's actual Norito and event-kind
+  indices: the rows after `EndorsePublicFinding` keep the sparse numbers that the retired timed-OVN
+  transitions and no-result kinds still occupy in the codec.
+
 - 2026-10-30: `proposeRuntimeUpgrade(changeSet:provenance:)` posts `{change_set, provenance}`:
   the change set and the trusted release signers' `ToriiRuntimeChangeSetEndorsement`s the
   committed `runtime_provenance_policy_v1` requires (none for a root without that policy).

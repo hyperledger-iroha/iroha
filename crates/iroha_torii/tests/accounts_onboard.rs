@@ -23,7 +23,10 @@ use iroha_data_model::{
     isi::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     level::Level,
     nexus::PublicLaneMonetaryPlanV1,
-    parameter::{Parameter, system::SumeragiNposParameters},
+    parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+    },
     permission::Permission,
     prelude::{Account, Asset, AssetDefinition, Domain, Log},
     sns::{NameControllerV1, NameRecordV1},
@@ -210,9 +213,10 @@ fn build_onboarding_test_context_at(
     let stake_asset_id = staking.stake_asset_id.clone();
     let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
         .build(&authority_id);
-    let stake_definition = AssetDefinition::numeric(
+    let stake_definition = AssetDefinition::new(
         stake_asset_id.clone(),
         "Staked XOR".to_owned(),
+        iroha_primitives::numeric::NumericSpec::fractional(9),
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
@@ -242,11 +246,16 @@ fn build_onboarding_test_context_at(
         assets,
         [],
     );
-    world
-        .set_parameter_for_testing(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
-        .expect("valid default consensus parameters");
+    // Monetary and consensus policy is authored by the signed genesis; a parameter seeded into
+    // the pre-genesis World would be read as parent authority without its staking policy.
+    let npos = SumeragiNposParameters::default();
+    native_config.consensus_mode = SumeragiConsensusMode::Npos;
+    native_config.genesis_parameters.extend([
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            npos.epoch_length_blocks,
+        )),
+        Parameter::Custom(npos.into_custom_parameter()),
+    ]);
     install_account_alias_policy(&mut world, &authority_id, &fee_asset_id);
     install_universal_parent_lease(&mut world, &authority_id);
     for permitted in [authority_id.clone(), alternate_id] {

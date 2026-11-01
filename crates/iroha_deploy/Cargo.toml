@@ -37,6 +37,7 @@ iroha_executor_data_model = { workspace = true }
 color-eyre = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }
 iroha_fs = { path = "../iroha_fs" }
+iroha_managed_ipc = { workspace = true }
 iroha_config_base = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
 iroha_data_model = { workspace = true, default-features = false }
@@ -61,14 +62,13 @@ toml = { workspace = true }
 url = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["process", "net", "event"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-libc = "0.2"
+rustix = { version = "1.1.4", features = ["process"] }
 
 [target.'cfg(windows)'.dependencies]
-tokio = { workspace = true, features = ["rt", "net", "io-util", "time"] }
-windows-sys = { version = "0.61.2", features = ["Win32_System_Pipes", "Win32_System_Threading", "Win32_Storage_FileSystem", "Win32_Networking_WinSock"] }
+windows-sys = { version = "0.61.2", features = ["Win32_System_Threading"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 iroha_operation_journal = { workspace = true }

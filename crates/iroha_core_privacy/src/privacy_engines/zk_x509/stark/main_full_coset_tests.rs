@@ -1,4 +1,4 @@
-//! Proposed, unexecuted full-output public-prefix parity and custody controls.
+//! Full-output public-prefix parity and original-owner custody controls.
 
 use super::*;
 use crate::privacy_engines::transparent_stark::{
@@ -17,20 +17,39 @@ fn horner(coefficients: &[F], point: F) -> F {
 // under the full specialization means every output. Exercise both compile-time
 // inner schedules and compare all four leaves with independent Horner values.
 fn static_destination_extents_v1<const INNER_PARALLEL: bool>() {
+    // The actual recursion must return unit, including its empty-output base case.
+    type UnitPrune = fn(&mut [F], usize, &[F], F, usize, FullPrefixBackendV1);
+    let selected_prune: UnitPrune = prune_v1::<INNER_PARALLEL, false, ()>;
+    let full_prune: UnitPrune = prune_v1::<INNER_PARALLEL, true, ()>;
     let original = [F(2), F(3), F(5), F(7)];
     let root = goldilocks_primitive_root_v1(2).unwrap();
     let mut no_outputs = original;
-    prune_v1::<INNER_PARALLEL, false>(&mut no_outputs, 0, &[], root, 4);
+    selected_prune(
+        &mut no_outputs,
+        0,
+        &[],
+        root,
+        4,
+        FullPrefixBackendV1::Scalar,
+    );
     assert_eq!(no_outputs, original);
     let mut full_outputs = original;
-    prune_v1::<INNER_PARALLEL, true>(&mut full_outputs, 0, &[], root, 4);
+    full_prune(
+        &mut full_outputs,
+        0,
+        &[],
+        root,
+        4,
+        FullPrefixBackendV1::Scalar,
+    );
     let mut every_selected_output = original;
-    prune_v1::<INNER_PARALLEL, false>(
+    selected_prune(
         &mut every_selected_output,
         0,
         &[F(0), F(1), F(2), F(3)],
         root,
         4,
+        FullPrefixBackendV1::Scalar,
     );
     assert_eq!(full_outputs, every_selected_output);
     assert_ne!(full_outputs, original);
@@ -73,7 +92,7 @@ fn full_prefix_matches_dense_fft_and_horner_at_every_public_split() {
                     masked_trace_coefficients_on_coset_v1(&coefficients, 1, common).unwrap(),
                 );
                 let actual = pool
-                    .install(|| evaluate_full_v1(&coefficients, 1, common))
+                    .install(|| evaluate_full_scalar_v1(&coefficients, 1, common))
                     .unwrap();
                 assert_eq!(&*actual, &*expected);
                 let root = goldilocks_primitive_root_v1(common).unwrap();
@@ -114,11 +133,50 @@ fn full_prefix_retains_long_mask_tail_and_parallel_public_splits() {
                 .build()
                 .unwrap();
             let actual = pool
-                .install(|| evaluate_full_v1(&coefficients, native, common))
+                .install(|| evaluate_full_scalar_v1(&coefficients, native, common))
                 .unwrap();
             assert_eq!(&*actual, &*expected);
         }
     }
+}
+
+#[test]
+fn full_prefix_unit_output_preserves_values_allocation_and_clearing() {
+    let coefficients = Column::from_vec_v1(vec![F(11); 21]);
+    let expected =
+        Column::from_vec_v1(masked_trace_coefficients_on_coset_v1(&coefficients, 4, 6).unwrap());
+    let original = std::cell::Cell::new(core::ptr::null());
+    let ((), cleared) = aggregate::field_column_erasure::observe_v1(|| {
+        // This type annotation checks the actual shared owner, not a wrapper
+        // that could silently discard a test-only counter result.
+        let (actual, ()): (Column, ()) = evaluate_full_owner_v1::<()>(
+            &coefficients,
+            4,
+            6,
+            FullPrefixBackendV1::Scalar,
+            |values| {
+                original.set(values.as_ptr());
+                Ok(())
+            },
+            |values| {
+                assert_eq!(values.as_ptr(), original.get());
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert_eq!(actual.as_ptr(), original.get());
+        assert_eq!(&*actual, &*expected);
+        let root = goldilocks_primitive_root_v1(6).unwrap();
+        for (row, &value) in actual.iter().enumerate() {
+            let point = F(GOLDILOCKS_GENERATOR_V1).mul(root.pow(row as u128));
+            assert_eq!(value, horner(&coefficients, point));
+        }
+        drop(actual);
+    });
+    assert_eq!(cleared.len(), 1);
+    assert_eq!(cleared[0].cells, 64);
+    assert!(cleared[0].nonzero_before > 0);
+    assert_eq!(cleared[0].nonzero_after, 0);
 }
 
 #[test]
@@ -139,7 +197,7 @@ fn full_prefix_rejects_original_bad_inputs_before_private_writes() {
             .err()
             .unwrap();
         let (actual, erased) = inspection::observe_v1(|| {
-            evaluate_full_with_v1(
+            evaluate_full_scalar_with_v1(
                 &values,
                 native,
                 common,
@@ -156,7 +214,7 @@ fn full_prefix_rejects_original_bad_inputs_before_private_writes() {
 fn full_prefix_returns_original_allocation_and_clears_populated_failure_paths() {
     let coefficients = vec![F(11); 21];
     let original = std::cell::Cell::new(std::ptr::null());
-    let output = evaluate_full_with_v1(
+    let output = evaluate_full_scalar_with_v1(
         &coefficients,
         4,
         6,
@@ -186,7 +244,7 @@ fn full_prefix_returns_original_allocation_and_clears_populated_failure_paths() 
             };
             let (result, erased) = inspection::observe_v1(|| {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    evaluate_full_with_v1(
+                    evaluate_full_scalar_with_v1(
                         &coefficients,
                         4,
                         6,
@@ -250,7 +308,7 @@ fn full_prefix_cpu_batch_keeps_original_columns_and_device_boundary() {
 }
 
 #[test]
-#[ignore = "full common22 public-prefix parity at every registered native domain; unqualified draft"]
+#[ignore = "explicit full common22 scalar parity at every registered native domain"]
 fn full_prefix_registered_domains_keep_every_output_and_mask_tail() {
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
     let domains = layout
@@ -263,8 +321,8 @@ fn full_prefix_registered_domains_keep_every_output_and_mask_tail() {
         let native_values = (0..1usize << native)
             .map(|index| F((index * 17 + 13) as u64))
             .collect::<Vec<_>>();
-        let mask = (0..1816_u64)
-            .map(|index| F(index * 29 + 7))
+        let mask = (0..MASK_DEGREE + 1)
+            .map(|index| F((index * 29 + 7) as u64))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(
             masked_trace_coefficients_with_mask_v1(&native_values, native, &mask).unwrap(),
@@ -278,9 +336,13 @@ fn full_prefix_registered_domains_keep_every_output_and_mask_tail() {
                 .build()
                 .unwrap();
             let actual = pool
-                .install(|| evaluate_full_v1(&coefficients, native, 22))
+                .install(|| evaluate_full_scalar_v1(&coefficients, native, 22))
                 .unwrap();
             assert_eq!(&*actual, &*expected);
         }
     }
 }
+
+#[cfg(target_arch = "x86_64")]
+#[path = "main_full_coset_avx2_tests.rs"]
+mod avx2_dif;

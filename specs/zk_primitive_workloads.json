@@ -2973,6 +2973,11 @@
      "path": "crates/iroha_plonk/src/transcript/mod.rs",
      "symbol": "pub const INSTANCE_FRAME_TAG: [u8; 8] = *b\"pipainst\";",
      "compiled": "production"
+    },
+    {
+     "path": "crates/iroha_plonk/src/contract.rs",
+     "symbol": "pub const PIPA_R_PROOF_DOMAIN: [u8; 8] = *b\"pipa-rb1\";",
+     "compiled": "production"
     }
    ],
    "canonical_native": {
@@ -3005,6 +3010,11 @@
      "path": "crates/iroha_plonk/src/transcript/pipa_r.rs",
      "symbol": "pub fn derive_cancellable(",
      "literals": ["Blake2bPersonal::<64>::new(persona)", "hasher.update(digest);"],
+     "compiled": "production"
+    },
+    {
+     "path": "crates/iroha_plonk/src/contract.rs",
+     "symbol": "pub(crate) const VK_TRANSCRIPT_DOMAIN: &[u8; 16] = b\"Iroha-PlonkVK-v2\";",
      "compiled": "production"
     }
    ],
@@ -3701,6 +3711,11 @@
   "privacy-substrate": {
    "description": "Shared privacy STARK substrate: outer hash, transparent STARK driver, shared note AIR and helpers.",
    "uses": {
+    "keccak": {
+     "class": "standard-internal",
+     "note": "The paired outer SHA3-384 row streams call the shared Keccak permutation; framing and finalization remain owned by SHA3-384.",
+     "roles": ["privacy-substrate.outer-sha3-384"]
+    },
     "digest384": {
      "class": "role",
      "note": "Separate typed Goldilocks digest helpers and proof-family references; the Exact12 catalog itself is raw32.",
@@ -5076,12 +5091,17 @@
    "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs": ["digest384", "poseidon", "sha2-512"],
    "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark_digest_tests.rs": ["digest384", "shake"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/initial_preflighted_cost_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/joined_initial_coalescing.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/joined_trace.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/joined_trace_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/reduced_trace_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/retained_commitment.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/retained_commitment_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/retained_polynomial_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/retained_scalar_commitment.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/retained_scalar_commitment_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/row_streams.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/streaming_commitment.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/streaming_commitment_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/anonymous_pgc.rs": ["sha2-256"],
@@ -5145,6 +5165,7 @@
    "crates/iroha_core_privacy/src/privacy_engines/pq_masp/stark.rs": ["iroha-hash", "sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/pq_masp/wire.rs": ["hkdf", "iroha-hash", "sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash.rs": ["blake3", "poseidon", "sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_pair.rs": ["keccak", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/proof_managed_accumulator.rs": ["sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/proof_managed_note_stark.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/prover_randomness.rs": ["sha2-256"],
@@ -5226,12 +5247,15 @@
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_links_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_resources.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_resources_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_composition_ownership_tests.rs": ["sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_digest_joins.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_replay_batch_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fp4_air_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fri_retention_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_initial_readonly_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_joint.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_key_joins.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_log16_fixed_cost_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_mask_sampling_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_native_boundary_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_oods_tests.rs": ["sha2-256", "sha3"],
@@ -5239,13 +5263,14 @@
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_crl_times.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_sha_digests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_sha_digests_tests.rs": ["sha2-256"],
-   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_denominator_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_denominator_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resource_tests.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resources.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_fp4_air_tests.rs": ["sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_union.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_sha_union_tests.rs": ["sha2-256"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_family_batch_tests.rs": ["sha3"],
+   "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_linear_tests.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_links.rs": ["sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay.rs": ["sha2-256", "sha3"],
    "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/native_registration_tests.rs": ["sha2-256", "sha3"],
@@ -5842,9 +5867,8 @@
    "crates/iroha_torii/src/zk_prover.rs": ["blake2b", "iroha-hash", "poseidon", "poseidon2", "sha2-256", "sha2-512"],
    "crates/iroha_torii/src/zk_prover/scanner_tests.rs": ["blake2b", "poseidon", "sha2-256"],
    "crates/iroha_torii/tests/kaigi_operator_reads.rs": ["blake2b"],
-   "crates/iroha_torii/tests/zk_endpoints.rs": ["iroha-hash"],
    "crates/iroha_torii/tests/zk_proofs_query_integration.rs": ["iroha-hash"],
-   "crates/iroha_torii/tests/zk_roots_handler_integration.rs": ["iroha-hash", "pedersen", "poseidon"],
+   "crates/iroha_torii/tests/zk_roots_handler_integration.rs": ["pedersen", "poseidon"],
    "crates/iroha_torii/tests/zk_vk_post_integration.rs": ["iroha-hash"],
    "crates/iroha_zkp_halo2/src/backend/bn254.rs": ["sha3"],
    "crates/iroha_zkp_halo2/src/backend/pallas.rs": ["sha3"],
@@ -6143,6 +6167,7 @@
    "crates/ivm/src/cuda_dispatch/measured.rs": ["poseidon", "poseidon2"],
    "crates/ivm/src/cuda_policy.rs": ["keccak", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/cuda_provenance.rs": ["sha2-256"],
+   "crates/ivm/src/game_unit_step.rs": ["iroha-hash"],
    "crates/ivm/src/gas.rs": ["blake2s", "iroha-hash", "pedersen", "poseidon", "poseidon2", "sha2-256"],
    "crates/ivm/src/host.rs": ["blake2b", "iroha-hash", "keccak", "sha2-256", "sha3", "sm3"],
    "crates/ivm/src/host/tests/quantity_pointer_tests.rs": ["iroha-hash", "sha2-256"],
@@ -6515,6 +6540,7 @@
    "crates/iroha_js_codec#other": ["blake2b", "iroha-hash", "sha2-256"],
    "crates/iroha_js_host#other": ["blake2b", "iroha-hash"],
    "crates/iroha_kagami#other": ["blake3", "iroha-hash", "sha2-256"],
+   "crates/iroha_managed_ipc#other": ["blake3"],
    "crates/iroha_measurement#other": ["sha2-256"],
    "crates/iroha_model_base#other": ["iroha-hash", "sha2-256"],
    "crates/iroha_musubi_service#other": ["blake3", "iroha-hash", "sha2-256"],

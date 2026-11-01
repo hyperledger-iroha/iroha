@@ -16182,7 +16182,7 @@
    "component": "specs",
    "role": "generated_artifact",
    "tasks": ["V.1"],
-   "summary": "Generated inventories that list RAM-LFE and FHE routes, environment toggles and panic boundaries.",
+   "summary": "Generated inventories that list RAM-LFE and FHE routes and runtime definitions, environment toggles and panic boundaries.",
    "files": [
     {"path": "fixtures/sorafs/source_contracts/open_work.tsv", "patterns": ["mkhe"], "test_only": true},
     {"path": "scripts/panic_recovery_boundaries.inventory", "patterns": ["bfv", "ram_lfe", "rns"]},
@@ -16469,7 +16469,6 @@
    "summary": "Source guards, estimators and feature-hygiene checks that name BFV, FHE, RAM-LFE or MKHE identifiers, the scanner image's FHE fixture build guidance, the workflow and Makefile entries that run this inventory's checker, and the registry of generated files, which names the two generated RNS-BGV vector files.",
    "files": [
     {"path": ".github/workflows/platform_native.yml", "patterns": ["fhe", "rns"]},
-    {"path": "scripts/run_guards.py", "patterns": ["bgv", "fhe"]},
     {"path": "scripts/tests/zk_resource_harness_public_delivery_test.py", "patterns": ["bgv", "fhe"], "test_only": true},
     {"path": ".github/workflows/pr.yml", "patterns": ["bgv", "fhe"]},
     {"path": ".oss-scanner/Dockerfile", "patterns": ["fhe"]},
@@ -16483,6 +16482,7 @@
     {"path": "scripts/check_zk_primitive_workloads.py", "patterns": ["mkhe"]},
     {"path": "scripts/check_zk_resource_contract.py", "patterns": ["ram_lfe"]},
     {"path": "scripts/check_zk_runtime_validity.py", "patterns": ["bfv", "bgv", "fhe", "mkhe"]},
+    {"path": "scripts/run_guards.py", "patterns": ["bgv", "fhe"]},
     {
      "path": "scripts/tests/check_zk_operation_inventory_test.py",
      "patterns": ["bfv", "fhe", "hkdf", "hkdf_ram_lfe", "mkhe", "ram_lfe"],

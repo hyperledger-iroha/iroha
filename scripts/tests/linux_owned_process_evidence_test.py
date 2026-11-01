@@ -8,8 +8,10 @@ from pathlib import Path
 import sys
 import types
 import unittest
+from unittest.mock import Mock
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 import linux_owned_process_evidence as evidence
 import private_settlement_process_observer as observer
 import private_settlement_session_control as control
@@ -32,12 +34,16 @@ def records_fixture(exit_code=0):
             'module_sha256':'b'*64,'provenance_sha256':'c'*64,'source_manifest_sha256':'d'*64,
             'cargo_lock_sha256':'e'*64,'native_target':'x86_64-unknown-linux-gnu'}}
     lifecycle={'version':1,'kind':'linux_owned_final_lifecycle','native_json':control.canonical(native).decode(),
-        'wait4':{'pid':12345,'status':exit_code<<8,'cpu_user_ns':150_000_000,'cpu_system_ns':180_000_000},
+        'wait4':{'pid':12345,'status':exit_code<<8,'cpu_user_ns':150_000_000,'cpu_system_ns':180_000_000,
+                 'peak_rss_bytes':4096},
         'wnowait':dict(native['terminal']),'finish_before_reap':True}
     process={'pid':12345,'exit':{'kind':'exited','code':exit_code},'timed_out':False,
         'cpu_user_ns':150_000_000,'cpu_system_ns':180_000_000,
+        'peak_rss_bytes':4096,'peak_rss_source':'kernel_child_rusage',
         'sampled':{'state':'not_sampled','observations':1}}
     baseline={'started_monotonic_ns':19,'finished_monotonic_ns':31,
+        'cpu_time_ns':reader['capture']['sample']['cpu_time_ns'],
+        'rss_bytes':reader['capture']['sample']['rss_bytes'],
         'processes':[dict(label='measured_command',**copy.deepcopy(reader['capture']['sample']))]}
     context={'artifact':'sha256:'+identity['executable_sha256']}
     return admission,lifecycle,terminal,process,baseline,context
@@ -82,7 +88,7 @@ class EvidenceControls(unittest.TestCase):
             with self.assertRaises((ValueError,RuntimeError)):self.validate(values)
 
     def test_every_wait4_field_and_wnowait_join_refuses_mutation(self):
-        for key in ('pid','status','cpu_user_ns','cpu_system_ns'):
+        for key in ('pid','status','cpu_user_ns','cpu_system_ns','peak_rss_bytes'):
             values=records_fixture();values[1]['wait4'][key]+=1
             with self.assertRaises(observer.ProcessObservationError):self.validate(values)
         for key in ('pid','code','status'):
@@ -90,6 +96,48 @@ class EvidenceControls(unittest.TestCase):
             with self.assertRaises(observer.ProcessObservationError):self.validate(values)
         values=records_fixture();values[1]['finish_before_reap']=False
         with self.assertRaises(observer.ProcessObservationError):self.validate(values)
+
+    def test_wait4_peak_must_match_outer_accounting_without_ordering_sampled_rss(self):
+        for change in (
+            lambda values: values[3].update(peak_rss_bytes=1),
+            lambda values: values[3].update(peak_rss_bytes=True),
+            lambda values: values[3].update(peak_rss_source='kernel_lifetime_high_water'),
+            lambda values: values[1]['wait4'].pop('peak_rss_bytes'),
+        ):
+            values=records_fixture();change(values)
+            with self.assertRaises((ValueError,KeyError,RuntimeError)):self.validate(values)
+            process,snapshot,context=self.snapshot(values)
+            self.assertEqual(evidence.replay(process,snapshot,context,1000,
+                expected_delivery=EXPECTED,required_linux=True),['linux_owned_evidence_invalid'])
+        values=records_fixture()
+        values[3]['peak_rss_bytes']=values[1]['wait4']['peak_rss_bytes']=1
+        self.validate(values)
+        for peak,valid in ((4096,True),(4097,True),(4095,False),(True,False)):
+            values=records_fixture()
+            values[3]['sampled'].update(state='validated',observations=2,
+                sampled_cpu_time_ns=0,sampled_peak_rss_bytes=peak)
+            if valid:self.validate(values)
+            else:
+                with self.assertRaises(observer.ProcessObservationError):self.validate(values)
+
+    def test_publication_retains_the_original_wait4_peak_in_linux_bytes(self):
+        admission,lifecycle,terminal,process,_,_=records_fixture()
+        owner=types.SimpleNamespace(joined=True,finish_attempted=True,
+            waited=(12345,0,types.SimpleNamespace(ru_maxrss=7)),
+            native=types.SimpleNamespace(final_raw=lifecycle['native_json'].encode(),supervisor=23456),
+            child=types.SimpleNamespace(pid=12345),wnowait=lifecycle['wnowait'],terminal_fact=terminal,
+            module_owner=types.SimpleNamespace(validate=Mock(),evidence=lambda:admission['delivery']),
+            workload=types.SimpleNamespace(validate=Mock()),
+            reader=types.SimpleNamespace(admission=lambda:admission['reader']))
+        records=types.SimpleNamespace(publish=Mock(side_effect=lambda path,raw:json.loads(raw)))
+        result=evidence.publish(owner,records,0,process['cpu_user_ns'],process['cpu_system_ns'],
+                                process['sampled'],1000)
+        self.assertEqual(result['lifecycle']['wait4']['peak_rss_bytes'],7*1024)
+        for invalid in (None,True,0,-1,1.5,1<<64):
+            owner.waited[2].ru_maxrss=invalid
+            with self.assertRaises(observer.ProcessObservationError):
+                evidence.publish(owner,records,0,process['cpu_user_ns'],process['cpu_system_ns'],
+                                 process['sampled'],1000)
 
     def test_native_negative_loss_or_exec_cannot_authenticate_terminal(self):
         for key,value in [('lifecycle_certified',False),('finalized',False),

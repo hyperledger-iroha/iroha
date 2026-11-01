@@ -15,6 +15,8 @@ on:
       - "crates/iroha_config_base/**"
       - "crates/iroha_operation_journal/**"
       - "crates/iroha_fhe/**"
+      - "crates/iroha_core_privacy/**"
+      - "crates/ivm/**"
       - "crates/iroha_measurement/**"
       - "crates/iroha_plonk/build.rs"
       - "crates/iroha_plonk/build_support/**"
@@ -100,7 +102,7 @@ jobs:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: 1.93.1
+          toolchain: 1.99.1
           # Test jobs keep normal compiler warnings; explicit Clippy steps stay strict.
           rustflags: ""
           components: clippy
@@ -174,8 +176,90 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture 2>&1 | tee target/platform-native/avx2.log
+          grep -Fq 'test result: ok. 1 passed; 0 failed; 0 ignored;' target/platform-native/avx2.log
           cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors 2>&1 | tee target/platform-native/simd.log
           cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors 2>&1 | tee target/platform-native/scalar.log
+      - name: Require actual IVM SHA-NI production execution
+        if: runner.os != 'macOS'
+        # These x86-64 Linux/Windows qualification runners must expose SHA-NI.
+        # The required test rejects missing instructions and scalar fallback.
+        # Intel Mac runners retain their AVX2/scalar scope; SHA-NI is not assumed.
+        run: |
+          set -euo pipefail
+          cargo test --locked -p ivm --lib vector::sha256_cpu::tests::required_x86_sha_ni_executes_production_path_and_matches_scalar -- --ignored --exact --nocapture 2>&1 | tee target/platform-native/sha-ni.log
+          grep -Eq '^IVM_NATIVE_SHA256_RECEIPT architecture=x86_64 completed_blocks=[1-9][0-9]*$' target/platform-native/sha-ni.log
+          cargo test --locked -p ivm --test ivm_group_03 gas_bench_policy:: -- --test-threads=1 2>&1 | tee target/platform-native/gas-bench-policy.log
+      - name: Require production DIF execution and feature-off refusal
+        # All three native x86-64 AVX2 runners execute CPU controls, not GPU work.
+        # Keep the warm test profile and dependency settings; optimize only this
+        # arithmetic owner. Missing AVX2 fails the default-feature qualifiers.
+        # These are correctness controls, not named-host performance evidence.
+        run: |
+          set -euo pipefail
+          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
+            2>&1 | tee target/platform-native/dif-default.log
+          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib full_native_ -- --nocapture --test-threads=1 \
+            2>&1 | tee target/platform-native/dif-feature-off.log
+          set +e
+          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
+            2>&1 | tee target/platform-native/dif-feature-off-refusal.log
+          dif_pipeline_status=("${PIPESTATUS[@]}")
+          set -e
+          printf '%s\n' "${dif_pipeline_status[0]}" > target/platform-native/dif-feature-off-refusal-status.txt
+          test "${dif_pipeline_status[1]}" -eq 0
+          python - <<'PYTHON'
+          import json
+          from pathlib import Path
+          import re
+
+          root = Path("target/platform-native")
+          owner = "privacy_engines::zk_x509::stark::main_aggregate::main_transform::"
+          kernel = "privacy_engines::transparent_stark::avx2_test_kernel::dif::required_avx2_dif_windows_match_independent_modular_arithmetic"
+          required = [kernel] + [owner + "selected_coset::full_tests::avx2_dif::required_avx2_dif_" + suffix for suffix in (
+              "actual_full_batch_dispatch_keeps_original_outputs",
+              "keeps_allocation_erasure_and_original_fallback",
+              "owner_matches_scalar_dense_and_refusal_boundaries",
+              "registered_common22_outputs_fit_original_funding",
+          )]
+          ordinary = [owner + "full_dispatch_tests::full_native_" + suffix for suffix in (
+              "admission_is_feature_and_architecture_bound",
+              "feature_off_measured_batch_executes_scalar_and_clears",
+              "gate_requires_every_complete_registered_masked_length",
+          )]
+
+          def checked_log(filename, expected_names, expected_result):
+              text = (root / filename).read_text()
+              starts = list(re.finditer(r"(?m)^test (\S+) \.\.\.", text))
+              names = [match[1] for match in starts]
+              results = re.findall(r"test result: (ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;", text)
+              if len(names) != len(expected_names) or set(names) != set(expected_names) or results != [expected_result]:
+                  raise ValueError(f"{filename}: require the exact named tests and terminal counts")
+              return {
+                  match[1]: text[match.end():starts[index + 1].start() if index + 1 < len(starts) else len(text)]
+                  for index, match in enumerate(starts)
+              }
+
+          receipt = {"status": "REFUSED", "expected_native_refusal_admitted": False}
+          try:
+              receipt["feature_off_native_exit_status"] = int((root / "dif-feature-off-refusal-status.txt").read_text())
+              checked_log("dif-default.log", required, ("ok", "5", "0", "0"))
+              checked_log("dif-feature-off.log", ordinary, ("ok", "3", "0", "0"))
+              failures = checked_log("dif-feature-off-refusal.log", required, ("FAILED", "0", "5", "0"))
+              if receipt["feature_off_native_exit_status"] != 101:
+                  raise ValueError("feature-off native invocation must retain exit 101")
+              for name, failure in failures.items():
+                  message = "simd and actual AVX2 are mandatory" if name == kernel else "simd and actual AVX2 required"
+                  if message not in failure.splitlines():
+                      raise ValueError(f"{name}: missing explicit native admission refusal")
+              receipt.update(status="PASS", default_native_passed=5, feature_off_scalar_passed=3,
+                             feature_off_native_underlying_result="FAILED", feature_off_native_failed=5,
+                             expected_native_refusal_admitted=True)
+          except Exception as error:
+              receipt["reason"] = str(error)
+              raise
+          finally:
+              (root / "dif-result.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+          PYTHON
       - name: Exercise native configuration identity and operation journals
         run: |
           set -euo pipefail
@@ -267,7 +351,7 @@ jobs:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: 1.93.1
+          toolchain: 1.99.1
           # Test jobs keep normal compiler warnings; explicit Clippy steps stay strict.
           rustflags: ""
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
@@ -343,7 +427,7 @@ jobs:
           persist-credentials: false
       - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
         with:
-          toolchain: 1.93.1
+          toolchain: 1.99.1
           rustflags: ""
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
