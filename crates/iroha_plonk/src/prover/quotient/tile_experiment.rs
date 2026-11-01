@@ -1,6 +1,7 @@
 //! Isolated real-descriptor DAG tiling experiment; never a proof or timing gate.
 //! Compare tiled and row-wise evaluation on independently pinned real descriptors.
 
+use std::fmt::Write as _;
 use std::{hint::black_box, io::Read as _, path::Path, time::Instant};
 
 use iroha_measurement::probe::ProcessSnapshot;
@@ -266,8 +267,10 @@ fn actual_descriptor_node_major_tile_experiment() {
         std::env::var("DAG_TILE_DESCRIPTOR_SHA256").expect("independently pinned SHA256");
     let actual = Sha256::digest(&bytes)
         .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+        .fold(String::new(), |mut hex, byte| {
+            let _ = write!(hex, "{byte:02x}");
+            hex
+        });
     assert_eq!(expected, actual);
     let binding = DescriptorBinding::decode_v2(&bytes).unwrap();
     let width: usize = std::env::var("DAG_TILE_WIDTH").unwrap().parse().unwrap();

@@ -2805,7 +2805,7 @@ enum PipelineStatusKind {
     Rejected,
     Expired,
 }
-const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
+const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_mins(15);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_SLOP: usize = 1_024;
 const PIPELINE_STATUS_CACHE_INDEX_REBUILD_MULTIPLIER: usize = 4;
@@ -3350,7 +3350,7 @@ impl PipelineStatusCache {
         }
     }
     fn decrement_live_count(count: &AtomicUsize) {
-        let _ = count.fetch_update(
+        let _ = count.try_update(
             AtomicOrdering::Relaxed,
             AtomicOrdering::Relaxed,
             |current| Some(current.saturating_sub(1)),
@@ -13304,7 +13304,7 @@ async fn handler_runtime_propose_upgrade(
         Ok(fmt) => fmt,
         Err(resp) => return Ok(resp),
     };
-    let payload = crate::runtime::handle_runtime_propose_upgrade(body).await?;
+    let payload = crate::runtime::handle_runtime_propose_upgrade(body).await;
     Ok(crate::utils::respond_with_format(&payload, format))
 }
 async fn handler_runtime_cancel_upgrade(
@@ -13894,8 +13894,9 @@ fn soracloud_hosted_http_topology_section(app: &SharedAppState) -> norito::json:
     let latest_block_ms = view.query_ledger_time_ms();
     let wall_clock_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        });
     let now_ms = wall_clock_ms.max(latest_block_ms);
     let world = view.world();
     let mut active_capability_adverts = 0_u64;
@@ -14359,8 +14360,7 @@ fn transaction_submission_receipt_response(
         let submitted_at_height = u64::try_from(app.state.committed_height()).unwrap_or(0);
         let submitted_at_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
-            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-            .unwrap_or(0);
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
         let payload = TransactionSubmissionReceiptPayload {
             entrypoint_hash,
             signed_transaction_hash,
@@ -16485,7 +16485,7 @@ fn next_torii_proxy_request_id(
 ) -> Result<Hash, &'static str> {
     let sequence = app
         .torii_proxy_sequence
-        .fetch_update(
+        .try_update(
             std::sync::atomic::Ordering::Relaxed,
             std::sync::atomic::Ordering::Relaxed,
             |sequence| sequence.checked_add(1),
@@ -18251,7 +18251,7 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
         &verified_query.request,
         iroha_data_model::query::QueryRequest::Singular(_)
     ) {
-        return execute_torii_singular_query_via_fanout_for_routes_admitted(
+        return Box::pin(execute_torii_singular_query_via_fanout_for_routes_admitted(
             app,
             query_bytes,
             verified_query,
@@ -18259,7 +18259,7 @@ async fn execute_torii_query_via_fanout_for_routes_admitted(
             format,
             (envelope, fanout_reservation),
             proxy_memory,
-        )
+        ))
         .await;
     }
     // Iterable starts have no canonical cross-route projection.
@@ -22732,7 +22732,7 @@ fn resolve_hosted_http_runtime_target(
         method,
         uri,
     )
-    .ok_or_else(&no_healthy_replica)?;
+    .ok_or_else(no_healthy_replica)?;
     let placement_is_local = app
         .local_peer_id
         .as_ref()
@@ -28000,8 +28000,7 @@ async fn handler_iso_status(
     let updated_ms = status
         .updated_at()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0);
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
     let mut payload = norito::json::native::Map::new();
     payload.insert(
         "message_id".into(),
@@ -28927,8 +28926,7 @@ fn insert_iso_metadata_fields(
             let updated_at_ms = entry
                 .updated_at()
                 .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
-                .unwrap_or(0);
+                .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
             item.insert(
                 "updated_at_ms".into(),
                 norito::json::native::Value::from(updated_at_ms),
@@ -42258,13 +42256,14 @@ ingress,
         iroha_logger::info!(addr = %torii_address, "starting Torii HTTP server");
         // Bind before launching any background service. A bind failure must leave no detached
         // Torii workers behind in the caller's runtime.
-        let listener = match prebound_listener {
-            Some(listener) => adopt_torii_tcp_listener(&torii_address, listener),
-            None => bind_torii_tcp_listener(torii_address.clone()),
-        }
-        .change_context(Error::StartServer)
-        .attach("failed to bind to the specified address")
-        .attach_with(|| self.address.clone().into_attachment())?;
+        let listener = prebound_listener
+            .map_or_else(
+                || bind_torii_tcp_listener(torii_address.clone()),
+                |listener| adopt_torii_tcp_listener(&torii_address, listener),
+            )
+            .change_context(Error::StartServer)
+            .attach("failed to bind to the specified address")
+            .attach_with(|| self.address.clone().into_attachment())?;
         let https = match https {
             Some(prepared) => Some(
                 prepared

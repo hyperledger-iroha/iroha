@@ -7,8 +7,7 @@ use iroha_primitives::addr::socket_addr;
 use nonzero_ext::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt;
-#[path = "fixtures.rs"]
-mod fixtures;
+use crate::fixtures;
 /// The network of the signed genesis `build_torii` applied and bound into `cfg`.
 fn connect_network_id(cfg: &iroha_config::parameters::actual::Root) -> NetworkId {
     NetworkId::from_genesis_hash(cfg.genesis.expected_hash)
@@ -844,7 +843,9 @@ async fn connect_session_status_requires_management_token() {
         norito::json::from_slice(&body).expect("session status should be JSON");
     assert_eq!(payload.get("sid").and_then(|x| x.as_str()), Some(sid));
     assert_eq!(
-        payload.get("app_attached").and_then(|x| x.as_bool()),
+        payload
+            .get("app_attached")
+            .and_then(norito::json::native::Value::as_bool),
         Some(false)
     );
     app.shutdown().await;
@@ -1001,11 +1002,11 @@ async fn connect_ws_handshake_succeeds_when_enabled() {
             .parse()
             .expect("authorization header"),
     );
-    let (_ws, resp) = tokio_tungstenite::connect_async(request)
+    let (ws, resp) = tokio_tungstenite::connect_async(request)
         .await
         .expect("ws handshake ok");
     assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-    drop(_ws);
+    drop(ws);
     server.shutdown().await;
 }
 #[cfg(feature = "ws_integration_tests")]
@@ -1066,11 +1067,11 @@ async fn connect_ws_accepts_protocol_token() {
             .parse()
             .expect("protocol header"),
     );
-    let (_ws, resp) = tokio_tungstenite::connect_async(request)
+    let (ws, resp) = tokio_tungstenite::connect_async(request)
         .await
         .expect("ws handshake ok");
     assert_eq!(resp.status(), StatusCode::SWITCHING_PROTOCOLS);
-    drop(_ws);
+    drop(ws);
     server.shutdown().await;
 }
 #[cfg(feature = "ws_integration_tests")]
@@ -1160,24 +1161,18 @@ async fn connect_ws_closes_on_role_direction_mismatch() {
         };
         match msg {
             Ok(Message::Binary(bytes)) => {
-                if let Ok(frame) = proto::decode_connect_frame_bare(&bytes) {
-                    if let proto::FrameKind::Control(proto::ConnectControlV1::Close {
-                        reason,
-                        ..
+                if let Ok(frame) = proto::decode_connect_frame_bare(&bytes)
+                    && let proto::FrameKind::Control(proto::ConnectControlV1::Close {
+                        reason, ..
                     }) = frame.kind
-                    {
-                        if reason == "connect_role_direction_mismatch" {
-                            saw_connect_close = true;
-                            break;
-                        }
-                    }
+                    && reason == "connect_role_direction_mismatch"
+                {
+                    saw_connect_close = true;
+                    break;
                 }
             }
-            Ok(Message::Close(_)) => {
-                saw_ws_close = true;
-                break;
-            }
-            Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => {
+            Ok(Message::Close(_))
+            | Err(tokio_tungstenite::tungstenite::Error::ConnectionClosed) => {
                 saw_ws_close = true;
                 break;
             }
@@ -1697,5 +1692,4 @@ async fn connect_ws_rejects_query_token() {
 }
 include!("connect_gating_disabled_ws_test.rs");
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

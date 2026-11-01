@@ -244,7 +244,7 @@ async fn handle(
         admission,
         "native resource names state worker failed",
         move || {
-            let _memory = memory;
+            let memory = memory;
             // Retain the exact certified World and its immutable source view
             // before certificate work. The physical World writer is released
             // by this capture, so later commits cannot split proof and rows.
@@ -393,7 +393,7 @@ async fn handle(
                         .map_err(|_| "native names state serialization refused".to_owned())
                 })
                 .map_err(|error| refused("snapshot", snapshot_refusal_reason(&error)))?;
-            body.memory = Some(_memory);
+            body.memory = Some(memory);
             let content_type = match format {
                 ResponseFormat::Norito => "application/x-norito",
                 ResponseFormat::Json => "application/json",

@@ -146,9 +146,9 @@ mod tests {
         let mut argv = vec!["kagami-network", "create"];
         argv.extend_from_slice(arguments);
         let TestCli {
-            command: NetworkCommand::Create(args),
+            command: NetworkCommand::Create(create_args),
         } = TestCli::try_parse_from(argv)?;
-        args.run(&mut BufWriter::new(Vec::new()))
+        create_args.run(&mut BufWriter::new(Vec::new()))
     }
 
     fn load_node(config: &Path) -> actual::Root {

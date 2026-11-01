@@ -85,7 +85,10 @@ fn union_plan_uses_exact_existing_roles_streams_and_six_native_endpoints() {
         );
         for segment in 0..4 {
             let sha = layout
-                .registered_segment(SegmentAdapterIdV1::Sha256CallBus, segment as u16)
+                .registered_segment(
+                    SegmentAdapterIdV1::Sha256CallBus,
+                    u16::try_from(segment).unwrap(),
+                )
                 .unwrap();
             assert_eq!(sha.column_chunks, 2);
             assert_eq!(plan.sha_projection[segment][lane].group, sha.trace_group);
@@ -731,7 +734,7 @@ fn projection_union_batch_keeps_and_erases_every_private_allocation() {
     use super::super::super::super::private_table::{
         PrivateTableV1, inspection, zeroize_field_rows_v1,
     };
-    let (_, observed) = inspection::observe_v1(|| {
+    let ((), observed) = inspection::observe_v1(|| {
         let mut owner =
             PrivateTableV1::new(vec![vec![F(7); 4]; 8], zeroize_field_rows_v1::<Vec<F>>);
         assert!(prepare_union_batch_v1(&mut owner, 4).is_err());

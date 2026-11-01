@@ -8042,8 +8042,9 @@ fn lifecycle_journal_path(store_dir: &Path) -> PathBuf {
 }
 fn system_time_to_ms(time: SystemTime) -> u64 {
     time.duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 fn system_time_from_ms(ms: u64) -> Option<SystemTime> {
     std::time::UNIX_EPOCH.checked_add(Duration::from_millis(ms))

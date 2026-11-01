@@ -4,7 +4,9 @@
 //! checks. World seeding is for a caller-owned pre-chain component fixture;
 //! transaction seeding preserves ordinary before-image/apply/rollback semantics.
 
-use iroha_data_model::parameter::Parameter;
+use std::borrow::Borrow;
+
+use iroha_data_model::parameter::{Parameter, SumeragiParameters};
 use mv::cell::CellInitialization;
 
 use super::{World, WorldBlock, WorldTransaction};
@@ -46,11 +48,13 @@ impl World {
     /// Returns admission or full Cell initialization refusal before replacement.
     pub fn set_sumeragi_for_testing(
         &mut self,
-        consensus: iroha_data_model::parameter::SumeragiParameters,
+        consensus: impl Borrow<SumeragiParameters>,
     ) -> Result<(), ParameterFixtureError> {
         let budget = self.sccp_committee_generations.allocation_budget().clone();
         let original = self.parameters.view();
-        let prepared = original.get().prepare_sumeragi(&consensus, &budget)?;
+        let prepared = original
+            .get()
+            .prepare_sumeragi(consensus.borrow(), &budget)?;
         let controls = CellInitialization::<RetainedStateParameters>::try_reserve(&budget)?;
         let successor = prepared
             .into_successor(original.get(), &budget)
@@ -70,13 +74,13 @@ impl World {
     /// Returns original validation, finite-pool or physical allocation refusal.
     pub fn set_parameter_for_testing(
         &mut self,
-        parameter: Parameter,
+        parameter: impl Borrow<Parameter>,
     ) -> Result<(), ParameterFixtureError> {
         let budget = self.sccp_committee_generations.allocation_budget().clone();
         let original = self.parameters.view();
         let prepared = original
             .get()
-            .prepare_fixture_parameter(parameter, &budget)?;
+            .prepare_parameter(parameter.borrow(), &budget)?;
         let controls = CellInitialization::<RetainedStateParameters>::try_reserve(&budget)?;
         let successor = prepared
             .into_successor(original.get(), &budget)
@@ -99,13 +103,13 @@ impl WorldTransaction<'_, '_> {
     /// Returns original validation or ownership refusal without touching the Cell.
     pub fn set_parameter_for_testing(
         &mut self,
-        parameter: Parameter,
+        parameter: impl Borrow<Parameter>,
     ) -> Result<(), ParameterFixtureError> {
         let budget = self.sccp_committee_generations.allocation_budget().clone();
         let prepared = self
             .parameters
             .get()
-            .prepare_fixture_parameter(parameter, &budget)?;
+            .prepare_parameter(parameter.borrow(), &budget)?;
         prepared.check_source(self.parameters.get(), &budget)?;
         prepared
             .install(self.parameters.get_mut(), &budget)
@@ -122,10 +126,13 @@ impl WorldBlock<'_> {
     /// Returns original parsing, admission or source-identity refusal.
     pub fn set_parameter_for_testing(
         &mut self,
-        parameter: Parameter,
+        parameter: impl Borrow<Parameter>,
     ) -> Result<(), ParameterFixtureError> {
         let pool = self.sccp_committee_generations.allocation_budget();
-        let prepared = self.parameters.get().prepare_parameter(&parameter, pool)?;
+        let prepared = self
+            .parameters
+            .get()
+            .prepare_parameter(parameter.borrow(), pool)?;
         let next = prepared
             .into_successor(self.parameters.get(), pool)
             .map_err(|(_prepared, original)| original)?;
@@ -140,10 +147,13 @@ impl WorldBlock<'_> {
     /// Returns original parsing, admission or source-identity refusal.
     pub fn set_sumeragi_for_testing(
         &mut self,
-        consensus: iroha_data_model::parameter::SumeragiParameters,
+        consensus: impl Borrow<SumeragiParameters>,
     ) -> Result<(), ParameterFixtureError> {
         let pool = self.sccp_committee_generations.allocation_budget();
-        let prepared = self.parameters.get().prepare_sumeragi(&consensus, pool)?;
+        let prepared = self
+            .parameters
+            .get()
+            .prepare_sumeragi(consensus.borrow(), pool)?;
         let next = prepared
             .into_successor(self.parameters.get(), pool)
             .map_err(|(_prepared, original)| original)?;
@@ -159,10 +169,13 @@ impl WorldTransaction<'_, '_> {
     /// Returns original preparation or source refusal before mutation.
     pub fn set_sumeragi_for_testing(
         &mut self,
-        consensus: iroha_data_model::parameter::SumeragiParameters,
+        consensus: impl Borrow<SumeragiParameters>,
     ) -> Result<(), ParameterFixtureError> {
         let pool = self.sccp_committee_generations.allocation_budget();
-        let prepared = self.parameters.get().prepare_sumeragi(&consensus, pool)?;
+        let prepared = self
+            .parameters
+            .get()
+            .prepare_sumeragi(consensus.borrow(), pool)?;
         let next = prepared
             .into_successor(self.parameters.get(), pool)
             .map_err(|(_prepared, original)| original)?;
@@ -229,10 +242,10 @@ fn parameter_cell_for_testing(
 /// Returns the original refusal before first mutable access to the Cell.
 pub fn set_parameter_cell_for_testing(
     cell: &mut mv::cell::Block<'_, RetainedStateParameters, iroha_allocation::AllocationCharge>,
-    parameter: Parameter,
+    parameter: impl Borrow<Parameter>,
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), ParameterFixtureError> {
-    let prepared = cell.get().prepare_parameter(&parameter, budget)?;
+    let prepared = cell.get().prepare_parameter(parameter.borrow(), budget)?;
     let next = prepared
         .into_successor(cell.get(), budget)
         .map_err(|(_prepared, original)| original)?;
@@ -246,10 +259,10 @@ pub fn set_parameter_cell_for_testing(
 /// Returns the original refusal before changing the current/undo graph handles.
 pub fn set_sumeragi_cell_for_testing(
     cell: &mut mv::cell::Block<'_, RetainedStateParameters, iroha_allocation::AllocationCharge>,
-    consensus: iroha_data_model::parameter::SumeragiParameters,
+    consensus: impl Borrow<SumeragiParameters>,
     budget: &iroha_allocation::AllocationBudget,
 ) -> Result<(), ParameterFixtureError> {
-    let prepared = cell.get().prepare_sumeragi(&consensus, budget)?;
+    let prepared = cell.get().prepare_sumeragi(consensus.borrow(), budget)?;
     let next = prepared
         .into_successor(cell.get(), budget)
         .map_err(|(_prepared, original)| original)?;
@@ -292,8 +305,10 @@ mod tests {
         block.commit();
         let mut next = parameter_cell_block_for_testing(&world).unwrap();
         let first = next.get().clone();
-        let mut consensus = SumeragiParameters::default();
-        consensus.max_clock_drift_ms = 97;
+        let consensus = SumeragiParameters {
+            max_clock_drift_ms: 97,
+            ..SumeragiParameters::default()
+        };
         set_sumeragi_cell_for_testing(&mut next, consensus, budget).unwrap();
         assert!(first.same_version(next.get_before_block()));
         assert_eq!(next.get().sumeragi.max_clock_drift_ms, 97);
@@ -385,8 +400,8 @@ mod tests {
             let original_layout = match error {
                 ParameterFixtureError::Generations(
                     mv::cell::CellGenerationBackingError::Allocator { layout },
-                ) => layout,
-                ParameterFixtureError::Successor(
+                )
+                | ParameterFixtureError::Successor(
                     mv::cell::CellPublicationSuccessorError::Allocator { layout },
                 ) => layout,
                 other => panic!("unexpected refusal {other}"),

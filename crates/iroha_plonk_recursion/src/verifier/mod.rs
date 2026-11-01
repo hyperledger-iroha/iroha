@@ -973,10 +973,8 @@ impl<C: PastaCurve> VerifierChip<C> {
                 duplex.absorb_constant(C::Base::from(value));
             }
             duplex.absorb(&key.representation);
-            for chunk in plan.binding.digest().chunks_exact(16) {
-                duplex.absorb_constant(C::Base::from_u128(u128::from_le_bytes(
-                    chunk.try_into().map_err(|_| Error::Synthesis)?,
-                )));
+            for chunk in plan.binding.digest().as_chunks::<16>().0 {
+                duplex.absorb_constant(C::Base::from_u128(u128::from_le_bytes(*chunk)));
             }
             for point in key.fixed.iter().chain(&key.permutation) {
                 duplex.absorb(point.x());

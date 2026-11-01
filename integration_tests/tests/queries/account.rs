@@ -54,7 +54,6 @@ fn find_accounts_with_asset() -> Result<()> {
         let register_accounts = accounts
             .iter()
             .skip(1) // Alice has already been registered in genesis
-            .cloned()
             .map(|account_id| Register::account(Account::new(account_id.clone())))
             .collect::<Vec<_>>();
         test_client.submit_all(

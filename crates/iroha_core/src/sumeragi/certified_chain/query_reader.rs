@@ -13,7 +13,7 @@ mod retention_tests;
 /// parent-service, signature and penalty-action graph children still charge this
 /// same finite frame pool; their complete source-dependent high water is not
 /// established by this helper. Malformed leaf extents can also refuse locally.
-pub(crate) fn native_finality_source_control_bytes() -> Option<usize> {
+pub fn native_finality_source_control_bytes() -> Option<usize> {
     use iroha_allocation::{ChargedBuffer, ChargedShared};
     let certificate = (iroha_sumeragi::pacemaker::FRAME_OVERHEAD as usize)
         .checked_mul(2)?
@@ -98,9 +98,9 @@ pub(super) fn authority_retention_bytes(
 ///
 /// The closed owner has only epoch material, core keys and the crypto constructor's
 /// backing; its inline fields live in the Arc shell. Geometric Vec allowances
-/// include spare PoP capacity. The post-validation gate checks actual material
+/// include spare `PoP` capacity. The post-validation gate checks actual material
 /// capacities before escape; this bound grants no protocol or allocation authority.
-pub(crate) fn native_finality_authority_bytes() -> Option<usize> {
+pub fn native_finality_authority_bytes() -> Option<usize> {
     use iroha_crypto::bls::consensus;
     use iroha_data_model::sumeragi::epoch::{MAX_VALIDATORS, ValidatorCommitteeMemberV1};
     let committee = vector_capacity_series(MAX_VALIDATORS)?
@@ -276,7 +276,7 @@ fn admit_genesis_root(
 /// One bounded query lifetime over the existing native verifier. Large decoded
 /// bodies never become persistent prefix authority; the original source fence and
 /// checked successor fields are retained instead.
-pub(crate) struct QueryCertifiedChain<'v> {
+pub struct QueryCertifiedChain<'v> {
     pub(super) source: ChainSource<'v, StateView<'v>>,
     pub(super) genesis_epoch: ValidatorEpochContextV1,
     pub(super) instance: Hash32,
@@ -536,7 +536,7 @@ impl QueryCertifiedChain<'_> {
             )
         })?;
         #[cfg(test)]
-        workspace.note_target_cost(&target);
+        crate::sumeragi::finality::FinalityDecodeWorkspace::note_target_cost(&target);
         progress()?;
         let wire = (raw.len() as u64, Hash::new(raw.as_slice()));
         let mut staged = StagedQueryFrame::new(committed, payload, Some(raw), wire, self.budget())?;
@@ -575,7 +575,7 @@ impl QueryCertifiedChain<'_> {
             workspace.stage(|| {
                 let header = next.frame.reconstruct_header()?;
                 let prepared = context.prepare_advance_source(
-                    prefix.borrowed(),
+                    &mut prefix.borrowed(),
                     next.source(header.as_ref()),
                     None,
                     (true, self.query_cache.lock().as_mut()),
@@ -603,7 +603,7 @@ impl QueryCertifiedChain<'_> {
                 context.prepare_certificate_source(source, &prefix.authority, None, None, None)?
             } else {
                 prepared = context.prepare_advance_source(
-                    prefix.borrowed(),
+                    &mut prefix.borrowed(),
                     source,
                     None,
                     (true, self.query_cache.lock().as_mut()),
@@ -673,7 +673,7 @@ impl QueryCertifiedChain<'_> {
 }
 
 /// Unauthenticated DATA only. It cannot construct a prefix or a returned proof;
-/// only with_verified_source can lend it to the shared verification kernel.
+/// only `with_verified_source` can lend it to the shared verification kernel.
 struct StagedQueryFrame {
     frame: query_projection::CheckedFrameProjection,
     payload: Option<iroha_sumeragi::availability::PayloadBytes>,

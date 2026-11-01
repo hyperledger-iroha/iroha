@@ -128,10 +128,7 @@ fn decode_commitments(value: &[u8]) -> Result<Vec<[u8; DIGEST_BYTES]>, c_int> {
     if value.len() > MAX_COMMITMENT_FRONTIER_BYTES || !value.len().is_multiple_of(DIGEST_BYTES) {
         return Err(ERR_CONFIDENTIAL_DERIVATION);
     }
-    value
-        .chunks_exact(DIGEST_BYTES)
-        .map(|chunk| chunk.try_into().map_err(|_| ERR_CONFIDENTIAL_DERIVATION))
-        .collect()
+    Ok(value.as_chunks::<DIGEST_BYTES>().0.to_vec())
 }
 fn derive_merkle_path_v3(
     commitments: &[u8],
@@ -170,10 +167,7 @@ fn verify_merkle_path_v3(
     {
         return Err(ERR_CONFIDENTIAL_DERIVATION);
     }
-    let siblings = siblings
-        .chunks_exact(DIGEST_BYTES)
-        .map(|chunk| chunk.try_into().map_err(|_| ERR_CONFIDENTIAL_DERIVATION))
-        .collect::<Result<Vec<_>, _>>()?;
+    let siblings = siblings.as_chunks::<DIGEST_BYTES>().0.to_vec();
     let root = root.try_into().map_err(|_| ERR_CONFIDENTIAL_DERIVATION)?;
     let path = ConfidentialMerklePathV2 {
         siblings,
@@ -203,10 +197,7 @@ fn advance_merkle_path_v3(
     {
         return Err(ERR_CONFIDENTIAL_DERIVATION);
     }
-    let siblings = siblings
-        .chunks_exact(DIGEST_BYTES)
-        .map(|chunk| chunk.try_into().map_err(|_| ERR_CONFIDENTIAL_DERIVATION))
-        .collect::<Result<Vec<_>, _>>()?;
+    let siblings = siblings.as_chunks::<DIGEST_BYTES>().0.to_vec();
     let root = root.try_into().map_err(|_| ERR_CONFIDENTIAL_DERIVATION)?;
     let advanced = derive_confidential_sequential_append_paths_v3(
         leaf_index,
@@ -562,7 +553,7 @@ mod jni_exports {
         value: JByteArray<'_>,
         maximum: usize,
     ) -> Option<Zeroizing<Vec<u8>>> {
-        let length = usize::try_from(env.get_array_length(&value).ok()?).ok()?;
+        let length = value.len(env).ok()?;
         if length == 0 || length > maximum {
             return None;
         }
@@ -573,7 +564,7 @@ mod jni_exports {
         value: JByteArray<'_>,
         maximum: usize,
     ) -> Option<Zeroizing<Vec<u8>>> {
-        let length = usize::try_from(env.get_array_length(&value).ok()?).ok()?;
+        let length = value.len(env).ok()?;
         if length > maximum {
             return None;
         }

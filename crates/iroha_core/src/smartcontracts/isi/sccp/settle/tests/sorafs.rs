@@ -1,4 +1,4 @@
-//! SCCP keeps unrelated SoraFS custody decoder refusals local to the attempt.
+//! SCCP keeps unrelated `SoraFS` custody decoder refusals local to the attempt.
 
 use super::*;
 use iroha_data_model::{

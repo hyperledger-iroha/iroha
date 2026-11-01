@@ -290,8 +290,10 @@ fn read_word_table(vm: &IVM, address: u64, count: usize) -> Result<Vec<u64>, VME
         u64::try_from(byte_len).map_err(|_| VMError::DecodeError)?,
     )?;
     Ok(bytes
-        .chunks_exact(8)
-        .map(|chunk| u64::from_le_bytes(chunk.try_into().expect("eight-byte word")))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .map(|chunk| u64::from_le_bytes(*chunk))
         .collect())
 }
 fn state_node_word_count(

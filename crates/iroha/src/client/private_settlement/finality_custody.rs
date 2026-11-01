@@ -57,7 +57,7 @@ use PrivateSettlementFinalityStorageError as Error;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha::client::PrivateSettlementFinalityPhaseV1")]
-pub(crate) enum FinalityPhase {
+pub enum FinalityPhase {
     Register,
     Finalize,
     Abort,
@@ -65,27 +65,27 @@ pub(crate) enum FinalityPhase {
 
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha::client::PrivateSettlementFinalityLookupV1")]
-pub(crate) struct FinalityLookup {
+pub struct FinalityLookup {
     pub phase: FinalityPhase,
     pub identity: Option<TransactionIdentityV1>,
     pub height: u64,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PendingFinalityPrefix {
+pub struct PendingFinalityPrefix {
     pub lookup: FinalityLookup,
     pub checkpoint: SumeragiFinalityCheckpoint,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct PendingFinalityPin {
+pub struct PendingFinalityPin {
     pub identity: TransactionIdentityV1,
     pub checkpoint: SumeragiFinalityCheckpoint,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha::client::PrivateSettlementFinalityTerminalKindV1")]
-pub(crate) enum FinalityTerminalKind {
+pub enum FinalityTerminalKind {
     Settled,
     Aborted,
 }
@@ -98,13 +98,13 @@ impl FinalityTerminalKind {
     }
 }
 #[derive(Clone, Debug)]
-pub(crate) struct PendingFinalityTerminal {
+pub struct PendingFinalityTerminal {
     pub kind: FinalityTerminalKind,
     pub pin: PendingFinalityPin,
 }
 
 #[derive(Clone, Debug, Default)]
-pub(crate) struct PendingFinalityRecord {
+pub struct PendingFinalityRecord {
     pub prefix: Option<PendingFinalityPrefix>,
     pub register: Option<PendingFinalityPin>,
     pub terminal: Option<PendingFinalityTerminal>,
@@ -140,7 +140,7 @@ struct StoredRecord {
 }
 impl StoredRecord {
     fn into_record(self) -> Result<PendingFinalityRecord, Error> {
-        fn pin(stored: StoredPin) -> Result<PendingFinalityPin, Error> {
+        fn pin(stored: &StoredPin) -> Result<PendingFinalityPin, Error> {
             Ok(PendingFinalityPin {
                 identity: stored.identity,
                 checkpoint: SumeragiFinalityCheckpoint::decode_canonical(&stored.checkpoint)?,
@@ -158,13 +158,13 @@ impl StoredRecord {
                     })
                 })
                 .transpose()?,
-            register: self.register.map(pin).transpose()?,
+            register: self.register.as_ref().map(pin).transpose()?,
             terminal: self
                 .terminal
                 .map(|stored| {
                     Ok::<_, Error>(PendingFinalityTerminal {
                         kind: stored.kind,
-                        pin: pin(stored.pin)?,
+                        pin: pin(&stored.pin)?,
                     })
                 })
                 .transpose()?,
@@ -175,6 +175,12 @@ fn encode_record(
     record: &PendingFinalityRecord,
     maximum: usize,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
+    fn pin(value: &PendingFinalityPin) -> Result<StoredPin, Error> {
+        Ok(StoredPin {
+            identity: value.identity,
+            checkpoint: value.checkpoint.encode_canonical()?,
+        })
+    }
     let mut checkpoint_bytes = 0_usize;
     for checkpoint in record
         .prefix
@@ -193,12 +199,6 @@ fn encode_record(
         if checkpoint_bytes > maximum {
             return Err(Error::Capacity);
         }
-    }
-    fn pin(value: &PendingFinalityPin) -> Result<StoredPin, Error> {
-        Ok(StoredPin {
-            identity: value.identity,
-            checkpoint: value.checkpoint.encode_canonical()?,
-        })
     }
     let stored = StoredRecord {
         prefix: record
@@ -229,7 +229,7 @@ fn encode_record(
     Ok(Zeroizing::new(norito::encode_canonical(&stored)?))
 }
 
-pub(crate) struct LoadedPendingFinality {
+pub struct LoadedPendingFinality {
     pub record: PendingFinalityRecord,
     pub digest: Option<Digest32>,
 }
@@ -301,7 +301,7 @@ impl FilePrivateSettlementFinality {
     }
 
     pub(crate) fn bind(
-        self: &Arc<Self>,
+        self: Arc<Self>,
         workflow: WorkflowId,
         request: Digest32,
         verifier: &SumeragiFinalityVerifier,
@@ -310,7 +310,7 @@ impl FilePrivateSettlementFinality {
             return Err(Error::Binding);
         }
         Ok(BoundPrivateSettlementFinality {
-            owner: self.clone(),
+            owner: self,
             binding: Binding {
                 workflow: *workflow.as_bytes(),
                 request,
@@ -324,7 +324,7 @@ impl FilePrivateSettlementFinality {
 }
 
 #[derive(Clone)]
-pub(crate) struct BoundPrivateSettlementFinality {
+pub struct BoundPrivateSettlementFinality {
     owner: Arc<FilePrivateSettlementFinality>,
     binding: Binding,
 }
@@ -345,15 +345,14 @@ impl BoundPrivateSettlementFinality {
         ))?)
     }
     fn validate(&self, record: &PendingFinalityRecord) -> Result<(), Error> {
-        if let Some(prefix) = &record.prefix {
-            if prefix.lookup.height < 2
+        if let Some(prefix) = &record.prefix
+            && (prefix.lookup.height < 2
                 || prefix.checkpoint.height() == 0
                 || prefix.checkpoint.height() > prefix.lookup.height
                 || (prefix.lookup.phase == FinalityPhase::Register
-                    && prefix.lookup.identity.is_none())
-            {
-                return Err(Error::Binding);
-            }
+                    && prefix.lookup.identity.is_none()))
+        {
+            return Err(Error::Binding);
         }
         if record
             .register

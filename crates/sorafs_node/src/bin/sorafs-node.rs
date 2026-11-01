@@ -1,4 +1,7 @@
 //! Offline developer CLI helpers for inspecting the SoraFS storage backend.
+#[cfg(all(test, windows))]
+#[path = "sorafs-node/sparse_fixture.rs"]
+mod sparse_fixture;
 use iroha_config::base::util::Bytes;
 use iroha_data_model::account::{AccountId, address::AccountAddress};
 use iroha_model_base::peer::PeerId;
@@ -2240,10 +2243,10 @@ mod tests {
             .into_iter()
             .zip(sizes)
         {
-            File::create(nested.join(name))
-                .expect("create sparse guest member")
-                .set_len(size)
-                .expect("size sparse guest member");
+            let file = File::create(nested.join(name)).expect("create sparse guest member");
+            #[cfg(windows)]
+            sparse_fixture::mark_sparse(&file).expect("mark sparse guest member");
+            file.set_len(size).expect("size sparse guest member");
         }
         let inventory = offline_directory_inventory(temp.path()).expect("large inventory");
         let total = inventory.iter().map(|file| file.size).sum::<u64>();

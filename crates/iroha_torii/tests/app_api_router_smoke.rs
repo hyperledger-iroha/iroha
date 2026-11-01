@@ -10,8 +10,7 @@ use iroha_core::{kiso::KisoHandle, prelude::World, query::store::LiveQueryStore}
 use iroha_data_model::account::AccountId;
 use tower::ServiceExt as _; // for Router::oneshot
 // use iroha_primitives::addr::socket_addr; // unused in this smoke test
-#[path = "fixtures.rs"]
-mod fixtures;
+use crate::fixtures;
 // Minimal root config for starting Kiso and wiring Torii
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
@@ -590,5 +589,4 @@ async fn contract_routes_honor_api_token_requirement() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

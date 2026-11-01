@@ -3,7 +3,9 @@
 //! The runtime in this module is deliberately transport-neutral. Torii supplies council-verified
 //! admission records, while the runtime owns canonical replay protection, deadline enforcement,
 //! exhaustive proof verification, durable terminal handoff state, and deterministic queue ordering.
-use crate::durable_transaction_forwarder::{CheckpointStoreError, CheckpointWriterGuard};
+#[cfg(test)]
+use crate::durable_transaction_forwarder::CheckpointWriterGuard;
+use crate::durable_transaction_forwarder::{AtomicCheckpointStore, CheckpointStoreError};
 use iroha_crypto::{Algorithm, KeyPair, Signature as IrohaSignature};
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
 pub use sorafs_manifest::pdp::{
@@ -23,15 +25,9 @@ use sorafs_manifest::{
         RepairPdpFailureCauseV1, RepairPdpFailureKindV1, RepairReportV1, RepairTicketId,
     },
 };
-#[cfg(unix)]
-use std::os::unix::fs::{
-    DirBuilderExt as _, MetadataExt as _, OpenOptionsExt as _, PermissionsExt as _,
-};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
-    io::{Read, Write as _},
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -57,21 +53,6 @@ const DEFAULT_MAX_RESPONSE_WINDOW_SECS: u64 = 10 * 60;
 const DEFAULT_MAX_FUTURE_SKEW_SECS: u64 = 5;
 const DEFAULT_TERMINAL_RETENTION_SECS: u64 = 24 * 60 * 60;
 const CHECKPOINT_LOCK_FILE_NAME: &str = "pdp-provider-state.lock";
-static CHECKPOINT_TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
-#[cfg(any(target_os = "linux", target_os = "android"))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0002_0000 | 0x0008_0000;
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0x0000_0100 | 0x0100_0000;
-#[cfg(all(
-    unix,
-    not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "macos",
-        target_os = "ios"
-    ))
-))]
-const SAFE_OPEN_FLAGS: std::os::raw::c_int = 0;
 /// Governance-controlled resource and timing bounds for the embedded PDP runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
 pub struct PdpProviderProtocolPolicyV1 {
@@ -1220,9 +1201,7 @@ impl PdpTerminalOutcomeV1 {
 }
 #[derive(Debug)]
 struct PdpCheckpointStore {
-    root: PathBuf,
-    checkpoint_path: PathBuf,
-    lock_path: PathBuf,
+    storage: AtomicCheckpointStore,
     policy: PdpProviderProtocolPolicyV1,
 }
 impl PdpCheckpointStore {
@@ -1230,24 +1209,25 @@ impl PdpCheckpointStore {
         root: &Path,
         policy: PdpProviderProtocolPolicyV1,
     ) -> Result<Self, PdpProviderProtocolError> {
-        ensure_private_state_directory(root)?;
-        Ok(Self {
-            root: root.to_path_buf(),
-            checkpoint_path: root.join(PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1),
-            lock_path: root.join(CHECKPOINT_LOCK_FILE_NAME),
-            policy,
-        })
+        let storage = AtomicCheckpointStore::new(
+            root,
+            PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1,
+            CHECKPOINT_LOCK_FILE_NAME,
+            policy.checkpoint_max_bytes,
+        )
+        .map_err(map_checkpoint_store_error)?;
+        Ok(Self { storage, policy })
     }
     fn load(
         &self,
     ) -> Result<(Option<PdpProviderCheckpointV1>, Option<[u8; 32]>), PdpProviderProtocolError> {
-        let _writer = acquire_checkpoint_writer(&self.lock_path)?;
-        let Some(bytes) =
-            read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)?
-        else {
+        let (bytes, fingerprint) = self
+            .storage
+            .load_bytes()
+            .map_err(map_checkpoint_store_error)?;
+        let Some(bytes) = bytes else {
             return Ok((None, None));
         };
-        let fingerprint = *blake3::hash(&bytes).as_bytes();
         let checkpoint: PdpProviderCheckpointV1 =
             norito::decode_from_bytes_with_limits(&bytes, checkpoint_decode_limits(self.policy))
                 .map_err(|error| {
@@ -1266,7 +1246,7 @@ impl PdpCheckpointStore {
             ));
         }
         validate_checkpoint(&checkpoint, self.policy)?;
-        Ok((Some(checkpoint), Some(fingerprint)))
+        Ok((Some(checkpoint), fingerprint))
     }
     fn commit(
         &self,
@@ -1285,276 +1265,34 @@ impl PdpCheckpointStore {
                 limit: usize::try_from(self.policy.checkpoint_max_bytes).unwrap_or(usize::MAX),
             });
         }
-        let _writer = acquire_checkpoint_writer(&self.lock_path)?;
-        let current =
-            read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)?;
-        let current_fingerprint = current
-            .as_deref()
-            .map(blake3::hash)
-            .map(|digest| *digest.as_bytes());
-        if current_fingerprint != expected_fingerprint {
-            return Err(PdpProviderProtocolError::StaleCheckpoint);
-        }
-        let temp_path = self.root.join(format!(
-            ".{PDP_PROVIDER_CHECKPOINT_FILE_NAME_V1}.{}.{}.tmp",
-            std::process::id(),
-            CHECKPOINT_TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
-        ));
-        let write_result = write_checkpoint_temp(&temp_path, &bytes).and_then(|()| {
-            let latest =
-                read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)?;
-            let latest_fingerprint = latest
-                .as_deref()
-                .map(blake3::hash)
-                .map(|digest| *digest.as_bytes());
-            if latest_fingerprint != expected_fingerprint {
-                return Err(PdpProviderProtocolError::StaleCheckpoint);
-            }
-            fs::rename(&temp_path, &self.checkpoint_path).map_err(|error| {
-                PdpProviderProtocolError::CheckpointIo(format!(
-                    "rename PDP checkpoint into place: {error}"
-                ))
-            })?;
-            sync_directory(&self.root).map_err(|error| {
-                PdpProviderProtocolError::CheckpointDurabilityUncertain(error.to_string())
-            })
-        });
-        if write_result.is_err() {
-            let _ = fs::remove_file(&temp_path);
-        }
-        write_result?;
-        let persisted =
-            read_checkpoint_bytes(&self.checkpoint_path, self.policy.checkpoint_max_bytes)
-                .map_err(|error| {
-                    PdpProviderProtocolError::CheckpointDurabilityUncertain(format!(
-                        "could not verify PDP checkpoint after atomic rename: {error}"
-                    ))
-                })?
-                .ok_or_else(|| {
-                    PdpProviderProtocolError::CheckpointDurabilityUncertain(
-                        "PDP checkpoint disappeared after atomic rename".to_owned(),
-                    )
-                })?;
-        if persisted != bytes {
-            return Err(PdpProviderProtocolError::CheckpointDurabilityUncertain(
-                "PDP checkpoint bytes changed after atomic rename".to_owned(),
-            ));
-        }
-        Ok(*blake3::hash(&bytes).as_bytes())
+        self.storage
+            .commit_bytes(&bytes, expected_fingerprint)
+            .map_err(map_checkpoint_store_error)
     }
 }
+fn map_checkpoint_store_error(error: CheckpointStoreError) -> PdpProviderProtocolError {
+    match error {
+        CheckpointStoreError::Busy => PdpProviderProtocolError::CheckpointBusy,
+        CheckpointStoreError::RuntimePoisoned => PdpProviderProtocolError::RuntimePoisoned,
+        CheckpointStoreError::Stale => PdpProviderProtocolError::StaleCheckpoint,
+        CheckpointStoreError::DurabilityUncertain => {
+            PdpProviderProtocolError::CheckpointDurabilityUncertain(error.to_string())
+        }
+        CheckpointStoreError::TooLarge => PdpProviderProtocolError::InvalidCheckpoint(
+            "PDP checkpoint exceeds its governed byte bound".to_owned(),
+        ),
+        CheckpointStoreError::Io => PdpProviderProtocolError::CheckpointIo(
+            "PDP checkpoint custody or I/O validation failed".to_owned(),
+        ),
+    }
+}
+#[cfg(test)]
 fn acquire_checkpoint_writer(
     path: &Path,
 ) -> Result<CheckpointWriterGuard, PdpProviderProtocolError> {
-    CheckpointWriterGuard::acquire(path).map_err(|error| match error {
-        CheckpointStoreError::Busy => PdpProviderProtocolError::CheckpointBusy,
-        CheckpointStoreError::RuntimePoisoned => PdpProviderProtocolError::RuntimePoisoned,
-        other => PdpProviderProtocolError::CheckpointIo(format!(
-            "acquire PDP checkpoint writer: {other}"
-        )),
-    })
+    CheckpointWriterGuard::acquire(path).map_err(map_checkpoint_store_error)
 }
-fn ensure_private_state_directory(path: &Path) -> Result<(), PdpProviderProtocolError> {
-    match fs::symlink_metadata(path) {
-        Ok(metadata) => {
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(PdpProviderProtocolError::CheckpointIo(format!(
-                    "PDP state root {path:?} must be a real directory"
-                )));
-            }
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            let mut builder = fs::DirBuilder::new();
-            builder.recursive(true);
-            #[cfg(unix)]
-            builder.mode(0o700);
-            builder.create(path).map_err(|error| {
-                PdpProviderProtocolError::CheckpointIo(format!(
-                    "create PDP state root {path:?}: {error}"
-                ))
-            })?;
-        }
-        Err(error) => {
-            return Err(PdpProviderProtocolError::CheckpointIo(format!(
-                "inspect PDP state root {path:?}: {error}"
-            )));
-        }
-    }
-    let metadata = fs::symlink_metadata(path).map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "reinspect PDP state root {path:?}: {error}"
-        ))
-    })?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        return Err(PdpProviderProtocolError::CheckpointIo(format!(
-            "PDP state root {path:?} changed during initialization"
-        )));
-    }
-    #[cfg(unix)]
-    fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "set private PDP state-root permissions: {error}"
-        ))
-    })?;
-    Ok(())
-}
-fn read_checkpoint_bytes(
-    path: &Path,
-    max_bytes: u64,
-) -> Result<Option<Vec<u8>>, PdpProviderProtocolError> {
-    let path_metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => {
-            return Err(PdpProviderProtocolError::CheckpointIo(format!(
-                "inspect PDP checkpoint: {error}"
-            )));
-        }
-    };
-    if path_metadata.file_type().is_symlink() || !path_metadata.is_file() {
-        return Err(PdpProviderProtocolError::CheckpointIo(
-            "PDP checkpoint must be a non-symlink regular file".to_owned(),
-        ));
-    }
-    #[cfg(unix)]
-    if path_metadata.nlink() != 1 {
-        return Err(PdpProviderProtocolError::CheckpointIo(
-            "PDP checkpoint must not have hard links".to_owned(),
-        ));
-    }
-    if path_metadata.len() > max_bytes {
-        return Err(PdpProviderProtocolError::PayloadTooLarge {
-            kind: "checkpoint",
-            size: usize::try_from(path_metadata.len()).unwrap_or(usize::MAX),
-            limit: usize::try_from(max_bytes).unwrap_or(usize::MAX),
-        });
-    }
-    let mut options = OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    options.custom_flags(SAFE_OPEN_FLAGS);
-    let mut file = options.open(path).map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!("open PDP checkpoint: {error}"))
-    })?;
-    validate_open_regular_file(path, &file, max_bytes, false)?;
-    let allocation = usize::try_from(path_metadata.len())
-        .unwrap_or(usize::MAX)
-        .min(usize::try_from(max_bytes).unwrap_or(usize::MAX));
-    let mut bytes = Vec::with_capacity(allocation);
-    Read::by_ref(&mut file)
-        .take(max_bytes.saturating_add(1))
-        .read_to_end(&mut bytes)
-        .map_err(|error| {
-            PdpProviderProtocolError::CheckpointIo(format!("read PDP checkpoint: {error}"))
-        })?;
-    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > max_bytes {
-        return Err(PdpProviderProtocolError::PayloadTooLarge {
-            kind: "checkpoint",
-            size: bytes.len(),
-            limit: usize::try_from(max_bytes).unwrap_or(usize::MAX),
-        });
-    }
-    let reopened = fs::symlink_metadata(path).map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "reinspect PDP checkpoint after read: {error}"
-        ))
-    })?;
-    #[cfg(unix)]
-    if reopened.dev() != path_metadata.dev()
-        || reopened.ino() != path_metadata.ino()
-        || reopened.nlink() != 1
-    {
-        return Err(PdpProviderProtocolError::CheckpointIo(
-            "PDP checkpoint changed during bounded read".to_owned(),
-        ));
-    }
-    Ok(Some(bytes))
-}
-fn validate_open_regular_file(
-    path: &Path,
-    file: &File,
-    max_bytes: u64,
-    allow_empty_lock: bool,
-) -> Result<(), PdpProviderProtocolError> {
-    let metadata = file.metadata().map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "inspect opened PDP state file {path:?}: {error}"
-        ))
-    })?;
-    if !metadata.is_file() || (!allow_empty_lock && metadata.len() > max_bytes) {
-        return Err(PdpProviderProtocolError::CheckpointIo(format!(
-            "opened PDP state path {path:?} is unsafe or oversized"
-        )));
-    }
-    #[cfg(unix)]
-    {
-        let path_metadata = fs::symlink_metadata(path).map_err(|error| {
-            PdpProviderProtocolError::CheckpointIo(format!(
-                "inspect PDP state path {path:?}: {error}"
-            ))
-        })?;
-        if path_metadata.file_type().is_symlink()
-            || path_metadata.dev() != metadata.dev()
-            || path_metadata.ino() != metadata.ino()
-            || metadata.nlink() != 1
-        {
-            return Err(PdpProviderProtocolError::CheckpointIo(format!(
-                "PDP state path {path:?} changed or has hard links"
-            )));
-        }
-    }
-    Ok(())
-}
-fn write_checkpoint_temp(path: &Path, bytes: &[u8]) -> Result<(), PdpProviderProtocolError> {
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600);
-        options.custom_flags(SAFE_OPEN_FLAGS);
-    }
-    let mut file = options.open(path).map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "create private PDP checkpoint temporary file: {error}"
-        ))
-    })?;
-    validate_open_regular_file(path, &file, u64::MAX, true)?;
-    file.write_all(bytes).map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "write PDP checkpoint temporary file: {error}"
-        ))
-    })?;
-    file.sync_all().map_err(|error| {
-        PdpProviderProtocolError::CheckpointIo(format!(
-            "sync PDP checkpoint temporary file: {error}"
-        ))
-    })?;
-    #[cfg(unix)]
-    if file
-        .metadata()
-        .map_err(|error| {
-            PdpProviderProtocolError::CheckpointIo(format!(
-                "reinspect PDP checkpoint temporary file: {error}"
-            ))
-        })?
-        .nlink()
-        != 1
-    {
-        return Err(PdpProviderProtocolError::CheckpointIo(
-            "PDP checkpoint temporary file acquired a hard link".to_owned(),
-        ));
-    }
-    Ok(())
-}
-fn sync_directory(path: &Path) -> Result<(), PdpProviderProtocolError> {
-    File::open(path)
-        .and_then(|directory| directory.sync_all())
-        .map_err(|error| {
-            PdpProviderProtocolError::CheckpointIo(format!(
-                "sync PDP checkpoint directory: {error}"
-            ))
-        })
-}
+
 struct PreparedEnqueue {
     commitment: PdpCommitmentV1,
     challenge: PdpChallengeV1,
@@ -2272,19 +2010,76 @@ mod tests {
         pdp::{PDP_HOT_LEAF_SIZE_V1, PDP_SEGMENT_SIZE_V1, PdpMerkleTreeV1},
         sign_pdp_proof_ed25519_v1, verify_pdp_bundle_v1,
     };
+    use std::fs::OpenOptions;
     use std::{
         collections::BTreeMap,
         fs,
+        path::PathBuf,
         sync::{Arc, Barrier, atomic::AtomicU64},
         thread,
     };
     use tempfile::TempDir;
 
+    struct CheckpointTestDirectory {
+        _temporary: TempDir,
+        path: PathBuf,
+    }
+    impl CheckpointTestDirectory {
+        fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+    fn private_tempdir() -> std::io::Result<CheckpointTestDirectory> {
+        let temporary = TempDir::new()?;
+        let path = temporary.path().join("private");
+        iroha_fs::PrivateDirectory::open_or_create(&path)?;
+        Ok(CheckpointTestDirectory {
+            _temporary: temporary,
+            path,
+        })
+    }
+    #[test]
+    fn checkpoint_errors_preserve_retry_and_ambiguous_publication_classes() {
+        assert!(matches!(
+            map_checkpoint_store_error(CheckpointStoreError::Busy),
+            PdpProviderProtocolError::CheckpointBusy
+        ));
+        assert!(matches!(
+            map_checkpoint_store_error(CheckpointStoreError::Stale),
+            PdpProviderProtocolError::StaleCheckpoint
+        ));
+        assert!(matches!(
+            map_checkpoint_store_error(CheckpointStoreError::DurabilityUncertain),
+            PdpProviderProtocolError::CheckpointDurabilityUncertain(_)
+        ));
+        assert!(matches!(
+            map_checkpoint_store_error(CheckpointStoreError::Io),
+            PdpProviderProtocolError::CheckpointIo(_)
+        ));
+        assert!(matches!(
+            map_checkpoint_store_error(CheckpointStoreError::TooLarge),
+            PdpProviderProtocolError::InvalidCheckpoint(_)
+        ));
+        assert!(matches!(
+            map_checkpoint_store_error(CheckpointStoreError::RuntimePoisoned),
+            PdpProviderProtocolError::RuntimePoisoned
+        ));
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_pdp_checkpoint_rejects_inherited_private_custody() {
+        let inherited = TempDir::new().unwrap();
+        assert!(matches!(
+            PdpProviderProtocol::open(PdpProviderProtocolPolicyV1::default(), inherited.path()),
+            Err(PdpProviderProtocolError::CheckpointIo(_))
+        ));
+    }
+
     #[cfg(any(unix, windows))]
     #[test]
     fn checkpoint_writer_allows_independent_roots_and_rejects_same_identity() {
-        let first_root = TempDir::new().expect("first checkpoint root");
-        let second_root = TempDir::new().expect("second checkpoint root");
+        let first_root = private_tempdir().expect("first checkpoint root");
+        let second_root = private_tempdir().expect("second checkpoint root");
         let first_path = first_root
             .path()
             .canonicalize()
@@ -2551,7 +2346,7 @@ mod tests {
     }
     fn consume_failure(counter: &AtomicU64) -> bool {
         counter
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
                 (value != 0).then(|| value - 1)
             })
             .is_ok()
@@ -2639,10 +2434,10 @@ mod tests {
     }
     #[test]
     fn checkpoint_writers_are_independent_per_directory_and_fence_aliases_and_os_locks() {
-        let first = TempDir::new().expect("first state root");
-        let second = TempDir::new().expect("second state root");
-        ensure_private_state_directory(first.path()).unwrap();
-        ensure_private_state_directory(second.path()).unwrap();
+        let first = private_tempdir().expect("first state root");
+        let second = private_tempdir().expect("second state root");
+        PdpCheckpointStore::new(first.path(), PdpProviderProtocolPolicyV1::default()).unwrap();
+        PdpCheckpointStore::new(second.path(), PdpProviderProtocolPolicyV1::default()).unwrap();
         let lock_path = first.path().join(CHECKPOINT_LOCK_FILE_NAME);
         let held = acquire_checkpoint_writer(&lock_path).expect("hold first writer");
         let policy = PdpProviderProtocolPolicyV1::default();
@@ -2726,7 +2521,7 @@ mod tests {
     }
     #[test]
     fn durable_happy_path_is_ordered_idempotent_and_restart_safe() {
-        let dir = TempDir::new().expect("tempdir");
+        let dir = private_tempdir().expect("tempdir");
         let policy = PdpProviderProtocolPolicyV1::default();
         let protocol = PdpProviderProtocol::open(policy, dir.path()).expect("open runtime");
         let fixture = fixture(7);
@@ -2750,7 +2545,15 @@ mod tests {
             "sorafs_node::pdp_provider::PdpProviderCheckpointV1",
         );
         assert_eq!(
-            fs::read(&protocol.checkpoint_store.as_ref().unwrap().checkpoint_path).unwrap(),
+            protocol
+                .checkpoint_store
+                .as_ref()
+                .unwrap()
+                .storage
+                .load_bytes()
+                .unwrap()
+                .0
+                .unwrap(),
             checkpoint_bytes
         );
 
@@ -3185,7 +2988,7 @@ mod tests {
     }
     #[test]
     fn archive_and_repair_failures_resume_without_premature_terminal_ack() {
-        let dir = TempDir::new().expect("tempdir");
+        let dir = private_tempdir().expect("tempdir");
         let policy = PdpProviderProtocolPolicyV1::default();
         let fixture = fixture(50);
         let protocol = PdpProviderProtocol::open(policy, dir.path()).expect("runtime");
@@ -3273,7 +3076,7 @@ mod tests {
             drop(protocol);
             fixture
         }
-        let happy_dir = TempDir::new().expect("happy-path tempdir");
+        let happy_dir = private_tempdir().expect("happy-path tempdir");
         let happy_root = happy_dir.path().canonicalize().expect("canonical tempdir");
         let happy_config = StorageConfig::builder()
             .enabled(true)
@@ -3336,7 +3139,7 @@ mod tests {
         assert_eq!(second_pending[0].operation_id, operation_id);
         assert_eq!(second_pending[0].outcome_digest, outcome_digest);
         drop(second_restart);
-        let repair_dir = TempDir::new().expect("repair-required tempdir");
+        let repair_dir = private_tempdir().expect("repair-required tempdir");
         let repair_root = repair_dir.path().canonicalize().expect("canonical tempdir");
         let repair_config = StorageConfig::builder()
             .enabled(true)
@@ -3382,7 +3185,7 @@ mod tests {
             PdpChallengeLifecycleV1::HandoffPending
         );
         drop(repair_second_restart);
-        let poisoned_dir = TempDir::new().expect("poisoned-path tempdir");
+        let poisoned_dir = private_tempdir().expect("poisoned-path tempdir");
         let poisoned_root = poisoned_dir
             .path()
             .canonicalize()
@@ -3481,7 +3284,7 @@ mod tests {
     #[test]
     fn checkpoint_rejects_corruption_symlinks_hardlinks_and_stale_writers() {
         let policy = PdpProviderProtocolPolicyV1::default();
-        let dir = TempDir::new().expect("tempdir");
+        let dir = private_tempdir().expect("tempdir");
         let first_writer = PdpProviderProtocol::open(policy, dir.path()).expect("first writer");
         let stale_writer = PdpProviderProtocol::open(policy, dir.path()).expect("stale writer");
         let first = fixture(70);
@@ -3511,12 +3314,12 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::symlink;
-            let target = TempDir::new().expect("target");
-            let parent = TempDir::new().expect("parent");
+            let target = private_tempdir().expect("target");
+            let parent = private_tempdir().expect("parent");
             let linked_root = parent.path().join("linked-root");
             symlink(target.path(), &linked_root).expect("symlink root");
             assert!(PdpProviderProtocol::open(policy, &linked_root).is_err());
-            let root = TempDir::new().expect("checkpoint root");
+            let root = private_tempdir().expect("checkpoint root");
             let external = root.path().join("external");
             fs::write(&external, [1, 2, 3]).expect("external file");
             symlink(
@@ -3530,7 +3333,7 @@ mod tests {
     #[test]
     fn persisted_pdp_checkpoint_frame_declares_identity_and_rejects_foreign_root() {
         let policy = PdpProviderProtocolPolicyV1::default();
-        let directory = TempDir::new().unwrap();
+        let directory = private_tempdir().unwrap();
         let protocol = PdpProviderProtocol::open(policy, directory.path()).unwrap();
         let fixture = fixture(70);
         enqueue(&protocol, &fixture);

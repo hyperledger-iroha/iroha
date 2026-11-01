@@ -138,7 +138,8 @@ fn final_kaigi_rejects_nonexact_instance_dimensions() {
     extra_zero.push(kaigi_zk::Scalar::ZERO);
     // A trailing zero may be algebraically invisible to an IPA instance
     // commitment. The final wire schema still permits exactly 25 rows.
-    let transposed: Vec<&[kaigi_zk::Scalar]> = fixture.instance.chunks_exact(1).collect();
+    let transposed: Vec<&[kaigi_zk::Scalar]> =
+        fixture.instance.iter().map(core::slice::from_ref).collect();
     let retired_shape = [kaigi_zk::Scalar::ZERO; 31];
     let shapes = [
         vec![],

@@ -536,11 +536,11 @@ fn citizen_instructions_seat_every_citizen_and_the_census_counts_them() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("citizens_cover_bodies"), "{error}");
-    assert!(
+    assert_eq!(
         citizen_genesis_instructions(&citizens, &asset, &bond, &Quantity::from(0_u32), None, None)
             .unwrap()
-            .len()
-            == citizens.len() * 3
+            .len(),
+        citizens.len() * 3
     );
 }
 

@@ -20,16 +20,13 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     finality: JByteArray<'_>,
     out_height: JLongArray<'_>,
 ) -> jint {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         wallet::run(|| {
-            if env
-                .get_array_length(&out_height)
-                .map_err(|_| Failure::code(INVALID))?
-                != 1
-            {
+            if out_height.len(env).map_err(|_| Failure::code(INVALID))? != 1 {
                 return Err(Failure::code(INVALID));
             }
-            env.set_long_array_region(&out_height, 0, &[0])
+            out_height
+                .set_region(env, 0, &[0])
                 .map_err(|_| Failure::code(INVALID))?;
             let inputs = [&scheme, &wallet_id, &request, &payer, &receipt, &finality];
             let bounds = [
@@ -41,10 +38,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                 KAGEMUSHA_WALLET_LOAD_FINALITY_MAX_BYTES_V1,
             ];
             for (index, (input, bound)) in inputs.iter().zip(bounds).enumerate() {
-                let length = env
-                    .get_array_length(*input)
-                    .map_err(|_| Failure::code(INVALID))?;
-                if length <= 0 || length as usize > bound || (index < 3 && length != 32) {
+                let length = input.len(env).map_err(|_| Failure::code(INVALID))?;
+                if length == 0 || length > bound || (index < 3 && length != 32) {
                     return Err(Failure::code(INVALID));
                 }
             }
@@ -63,7 +58,8 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
                 &originals[4],
                 &originals[5],
             )?;
-            env.set_long_array_region(&out_height, 0, &[height as i64])
+            out_height
+                .set_region(env, 0, &[height as i64])
                 .map_err(|_| Failure::code(INVALID))
         })
         .err()

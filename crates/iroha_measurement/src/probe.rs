@@ -426,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     fn live_kernel_measurements_are_monotonic() {
         let before = ProcessSnapshot::capture().expect("kernel resource probes");
         let after = ProcessSnapshot::capture().expect("kernel resource probes");

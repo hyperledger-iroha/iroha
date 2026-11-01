@@ -164,6 +164,171 @@ fn projection_keeps_canonicality_admission_at_the_existing_caller_boundary() {
 }
 
 #[test]
+fn auxiliary_projection_matches_every_column_range_across_active_padding_and_carry_boundaries() {
+    let mut trace = trace();
+    // Distinct synthetic auxiliary values make every carry source observable.
+    // This exercises projection only; the original parser geometry is intact.
+    for (index, row) in trace.aux_rows.iter_mut().enumerate() {
+        for (column, value) in row.iter_mut().enumerate() {
+            *value = F((1_000 + index * ZK_X509_DER_STARK_AUX_WIDTH_V1 + column) as u64);
+        }
+    }
+    let parser = trace.base.private_shape.parser_rows;
+    let comparator = trace.base.private_shape.comparator_rows;
+    assert!(parser > 0 && comparator > 0);
+    let indices = [
+        0,
+        parser - 1,
+        parser,
+        ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 - 1,
+        ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1,
+        ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + comparator - 1,
+        ZK_X509_DER_STARK_MAX_PARSER_ROWS_V1 + comparator,
+        ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1,
+    ];
+    for index in indices {
+        let original =
+            Zeroizing::new(zk_x509_der_stark_aggregate_aux_row_v1(&trace, index).unwrap());
+        for width in 1..=MASKED_TRACE_LDE_COLUMN_BATCH_V1 {
+            for first in 0..=ZK_X509_DER_STARK_AUX_WIDTH_V1 - width {
+                let projection = AuxProjectionV1::new_v1(first, width).unwrap();
+                let actual = Zeroizing::new(projection.row_v1(&trace, index).unwrap());
+                assert_eq!(&actual[..width], &original[first..first + width]);
+                assert!(actual[width..].iter().all(|value| *value == F::ZERO));
+            }
+        }
+    }
+    let invalid = F(GOLDILOCKS_MODULUS_V1);
+    trace.aux_rows[0][AUX_HIGH_LOW_ZERO] = invalid;
+    let projection = AuxProjectionV1::new_v1(AUX_HIGH_LOW_ZERO, 1).unwrap();
+    assert_eq!(projection.row_v1(&trace, 0).unwrap()[0], invalid);
+    assert_eq!(
+        zk_x509_der_stark_aggregate_aux_row_v1(&trace, 0).unwrap()[AUX_HIGH_LOW_ZERO],
+        invalid
+    );
+}
+
+#[test]
+fn auxiliary_projection_preserves_original_error_order_and_erases_failed_batches() {
+    for (first, width) in [(0, 0), (0, 9), (196, 1), (195, 2), (usize::MAX, 1)] {
+        assert!(matches!(
+            AuxProjectionV1::new_v1(first, width),
+            Err(Error::Resource)
+        ));
+    }
+    for corruption in 0..5 {
+        let mut trace = trace();
+        let index = match corruption {
+            0 => ZK_X509_DER_STARK_TRACE_SIZE_V1,
+            1 => {
+                zeroize_field_rows_v1(&mut trace.aux_rows);
+                trace.aux_rows.clear();
+                0
+            }
+            2 => {
+                trace.base.private_shape.parser_rows = 0;
+                0
+            }
+            3 => {
+                trace.base.private_shape.document_lengths.clear();
+                trace.base.private_shape.parser_rows
+            }
+            _ => {
+                zeroize_field_rows_v1(&mut trace.aux_rows);
+                trace.aux_rows.clear();
+                ZK_X509_DER_STARK_TRACE_SIZE_V1 - 1
+            }
+        };
+        let original = zk_x509_der_stark_aggregate_aux_row_v1(&trace, index).unwrap_err();
+        for first in [0, AUX_BYTE_TABLE_INVERSE, AUX_HIGH_LOW_ZERO] {
+            assert_eq!(
+                AuxProjectionV1::new_v1(first, 1)
+                    .unwrap()
+                    .row_v1(&trace, index),
+                Err(original)
+            );
+        }
+    }
+    for unwind in [false, true] {
+        let mut trace = trace();
+        let rows = trace.base.private_shape.parser_rows + 1;
+        trace.base.private_shape.document_lengths.clear();
+        let projection = AuxProjectionV1::new_v1(AUX_NODE_BEFORE, 8).unwrap();
+        let mut columns = vec![vec![F(97); rows]; 8];
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut targets = columns
+                .iter_mut()
+                .map(Vec::as_mut_slice)
+                .collect::<Vec<_>>();
+            project_rows_v1(rows, 0, &mut targets, |index| {
+                if unwind && index + 1 == rows {
+                    panic!("selected auxiliary source unwind");
+                }
+                projection.row_v1(&trace, index)
+            })
+        }));
+        if unwind {
+            assert!(outcome.is_err());
+        } else {
+            assert_eq!(outcome.unwrap(), Err(Error::Shape));
+        }
+        assert!(columns.iter().flatten().all(|value| *value == F::ZERO));
+    }
+    let trace = trace();
+    let mut short = [F(97); 3];
+    assert_eq!(
+        fill_zk_x509_der_stark_native_aux_columns_v1(&trace, 0, &mut [&mut short]),
+        Err(Error::Resource)
+    );
+    assert_eq!(short, [F(97); 3]);
+}
+
+#[test]
+#[ignore = "all196 DER auxiliary columns on the native domain, selected/dense parity and costs"]
+fn full_selected_auxiliary_projection_matches_dense_batches_and_reports_costs() {
+    let trace = trace();
+    let rows = ZK_X509_DER_STARK_TRACE_SIZE_V1;
+    let mut dense_seconds = 0.0;
+    let mut selected_seconds = 0.0;
+    for first in (0..ZK_X509_DER_STARK_AUX_WIDTH_V1).step_by(MASKED_TRACE_LDE_COLUMN_BATCH_V1) {
+        let count = (ZK_X509_DER_STARK_AUX_WIDTH_V1 - first).min(MASKED_TRACE_LDE_COLUMN_BATCH_V1);
+        let mut expected = PrivateTableV1::new(
+            vec![vec![F::ZERO; rows]; count],
+            zeroize_field_rows_v1::<Vec<F>>,
+        );
+        let mut actual = PrivateTableV1::new(
+            vec![vec![F::ZERO; rows]; count],
+            zeroize_field_rows_v1::<Vec<F>>,
+        );
+        let started = std::time::Instant::now();
+        project_rows_v1(
+            rows,
+            first,
+            &mut expected
+                .iter_mut()
+                .map(Vec::as_mut_slice)
+                .collect::<Vec<_>>(),
+            |index| zk_x509_der_stark_aggregate_aux_row_v1(&trace, index),
+        )
+        .unwrap();
+        dense_seconds += started.elapsed().as_secs_f64();
+        let started = std::time::Instant::now();
+        fill_zk_x509_der_stark_native_aux_columns_v1(
+            &trace,
+            first,
+            &mut actual.iter_mut().map(Vec::as_mut_slice).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        selected_seconds += started.elapsed().as_secs_f64();
+        assert_eq!(&*actual, &*expected);
+    }
+    eprintln!(
+        "der_selected_projection dense_seconds={dense_seconds:.6} selected_seconds={selected_seconds:.6} speedup={:.3} columns=196 rows={rows} all_cells_identical=true",
+        dense_seconds / selected_seconds
+    );
+}
+
+#[test]
 #[ignore = "complete original DER native-column oracle parity; run optimized"]
 fn full_native_batches_match_original_columns_in_every_region_and_terminal_lane() {
     let trace = trace();

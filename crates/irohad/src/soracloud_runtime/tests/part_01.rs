@@ -1453,7 +1453,7 @@ async fn queued_runtime_submission_requires_the_committed_crypto_policy() -> Res
 
     struct Signer(KeyPair);
     impl SoracloudRuntimeMutationSignerV1 for Signer {
-        fn handle(&self) -> &str {
+        fn handle(&self) -> &'static str {
             "provider://soracloud/runtime-policy-fixture"
         }
         fn authority(&self) -> AccountId {
@@ -1545,7 +1545,10 @@ async fn queued_runtime_submission_requires_the_committed_crypto_policy() -> Res
         ..Default::default()
     };
     let (events, _) = tokio::sync::broadcast::channel(1);
-    let queue = Arc::new(Queue::from_config(Default::default(), events));
+    let queue = Arc::new(Queue::from_config(
+        iroha_config::parameters::actual::Queue::default(),
+        events,
+    ));
     let sink = QueuedSoracloudRuntimeMutationSink::new(queue, state.clone(), signer, submission)?;
     let submit = || {
         sink.submit_instruction(

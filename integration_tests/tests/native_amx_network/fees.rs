@@ -21,21 +21,17 @@ use std::{
 // Progress is returned only after the newer cut and every carrier through it have
 // been independently authenticated. It is never inferred from a transport error.
 #[derive(Debug, PartialEq, Eq)]
-pub(crate) enum FeeCut {
+pub enum FeeCut {
     Exact,
     Advanced { observed: u64 },
 }
 
-pub(crate) async fn audit(
-    root: &Root,
-    height: u64,
-    deadline: tokio::time::Instant,
-) -> Result<FeeCut> {
+pub async fn audit(root: &Root, height: u64, deadline: tokio::time::Instant) -> Result<FeeCut> {
     ensure!(
         (2..=128).contains(&height),
         "fee audit exceeded the fixture's finite history bound"
     );
-    tokio::time::timeout_at(deadline, async {
+    Box::pin(tokio::time::timeout_at(deadline, async {
         // The ordinary query supplies only an original value. It becomes evidence only
         // after its exact canonical preimage matches the independently authenticated cut.
         let definition = root
@@ -149,7 +145,7 @@ pub(crate) async fn audit(
             AssetBalanceScope::Dataspace(DATASPACES[root.index - 1])
         };
         for (owner, amount) in balances {
-            let asset = AssetId::with_scope(fee_asset(), owner, scope.clone());
+            let asset = AssetId::with_scope(fee_asset(), owner, scope);
             if amount.is_zero() {
                 world.verify_asset_absent(&asset)?;
             } else {
@@ -157,7 +153,7 @@ pub(crate) async fn audit(
             }
         }
         Ok(FeeCut::Exact)
-    })
+    }))
     .await
     .map_err(|_| eyre!("fee audit deadline exceeded for root {} at expected height {height}", root.index))?
 }
@@ -165,7 +161,7 @@ pub(crate) async fn audit(
 // Reuse the existing signed full-ledger read owner. Only its complete World hash
 // preimages are needed; neither the HTTP publisher nor its reported tip grants
 // finality authority. The fixture deliberately grants this read capability in genesis.
-pub(crate) async fn world_cut(root: &Root) -> Result<NativeResourceNamesStateV1> {
+pub async fn world_cut(root: &Root) -> Result<NativeResourceNamesStateV1> {
     static NONCE: AtomicU64 = AtomicU64::new(0);
     let nonce = format!("amx-fee-audit-{}", NONCE.fetch_add(1, Ordering::Relaxed));
     let challenge: [u8; 32] = Sha256::digest(nonce.as_bytes()).into();

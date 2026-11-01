@@ -314,11 +314,9 @@ impl RelayRewardCalculator {
         let weighted = availability
             .saturating_add(bandwidth)
             .saturating_add(compliance);
-        if total_weight == 0 {
-            0
-        } else {
-            (weighted / total_weight).min(1_000) as u16
-        }
+        weighted
+            .checked_div(total_weight)
+            .map_or(0, |score| score.min(1_000) as u16)
     }
     fn apply_exit_bonus(&self, score: u16, exit_capable: bool) -> u16 {
         if exit_capable && self.config.exit_bonus_per_mille > 0 {

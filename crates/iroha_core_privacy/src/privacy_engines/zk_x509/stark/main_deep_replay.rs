@@ -67,13 +67,12 @@ impl MainDeepPointPowersV1 {
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
         }
-        let mut result = [E::ZERO; 2];
-        for (degree, &coefficient) in coefficients.iter().enumerate() {
-            for (value, powers) in result.iter_mut().zip(&self.powers) {
-                *value = value.add(powers[degree].mul_base(coefficient));
-            }
-        }
-        Ok(result)
+        Ok(core::array::from_fn(|side| {
+            main_composition_mix::mix_residues_v1(
+                coefficients,
+                &self.powers[side][..coefficients.len()],
+            )
+        }))
     }
 }
 

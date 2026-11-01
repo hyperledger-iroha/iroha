@@ -59,7 +59,7 @@ fn compact(nibbles: &[u8], leaf: bool) -> Vec<u8> {
         out.push(flag << 4);
         0
     };
-    for pair in nibbles[start..].chunks_exact(2) {
+    for pair in nibbles[start..].as_chunks::<2>().0 {
         out.push((pair[0] << 4) | pair[1]);
     }
     out

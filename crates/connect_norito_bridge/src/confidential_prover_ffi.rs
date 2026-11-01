@@ -226,10 +226,7 @@ pub(super) fn job_commitments(id: u64, bytes: &[u8]) -> Result<()> {
         {
             return Err(-15);
         }
-        let leaves = bytes
-            .chunks_exact(32)
-            .map(|word| word.try_into().expect("exact chunk"))
-            .collect();
+        let leaves = bytes.as_chunks::<32>().0.to_vec();
         job.evidence = Some(Evidence::Commitments(leaves));
         Ok(())
     })
@@ -267,11 +264,8 @@ pub(super) fn job_paths(id: u64, siblings: &[u8], directions: &[u8]) -> Result<(
                 directions: Vec::with_capacity(16),
                 witness_nodes: Vec::new(),
             };
-            path.siblings.extend(
-                siblings[index * 512..(index + 1) * 512]
-                    .chunks_exact(32)
-                    .map(|word| <[u8; 32]>::try_from(word).expect("exact chunk")),
-            );
+            path.siblings
+                .extend_from_slice(siblings[index * 512..(index + 1) * 512].as_chunks::<32>().0);
             path.directions.extend_from_slice(directions);
             paths.push(path);
         }

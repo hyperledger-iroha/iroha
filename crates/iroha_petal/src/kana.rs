@@ -237,7 +237,9 @@ pub fn kana_packet(header: LaneHeader, lane: KanaLane, data: &[u8]) -> Option<At
         header,
         first_id: kana_first_id(header.frame, lane),
         atoms: atoms
-            .chunks_exact(ATOM_LEN)
+            .as_chunks::<ATOM_LEN>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut atom: Atom = [0; ATOM_LEN];
                 atom.copy_from_slice(chunk);

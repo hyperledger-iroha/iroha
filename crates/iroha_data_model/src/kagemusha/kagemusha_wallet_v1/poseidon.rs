@@ -226,17 +226,15 @@ pub const KAGEMUSHA_WALLET_INDEXED_EMPTY_OPENING_TRANSCRIPT_BYTES_V1: usize =
 
 fn limbs_of_v1(value: &[u8; 32]) -> [u64; 4] {
     let mut limbs = [0_u64; 4];
-    for (limb, chunk) in limbs.iter_mut().zip(value.chunks_exact(8)) {
-        let mut bytes = [0_u8; 8];
-        bytes.copy_from_slice(chunk);
-        *limb = u64::from_le_bytes(bytes);
+    for (limb, chunk) in limbs.iter_mut().zip(value.as_chunks::<8>().0) {
+        *limb = u64::from_le_bytes(*chunk);
     }
     limbs
 }
 
 fn bytes_of_limbs_v1(limbs: [u64; 4]) -> [u8; 32] {
     let mut value = [0_u8; 32];
-    for (chunk, limb) in value.chunks_exact_mut(8).zip(limbs) {
+    for (chunk, limb) in value.as_chunks_mut::<8>().0.iter_mut().zip(limbs) {
         chunk.copy_from_slice(&limb.to_le_bytes());
     }
     value
@@ -485,8 +483,8 @@ impl KagemushaWalletIndexedOpeningV1 {
             return Err(invalid_v1("indexed_opening.siblings"));
         }
         let mut siblings = [[0_u8; 32]; KAGEMUSHA_WALLET_INDEXED_TREE_DEPTH_V1];
-        for (sibling, chunk) in siblings.iter_mut().zip(bytes.chunks_exact(32)) {
-            sibling.copy_from_slice(chunk);
+        for (sibling, chunk) in siblings.iter_mut().zip(bytes.as_chunks::<32>().0) {
+            *sibling = *chunk;
             if !kagemusha_wallet_is_canonical_field_v1(sibling) {
                 return Err(invalid_v1("indexed_opening.sibling"));
             }
@@ -512,7 +510,7 @@ impl KagemushaWalletIndexedOpeningV1 {
                 let mut leaf = KagemushaWalletIndexedLeafV1::SENTINEL;
                 for (field, chunk) in [&mut leaf.key, &mut leaf.value, &mut leaf.next_key]
                     .into_iter()
-                    .zip(fields.chunks_exact(32))
+                    .zip(fields.as_chunks::<32>().0)
                 {
                     field.copy_from_slice(chunk);
                 }

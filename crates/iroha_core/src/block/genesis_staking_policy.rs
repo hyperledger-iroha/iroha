@@ -2,7 +2,7 @@
 //!
 //! This capability authenticates the selected original instruction and unpublished State
 //! overlay. It does not certify allocation admission. TODO(F4): admit and retain original
-//! custom-parameter, AccountId and Quantity backing through the canonical parameter MV
+//! custom-parameter, `AccountId` and Quantity backing through the canonical parameter MV
 //! owner before live adoption; author all genesis policies and retire monetary config
 //! only with the complete consumer migration.
 
@@ -22,7 +22,7 @@ use crate::{
 
 /// A private original-source selection; a height-one header cannot construct it.
 #[derive(Debug)]
-pub(crate) struct GenesisStakingPolicy {
+pub struct GenesisStakingPolicy {
     header: BlockHeader,
     coordinate: (usize, usize),
     parameter: CustomParameter,

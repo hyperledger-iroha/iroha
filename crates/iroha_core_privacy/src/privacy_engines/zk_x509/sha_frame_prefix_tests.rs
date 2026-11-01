@@ -30,7 +30,11 @@ fn every_declared_frame_prefix_matches_actual_credential_producers() {
         let mut framed_calls = 0;
         for manifest in schedule.calls().iter().copied() {
             let message = &assembly.sha_witnesses[usize::from(manifest.call)].message;
-            let raw_len = message.len() - sha_rfc_framed_field_offset_v1(manifest.role).unwrap();
+            let raw_len = u16::try_from(
+                message.len() - sha_rfc_framed_field_offset_v1(manifest.role).unwrap(),
+            )
+            .unwrap()
+            .to_be_bytes();
             let framed = sha_frame_byte_v1(manifest, 0).is_some();
             assert_eq!(
                 framed,
@@ -41,8 +45,8 @@ fn every_declared_frame_prefix_matches_actual_credential_producers() {
                 if let Some(expected) = sha_frame_byte_v1(manifest, offset) {
                     let expected = match expected {
                         ShaFrameByteV1::Constant(value) => value,
-                        ShaFrameByteV1::RawLengthHigh => (raw_len >> 8) as u8,
-                        ShaFrameByteV1::RawLengthLow => raw_len as u8,
+                        ShaFrameByteV1::RawLengthHigh => raw_len[0],
+                        ShaFrameByteV1::RawLengthLow => raw_len[1],
                     };
                     assert_eq!(
                         message.get(offset),
@@ -72,7 +76,8 @@ fn frame_fixed_provider_populates_all_roles_and_keeps_payload_bytes_free() {
                 if word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_V1] != F::ONE {
                     continue;
                 }
-                let index = word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0 as usize;
+                let index =
+                    usize::try_from(word_fixed[SHA_WORD_CAPACITY_INPUT_WORD_INDEX_V1].0).unwrap();
                 let global = manifest.first_logical_row + local_row;
                 let fixed = provider
                     .fixed_row_v1(
@@ -136,6 +141,8 @@ fn frame_local_residues_v1(call: &ZkX509ShaBatchCallTraceV1, row: usize) -> Vec<
 
 #[test]
 fn compiled_frame_rejects_equal_length_prefix_substitution_after_recomputed_sha() {
+    use crate::privacy_engines::transparent_stark::GoldilocksFp4V1 as E;
+
     let schedule = ZkX509ShaCallScheduleV1::new(ZkX509ShaCallPublicShapeV1 {
         disclosed_attributes: 0,
     })
@@ -206,7 +213,6 @@ fn compiled_frame_rejects_equal_length_prefix_substitution_after_recomputed_sha(
                 "predecessor local equations accept the recomputed prefix at call {call_index}, offset {offset}"
             );
             // The full verifier evaluator embeds the same original row in Fp4.
-            use crate::privacy_engines::transparent_stark::GoldilocksFp4V1 as E;
             let embed = |row: ZkX509ShaBatchRowV1| ZkX509ShaBatchRowV1 {
                 base: row.base.map(E::from_base),
                 aux: row.aux.map(E::from_base),

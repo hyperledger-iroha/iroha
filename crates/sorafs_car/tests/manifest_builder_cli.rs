@@ -14,6 +14,133 @@ fn tempdir() -> Result<TempDir, std::io::Error> {
         .prefix("sorafs-manifest-builder-cli-")
         .tempdir_in(canonical_temp_base())
 }
+/// A raw 32-byte council signing seed in an owner-only file, as the builder requires before it
+/// signs a completed manifest.
+fn council_signing_key_file(dir: &std::path::Path) -> PathBuf {
+    use std::io::Write as _;
+
+    let path = dir.join("council.seed");
+    let mut options = fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options
+        .open(&path)
+        .expect("create council signing key")
+        .write_all(&[0x5c; 32])
+        .expect("write council signing key");
+    path
+}
+#[test]
+fn manifest_builder_directory_outputs_match_explicit_file_commitments() {
+    use norito::{decode_from_bytes, json::Value};
+    use sorafs_car::{CarBuildPlan, CarWriter, FileEntry};
+    use sorafs_manifest::ManifestV1;
+
+    let temp = tempdir().expect("tempdir");
+    let site = temp.path().join("site");
+    fs::create_dir_all(site.join("assets")).expect("nested site");
+    let entries = vec![
+        FileEntry {
+            path: vec!["index.html".into()],
+            data: b"<html>directory package</html>".to_vec(),
+        },
+        FileEntry {
+            path: vec!["assets".into(), "\u{10000}.txt".into()],
+            data: b"supplementary plane".to_vec(),
+        },
+        FileEntry {
+            path: vec!["assets".into(), "\u{e000}.txt".into()],
+            data: b"private use".to_vec(),
+        },
+        FileEntry {
+            path: vec!["empty.txt".into()],
+            data: Vec::new(),
+        },
+    ];
+    for entry in &entries {
+        let path = entry
+            .path
+            .iter()
+            .fold(site.clone(), |path, part| path.join(part));
+        fs::write(path, &entry.data).expect("fixture file");
+    }
+    let (plan, payload) = CarBuildPlan::from_files(entries).expect("explicit reference plan");
+    let council_key = council_signing_key_file(temp.path());
+    let mut expected_archive = Vec::new();
+    let stats = CarWriter::new(&plan, &payload)
+        .expect("reference writer")
+        .write_to(&mut expected_archive)
+        .expect("reference archive");
+
+    // Exercise both the reopened directory stream and the in-memory output path.
+    for archive_output in [false, true] {
+        let manifest_path = temp.path().join(format!("manifest-{archive_output}.to"));
+        let report_path = temp.path().join(format!("report-{archive_output}.json"));
+        let car_path = temp.path().join(format!("archive-{archive_output}.car"));
+        let mut command = cargo_bin_cmd!("sorafs_manifest_builder");
+        command
+            .arg(&site)
+            .arg("--retention-epoch=1")
+            .arg(format!(
+                "--council-signing-key-file={}",
+                council_key.display()
+            ))
+            .arg(format!("--manifest-out={}", manifest_path.display()))
+            .arg(format!("--json-out={}", report_path.display()));
+        if archive_output {
+            command.arg(format!("--car-out={}", car_path.display()));
+        }
+        let output = command.output().expect("run directory manifest builder");
+        assert!(
+            output.status.success(),
+            "directory manifest builder failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let manifest: ManifestV1 =
+            decode_from_bytes(&fs::read(manifest_path).expect("manifest bytes"))
+                .expect("canonical manifest");
+        assert_eq!(manifest.content_length, payload.len() as u64);
+        assert_eq!(manifest.root_cid, stats.root_cids[0]);
+        assert_eq!(manifest.car_size, expected_archive.len() as u64);
+        assert_eq!(
+            manifest.car_digest,
+            *blake3::hash(&expected_archive).as_bytes()
+        );
+        assert_eq!(
+            manifest.chunk_digest_sha3_256,
+            sorafs_car::compute_chunk_plan_digest_sha3(&plan.chunks)
+        );
+        assert_eq!(
+            manifest.por_root,
+            sorafs_car::compute_por_root(&payload, &plan).expect("reference PoR")
+        );
+        let report: Value = norito::json::from_slice(&fs::read(report_path).expect("report bytes"))
+            .expect("report");
+        for (name, expected) in [
+            ("car_archive_digest_hex", hex::encode(manifest.car_digest)),
+            (
+                "payload_digest_hex",
+                hex::encode(plan.payload_digest.as_bytes()),
+            ),
+            ("car_root_hex", hex::encode(&manifest.root_cid)),
+            (
+                "manifest_digest_hex",
+                hex::encode(manifest.digest().expect("manifest digest").as_bytes()),
+            ),
+        ] {
+            assert_eq!(
+                report.get(name).and_then(Value::as_str),
+                Some(expected.as_str())
+            );
+        }
+        if archive_output {
+            assert_eq!(fs::read(car_path).expect("archive bytes"), expected_archive);
+        } else {
+            assert!(!car_path.exists());
+        }
+    }
+}
 #[test]
 fn manifest_builder_rejects_noncanonical_operator_inputs() {
     let temp = tempdir().expect("tempdir");

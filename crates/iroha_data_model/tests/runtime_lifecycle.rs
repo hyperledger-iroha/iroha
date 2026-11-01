@@ -218,7 +218,21 @@ fn rebinding_breaks_a_signed_expectation() {
             implementation: old_impl,
         }],
         services_profile: selection.services_profile,
+        kernel: selection.kernel,
+        commitment_profile: selection.commitment_profile,
+        definitions: sorted(vec![claim, old_impl, selection.services_profile]),
+        exact_bindings: false,
     };
+    assert_eq!(
+        norito::decode_from_bytes::<ExpectationV1>(&norito::to_bytes(&expectation).unwrap())
+            .unwrap(),
+        expectation,
+    );
+    assert_eq!(
+        norito::json::from_str::<ExpectationV1>(&norito::json::to_json(&expectation).unwrap())
+            .unwrap(),
+        expectation,
+    );
     assert_eq!(expectation.check(&selection), Ok(()));
 
     let fixed = implementation(&ids, claim, "bond.claim.fixed");
@@ -479,4 +493,29 @@ fn rejection_codes_are_stable() {
         RuntimeRejectionV1::ExpectationMismatch { wire_id: None }.code(),
         "expectation_mismatch"
     );
+    assert_eq!(
+        RuntimeRejectionV1::MalformedPayload {
+            wire_id: "iroha.bond.call.v1".into()
+        }
+        .code(),
+        "malformed_payload"
+    );
+}
+
+#[test]
+fn malformed_payload_rejection_round_trips_and_names_its_wire_id() {
+    let rejection = RuntimeRejectionV1::MalformedPayload {
+        wire_id: "iroha.bond.call.v1".into(),
+    };
+    let bytes = norito::to_bytes(&rejection).expect("encode rejection");
+    assert_eq!(
+        norito::decode_from_bytes::<RuntimeRejectionV1>(&bytes).expect("decode rejection"),
+        rejection
+    );
+    let json = norito::json::to_json(&rejection).expect("rejection JSON");
+    assert_eq!(
+        norito::json::from_str::<RuntimeRejectionV1>(&json).expect("rejection from JSON"),
+        rejection
+    );
+    assert!(rejection.to_string().contains("iroha.bond.call.v1"));
 }

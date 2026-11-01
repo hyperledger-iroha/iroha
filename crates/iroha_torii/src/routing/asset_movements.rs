@@ -87,11 +87,11 @@ const BLOCK_ORIGINAL_WORK: u64 = 1 << 16;
 const READ_FOLD_WAIT: Duration = Duration::from_secs(2);
 
 /// Code of the retryable answer while the index is behind the committed tip.
-pub(crate) const INDEXING_CODE: &str = "asset_movements_indexing";
+pub const INDEXING_CODE: &str = "asset_movements_indexing";
 /// Code of the answer for movements below the retained floor.
-pub(crate) const NOT_RETAINED_CODE: &str = "asset_movements_not_retained";
+pub const NOT_RETAINED_CODE: &str = "asset_movements_not_retained";
 /// Endpoint label of `/v1/assets/{definition_id}/movements`.
-pub(crate) const ENDPOINT: &str = "/v1/assets/{definition_id}/movements";
+pub const ENDPOINT: &str = "/v1/assets/{definition_id}/movements";
 
 /// KAGEMUSHA ledger row tags of the records this index reads (`iroha_core` ledger storage).
 /// Payout rows are addressed by `KagemushaWalletPayoutKeyV1::ledger_key`.
@@ -427,11 +427,10 @@ impl AssetMovementIndex {
             start = start.min(rows.partition_point(|row| row.entry.height < below));
         }
         let mut items = Vec::new();
-        let mut examined = 0usize;
         let mut previous_height = None;
         let mut last_visible = None;
         let mut end = WalkEnd::Exhausted;
-        for row in rows.range(..start).rev() {
+        for (examined, row) in rows.range(..start).rev().enumerate() {
             let coordinate = row.coordinate();
             if coordinate.0 < lowest {
                 end = WalkEnd::BelowRange;
@@ -444,7 +443,6 @@ impl AssetMovementIndex {
                 end = WalkEnd::Budget(height);
                 break;
             }
-            examined += 1;
             previous_height = Some(coordinate.0);
             if !row.visible(visibility) {
                 continue;
@@ -1306,7 +1304,7 @@ async fn read(
 }
 
 /// `GET /v1/assets/{definition_id}/movements`
-pub(crate) async fn handler_get(
+pub async fn handler_get(
     State(app): State<crate::SharedAppState>,
     method: Method,
     uri: Uri,
@@ -1322,7 +1320,7 @@ pub(crate) async fn handler_get(
 }
 
 /// `POST /v1/assets/{definition_id}/movements/query`
-pub(crate) async fn handler_query(
+pub async fn handler_query(
     State(app): State<crate::SharedAppState>,
     Extension(caller): Extension<crate::ToriiAccountReadVisibility>,
     headers: HeaderMap,

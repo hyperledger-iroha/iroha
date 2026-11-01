@@ -406,7 +406,7 @@ impl DaSpooler {
     }
     fn try_increment_depth(depth: &AtomicUsize) -> Option<usize> {
         depth
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |current| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |current| {
                 current.checked_add(1)
             })
             .ok()

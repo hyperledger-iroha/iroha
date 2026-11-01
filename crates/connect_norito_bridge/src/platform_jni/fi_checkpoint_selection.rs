@@ -38,36 +38,34 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
     expected_height: JByteArray<'_>,
     expected_context_id: JByteArray<'_>,
 ) -> jni::sys::jbyteArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let Some(checkpoint) = read_java_byte_array_bounded(
-            &mut env,
+            env,
             &checkpoint,
             "checkpointBytes",
             iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
         ) else {
             return std::ptr::null_mut();
         };
-        let Some(network) = read_java_byte_array_bounded(&mut env, &network_id, "networkId", 74)
-        else {
+        let Some(network) = read_java_byte_array_bounded(env, &network_id, "networkId", 74) else {
             return std::ptr::null_mut();
         };
-        let Some(chain) =
-            read_java_byte_array_bounded(&mut env, &expected_chain, "expectedChain", 1024)
+        let Some(chain) = read_java_byte_array_bounded(env, &expected_chain, "expectedChain", 1024)
         else {
             return std::ptr::null_mut();
         };
         let Some(digest) =
-            read_java_byte_array_bounded(&mut env, &expected_sha256, "expectedSha256", 32)
+            read_java_byte_array_bounded(env, &expected_sha256, "expectedSha256", 32)
         else {
             return std::ptr::null_mut();
         };
         let Some(height) =
-            read_java_byte_array_bounded(&mut env, &expected_height, "expectedHeight", 20)
+            read_java_byte_array_bounded(env, &expected_height, "expectedHeight", 20)
         else {
             return std::ptr::null_mut();
         };
         let Some(context) =
-            read_java_byte_array_bounded(&mut env, &expected_context_id, "expectedContextId", 32)
+            read_java_byte_array_bounded(env, &expected_context_id, "expectedContextId", 32)
         else {
             return std::ptr::null_mut();
         };
@@ -78,13 +76,10 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
             || digest.len() != 32
             || context.len() != 32
         {
-            throw_java_illegal_argument(
-                &mut env,
-                "Invalid checkpoint selection input size".to_owned(),
-            );
+            throw_java_illegal_argument(env, "Invalid checkpoint selection input size".to_owned());
             return std::ptr::null_mut();
         }
-        let Some(result) = catch_unwind_to_java(&mut env, "FI checkpoint selection", || {
+        let Some(result) = catch_unwind_to_java(env, "FI checkpoint selection", || {
             struct Output(*mut std::os::raw::c_uchar);
             impl Drop for Output {
                 fn drop(&mut self) {
@@ -124,7 +119,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
         let metadata = match result {
             Ok(value) => value,
             Err(error) => {
-                throw_java_illegal_argument(&mut env, error.to_owned());
+                throw_java_illegal_argument(env, error.to_owned());
                 return std::ptr::null_mut();
             }
         };
@@ -132,7 +127,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
             Ok(value) => value.into_raw(),
             Err(_) => {
                 throw_java_illegal_state(
-                    &mut env,
+                    env,
                     "Native checkpoint metadata allocation failed".to_owned(),
                 );
                 std::ptr::null_mut()

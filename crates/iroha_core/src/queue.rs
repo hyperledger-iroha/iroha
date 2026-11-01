@@ -1058,6 +1058,10 @@ pub enum Error {
         /// Exact local invariant failure.
         reason: String,
     },
+    // The first top-level envelope with an unbound wire ID or kept opaque, with the stable
+    // rejection execution would commit (`specs/live_runtime_upgrades.md` §5.2).
+    /// The committed runtime selection does not admit the transaction: {0}
+    RuntimeRejected(iroha_data_model::runtime::lifecycle::RuntimeRejectionV1),
 }
 
 impl From<RoutingResolveError> for Error {
@@ -1141,6 +1145,13 @@ trait QueueAdmissionStateAccess {
             iroha_data_model::parameter::system::TransactionNeverIncludable,
         >,
     >;
+    /// The rejection of the first top-level envelope of `transaction` the committed selection
+    /// would refuse: an unbound wire ID or an envelope kept opaque
+    /// (`specs/live_runtime_upgrades.md` §5.2).
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1>;
     /// Classify an external signed transaction's SCCP exemption against committed state
     /// (`specs/sccp.md` §4.19).
     fn sccp_exempt_admission(
@@ -1233,6 +1244,21 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
             self.ledger_time_ms,
             self.next_block_height,
             transaction,
+        )
+    }
+    fn first_inactive_envelope(
+        &mut self,
+        transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+        let signed = match transaction.entrypoint() {
+            TransactionEntrypoint::External(signed) => signed,
+            TransactionEntrypoint::SealedReveal(reveal) => reveal.signed_transaction(),
+            TransactionEntrypoint::SealedCommitment(_)
+            | TransactionEntrypoint::AnonymousBallot(_) => return None,
+        };
+        crate::runtime::envelope::first_unadmitted_envelope(
+            self.view.world().runtime_selection.get(),
+            signed.instructions(),
         )
     }
     fn sccp_exempt_admission(
@@ -2145,7 +2171,6 @@ impl Queue {
     }
     /// Reconstruct refreshed manifests from the static baseline and committed additions.
     fn refreshed_lane_manifest_registry(
-        &self,
         registry_cfg: &LaneRegistry,
         state: &State,
     ) -> Result<LaneManifestRegistryHandle, LaneLifecycleError> {
@@ -2167,7 +2192,7 @@ impl Queue {
         registry_cfg: LaneRegistry,
         state: Arc<State>,
     ) {
-        let initial = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+        let initial = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
             Ok(registry) => registry,
             Err(err) => {
                 iroha_logger::warn!(reason = %err, "refusing to install incomplete initial lane-manifest snapshot");
@@ -2176,10 +2201,8 @@ impl Queue {
         };
         let initial_applied =
             self.install_lane_manifests_with_state_if_consensus_compatible(&initial, &state);
-        if initial_applied {
-            if let Some(telemetry_handle) = telemetry.as_ref() {
-                telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
-            }
+        if initial_applied && let Some(telemetry_handle) = telemetry.as_ref() {
+            telemetry_handle.set_lane_manifest_registry(Arc::clone(&initial));
         }
         if registry_cfg.poll_interval.is_zero() {
             return;
@@ -2188,7 +2211,7 @@ impl Queue {
         ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
         loop {
             ticker.tick().await;
-            let registry = match self.refreshed_lane_manifest_registry(&registry_cfg, &state) {
+            let registry = match Self::refreshed_lane_manifest_registry(&registry_cfg, &state) {
                 Ok(registry) => registry,
                 Err(err) => {
                     iroha_logger::warn!(reason = %err, "refusing lane-manifest hot reload without exact active-lane coverage");
@@ -2281,6 +2304,10 @@ impl Queue {
                 || instruction
                     .as_any()
                     .downcast_ref::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>()
+                    .is_some()
+                || instruction
+                    .as_any()
+                    .downcast_ref::<iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal>()
                     .is_some()
         };
         match tx.as_accepted().executable() {
@@ -2952,7 +2979,7 @@ impl Queue {
                     return Err("transaction queue resident custody belongs to a different original State pool");
                 }
                 let ticket = self.sumeragi_start_ticket
-                    .fetch_update(Ordering::AcqRel, Ordering::Acquire, |previous| previous.checked_add(1))
+                    .try_update(Ordering::AcqRel, Ordering::Acquire, |previous| previous.checked_add(1))
                     .map_err(|_| "transaction queue startup identity is exhausted")?;
                 Ok((ticket, binding.replace(SumeragiQueueWake::Reserved { ticket, budget: budget.clone() })))
             },
@@ -4011,14 +4038,15 @@ impl Queue {
                         err: Error::Deferred(original),
                     });
                 }
-                let plan = match routing_plan {
-                    Some(plan) => self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
-                    None => self
-                        .router
-                        .read()
-                        .try_route_plan_with_view(&tx, &view)
-                        .and_then(|plan| Self::resolve_view_routing_plan(plan, &view)),
-                };
+                let plan = routing_plan.map_or_else(
+                    || {
+                        self.router
+                            .read()
+                            .try_route_plan_with_view(&tx, &view)
+                            .and_then(|plan| Self::resolve_view_routing_plan(plan, &view))
+                    },
+                    |plan| self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
+                );
                 let plan = match plan {
                     Ok(plan) => plan,
                     Err(error) => {
@@ -4140,6 +4168,12 @@ impl Queue {
                 },
                 checked,
             ));
+        }
+        // Honest proposers never carry an envelope the committed selection does not admit; it
+        // would only commit `definition_inactive` or `malformed_payload`
+        // (`specs/live_runtime_upgrades.md` §5.2).
+        if let Some(rejection) = state_access.first_inactive_envelope(checked.as_accepted()) {
+            return Err(Self::refused(Error::RuntimeRejected(rejection), checked));
         }
         // Reclaim bounded stale work and reject cheap saturation/duplication cases before fee,
         // manifest, privacy-proof, compliance, and gas analysis.
@@ -6905,7 +6939,7 @@ pub mod tests {
             authority_keypair,
             ..
         } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -7068,7 +7102,7 @@ pub mod tests {
             authority_keypair,
             ..
         } = nexus_routing_fixture_with_nexus(Nexus::default(), zero_rate_routing_fees());
-        let mut nexus = state.nexus_snapshot();
+        let nexus = state.nexus_snapshot();
         state
             .set_nexus(nexus.clone())
             .expect("apply initial single-lane Nexus config");
@@ -7947,7 +7981,6 @@ pub mod tests {
     }
     #[test]
     fn manifest_hot_reload_rejects_semantic_drift_atomically() {
-        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         fn registry(path: &str, validator: AccountId, quorum: u32) -> LaneManifestRegistryHandle {
             let rules = GovernanceRules {
                 validators: vec![validator],
@@ -7970,6 +8003,7 @@ pub mod tests {
                 status,
             )])))
         }
+        let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
         let (alice, _) = gen_account_in("wonderland");
@@ -8124,12 +8158,12 @@ pub mod tests {
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &queue_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*queue.lane_privacy_registry.read(),
+            &queue.lane_privacy_registry.read(),
             &queue_privacy_before
         ));
 
@@ -8157,7 +8191,7 @@ pub mod tests {
         assert_eq!(state.state_view_generation(), state_generation_before);
         assert!(Arc::ptr_eq(&*state.lane_manifests.read(), &state_before));
         assert!(LanePrivacyRegistry::ptr_eq(
-            &*state.lane_privacy_registry.read(),
+            &state.lane_privacy_registry.read(),
             &state_privacy_before
         ));
         assert!(Arc::ptr_eq(&*queue.lane_manifests.read(), &source_backed));
@@ -9527,6 +9561,7 @@ pub mod tests {
         include!("queue/resident_owner_tests.rs");
     }
     include!("queue/current_admission_tests.rs");
+    include!("queue/runtime_envelope_admission_tests.rs");
     include!("queue/keepalive_tests.rs");
     include!("queue/domain_admission_tests.rs");
     include!("queue/resource_contract_tests.rs");

@@ -187,7 +187,7 @@ fn decode_local_rows(
 }
 
 /// Check the account in this peer's actual local committed view.
-pub(super) fn account_present(
+pub fn account_present(
     peer: &NetworkPeer,
     rt: &Runtime,
     account: &AccountId,
@@ -212,7 +212,7 @@ pub(super) fn account_present(
 }
 
 /// Read both exact fee buckets from this peer, without authoritative-peer proxying.
-pub(super) fn balances(
+pub fn balances(
     peer: &NetworkPeer,
     rt: &Runtime,
     ids: &[AssetId; 2],

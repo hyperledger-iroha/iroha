@@ -1,7 +1,7 @@
 // Existing tests kept in their original parent test namespace.
 #[test]
 fn finalized_query_reconciliation_is_bounded_and_stops_on_empty_progress() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     let first_query = TestFinalizedQuery::new(vec![
@@ -110,7 +110,7 @@ fn finalized_query_reconciliation_is_bounded_and_stops_on_empty_progress() {
         }
     );
     assert_eq!(empty_query.calls.load(Ordering::Relaxed), 2);
-    let bounded_root = tempfile::tempdir().expect("bounded state root");
+    let bounded_root = private_state_tempdir().expect("bounded state root");
     let (bounded_service, ..) = ready_service(bounded_root.path());
     let beyond_head_query =
         TestFinalizedQuery::new(vec![Some(page(vec![event(1, "storage:beyond-head", "1")]))]);

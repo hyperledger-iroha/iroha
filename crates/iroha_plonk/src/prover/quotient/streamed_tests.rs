@@ -387,7 +387,9 @@ fn streamed_parity<C: PastaCurve>() {
                 instance: &instance,
                 permutation_products: products.iter().map(Vec::as_slice).collect(),
                 lookups: lookup_polys
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|c| LookupPolys {
                         product: &c[0],
                         input: &c[1],
@@ -655,7 +657,9 @@ fn gate_fold_boundary_parity<C: PastaCurve>() {
                 instance: &instance,
                 permutation_products: products.iter().map(Vec::as_slice).collect(),
                 lookups: lookup_polys
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|column| LookupPolys {
                         product: &column[0],
                         input: &column[1],
@@ -1090,7 +1094,9 @@ fn factored_quotient_parity<C: PastaCurve>(factored: bool) {
             instance: &instance,
             permutation_products: products.iter().map(Vec::as_slice).collect(),
             lookups: lookups
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|column| LookupPolys {
                     product: &column[0],
                     input: &column[1],
@@ -1236,7 +1242,9 @@ fn batched_lookup_filter_order_cancellation_unwind_and_reuse_both_fields() {
                 instance: &instance,
                 permutation_products: products.iter().map(Vec::as_slice).collect(),
                 lookups: lookups
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|column| LookupPolys {
                         product: &column[0],
                         input: &column[1],
@@ -1551,7 +1559,9 @@ fn bounded_parity<C: PastaCurve>() {
                 instance: &instance,
                 permutation_products: products.iter().map(Vec::as_slice).collect(),
                 lookups: lookup_polys
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|column| LookupPolys {
                         product: &column[0],
                         input: &column[1],

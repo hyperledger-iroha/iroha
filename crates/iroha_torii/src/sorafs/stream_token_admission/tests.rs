@@ -136,7 +136,7 @@ impl StreamTokenReputationDeliveryV1 for ReputationProbe {
     ) -> Result<(), StreamTokenGatewayAdmissionErrorV1> {
         if self
             .fail_next
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()

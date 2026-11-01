@@ -452,7 +452,7 @@ fn authenticate_parent(
             source: Box::new(source.into()),
         })?;
     store
-        .accept(profile, native)
+        .accept(profile, &native)
         .map_err(|source| Error::ParentCheckpoint {
             profile: Box::new(profile.clone()),
             source: Box::new(source.into()),

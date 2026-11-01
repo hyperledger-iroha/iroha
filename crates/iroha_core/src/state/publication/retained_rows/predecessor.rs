@@ -168,14 +168,7 @@ impl<K: ComparisonKey, V: mv::Value> OriginalTableRead<K, V> {
             // This private source-bound step prepays the actual repeated tree
             // resolves as well as comparison. The callbacks below verify their
             // unchanged recorded demand; they do not waive or reset a quota.
-            if let Err(cause) = admit(work, required, limit) {
-                // SPEC: §13.4 HC175 loses already funded predecessor work on refusal.
-                #[cfg(all(test, sumeragi_core_mutation = "HC175"))]
-                {
-                    self.predecessor = PredecessorIndex::default();
-                }
-                return Err(cause);
-            }
+            admit(work, required, limit)?;
             let current_row = if let Some(head) = current {
                 let position = self
                     .current

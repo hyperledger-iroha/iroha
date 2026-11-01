@@ -744,7 +744,7 @@ mod tests {
         atomic::{AtomicUsize, Ordering},
     };
 
-    use iroha_data_model::transaction::FeePaymentIntent;
+    use iroha_data_model::transaction::{FeePaymentIntent, error::TransactionRejectionReason};
     use iroha_model_base::chain::ChainId;
     use iroha_model_base::metadata::Metadata;
     use iroha_service_model::soranet::{AnonymityPolicy, RolloutPhase};
@@ -1270,10 +1270,7 @@ mod tests {
 
     #[test]
     fn rejected_submission_downcasts_to_its_authenticated_reason() {
-        use iroha_data_model::{
-            ValidationFail,
-            transaction::{TransactionResult, error::TransactionRejectionReason},
-        };
+        use iroha_data_model::{ValidationFail, transaction::TransactionResult};
         let reason =
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted("no".to_owned()));
         let error = rejected_submission(|transaction| {
@@ -1296,7 +1293,6 @@ mod tests {
 
     #[test]
     fn rejected_submission_keeps_its_evidence_when_the_reason_is_unreadable() {
-        use iroha_data_model::transaction::error::TransactionRejectionReason;
         let error = rejected_submission(|_| Err(http::StatusCode::FORBIDDEN));
         assert!(error.downcast_ref::<TransactionRejectionReason>().is_none());
         assert!(

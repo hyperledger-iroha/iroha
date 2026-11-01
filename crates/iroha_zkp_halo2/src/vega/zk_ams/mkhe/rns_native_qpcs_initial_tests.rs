@@ -830,7 +830,7 @@ fn initial_wire_rejects_every_noncanonical_lane_and_both_retired_widths() {
     let values =
         &fixture.proof[QPCS_BODY_HEADER_BYTES_V1..QPCS_BODY_HEADER_BYTES_V1 + values_bytes];
     let mut retired_values = Vec::new();
-    for (coordinate, pair) in values.chunks_exact(FQ2_BYTES_V1).enumerate() {
+    for (coordinate, pair) in values.as_chunks::<FQ2_BYTES_V1>().0.iter().enumerate() {
         let value =
             decode_fq2_v1(coordinate % COORDINATE_COUNT_V1 / ROWS_PER_LIMB_V1, pair).unwrap();
         retired_values.extend_from_slice(&value.c0.to_be_bytes());

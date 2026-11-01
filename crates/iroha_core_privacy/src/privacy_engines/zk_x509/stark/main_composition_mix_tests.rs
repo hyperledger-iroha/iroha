@@ -13,6 +13,15 @@ fn scalar_mix(residues: &[F], alphas: &[E]) -> E {
         })
 }
 
+fn streamed_mix(residues: &[F], alphas: &[E]) -> E {
+    assert_eq!(residues.len(), alphas.len());
+    let mut mix = MainResidueMixV1::new_v1();
+    for (residue, alpha) in residues.iter().zip(alphas) {
+        mix.push_v1(*residue, alpha);
+    }
+    mix.finish_v1()
+}
+
 fn fixture(length: usize, seed: u8) -> (Vec<F>, Vec<E>) {
     let mut rng = ChaCha12Rng::from_seed([seed; 32]);
     let mut field = || F::reduce(u128::from(rng.try_next_u64().unwrap()));
@@ -37,7 +46,7 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
             ] {
                 let alphas = vec![alpha; length];
                 assert_eq!(
-                    mix_residues_v1(&residues, &alphas),
+                    streamed_mix(&residues, &alphas),
                     scalar_mix(&residues, &alphas)
                 );
             }
@@ -45,10 +54,37 @@ fn widened_composition_matches_scalar_reduction_at_carry_and_block_boundaries() 
         for seed in [0, 17, 255] {
             let (residues, alphas) = fixture(length, seed);
             assert_eq!(
-                mix_residues_v1(&residues, &alphas),
+                streamed_mix(&residues, &alphas),
                 scalar_mix(&residues, &alphas)
             );
         }
+    }
+}
+
+#[test]
+fn indexed_widened_mix_preserves_order_carries_and_empty_input() {
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    for length in [0, 1, 2, 7, 8, 9, 1023, 1024, 1025, 2048, 4097] {
+        let residues = (0..length)
+            .map(|index| F(p - 1 - (index % 31) as u64))
+            .collect::<Vec<_>>();
+        let alphas = (0..length)
+            .map(|index| {
+                E::from_coefficients(core::array::from_fn(|lane| {
+                    F(p - 1 - ((index + lane) % 17) as u64)
+                }))
+                .unwrap()
+            })
+            .collect::<Vec<_>>();
+        let mut visited = 0;
+        let actual = mix_indexed_residues_v1(length, |index| {
+            assert_eq!(index, visited);
+            visited += 1;
+            (residues[length - 1 - index], alphas[length - 1 - index])
+        });
+        assert_eq!(visited, length);
+        assert_eq!(actual, scalar_mix(&residues, &alphas));
+        assert_eq!(actual, mix_residues_v1(&residues, &alphas));
     }
 }
 
@@ -59,7 +95,12 @@ fn every_registration_mix_is_identical_across_worker_schedules() {
         .registered_segments
         .iter()
         .enumerate()
-        .map(|(index, registration)| fixture(registration.segment.constraint_count, index as u8))
+        .map(|(index, registration)| {
+            fixture(
+                registration.segment.constraint_count,
+                u8::try_from(index).unwrap(),
+            )
+        })
         .collect::<Vec<_>>();
     let expected = fixtures
         .iter()
@@ -73,7 +114,7 @@ fn every_registration_mix_is_identical_across_worker_schedules() {
         let actual = pool.install(|| {
             fixtures
                 .par_iter()
-                .map(|(r, a)| mix_residues_v1(r, a))
+                .map(|(r, a)| streamed_mix(r, a))
                 .collect::<Vec<_>>()
         });
         assert_eq!(actual, expected);
@@ -81,9 +122,58 @@ fn every_registration_mix_is_identical_across_worker_schedules() {
 }
 
 #[test]
+fn streamed_mixture_clears_products_carries_and_completed_blocks_on_every_exit() {
+    use crate::privacy_engines::zk_x509::private_table::inspection;
+
+    let value = F(crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1 - 1);
+    let alpha = E::from_coefficients([value; 4]).unwrap();
+    for count in [2, TERMS_PER_BLOCK_V1, TERMS_PER_BLOCK_V1 + 1] {
+        for outcome in 0..3 {
+            let (result, erased) = inspection::observe_v1(|| {
+                std::panic::catch_unwind(|| {
+                    let mut mix = MainResidueMixV1::new_v1();
+                    for _ in 0..count {
+                        mix.push_v1(value, &alpha);
+                    }
+                    match outcome {
+                        0 => assert_eq!(
+                            mix.finish_v1(),
+                            E::from_coefficients([F(count as u64); 4]).unwrap()
+                        ),
+                        1 => drop(mix),
+                        _ => panic!("synthetic widened mixture unwind"),
+                    }
+                })
+            });
+            assert_eq!(result.is_err(), outcome == 2);
+            // These maximal products populate both the four sums and the four
+            // carry counters, including a complete block before a partial tail.
+            assert!(
+                erased
+                    .iter()
+                    .filter(|entry| entry.cells == 4 && entry.nonzero_before == 4)
+                    .count()
+                    >= 2
+            );
+            if outcome == 0 || count >= TERMS_PER_BLOCK_V1 {
+                assert!(
+                    erased
+                        .iter()
+                        .any(|entry| entry.cells == 1 && entry.nonzero_before == 1)
+                );
+            }
+            assert!(erased.iter().all(|entry| entry.nonzero_after == 0));
+        }
+    }
+}
+
+#[test]
 #[ignore = "release-only isolated scalar versus widened composition-mix timings"]
 fn composition_mix_cost_diagnostic() {
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     for width in [90, 593, 1024, 2145] {
         let (residues, alphas) = fixture(width, 73);
         let iterations = (1 << 24) / width;
@@ -100,7 +190,7 @@ fn composition_mix_cost_diagnostic() {
                     let mixed = if mode == 0 {
                         scalar_mix(r, a)
                     } else {
-                        mix_residues_v1(r, a)
+                        streamed_mix(r, a)
                     };
                     checksums[mode] = checksums[mode].add(std::hint::black_box(mixed));
                 }

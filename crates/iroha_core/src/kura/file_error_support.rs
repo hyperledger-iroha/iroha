@@ -107,8 +107,20 @@ fn create_dir_all_with_context(path: &Path) -> Result<()> {
     std::fs::create_dir_all(path).map_err(|err| Error::MkDir(err, path.to_path_buf()))
 }
 fn sync_dir(path: &Path) -> std::io::Result<()> {
-    let file = std::fs::File::open(path)?;
-    file.sync_all()
+    #[cfg(windows)]
+    {
+        // Retain the original directory and ancestors while completing the native
+        // write-through metadata publication boundary. A plain File::open cannot
+        // open Windows directories and does not provide this durability authority.
+        let directory = iroha_fs::OwnerDirectory::open(path)?;
+        directory.sync()?;
+        directory.revalidate()
+    }
+    #[cfg(not(windows))]
+    {
+        let file = std::fs::File::open(path)?;
+        file.sync_all()
+    }
 }
 fn remove_commit_marker_temp_and_sync(path: &Path) -> Result<()> {
     match std::fs::remove_file(path) {
@@ -208,15 +220,25 @@ fn sync_indexed_sidecar_dir(path: &Path) -> std::io::Result<()> {
     sync_indexed_sidecar_dir_handle(&file)
 }
 fn sync_indexed_sidecar_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
+    sync_indexed_sidecar_directory(|| file.sync_all())
+}
+fn sync_indexed_sidecar_directory(
+    sync: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.replace(false)) {
         return Err(std::io::Error::other(
             "injected indexed sidecar directory sync failure",
         ));
     }
-    file.sync_all()
+    sync()
 }
 fn sync_progress_sidecar_ancestor_dir_handle(file: &std::fs::File) -> std::io::Result<()> {
+    sync_progress_sidecar_ancestor(|| file.sync_all())
+}
+fn sync_progress_sidecar_ancestor(
+    sync: impl FnOnce() -> std::io::Result<()>,
+) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_PROGRESS_SIDECAR_ANCESTOR_SYNC_AT.with(|slot| {
         let Some(mut fault) = slot.get() else {
@@ -240,7 +262,7 @@ fn sync_progress_sidecar_ancestor_dir_handle(file: &std::fs::File) -> std::io::R
             "injected progress sidecar ancestor directory sync failure",
         ));
     }
-    file.sync_all()
+    sync()
 }
 fn sync_sidecar_promotion_dir(path: &Path) -> std::io::Result<()> {
     #[cfg(test)]

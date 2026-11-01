@@ -2,10 +2,9 @@
 
 use iroha_config::parameters::actual::TelemetryIntegrity as TelemetryIntegrityConfig;
 use norito::json::{Map, Value};
-use std::{
-    fs::File,
-    path::{Path, PathBuf},
-};
+#[cfg(not(windows))]
+use std::fs::File;
+use std::path::{Path, PathBuf};
 #[cfg(unix)]
 use std::{
     fs::OpenOptions,
@@ -14,7 +13,12 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
 };
 use thiserror::Error;
+#[cfg(unix)]
 use tokio::io::AsyncWriteExt;
+
+#[cfg(windows)]
+#[path = "integrity_windows.rs"]
+mod windows;
 
 const STATE_VERSION: u64 = 1;
 const STATE_FILE_PREFIX: &str = "telemetry_integrity_";
@@ -139,7 +143,10 @@ struct PendingRecord {
 }
 
 struct StateLock {
+    #[cfg(not(windows))]
     _file: File,
+    #[cfg(windows)]
+    native: std::sync::Arc<windows::StateStore>,
 }
 
 /// Integrity state shared by one telemetry exporter.
@@ -349,30 +356,36 @@ impl ChainState {
         if !self.config.enabled {
             return Ok(());
         }
-        let Some(path) = self.state_path.as_ref() else {
+        let Some(path) = self.state_path.clone() else {
             return Ok(());
         };
-        let snapshot = load_state_snapshot(path).map_err(|message| {
-            IntegrityError::LoadState(format!("{}: {message}", path.display()))
-        })?;
+        #[cfg(not(windows))]
+        let result =
+            load_state_snapshot(&path).and_then(|snapshot| self.restore_snapshot(snapshot));
+        #[cfg(windows)]
+        let result = self
+            ._state_lock
+            .as_ref()
+            .map(|lock| std::sync::Arc::clone(&lock.native))
+            .ok_or_else(|| "state path has no retained native lock".to_string())
+            .and_then(|native| native.load(&path, |snapshot| self.restore_snapshot(snapshot)));
+        result
+            .map_err(|message| IntegrityError::LoadState(format!("{}: {message}", path.display())))
+    }
+
+    fn restore_snapshot(&mut self, snapshot: Option<ChainStateSnapshot>) -> Result<(), String> {
         let Some(snapshot) = snapshot else {
             return Ok(());
         };
         if snapshot.sink_fingerprint != self.sink_fingerprint {
-            return Err(IntegrityError::LoadState(format!(
-                "{}: state belongs to a different telemetry sink",
-                path.display()
-            )));
+            return Err("state belongs to a different telemetry sink".to_string());
         }
         let pending = snapshot
             .pending_record
             .map(|bytes| {
                 validate_pending_record(&self.config, snapshot.seq, snapshot.prev_hash, bytes)
             })
-            .transpose()
-            .map_err(|message| {
-                IntegrityError::LoadState(format!("{}: {message}", path.display()))
-            })?;
+            .transpose()?;
         self.seq = snapshot.seq;
         self.prev_hash = snapshot.prev_hash;
         self.pending = pending;
@@ -388,11 +401,33 @@ impl ChainState {
         let Some(path) = self.state_path.as_ref() else {
             return Ok(());
         };
-        persist_state_snapshot(path, self.sink_fingerprint, seq, prev_hash, pending_record)
-            .await
-            .map_err(|message| {
-                IntegrityError::PersistState(format!("{}: {message}", path.display()))
-            })
+        #[cfg(not(windows))]
+        let result =
+            persist_state_snapshot(path, self.sink_fingerprint, seq, prev_hash, pending_record)
+                .await;
+        #[cfg(windows)]
+        let result = async {
+            let lock = self
+                ._state_lock
+                .as_ref()
+                .ok_or_else(|| "state path has no retained native lock".to_string())?;
+            lock.native.require_path(path)?;
+            let native = std::sync::Arc::clone(&lock.native);
+            let payload =
+                encode_state_snapshot(self.sink_fingerprint, seq, prev_hash, pending_record);
+            let final_check = lock.native.require_path(path);
+            let payload = payload.and_then(|bytes| final_check.map(|()| bytes))?;
+            let result = tokio::task::spawn_blocking(move || native.persist(payload))
+                .await
+                .map_err(|error| format!("native state worker failed: {error}"))
+                .and_then(std::convert::identity);
+            let final_check = lock.native.require_path(path);
+            result.and(final_check)
+        }
+        .await;
+        result.map_err(|message| {
+            IntegrityError::PersistState(format!("{}: {message}", path.display()))
+        })
     }
 }
 
@@ -416,13 +451,13 @@ pub enum IntegrityError {
     LoadState(String),
     #[error("failed to persist telemetry integrity state: {0}")]
     PersistState(String),
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[error("telemetry integrity state persistence is unsupported on this platform")]
     UnsupportedStatePersistence,
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[error("telemetry integrity state is already in use: {0}")]
     StateAlreadyInUse(String),
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[error("telemetry integrity state custody check failed: {0}")]
     StateCustody(String),
 }
@@ -511,7 +546,14 @@ fn acquire_state_lock(path: &Path) -> Result<StateLock, IntegrityError> {
     Ok(StateLock { _file: file })
 }
 
-#[cfg(not(unix))]
+#[cfg(windows)]
+fn acquire_state_lock(path: &Path) -> Result<StateLock, IntegrityError> {
+    windows::StateStore::open(path).map(|native| StateLock {
+        native: std::sync::Arc::new(native),
+    })
+}
+
+#[cfg(not(any(unix, windows)))]
 fn acquire_state_lock(_path: &Path) -> Result<StateLock, IntegrityError> {
     Err(IntegrityError::UnsupportedStatePersistence)
 }
@@ -665,7 +707,12 @@ fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String
         ));
     }
 
-    let value: Value = norito::json::from_slice(&bytes)
+    decode_state_snapshot(&bytes).map(Some)
+}
+
+#[cfg(any(unix, windows))]
+fn decode_state_snapshot(bytes: &[u8]) -> Result<ChainStateSnapshot, String> {
+    let value: Value = norito::json::from_slice(bytes)
         .map_err(|err| format!("failed to decode state file: {err}"))?;
     let map = value
         .as_object()
@@ -712,15 +759,15 @@ fn load_state_snapshot(path: &Path) -> Result<Option<ChainStateSnapshot>, String
         Some(_) => return Err("state file pending_record must be a string or null".to_string()),
         None => return Err("state file missing pending_record".to_string()),
     };
-    Ok(Some(ChainStateSnapshot {
+    Ok(ChainStateSnapshot {
         sink_fingerprint,
         seq,
         prev_hash,
         pending_record,
-    }))
+    })
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 fn load_state_snapshot(_path: &Path) -> Result<Option<ChainStateSnapshot>, String> {
     Err("durable state files are unsupported on this platform".to_string())
 }
@@ -801,14 +848,13 @@ fn validate_pending_record(
     })
 }
 
-#[cfg(unix)]
-async fn persist_state_snapshot(
-    path: &Path,
+#[cfg(any(unix, windows))]
+fn encode_state_snapshot(
     sink_fingerprint: [u8; 32],
     seq: u64,
     prev_hash: [u8; 32],
     pending_record: Option<&[u8]>,
-) -> Result<(), String> {
+) -> Result<Vec<u8>, String> {
     let mut map = Map::new();
     map.insert("version".into(), Value::from(STATE_VERSION));
     map.insert(
@@ -833,6 +879,19 @@ async fn persist_state_snapshot(
             "serialized state exceeds the {STATE_FILE_MAX_BYTES}-byte limit"
         ));
     }
+
+    Ok(payload)
+}
+
+#[cfg(unix)]
+async fn persist_state_snapshot(
+    path: &Path,
+    sink_fingerprint: [u8; 32],
+    seq: u64,
+    prev_hash: [u8; 32],
+    pending_record: Option<&[u8]>,
+) -> Result<(), String> {
+    let payload = encode_state_snapshot(sink_fingerprint, seq, prev_hash, pending_record)?;
 
     let tmp_path = path.with_extension("tmp");
     let result = async {
@@ -870,7 +929,7 @@ async fn persist_state_snapshot(
     result
 }
 
-#[cfg(not(unix))]
+#[cfg(not(any(unix, windows)))]
 async fn persist_state_snapshot(
     _path: &Path,
     _sink_fingerprint: [u8; 32],
@@ -1387,7 +1446,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     #[test]
     fn persisted_state_is_rejected_without_directory_sync() {
         let state_path = temp_dir("integrity-unsupported").join("telemetry_integrity_ws.json");

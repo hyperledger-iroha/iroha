@@ -22,12 +22,16 @@ fn source(log: u32, columns: usize) -> Vec<Vec<u64>> {
 }
 
 fn oracle_add(left: u64, right: u64) -> u64 {
-    ((u128::from(left) + u128::from(right)) % u128::from(FIELD_MODULUS)) as u64
+    u64::try_from((u128::from(left) + u128::from(right)) % u128::from(FIELD_MODULUS))
+        .expect("residue modulo the field fits u64")
 }
 
 fn oracle_sub(left: u64, right: u64) -> u64 {
-    ((u128::from(left) + u128::from(FIELD_MODULUS) - u128::from(right)) % u128::from(FIELD_MODULUS))
-        as u64
+    u64::try_from(
+        (u128::from(left) + u128::from(FIELD_MODULUS) - u128::from(right))
+            % u128::from(FIELD_MODULUS),
+    )
+    .expect("residue modulo the field fits u64")
 }
 
 fn reference_stage(values: &mut [u64], root: u64, stage: u32) {
@@ -68,8 +72,9 @@ fn fused_global_model(values: &mut [u64], log: u32, root: u64, stage: u32) -> Ve
                     break;
                 }
                 assert_eq!(twiddle, goldilocks_pow(step, offset));
-                let low = ((cell - offset) * if paired { 4 } else { 2 } + offset) as usize;
-                let half = half as usize;
+                let low = usize::try_from((cell - offset) * if paired { 4 } else { 2 } + offset)
+                    .expect("model row index fits usize");
+                let half = usize::try_from(half).expect("model stage half fits usize");
                 if paired {
                     let squared = goldilocks_mul(twiddle, twiddle);
                     let a = values[low];
@@ -168,16 +173,24 @@ fn fourth_root_shift_matches_independent_products_at_every_supported_order() {
         for root in [root, goldilocks_pow(root, 3), goldilocks_inv(root)] {
             let fourth = goldilocks_pow(root, 1_u64 << (log - 2));
             assert!(fourth == POSITIVE || fourth == NEGATIVE);
-            for value in [0, 1, u16::MAX as u64, 1 << 16, 1 << 48, FIELD_MODULUS - 1]
-                .into_iter()
-                .chain(
-                    (0..1024_u64)
-                        .map(|index| index.wrapping_mul(0x9e37_79b9_7f4a_7c15) % FIELD_MODULUS),
-                )
-            {
+            for value in [
+                0,
+                1,
+                u64::from(u16::MAX),
+                1 << 16,
+                1 << 48,
+                FIELD_MODULUS - 1,
+            ]
+            .into_iter()
+            .chain(
+                (0..1024_u64)
+                    .map(|index| index.wrapping_mul(0x9e37_79b9_7f4a_7c15) % FIELD_MODULUS),
+            ) {
                 let actual = metal_fourth_root_model(value, fourth);
-                let expected =
-                    (u128::from(value) * u128::from(fourth) % u128::from(FIELD_MODULUS)) as u64;
+                let expected = u64::try_from(
+                    u128::from(value) * u128::from(fourth) % u128::from(FIELD_MODULUS),
+                )
+                .expect("residue modulo the field fits u64");
                 assert_eq!(actual, expected);
             }
         }
@@ -691,7 +704,10 @@ fn required_metal_native19_pool_retention_cost_matches_original_values() {
     // 32MiB entries. It is not a production policy for oversized live loans.
     const HISTORICAL_16MIB_CACHE_BASELINE_PAGES: usize = (16 << 20) / METAL_BUFFER_PAGE_BYTES;
 
-    assert!(!cfg!(debug_assertions), "run in release mode");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run in release mode"
+    );
     select_metal_device().expect("native pool diagnostic requires actual Metal");
     let _lane = crate::backend::acquire_gpu_lane();
     let log = 19;
@@ -777,11 +793,33 @@ fn phase_diagnostic_scope_is_opt_in_and_clears_after_unwind() {
 #[test]
 #[ignore = "actual Metal phase timing with CPU parity; run alone in release mode"]
 fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
+    exact_root_phase_latency_with_wait_strategies(
+        &[ticket_lifetime::TestWaitStrategy::YieldThenNotify],
+        12,
+    );
+}
+
+#[test]
+#[ignore = "actual Metal wait-strategy comparison with full CPU parity; run alone in release mode"]
+fn required_metal_exact_root_active_wait_strategies_match_cpu_with_original_owners() {
+    use ticket_lifetime::TestWaitStrategy;
+    exact_root_phase_latency_with_wait_strategies(
+        &[
+            TestWaitStrategy::YieldThenNotify,
+            TestWaitStrategy::ActiveOneMillisecond,
+            TestWaitStrategy::ActiveTwoMilliseconds,
+            TestWaitStrategy::ActiveSixteenMilliseconds,
+        ],
+        8,
+    );
+}
+
+fn exact_root_phase_latency_with_wait_strategies(
+    strategies: &[ticket_lifetime::TestWaitStrategy],
+    rounds: usize,
+) {
     use rayon::prelude::*;
 
-    assert!(!cfg!(debug_assertions), "run in release mode");
-    select_metal_device().expect("phase diagnostic requires actual Metal");
-    let _lane = crate::backend::acquire_gpu_lane();
     struct Case {
         log: u32,
         columns: usize,
@@ -791,6 +829,13 @@ fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
         expected: Vec<Vec<u64>>,
         actual: Vec<Vec<u64>>,
     }
+
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "run in release mode"
+    );
+    select_metal_device().expect("phase diagnostic requires actual Metal");
+    let _lane = crate::backend::acquire_gpu_lane();
     let mut cases = [(19, 4), (19, 8), (22, 4), (22, 8)]
         .into_iter()
         .map(|(log, columns)| {
@@ -821,52 +866,71 @@ fn required_metal_exact_root_phase_latency_matches_cpu_with_original_owners() {
             }
         })
         .collect::<Vec<_>>();
-    for round in 0..12 {
+    if strategies.len() > 1 {
+        // The controlled comparison excludes one-time pipeline/allocation
+        // warmup for every public shape before any policy receives a sample.
+        for case in &mut cases {
+            transform(&mut case.actual, case.log, case.root, case.inverse).unwrap();
+            assert_eq!(case.actual, case.expected);
+        }
+    }
+    for round in 0..rounds {
         for index in if round % 2 == 0 {
             [0, 1, 2, 3]
         } else {
             [3, 2, 1, 0]
         } {
             let case = &mut cases[index];
-            for (actual, original) in case.actual.iter_mut().zip(&case.original) {
-                actual.copy_from_slice(original);
+            for strategy_offset in 0..strategies.len() {
+                // Rotate and reverse so each policy occupies every position
+                // twice across two rounds per policy.
+                let strategy_index = if round % 2 == 0 {
+                    (round / 2 + strategy_offset) % strategies.len()
+                } else {
+                    (round / 2 + strategies.len() - 1 - strategy_offset) % strategies.len()
+                };
+                let strategy = strategies[strategy_index];
+                for (actual, original) in case.actual.iter_mut().zip(&case.original) {
+                    actual.copy_from_slice(original);
+                }
+                let _strategy = ticket_lifetime::TestWaitStrategyScope::enter(strategy);
+                let scope = PhaseDiagnosticScope::begin();
+                let started = Instant::now();
+                transform(&mut case.actual, case.log, case.root, case.inverse).unwrap();
+                let outer = started.elapsed();
+                let record = scope.finish();
+                assert_eq!(case.actual, case.expected);
+                assert!(record.gpu_seconds > 0.0);
+                let cleanup = record
+                    .wait_and_cleanup
+                    .saturating_sub(record.ticket_wait + record.copy_back);
+                let final_return = outer.saturating_sub(record.total);
+                let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
+                eprintln!(
+                    "exact_root_phase log={} columns={} inverse={} round={} context_twiddle_ms={:.6} flatten_ms={:.6} mapping_ms={:.6} submit_ms={:.6} wait_cleanup_ms={:.6} ticket_wait_ms={:.6} copyback_ms={:.6} wait_owner_cleanup_ms={:.6} backing_drop_ms={:.6} final_return_ms={:.6} inner_total_ms={:.6} outer_total_ms={:.6} gpu_ms={:.6} kernel_ms={:.6} parity=exact wait_strategy={strategy:?} strategy_position={strategy_offset}",
+                    case.log,
+                    case.columns,
+                    case.inverse,
+                    round,
+                    ms(record.context_twiddles),
+                    ms(record.flatten),
+                    ms(record.mapping),
+                    ms(record.submit),
+                    ms(record.wait_and_cleanup),
+                    ms(record.ticket_wait),
+                    ms(record.copy_back),
+                    ms(cleanup),
+                    ms(record.backing_drop),
+                    ms(final_return),
+                    ms(record.total),
+                    ms(outer),
+                    record.gpu_seconds * 1000.0,
+                    record.kernel_seconds * 1000.0,
+                );
             }
-            let scope = PhaseDiagnosticScope::begin();
-            let started = Instant::now();
-            transform(&mut case.actual, case.log, case.root, case.inverse).unwrap();
-            let outer = started.elapsed();
-            let record = scope.finish();
-            assert_eq!(case.actual, case.expected);
-            assert!(record.gpu_seconds > 0.0);
-            let cleanup = record
-                .wait_and_cleanup
-                .saturating_sub(record.ticket_wait + record.copy_back);
-            let final_return = outer.saturating_sub(record.total);
-            let ms = |duration: Duration| duration.as_secs_f64() * 1000.0;
-            eprintln!(
-                "exact_root_phase log={} columns={} inverse={} round={} context_twiddle_ms={:.6} flatten_ms={:.6} mapping_ms={:.6} submit_ms={:.6} wait_cleanup_ms={:.6} ticket_wait_ms={:.6} copyback_ms={:.6} wait_owner_cleanup_ms={:.6} backing_drop_ms={:.6} final_return_ms={:.6} inner_total_ms={:.6} outer_total_ms={:.6} gpu_ms={:.6} kernel_ms={:.6} parity=exact",
-                case.log,
-                case.columns,
-                case.inverse,
-                round,
-                ms(record.context_twiddles),
-                ms(record.flatten),
-                ms(record.mapping),
-                ms(record.submit),
-                ms(record.wait_and_cleanup),
-                ms(record.ticket_wait),
-                ms(record.copy_back),
-                ms(cleanup),
-                ms(record.backing_drop),
-                ms(final_return),
-                ms(record.total),
-                ms(outer),
-                record.gpu_seconds * 1000.0,
-                record.kernel_seconds * 1000.0,
-            );
         }
     }
     eprintln!(
-        "exact_root_phase_notes no_command_clone=true original_owner_drop_order=true gpu_timestamps_after_success_only=true private_input=false backing_drop_records_synchronous_thread_only=true final_return_includes_public_twiddle_and_drain_scope_drop=true"
+        "exact_root_phase_notes no_command_clone=true original_owner_drop_order=true gpu_timestamps_after_success_only=true private_input=false backing_drop_records_synchronous_thread_only=true final_return_includes_public_twiddle_and_drain_scope_drop=true wait_override_test_only=true shared_deadline_unchanged=true active_wait_replaces_yields=true active_wait_then_original_notification_fallback=true"
     );
 }

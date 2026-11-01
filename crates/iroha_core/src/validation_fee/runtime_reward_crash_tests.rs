@@ -3,13 +3,15 @@
 //! The explicit component bootstrap is reconstructed independently in each process.
 //! These tests do not qualify genesis governance or loss of the kernel's disk cache.
 
+#[path = "runtime_reward_crash_io.rs"]
+mod io_fixture;
+
 use super::*;
 use crate::query::native_context_archive::process_crash::{self, Boundary};
 use iroha_crypto::HashOf;
 use iroha_data_model::{block::BlockHeader, transaction::SignedTransaction};
 use std::{
     fs::{self, File},
-    io::Write as _,
     path::Path,
     process::Command,
     sync::Arc,
@@ -103,14 +105,16 @@ fn run_child(root: &Path, case: usize, mode: &str) -> (std::process::ExitStatus,
     let started = Instant::now();
     let stdout_path = root.join(format!("{mode}.stdout.log"));
     let stderr_path = root.join(format!("{mode}.stderr.log"));
-    let mut child = Command::new(std::env::current_exe().unwrap())
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
         .args([EXACT, "--exact", "--nocapture", "--test-threads=1"])
         .env(MODE, mode)
         .env(CASE, case.to_string())
-        .env(ROOT, root)
-        // All child temporaries belong to this disposable parent directory,
-        // including the Kura whose destructor process::exit deliberately skips.
-        .env("TMPDIR", root)
+        .env(ROOT, root);
+    // All child temporaries belong to this disposable parent directory,
+    // including the Kura whose destructor process::exit deliberately skips.
+    io_fixture::configure_temporary_directories(&mut command, root);
+    let mut child = command
         .stdout(File::create(&stdout_path).unwrap())
         .stderr(File::create(&stderr_path).unwrap())
         .spawn()
@@ -264,10 +268,7 @@ fn crash(root: &Path, transition: Transition, boundary: Boundary) {
         prefix_hash,
     ))
     .unwrap();
-    let mut manifest = File::create(root.join("original.norito")).unwrap();
-    manifest.write_all(&bytes).unwrap();
-    manifest.sync_all().unwrap();
-    File::open(root).unwrap().sync_all().unwrap();
+    io_fixture::publish_original_control(root, &bytes).unwrap();
     process_crash::arm(height, hash, boundary);
     phase("publishing at armed archive boundary");
     pending
@@ -326,10 +327,20 @@ fn recover(root: &Path, transition: Transition, boundary: Boundary) {
         canonical.exists(),
         matches!(boundary, Boundary::CanonicalSynced | Boundary::Complete)
     );
+    #[cfg(not(windows))]
     assert_eq!(
         stage.exists(),
         matches!(boundary, Boundary::StageSynced | Boundary::CanonicalSynced)
     );
+    #[cfg(windows)]
+    {
+        assert_eq!(stage.exists(), boundary == Boundary::StageSynced);
+        if canonical.exists() {
+            let file = fs::File::open(&canonical).unwrap();
+            assert_eq!(iroha_fs::FileMetadata::of(&file).unwrap().links(), 1);
+            iroha_fs::FileSnapshot::of(&file, true).unwrap();
+        }
+    }
     #[cfg(unix)]
     if boundary == Boundary::CanonicalSynced {
         use std::os::unix::fs::MetadataExt as _;

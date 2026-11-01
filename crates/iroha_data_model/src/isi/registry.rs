@@ -38,6 +38,10 @@ pub struct BuiltInInstructionSchema {
     pub wire_id: &'static str,
     /// Declared Norito nominal identity of the payload type.
     pub payload: fn() -> std::borrow::Cow<'static, str>,
+    /// Registered tolerantly: an instruction this release adds after the frozen baseline, whose
+    /// envelopes decode as opaque rather than fail when their frame is not canonical
+    /// (`specs/live_runtime_upgrades.md` §5.2). Baseline instructions never are.
+    pub tolerant: bool,
 }
 
 impl core::fmt::Debug for BuiltInInstructionSchema {
@@ -45,6 +49,7 @@ impl core::fmt::Debug for BuiltInInstructionSchema {
         f.debug_struct("BuiltInInstructionSchema")
             .field("wire_id", &self.wire_id)
             .field("payload", &(self.payload)())
+            .field("tolerant", &self.tolerant)
             .finish()
     }
 }
@@ -55,17 +60,34 @@ pub fn built_in_instruction_schemas() -> impl Iterator<Item = BuiltInInstruction
     wire_ids::ALL.iter().map(|entry| BuiltInInstructionSchema {
         wire_id: entry.wire_id,
         payload: entry.payload,
+        tolerant: entry.tolerant,
     })
 }
 
 /// Return whether `wire_id` identifies a built-in instruction accepted by the default registry.
 ///
-/// Sponsor-program revision validation uses this fail-closed lookup before an
-/// immutable native-instruction selector can be staged.
+/// The answer depends on the release, so it must never decide whether a transaction, block or
+/// state change is valid: releases that differ in what they register would disagree
+/// (`specs/live_runtime_upgrades.md` §5.2). Validity follows the root's selection and the
+/// release-independent [`crate::isi::is_well_formed_wire_id`].
 #[must_use]
 pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
     DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
+}
+/// Structural layout of an instruction payload type: every type its schema reaches, by name, with
+/// its field, variant and container shape, hashed in name order. The frozen baseline pins it for
+/// every baseline wire ID (`specs/runtime_baseline_instruction_layouts.tsv`), because the catalog's
+/// interface descriptors name only the payload's nominal type.
+#[cfg(test)]
+pub(super) fn payload_layout<T: iroha_schema::IntoSchema>() -> String {
+    use sha2::{Digest, Sha256};
+    let mut entries: Vec<String> = T::schema()
+        .iter()
+        .map(|(_, entry)| format!("{}\t{:?}\n", entry.type_name, entry.metadata))
+        .collect();
+    entries.sort_unstable();
+    hex::encode(Sha256::digest(entries.concat().as_bytes()))
 }
 #[cfg(test)]
 pub(super) fn encoding_inventory_for_tests() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -441,6 +463,49 @@ mod tests {
         assert_eq!(provider.matches("register_with_id::<").count(), 1);
         assert_eq!(provider.matches("register_with_id_slice::<").count(), 2);
     }
+    /// The structural layout of every baseline instruction, one `wire_id<TAB>layout` line each in
+    /// wire-ID order.
+    fn baseline_instruction_layouts() -> String {
+        let mut lines: Vec<String> = wire_ids::ALL
+            .iter()
+            .filter(|entry| !entry.tolerant)
+            .map(|entry| format!("{}\t{}\n", entry.wire_id, (entry.layout)()))
+            .collect();
+        lines.sort_unstable();
+        lines.concat()
+    }
+
+    #[test]
+    fn baseline_instruction_layouts_stay_frozen() {
+        // A network that installed the baseline decodes and executes these payloads forever
+        // (`specs/live_runtime_upgrades.md` §3.1, §12). The catalog's interface descriptors name
+        // only the payload's nominal type, so this pin is what refuses a changed layout under an
+        // unchanged wire ID; new behaviour ships as an addition under its own wire ID.
+        const PINNED: &str =
+            include_str!("../../../../specs/runtime_baseline_instruction_layouts.tsv");
+        let actual = baseline_instruction_layouts();
+        let pinned: std::collections::BTreeMap<&str, &str> = PINNED
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .collect();
+        let changed: Vec<&str> = actual
+            .lines()
+            .filter_map(|line| line.split_once('\t'))
+            .filter(|(wire_id, layout)| pinned.get(wire_id) != Some(layout))
+            .map(|(wire_id, _)| wire_id)
+            .collect();
+        assert!(
+            changed.is_empty() && actual == PINNED,
+            "baseline instruction layouts changed (or the pin is stale) for {changed:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "prints the layout table that specs/runtime_baseline_instruction_layouts.tsv pins"]
+    fn print_baseline_instruction_layouts() {
+        print!("{}", baseline_instruction_layouts());
+    }
+
     #[test]
     fn instruction_wire_ids_match_v1_golden_inventory_hash() {
         use sha2::{Digest, Sha256};
@@ -458,12 +523,11 @@ mod tests {
             let canonical = assignments.concat();
             hex::encode(Sha256::digest(canonical.as_bytes()))
         };
-        let without_governance = assignment_digest(
-            wire_ids::ALL
-                .iter()
-                .filter(|entry| !entry.governance_only)
-                .collect(),
-        );
+        // The digests pin the frozen baseline's assignments: a release adds an instruction only
+        // as a tolerant registration that a catalog addition claims, never by changing these.
+        let baseline = || wire_ids::ALL.iter().filter(|entry| !entry.tolerant);
+        let without_governance =
+            assignment_digest(baseline().filter(|entry| !entry.governance_only).collect());
         assert_eq!(
             without_governance, EXPECTED_WITHOUT_GOVERNANCE_SHA256,
             "non-governance V1 type-to-wire-ID assignments changed"
@@ -471,19 +535,27 @@ mod tests {
 
         {
             assert_eq!(
-                wire_ids::ALL
-                    .iter()
-                    .filter(|entry| entry.governance_only)
-                    .count(),
+                baseline().filter(|entry| entry.governance_only).count(),
                 18,
                 "governance-only V1 inventory changed without updating its explicit scope"
             );
             assert_eq!(
-                assignment_digest(wire_ids::ALL.iter().collect()),
+                assignment_digest(baseline().collect()),
                 EXPECTED_WITH_GOVERNANCE_SHA256,
                 "complete V1 type-to-wire-ID assignments changed"
             );
         }
+        let mut added: Vec<_> = wire_ids::ALL
+            .iter()
+            .filter(|entry| entry.tolerant)
+            .map(|entry| entry.wire_id)
+            .collect();
+        added.sort_unstable();
+        assert_eq!(
+            added,
+            ["iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"],
+            "instructions added after the frozen baseline changed"
+        );
     }
 
     #[test]
@@ -494,6 +566,7 @@ mod tests {
             "iroha.instruction.v1::governance::ProposeContractEmergencyHold",
             "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance",
             "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal",
+            "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
             "iroha.instruction.v1::governance::ProposeSccpRouteGovernance",
             "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance",
             "iroha.instruction.v1::governance::ProposeValidationFeePolicy",

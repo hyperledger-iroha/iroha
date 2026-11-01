@@ -133,7 +133,7 @@ fn original_large_roster_cleanup_fits_the_complete_admitted_carrier_envelope() {
     let sponsor = |additional: usize| {
         AccountId::new_multisig(
             MultisigPolicy::new(
-                count as u16,
+                u16::try_from(count).unwrap(),
                 signing_members
                     .iter()
                     .cloned()
@@ -148,7 +148,7 @@ fn original_large_roster_cleanup_fits_the_complete_admitted_carrier_envelope() {
         .try_sign_multisig(signers.iter().map(KeyPair::private_key))
         .unwrap();
     signed.verify_signature().unwrap();
-    let limit = PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1 as usize;
+    let limit = usize::try_from(PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1).unwrap();
     assert!(bytes(&signed) < limit);
 
     // Counting reuses fixed-width signature encodings only as a transport probe. It never
@@ -163,7 +163,7 @@ fn original_large_roster_cleanup_fits_the_complete_admitted_carrier_envelope() {
     assert!(measured(extra.len()) > limit);
     let (mut fitting, mut refused) = (0, extra.len());
     while fitting + 1 < refused {
-        let middle = (fitting + refused) / 2;
+        let middle = usize::midpoint(fitting, refused);
         if measured(middle) <= limit {
             fitting = middle;
         } else {

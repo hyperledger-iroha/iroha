@@ -50,7 +50,7 @@ mod sorafs_provider_governance_admission {
                 );
             }
             let error = crate::executor::Executor::Initial
-                .execute_instruction(&mut transaction, &authority, instruction.clone())
+                .execute_instruction(&mut transaction, &authority, &instruction)
                 .expect_err("missing or insufficient citizenship bond must fail closed");
             assert!(
                 matches!(error, ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(ref message))
@@ -73,7 +73,7 @@ mod sorafs_provider_governance_admission {
             crate::state::CitizenshipRecord::new(authority.clone(), Quantity::from(10_u32), 1),
         );
         crate::executor::Executor::Initial
-            .execute_instruction(&mut transaction, &authority, instruction.clone())
+            .execute_instruction(&mut transaction, &authority, &instruction)
             .expect("an exactly bonded citizen may submit a provider proposal");
         let kind = ProposalKind::SorafsProviderGovernance(SorafsProviderGovernanceProposal {
             action: Box::new(action),
@@ -106,7 +106,7 @@ mod sorafs_provider_governance_admission {
         );
         let before = proposal.encode();
         crate::executor::Executor::Initial
-            .execute_instruction(&mut transaction, &authority, instruction.clone())
+            .execute_instruction(&mut transaction, &authority, &instruction)
             .expect("exact proposal replay is idempotent");
         assert_eq!(transaction.world.governance_proposals.iter().count(), 1);
         assert_eq!(
@@ -127,7 +127,7 @@ mod sorafs_provider_governance_admission {
         let mut block = state.block(BlockHeader::new(nonzero!(2_u64), None, None, 1, 0));
         let mut transaction = block.transaction();
         let error = crate::executor::Executor::Initial
-            .execute_instruction(&mut transaction, &authority, instruction)
+            .execute_instruction(&mut transaction, &authority, &instruction)
             .expect_err("replay must recheck the current bond requirement");
         assert!(matches!(error, ValidationFail::InstructionFailed(
             InstructionExecutionError::InvariantViolation(ref message))

@@ -648,7 +648,7 @@ mod tests {
         };
         let executor = Executor::Initial;
         executor
-            .execute_instruction(&mut tx, &registrar, publish.clone().into())
+            .execute_instruction(&mut tx, &registrar, &publish.clone().into())
             .expect("current domain registrar publishes through Initial without activation");
         let before = tx
             .world
@@ -657,9 +657,9 @@ mod tests {
             .unwrap()
             .clone();
         for instruction in [
-            publish.clone().into(),
-            revoke.clone().into(),
-            expire.clone().into(),
+            &publish.clone().into(),
+            &revoke.clone().into(),
+            &expire.clone().into(),
         ] {
             let error = executor
                 .execute_instruction(&mut tx, &foreign_registrar, instruction)
@@ -678,7 +678,7 @@ mod tests {
         let unknown =
             PublishSpaceDirectoryManifest::new(sample_manifest(uaid, DataSpaceId::new(92), 2));
         let error = executor
-            .execute_instruction(&mut tx, &registrar, unknown.into())
+            .execute_instruction(&mut tx, &registrar, &unknown.into())
             .expect_err("an absent current dataspace cannot receive a manifest");
         assert!(
             matches!(
@@ -693,7 +693,7 @@ mod tests {
         );
         assert_eq!(tx.world.space_directory_manifests.get(&uaid), Some(&before));
         executor
-            .execute_instruction(&mut tx, &registrar, revoke.into())
+            .execute_instruction(&mut tx, &registrar, &revoke.into())
             .expect("same exact domain permission revokes through Initial");
         assert!(
             tx.world
@@ -707,10 +707,10 @@ mod tests {
                 .is_some()
         );
         executor
-            .execute_instruction(&mut tx, &registrar, publish.into())
+            .execute_instruction(&mut tx, &registrar, &publish.into())
             .expect("same authority publishes a fresh active manifest");
         executor
-            .execute_instruction(&mut tx, &registrar, expire.into())
+            .execute_instruction(&mut tx, &registrar, &expire.into())
             .expect("same exact domain permission expires through Initial");
         let lifecycle = &tx
             .world

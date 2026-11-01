@@ -8,7 +8,6 @@ use core::{
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     time::Duration,
 };
-use iroha_crypto::Algorithm;
 use iroha_data_model_derive::model;
 use iroha_primitives::{json::Json, numeric::Quantity};
 
@@ -381,12 +380,6 @@ mod json_support {
                 message: String::from("expected object"),
             }),
         }
-    }
-    pub(super) fn ensure_no_extra(map: Map) -> Result<(), json::Error> {
-        if let Some((field, _)) = map.into_iter().next() {
-            return Err(json::Error::UnknownField { field });
-        }
-        Ok(())
     }
     pub(super) fn expect_u64(value: &json::Value, field: &str) -> Result<u64, json::Error> {
         match value {

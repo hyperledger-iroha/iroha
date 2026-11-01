@@ -264,7 +264,7 @@ class Profile:
         self.special_product = product(self.special)
 
     def canonical_bytes(self) -> bytes:
-        out = bytes([1]) + self.log_degree.to_bytes(4, "little") + self.t.to_bytes(8, "little")
+        out = bytes([1]) + self.log_degree.to_bytes(4, "little") + self.t.to_bytes(8, "little") + (1).to_bytes(4, "little")
         for primes, roots in ((self.main, self.main_roots), (self.special, self.special_roots)):
             out += len(primes).to_bytes(4, "little")
             for prime, root in zip(primes, roots):

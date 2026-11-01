@@ -592,7 +592,6 @@ async fn canonical_jindo_actions_survive_four_peer_policy_replay_and_restart() -
         let pending_policy = PrivacyProtocolPolicyV1 { protocol_id: JINDO_PROTOCOL,
             current_limits: compiled_snapshot.protocol_limits,
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-            private_settlement_drain_blocks: None,
                 scheduled_at_height, effective_at_height, next_limits: restricted_limits }) };
         wait_for_all_peer_policies(&network, scheduled_at_height, compiled_snapshot, Some(pending_policy),
             "exact pending ordinary Jindo policy on all peers").await?;
@@ -616,7 +615,6 @@ async fn canonical_jindo_actions_survive_four_peer_policy_replay_and_restart() -
             effective_at_height, compiled_snapshot.protocol_limits),
             "restore ordinary Jindo limits within the same canonical ceiling").await?;
         let pending_restore = PrivacyProtocolPolicyV1 { pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-            private_settlement_drain_blocks: None,
             scheduled_at_height, effective_at_height, next_limits: compiled_snapshot.protocol_limits }),
             ..restricted_policy };
         wait_for_all_peer_policies(&network, scheduled_at_height, compiled_snapshot, Some(pending_restore),

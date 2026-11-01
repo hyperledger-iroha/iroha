@@ -1889,10 +1889,7 @@ fn render_pseudo_source(
     manifest: Option<&ContractManifest>,
     analysis: Option<&ProgramAnalysis>,
 ) -> String {
-    let seiyaku_name = format!(
-        "Contract_{}",
-        &code_hash.chars().take(8).collect::<String>()
-    );
+    let seiyaku_name = format!("Contract_{}", code_hash.chars().take(8).collect::<String>());
     let mut lines = Vec::new();
     lines.push(format!("seiyaku {seiyaku_name} {{"));
     lines.push(
@@ -3830,6 +3827,10 @@ seiyaku Display {
         invalid.authorization = EntrypointAuthorizationV1::RuntimeLifecycle;
         assert!(entrypoint_signature(&invalid).is_err());
     }
+    #[expect(
+        clippy::duration_suboptimal_units,
+        reason = "Unix timestamps stay in whole milliseconds"
+    )]
     fn build_state_with_single_transaction(
         instructions: Vec<dm::InstructionBox>,
     ) -> (Arc<State>, HashOf<TransactionEntrypoint>) {

@@ -1,7 +1,7 @@
 #[test]
 fn installing_manifests_populates_privacy_registry() {
-    let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
     use iroha_crypto::privacy::{LaneCommitmentId, LanePrivacyCommitment, MerkleCommitment};
+    let fixture_budget = iroha_allocation::AllocationBudget::new(1024 * 1024);
     let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
     let queue = Queue::test(config_factory(), &time_source);
     let mut statuses = BTreeMap::new();
@@ -823,11 +823,13 @@ impl std::task::Wake for ForeignQueuePrivacyRefundObserver {
         };
         let valid = cache.as_ref().is_some_and(|(source, owner)| {
             owner.belongs_to(&self.state.ivm_execution_budget())
-                && if let Some(expected) = &self.expected_cache_source {
-                    Arc::ptr_eq(source, expected)
-                } else {
-                    Arc::ptr_eq(source, &manifests) && LanePrivacyRegistry::ptr_eq(owner, &privacy)
-                }
+                && self.expected_cache_source.as_ref().map_or_else(
+                    || {
+                        Arc::ptr_eq(source, &manifests)
+                            && LanePrivacyRegistry::ptr_eq(owner, &privacy)
+                    },
+                    |expected| Arc::ptr_eq(source, expected),
+                )
         });
         if !valid {
             self.failed_probes.fetch_or(16, Ordering::SeqCst);
@@ -1043,9 +1045,7 @@ fn foreign_privacy_retirement_survives_error_and_unwind_after_both_replacements(
                 assert_eq!(observer.wakes.load(Ordering::SeqCst), 0);
                 assert!(foreign_pool.reserved_bytes() > 0);
                 assert!(state.try_lock_lane_lifecycle_work_admission().is_err());
-                if unwind {
-                    panic!("intentional post-replacement unwind");
-                }
+                assert!(!unwind, "intentional post-replacement unwind");
                 Err::<(), _>("intentional post-replacement error")
             }));
             if unwind {

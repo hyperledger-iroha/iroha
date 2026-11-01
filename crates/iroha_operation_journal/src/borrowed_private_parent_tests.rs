@@ -4,6 +4,33 @@ use super::*;
 use std::fs;
 
 #[test]
+fn creating_child_keeps_original_parent_and_refuses_existing_evidence() {
+    let temporary = tempfile::tempdir().unwrap();
+    let parent = PrivateDirectory::open_or_create(temporary.path().join("attempt")).unwrap();
+    assert!(Journal::create_child(&parent, "../transaction").is_err());
+    let journal = Journal::create_child(&parent, "transaction").unwrap();
+    let identity = journal.directory.identity().unwrap();
+    let operation = norito::json!({"original": "created-child"});
+    journal.write_operation(&operation).unwrap();
+    assert!(Journal::create_child(&parent, "transaction").is_err());
+    assert!(Journal::open_optional_child(&parent, "transaction").is_err());
+    drop(parent);
+    assert_eq!(
+        journal.read_operation::<norito::json::Value>().unwrap(),
+        operation
+    );
+    assert_eq!(journal.directory.identity().unwrap(), identity);
+    let path = journal.path().to_owned();
+    drop(journal);
+    let reopened = Journal::open(&path).unwrap();
+    assert_eq!(reopened.directory.identity().unwrap(), identity);
+    assert_eq!(
+        reopened.read_operation::<norito::json::Value>().unwrap(),
+        operation
+    );
+}
+
+#[test]
 fn borrowed_private_parent_journal_keeps_initial_absence_exact_identity_bytes_and_lock_lifetime() {
     let temporary = tempfile::tempdir().unwrap();
     let parent = PrivateDirectory::open_or_create(temporary.path().join("attempt")).unwrap();

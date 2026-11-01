@@ -234,7 +234,6 @@ mod tests {
             protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
             current_limits: ve_range(current),
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-                private_settlement_drain_blocks: None,
                 scheduled_at_height: 100,
                 effective_at_height: 101,
                 next_limits: ve_range(next),

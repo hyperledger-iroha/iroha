@@ -501,29 +501,49 @@ fn instruction_box_strict_decoders_reject_removed_direct_instruction_pairs() {
             .parse()
             .expect("repo agreement id"),
     );
-    for (removed_name, framed_payload) in [
-        (
-            std::any::type_name::<Register<Domain>>(),
-            framed_instruction_payload(&direct_register),
-        ),
-        (
-            repo::RepoMarginCallIsi::WIRE_ID,
-            framed_instruction_payload(&direct_repo),
-        ),
-    ] {
-        let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
-        let archived = norito::core::from_bytes::<InstructionBox>(&framed_pair)
-            .expect("instruction pair bytes");
-        assert!(
-            norito::core::DeserializePayload::try_deserialize(archived).is_err(),
-            "{removed_name} must be rejected by strict InstructionBox deserialization"
-        );
-        let bare_pair = bare_instruction_pair(removed_name, framed_payload);
-        assert!(
-            InstructionBox::decode_from_slice(&bare_pair).is_err(),
-            "{removed_name} must be rejected by canonical borrowed-pair decoding"
-        );
-    }
+    // A concrete type name is no well-formed wire ID: malformed envelope framing.
+    let removed_name = std::any::type_name::<Register<Domain>>();
+    let framed_payload = framed_instruction_payload(&direct_register);
+    let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
+    let archived =
+        norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair bytes");
+    assert!(
+        norito::core::DeserializePayload::try_deserialize(archived).is_err(),
+        "{removed_name} must be rejected by strict InstructionBox deserialization"
+    );
+    let bare_pair = bare_instruction_pair(removed_name, framed_payload);
+    assert!(
+        InstructionBox::decode_from_slice(&bare_pair).is_err(),
+        "{removed_name} must be rejected by canonical borrowed-pair decoding"
+    );
+    // A removed but well-formed wire ID is unknown to this release: it never decodes
+    // into the instruction it once named, only into an opaque envelope that keeps its
+    // exact bytes (specs/live_runtime_upgrades.md §5.2).
+    let removed_name = repo::RepoMarginCallIsi::WIRE_ID;
+    let framed_payload = framed_instruction_payload(&direct_repo);
+    let framed_pair = framed_instruction_pair(removed_name, framed_payload.clone());
+    let archived =
+        norito::core::from_bytes::<InstructionBox>(&framed_pair).expect("instruction pair bytes");
+    let decoded = norito::core::DeserializePayload::try_deserialize(archived)
+        .expect("an unknown wire ID decodes as an opaque envelope");
+    let opaque = decoded.as_opaque().expect("opaque envelope");
+    assert_eq!(opaque.wire_id(), removed_name);
+    assert_eq!(opaque.frame(), framed_payload.as_slice());
+    assert!(
+        decoded
+            .as_any()
+            .downcast_ref::<repo::RepoMarginCallIsi>()
+            .is_none()
+    );
+    let bare_pair = bare_instruction_pair(removed_name, framed_payload.clone());
+    let (borrowed, used) =
+        InstructionBox::decode_from_slice(&bare_pair).expect("borrowed opaque envelope");
+    assert_eq!(used, bare_pair.len());
+    assert_eq!(borrowed, decoded);
+    let mut reencoded = Vec::new();
+    norito::core::serialize_to_buffer(&borrowed, &mut reencoded).expect("re-encode envelope");
+    assert_eq!(reencoded, bare_pair);
+    assert!(decode_instruction_from_pair(removed_name, &framed_payload).is_err());
 }
 #[test]
 fn instruction_box_lossy_deserialize_maps_removed_direct_pair_to_invalid_instruction() {
@@ -543,8 +563,9 @@ fn instruction_box_lossy_deserialize_maps_removed_direct_pair_to_invalid_instruc
     assert_eq!(invalid.wire_id, removed_name);
     assert_eq!(invalid.payload_hash, expected_hash);
     assert!(
-        invalid.message.contains("not registered")
-            || invalid.message.contains("unknown instruction"),
+        invalid
+            .message
+            .contains("malformed instruction wire identifier"),
         "invalid placeholder should preserve the decode failure: {}",
         invalid.message
     );
@@ -606,7 +627,7 @@ fn instruction_box_lossy_deserialize_bounds_unknown_wire_error_message() {
     let invalid = decoded
         .as_any()
         .downcast_ref::<transparent::InvalidInstruction>()
-        .expect("unknown instruction becomes invalid placeholder");
+        .expect("an oversized wire id becomes the invalid placeholder");
     let expected_hash: [u8; 32] = iroha_crypto::Hash::new([]).into();
     assert_eq!(invalid.wire_id, hostile_name);
     assert_eq!(invalid.payload_hash, expected_hash);
@@ -616,7 +637,9 @@ fn instruction_box_lossy_deserialize_bounds_unknown_wire_error_message() {
         invalid.message.len()
     );
     assert!(
-        invalid.message.contains("unknown instruction"),
+        invalid
+            .message
+            .contains("malformed instruction wire identifier"),
         "invalid placeholder should explain the rejected wire id"
     );
 }
@@ -1233,11 +1256,18 @@ pub mod sccp_instruction_enum {
             assert!(registry.decode(&wire_id, &[]).is_none(), "{wire_id}");
             let type_name = format!("iroha_data_model::isi::sccp::{name}");
             assert_eq!(registry.wire_id(&type_name), None, "{type_name}");
-            // A boxed instruction frame that names the retired wire id does not decode.
+            // A boxed instruction frame that names the retired wire id decodes only as an
+            // opaque envelope, never as an instruction of this release
+            // (specs/live_runtime_upgrades.md §5.2).
             let frame = norito::to_bytes(&(wire_id.clone(), vec![0_u8; 64]))
                 .expect("serialize a retired instruction frame");
-            assert!(
-                norito::decode_from_bytes::<InstructionBox>(&frame).is_err(),
+            let decoded = norito::decode_from_bytes::<InstructionBox>(&frame)
+                .unwrap_or_else(|error| panic!("{wire_id}: {error}"));
+            assert_eq!(
+                decoded
+                    .as_opaque()
+                    .map(crate::isi::OpaqueInstructionV1::wire_id),
+                Some(wire_id.as_str()),
                 "{wire_id}"
             );
         }

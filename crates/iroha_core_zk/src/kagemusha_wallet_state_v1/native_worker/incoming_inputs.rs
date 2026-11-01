@@ -65,7 +65,7 @@ fn sigma_slot(
     })
 }
 
-/// Λ_recv's four incoming results and their modes, exactly as the fixed Receive owners
+/// `Λ_recv`'s four incoming results and their modes, exactly as the fixed Receive owners
 /// derive them: the Omega transport, the incoming Q-σ, the three nonproof predicates and
 /// every decide. The fold binds them into its proposal; Receive admission refuses, before
 /// Advance, every Payment whose verdict burns.

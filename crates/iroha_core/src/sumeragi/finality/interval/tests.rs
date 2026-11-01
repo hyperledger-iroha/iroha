@@ -20,7 +20,7 @@ fn limits(from: u64, to: u64) -> NativeFinalityProofIntervalLimits {
         NonZeroU64::new(to).unwrap(),
         NonZeroUsize::new(MAX_FINALITY_BLOCK_BYTES).unwrap(),
         NonZeroUsize::new(usize::MAX).unwrap(),
-        Instant::now() + std::time::Duration::from_secs(900),
+        Instant::now() + std::time::Duration::from_mins(15),
     )
     .unwrap()
 }

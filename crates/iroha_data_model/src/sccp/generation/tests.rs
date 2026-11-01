@@ -260,7 +260,9 @@ fn reference(chunk: u64, anchors: &[SccpAnchorV1], position: usize) -> ([u8; 32]
     while level.len() > 1 {
         path.push(level[index ^ 1]);
         level = level
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| {
                 Hash::new([b"sccp/anchor-node/v1".as_slice(), &pair[0], &pair[1]].concat()).into()
             })

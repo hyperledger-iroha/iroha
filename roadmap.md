@@ -7,11 +7,11 @@ the linked specifications. Routine repair receipts belong in PRs and CI.
 
 ## Current priorities
 
-Contract-controlled native locks require matching ABI inventories and compiler
-artifacts, native controller/bypass/CAS/deadline tests, and application custody
-qualification. Complete controlled drawdown with owner-consented waterfall
-distribution under native UID limits before migrating that business path;
-preserve the original payer's beneficial holdings and ordinary refund controls.
+Contract-controlled native locks require native controller/bypass/CAS/deadline
+tests and application custody qualification. Complete controlled drawdown with
+owner-consented waterfall distribution under native UID limits before migrating
+that business path; preserve the original payer's beneficial holdings and
+ordinary refund controls.
 
 1. Deliver the recoverable payment contract below, starting with included-but-rejected
    ISO settlement and withheld AMX decisions across committee changes. Reuse native
@@ -30,11 +30,18 @@ preserve the original payer's beneficial holdings and ordinary refund controls.
    signing inputs. This handoff task owns the outcomes in the
    [Sumeragi handoff goals](specs/sumeragi_goals.md#active-handoff-completion-gates)
    and works only in `/Users/takemiyamakoto/dev/iroha` on `optimizations`.
-5. Validate the combined fixture/runtime repairs through fresh workspace,
+5. Qualify the combined fixture/runtime and native release-owner corrections
+   through a fresh library build, affected-owner runtimes, workspace checks and
    genuine fixture and native SDK artifacts on one source candidate. Qualify the
-   joint X509 relation and transcript privacy, and resolve its proving-time and
-   hardware-specific address-space failures;
+   joint X509 relation and transcript privacy, meet the unchanged proving-time
+   limit while preserving the RSS limit, and complete process observation and
+   hardware-specific address-space qualification;
    produce current q77 maximum proofs without widening resource limits.
+
+The [Windows and Intel completion goals](specs/windows_intel_completion_goals.md)
+track native custody, retained CLI/Core evidence, SDK and package qualification,
+actual instruction execution, and the remaining named-hardware/resource gates.
+Component correctness does not close an installed-release or performance gate.
 
 The [first-release goals](specs/first_release_completion_goals.md),
 [IVM goals](specs/kotodama_ivm_completion.md) and [ZK goals](specs/zk_first_release_goals.md)
@@ -176,7 +183,7 @@ Authoritative contracts: [Sumeragi](specs/sumeragi.md),
 | N9 | Observable durable runtime | Telemetry/logger/Torii | Metric reachability, exporter isolation and immutable classified status; exact retries under crash/disk-full/half-close/permission and cancellation/timeout races. |
 | N10 | Current fixtures | Governance/integration | Full feature matrix for catalog/genesis/history, compiler/Kura and callback repairs, preserving real finality and adversarial assertions. |
 | N11 | Private settlement | Core/Nexus/native proofs | [Canonical settlement](specs/private_settlement.md), exact authority/publication/recovery and bounded proofs; ten fresh N=3 successes, five-second end-to-end target, N=2/3/4/8/16 faults and aligned leakage/resource campaigns; formal/independent release review. |
-| N14 | Live runtime upgrades | Core/State/governance/SDKs | Execute [live runtime upgrades](specs/live_runtime_upgrades.md) §14 (the change-set lifecycle with its committed notice and provenance policies, node-side attestation, panel containment with its ratification case, and native escrow obligations are [as built](specs/runtime_upgrades.md)): the other obligation kinds and captured completion closures; Parliament's Core integration; checkpoints, the startup floor and code deletion; complete-State coverage (G1-D2); then Taira adopts at a governed checkpoint and passes the acceptance journey (§1.3). |
+| N14 | Live runtime upgrades | Core/State/governance/SDKs | Execute [live runtime upgrades](specs/live_runtime_upgrades.md) §14 (the change-set lifecycle with its committed notice and provenance policies, node-side attestation, panel containment with its ratification case, escrow and AMX obligations, release additions with storage installation, stable envelopes, and `--check-replay` are [as built](specs/runtime_upgrades.md); Taira adopted the foundation with a660d601da, whose import is deleted): snapshots that follow the selection before the first World-field addition, and the operator route that drafts an addition's activation; kernel obligation registration for contract-created obligations and migration cursors, completion capabilities retained across rebinding; qualify captured multisig/trigger consent and complete explicit current-binding consent; migrations, storage retirement and storage capabilities; Parliament's frozen governance-clock/ballot integration (lifecycle policy admission is validated); checkpoints, the startup floor and code deletion; complete-State coverage (G1-D2, after the policy cells of G1-D3 move to committed State); Taira's adoption record ratified in committed State through governance with every validator's attestation; each later release qualified against a copy of a Taira store with `--check-replay`; then Taira passes the acceptance journey (§1.3). |
 | N12 | Production lanes/AMX | Lanes/Queue/Kura/SDKs | Per-instance authority/records and O9 isolation, elastic scale/restart, SDK/OpenAPI and real-peer load; DS-local State and S6 prepare/escrow/decision/settle. |
 
 Original-pool funding must cover retained inputs, projections, proof graphs and
@@ -245,7 +252,7 @@ with no node-schema key.
 | C2 | Deterministic VM/compiler | IVM/Kotodama/hosts | G1–G8, ABI V1, fallible lifecycle/erasure and detached proof custody; qualify integrated trigger-action relations, complete Musubi and membership/frontier capture and State/Kura publication, then native execution/private invocation/AXT; identical gas/traps/state/proofs, complete cache/index/control and host/native scratch allocation custody, retained observation recovery and authenticated calibration. |
 | C3 | Signature audit | Crypto/consumers | ML-DSA/SM2/GOST/FHE feature/lint/custody, mixed-torsion Ed25519, PoP and threshold-BLS beacon/side-channel review; Musubi State-reader prerequisites. |
 | C4 | FASTPQ/backend | Prover/verifier/reviewers | Masked 301-column/77-query SHA3/SHAKE DEEP ordinary/AXT relations and bounded work/RSS; preserve current maximum ordinary/AXT component proof passes while completing finalized-source admission, AIR/FRI/hash/qROM/privacy review, hardware/four-peer parity, embedded authenticated Metal and driver-loaded CUDA host. |
-| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and complete its maximum proof within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
+| C5 | Privacy authority/degree | ZK-ACE/STARK/AXT/IVM | Finalized source State and signed amount/intent, six-lane/qROM/AIR/FRI and exact SDK parity; explicit terminal degree/geometry; qualify the joint X509 relation and transcript privacy, and qualify maximum proofs across supported platforms within unchanged byte/RSS, literal address-space and 300-second limits; unsupported paths stay disabled. |
 | C6 | FHE/MKHE/Figure 9 | Crypto/model/proofs | Complete native40 correspondence/full-size eight-party replay; qPCS redesign within fixed work bounds, governed Figure 9 keys and independent measured ordinary-stack proofs. |
 | C7 | Acceleration | Native backends | Automatic target-appropriate daemon defaults, ten reproducible signed embedded CUDA PTX families, driverless daemon startup, actual CPU/Metal/CUDA KAT/root parity, authenticated library/device/calibration, fault quarantine, side-channel and RSS/throughput; unqualified T256/MKHE stay scalar. |
 | C8 | Kaigi sessions | Model/crypto/Core/SDKs | Release-profile evidence for the passing [four-validator gate](specs/kaigi_four_validator_lifecycle_v1.md); private proving in the Kotlin, Swift, Python and C# SDKs; a governed path to enable private calls on a running network, because verifying keys can only be registered at genesis; [SoraNet relay routing](specs/soranet/kaigi_over_soranet.md#outstanding-work), which needs an owner trust-model decision. |

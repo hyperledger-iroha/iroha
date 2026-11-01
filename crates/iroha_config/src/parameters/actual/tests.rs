@@ -202,6 +202,48 @@ mod tests {
     }
 
     #[test]
+    fn frozen_private_settlement_v1_matches_original_commitment_bytes_and_position() {
+        // Independently encoded from the declarations/defaults at 90ea8ea33b, using
+        // norito.md: little-endian scalars/u64 counts and compact field/element lengths.
+        // This literal was not captured from the implementation under test.
+        let expected = hex::decode(concat!(
+            "02010002ff0008201c00000000000008b00400000000000008b004000000000000",
+            "08b0040000000000001c0400000000000000040010000004004000000400000100",
+            "0400000400080000800000000000080000100000000000080000400000000000",
+            "0840420f0000000000040001000008000000c0000000000201000b0100000000000000020100",
+        ))
+        .unwrap();
+        assert_eq!(
+            NexusConsensusAtomicPrivateSettlementV1::frozen_v1().encode(),
+            expected,
+            "the signed V1 baseline cannot follow current defaults"
+        );
+
+        let nexus = Nexus::default();
+        let preimage = nexus_consensus_policy_preimage_with_runtime_policies(
+            &nexus,
+            Some(&nexus.fees),
+            None,
+            None,
+        )
+        .unwrap();
+        let mut remaining = preimage.as_slice();
+        let mut fields = Vec::new();
+        while !remaining.is_empty() {
+            let (len, prefix) = norito::core::read_len_from_slice_with_flags(remaining, 0x02)
+                .expect("canonical V1 field prefix");
+            let (field, rest) = remaining[prefix..].split_at(len);
+            fields.push(field);
+            remaining = rest;
+        }
+        assert_eq!(fields.len(), 21, "the original V1 field count is frozen");
+        assert_eq!(
+            fields[11], expected,
+            "private settlement stays after AXT and before governance"
+        );
+    }
+
+    #[test]
     fn private_sidecar_capacity_does_not_change_payment_consensus_identity() {
         let baseline = Nexus::default();
         let pipeline = Pipeline::default();
@@ -800,6 +842,29 @@ mod tests {
             [0x22; 32],
         )
     }
+    #[test]
+    fn frozen_runtime_provenance_v1_matches_original_commitment_bytes() {
+        // Independently encoded from the five ordered fields at 90ea8ea33b and its
+        // Optional/false/false/empty/zero baseline. Values retain their original types:
+        // u8, bool, bool, Vec<Vec<u8>>, u64, wrapped in the named V1 field sequence.
+        let expected = concat!(
+            "0500000000000000362b2a676f7665726e616e63652e72756e74696d655f757067",
+            "726164655f70726f76656e616e63652e6d6f6465090100000000000000013e3332",
+            "676f7665726e616e63652e72756e74696d655f757067726164655f70726f76656e",
+            "616e63652e726571756972655f73626f6d090100000000000000003e3332676f76",
+            "65726e616e63652e72756e74696d655f757067726164655f70726f76656e616e63",
+            "652e726571756972655f736c736109010000000000000000483635676f7665726e",
+            "616e63652e72756e74696d655f757067726164655f70726f76656e616e63652e74",
+            "7275737465645f7369676e65727310080000000000000000000000000000004c3a",
+            "39676f7665726e616e63652e72756e74696d655f757067726164655f70726f7665",
+            "6e616e63652e7369676e61747572655f7468726573686f6c641008000000000000",
+            "000000000000000000",
+        );
+        let mut policy = ExecutionPolicyFieldsV1::default();
+        policy.push_frozen_runtime_provenance_v1();
+        assert_eq!(hex::encode(policy.fields.encode()), expected);
+    }
+
     #[test]
     fn local_crypto_generation_and_backend_choices_cannot_change_execution_policy_digest() {
         let baseline = super::sora_profile_tests::minimal_root();

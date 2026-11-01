@@ -39,7 +39,7 @@ CONFIG_REPORT = {
     },
     "protocol_version": 1,
     "wire_schema_hash": "01" * 32,
-    "gas_schedule_hash": "02" * 32,
+    "host_profiles": ["02" * 32],
 }
 
 
@@ -136,7 +136,7 @@ def test_record_copies_what_the_writing_build_reported(evidence: dict[str, Path]
     assert reported["genesis_hash"] == "cd" * 32
     assert reported["tip_height"] == 7
     assert reported["tip_hash"] == "ab" * 32
-    assert reported["gas_schedule_hash"] == "02" * 32
+    assert reported["host_profiles"] == ["02" * 32]
 
 
 def test_explicit_revision_and_identity_override_the_report(evidence: dict[str, Path], tmp_path: Path) -> None:

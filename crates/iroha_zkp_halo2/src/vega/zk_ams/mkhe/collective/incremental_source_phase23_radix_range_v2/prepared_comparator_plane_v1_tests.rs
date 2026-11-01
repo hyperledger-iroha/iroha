@@ -191,7 +191,7 @@ fn real_storage_projection_matches_independent_boundaries_in_all_21_roles_and_fu
         for chunk_index in 0..32 {
             let chunk = values.emit_next_v1(chunk_index).unwrap();
             assert_eq!(chunk.len_v1(), 16_384);
-            for (local, bytes) in chunk.as_slice_v1().chunks_exact(32).enumerate() {
+            for (local, bytes) in chunk.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
                 let index = usize::from(chunk_index) * 512 + local;
                 let packed = BOUNDARY_PACKED_V1[boundary_case_v1(index)];
                 let expected = match role {
@@ -262,7 +262,7 @@ fn emitted_chunks_preserve_every_coordinate_without_a_second_transpose() {
         expand_comparator_values_v1(packed, comparator_coordinate_v1(0).unwrap()).unwrap();
     for chunk_index in 0..32 {
         let chunk = values.emit_next_v1(chunk_index).unwrap();
-        for (local, bytes) in chunk.as_slice_v1().chunks_exact(32).enumerate() {
+        for (local, bytes) in chunk.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
             let index = usize::from(chunk_index) * 512 + local;
             assert_eq!(
                 bytes[31],

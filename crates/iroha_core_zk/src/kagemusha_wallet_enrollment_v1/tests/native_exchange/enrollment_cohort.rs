@@ -1,6 +1,6 @@
 //! Isolated engineering-issuer enrollment cohort with real native proofs and custody.
 //! Hardware and issuer evidence are explicit software fixtures. Ledger execution and
-//! activation finality must come from the separate Core StateExecutor producer.
+//! activation finality must come from the separate Core `StateExecutor` producer.
 
 use super::*;
 use iroha_data_model::{
@@ -148,7 +148,7 @@ impl Cohort {
         let height = value["registration_height"].as_u64().unwrap();
         assert_eq!(height, 3);
         let history = value["history"].as_array().unwrap();
-        assert_eq!(history.len(), height as usize);
+        assert_eq!(history.len(), usize::try_from(height).unwrap());
         let mut verifier = sources.genesis.as_ref().clone();
         for (index, row) in history.iter().enumerate() {
             let height = index as u64 + 1;
@@ -177,7 +177,8 @@ impl Cohort {
                     4096,
                 );
                 let account: AccountId = decode(&bytes);
-                let key = KeyPair::from_seed(vec![(100 + index) as u8; 32], Algorithm::Ed25519);
+                let seed = u8::try_from(100 + index).expect("cohort seed fits u8");
+                let key = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
                 assert_eq!(account, AccountId::new(key.public_key().clone()));
                 account
             })
@@ -198,7 +199,7 @@ impl Cohort {
             &mut fixture,
             self.accounts[index].clone(),
             base.asset.clone(),
-            (100 + index) as u8,
+            u8::try_from(100 + index).expect("cohort seed fits u8"),
         );
         fixture
     }
@@ -260,7 +261,7 @@ fn signed_activation(
         FeePaymentIntent::authority(vec![], None),
     );
     transaction.set_creation_time(Duration::from_millis(time_ms));
-    transaction.set_ttl(Duration::from_millis(100_000));
+    transaction.set_ttl(Duration::from_secs(100));
     transaction
         .with_instructions([KagemushaWalletLedgerV1::new(
             fixture.config.scheme.scheme_id(),
@@ -280,8 +281,10 @@ fn export_hundred_native_enrollment_activation_targets() {
         let began = Instant::now();
         let queue_ms = began.duration_since(common_start).as_millis();
         let fixture = cohort.fixture(&sources, &base, index);
-        let device =
-            HostDevice::create(&output.join(format!("owner-{index:03}")), (index + 1) as u8);
+        let device = HostDevice::create(
+            &output.join(format!("owner-{index:03}")),
+            u8::try_from(index + 1).expect("cohort device seed fits u8"),
+        );
         let (frames, enrollment_originals) = enroll(&device, &fixture);
         let enrolled_ms = began.elapsed().as_millis();
         let mut wallet = sources.open(&device, &fixture, &frames);
@@ -374,7 +377,7 @@ fn verified_history(sources: &Sources, root: &Path, value: &Json) -> Vec<(u64, V
     let last = value["final_height"].as_u64().unwrap();
     assert!((6..=256).contains(&last));
     let rows = value["history"].as_array().unwrap();
-    assert_eq!(rows.len(), last as usize);
+    assert_eq!(rows.len(), usize::try_from(last).unwrap());
     let mut verifier = sources.genesis.as_ref().clone();
     let mut certificates = Vec::new();
     for (index, row) in rows.iter().enumerate() {
@@ -388,11 +391,11 @@ fn verified_history(sources: &Sources, root: &Path, value: &Json) -> Vec<(u64, V
         );
         let proof: SumeragiFinalityProof = decode(&bytes);
         assert_eq!(proof.height(), height);
-        let verified = verifier.verify(&proof).unwrap();
+        let verified_proof = verifier.verify(&proof).unwrap();
         if height > 1 {
             let certificate =
                 iroha_data_model::sumeragi_finality::SumeragiCommitCertificateV1::from_verified(
-                    &verified,
+                    &verified_proof,
                 )
                 .unwrap();
             certificates.push((height, certificate.to_canonical_bytes().unwrap()));

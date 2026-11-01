@@ -279,7 +279,7 @@ impl HistoryProducerOwner {
             crate::explorer::EXPLORER_HISTORY_RESPONSE_METADATA_BYTES,
         ]
         .into_iter()
-        .try_fold(0usize, |sum, bytes| sum.checked_add(bytes))
+        .try_fold(0usize, usize::checked_add)
         .ok_or_else(|| self.owner_capacity())
     }
 
@@ -558,7 +558,8 @@ mod tests {
                 state.read_canonical_history_block(newest, &measured.canonical_history_budget())
             })
             .unwrap();
-        let first = measured.allocation_context().consumed_allocated_bytes() as usize;
+        let first =
+            usize::try_from(measured.allocation_context().consumed_allocated_bytes()).unwrap();
         measured
             .scope(|| {
                 state.read_canonical_history_block(
@@ -567,7 +568,9 @@ mod tests {
                 )
             })
             .unwrap();
-        let second = measured.allocation_context().consumed_allocated_bytes() as usize - first;
+        let second = usize::try_from(measured.allocation_context().consumed_allocated_bytes())
+            .unwrap()
+            - first;
         assert!(first > 0 && second > 0);
 
         let request = owner(48_000_000);
@@ -587,10 +590,10 @@ mod tests {
         let response = request
             .physical_scope(|| {
                 crate::routing::handle_v1_explorer_blocks_sync(
-                    Arc::clone(&state),
-                    crate::routing::MaybeTelemetry::disabled(),
-                    crate::routing::DataspaceReadVisibility::all_for_tests(),
-                    crate::explorer::ExplorerCursorQuery {
+                    &state,
+                    &crate::routing::MaybeTelemetry::disabled(),
+                    &crate::routing::DataspaceReadVisibility::all_for_tests(),
+                    &crate::explorer::ExplorerCursorQuery {
                         cursor: None,
                         limit: 100,
                     },
@@ -620,10 +623,10 @@ mod tests {
         let response = next
             .physical_scope(|| {
                 crate::routing::handle_v1_explorer_blocks_sync(
-                    state,
-                    crate::routing::MaybeTelemetry::disabled(),
-                    crate::routing::DataspaceReadVisibility::all_for_tests(),
-                    crate::explorer::ExplorerCursorQuery {
+                    &state,
+                    &crate::routing::MaybeTelemetry::disabled(),
+                    &crate::routing::DataspaceReadVisibility::all_for_tests(),
+                    &crate::explorer::ExplorerCursorQuery {
                         cursor: Some(cursor.to_owned()),
                         limit: 100,
                     },

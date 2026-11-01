@@ -673,7 +673,7 @@ fn solve_NTRU_depth0(
     let hn = degree >> 1;
     // Normally, (F,G) from depth 1 should use one word per coefficient.
     // The code in this function assumes it.
-    assert!(MOD_SMALL_BL[1] == 1);
+    assert_eq!(MOD_SMALL_BL[1], 1);
     // At depth 0, all values fit on 30 bits, so we work with a single
     // modulus p.
     let modulus = P0.p;

@@ -184,6 +184,90 @@ fn native_weighted_batches_match_each_original_quotient_in_fixed_column_order() 
 }
 
 #[test]
+fn widened_native_weighted_batches_match_original_polynomials_at_field_boundaries() {
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    for workers in [1, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        for log in [1, 5, 9] {
+            for width in [1, 3, 4, BATCH - 1, BATCH] {
+                let native = (0..width)
+                    .map(|column| {
+                        ZeroizingMainTraceColumnV1(
+                            (0..1usize << log)
+                                .map(|index| F(p - 1 - ((index + column) % 17) as u64))
+                                .collect(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let masks = (0..width)
+                    .map(|column| {
+                        ZeroizingMainTraceColumnV1(
+                            (0..MASK_LENGTH)
+                                .map(|index| F(p - 1 - ((index + column) % 31) as u64))
+                                .collect(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let points = MainNativeDeepPointsV1::new_v1(log, extension(397)).unwrap();
+                let scales = (0..width)
+                    .map(|column| {
+                        core::array::from_fn(|side| {
+                            E::from_coefficients(core::array::from_fn(|lane| {
+                                F(p - 1 - (column + side + lane) as u64)
+                            }))
+                            .unwrap()
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let inputs = (0..width)
+                    .map(|column| {
+                        let coefficients = old_coefficients(&native[column], log, &masks[column]);
+                        (
+                            &*native[column],
+                            &*masks[column],
+                            points.points.map(|point| horner(&coefficients, point)),
+                            scales[column],
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let expected = original_quotient(log, &native, &masks, points.points, &scales);
+                for chunk_width in [1, 3, 4, BATCH - 1, BATCH] {
+                    pool.install(|| {
+                        let mut weighted = MainNativeDeepQuotientV1::new_v1(&points).unwrap();
+                        for batch in inputs.chunks(chunk_width) {
+                            weighted.add_batch_v1(&points, batch).unwrap();
+                        }
+                        for side in 0..2 {
+                            for index in 0..points.native_rows + MASK_LENGTH {
+                                let original = inputs.iter().fold(E::ZERO, |sum, input| {
+                                    let source = if index < points.native_rows {
+                                        input.0[index]
+                                    } else {
+                                        input.1[index - points.native_rows]
+                                    };
+                                    sum.add(input.3[side].mul_base(source))
+                                });
+                                assert_eq!(weighted.coefficients[side][index], original);
+                            }
+                            let original_value = inputs.iter().fold(E::ZERO, |sum, input| {
+                                sum.add(input.2[side].mul(input.3[side]))
+                            });
+                            assert_eq!(weighted.values[side], original_value);
+                        }
+                        let mut actual = zero_column_v1(expected.len()).unwrap();
+                        weighted.accumulate_v1(width, &mut actual).unwrap();
+                        assert_eq!(&*actual, &*expected);
+                    });
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn native_each_changed_claim_foreign_mask_and_cancelling_pair_refuse_before_mutation() {
     let native = (0..BATCH).map(|column| rows(5, column)).collect::<Vec<_>>();
     let masks = (0..BATCH).map(mask).collect::<Vec<_>>();
@@ -589,5 +673,85 @@ fn native_weighted_mask_slot_clears_each_read_and_on_late_division_or_ifft_error
             assert!(cleared.iter().map(|entry| entry.1).sum::<usize>() > 0);
             assert_eq!(cleared.last(), Some(&(1, 0, 0)));
         }
+    }
+}
+
+#[test]
+fn widened_native_openings_preserve_cyclic_shift_and_high_carries_across_blocks() {
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    for log in [10, 11] {
+        let native = ZeroizingMainTraceColumnV1(
+            (0..1usize << log)
+                .map(|index| F(p - 1 - (index % 17) as u64))
+                .collect(),
+        );
+        let mask = ZeroizingMainTraceColumnV1(
+            (0..MASK_LENGTH)
+                .map(|index| F(p - 1 - (index % 31) as u64))
+                .collect(),
+        );
+        let coefficients = old_coefficients(&native, log, &mask);
+        let root = goldilocks_primitive_root_v1(log).unwrap();
+        for point in [
+            extension(101),
+            E::ONE,
+            E::from_base(root.pow((1u128 << log) - 1)),
+        ] {
+            let points = MainNativeDeepPointsV1::new_v1(log, point).unwrap();
+            assert_eq!(
+                points.evaluate_v1(&native, &mask).unwrap(),
+                points.points.map(|point| horner(&coefficients, point))
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "native19 DEEP dot-product cost against the original scalar reduction; component timing only"]
+fn widened_native_deep_dot_product_cost_preserves_original_openings() {
+    assert!(!cfg!(debug_assertions));
+    let native = rows(19, 23);
+    let mask = mask(37);
+    let points = MainNativeDeepPointsV1::new_v1(19, extension(101)).unwrap();
+    let scalar = || {
+        points.validate_column_v1(&native, &mask).unwrap();
+        let mut values = [E::ZERO; 2];
+        for (index, &value) in native.iter().enumerate() {
+            values[0] = values[0].add(points.weights[index].mul_base(value));
+            values[1] = values[1].add(
+                points.weights[(index + points.native_rows - 1) & (points.native_rows - 1)]
+                    .mul_base(value),
+            );
+        }
+        for (value, powers) in values.iter_mut().zip(&points.mask_powers) {
+            let masked = mask
+                .iter()
+                .zip(powers.iter())
+                .fold(E::ZERO, |sum, (&coefficient, power)| {
+                    sum.add(power.mul_base(coefficient))
+                });
+            *value = value.add(masked.mul(points.vanishing));
+        }
+        values
+    };
+    for round in 0..3 {
+        let mut elapsed = [0; 2];
+        let mut outputs = [[E::ZERO; 2]; 2];
+        for mode in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
+            let start = std::time::Instant::now();
+            for _ in 0..8 {
+                outputs[mode] = std::hint::black_box(if mode == 0 {
+                    scalar()
+                } else {
+                    points.evaluate_v1(&native, &mask).unwrap()
+                });
+            }
+            elapsed[mode] = start.elapsed().as_nanos();
+        }
+        assert_eq!(outputs[0], outputs[1]);
+        eprintln!(
+            "x509_native_deep_dot log=19 iterations=8 round={round} scalar_ns={} widened_ns={} parity=exact",
+            elapsed[0], elapsed[1]
+        );
     }
 }

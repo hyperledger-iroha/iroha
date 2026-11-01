@@ -367,9 +367,7 @@ fn public(
     out
 }
 fn satisfied(circuit: &Recursive, instances: &[Vec<Fp>]) -> bool {
-    check_circuit(circuit, 16, instances, CheckMode::Strict)
-        .map(|r| r.is_satisfied())
-        .unwrap_or(false)
+    check_circuit(circuit, 16, instances, CheckMode::Strict).is_ok_and(|r| r.is_satisfied())
 }
 
 fn fixture() -> Fixture {
@@ -998,7 +996,7 @@ impl TerminalCircuit {
                 signatures: &ordered,
             },
         )?;
-        for (slot, words) in slots.slots().iter().zip(q[0].chunks_exact(10)) {
+        for (slot, words) in slots.slots().iter().zip(q[0].as_chunks::<10>().0) {
             let actual = std::iter::once(slot.message())
                 .chain(slot.key())
                 .chain(slot.signature())

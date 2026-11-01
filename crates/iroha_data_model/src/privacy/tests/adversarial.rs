@@ -1290,7 +1290,6 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
     });
     for count in [1, 3, 4] {
         PrivacyProtocolLimitsUpdateV1 {
-            private_settlement_drain_blocks: None,
             scheduled_at_height: 7,
             effective_at_height: 8,
             next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
@@ -1303,7 +1302,6 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
     for count in [0, 2, 5] {
         assert!(
             PrivacyProtocolLimitsUpdateV1 {
-                private_settlement_drain_blocks: None,
                 scheduled_at_height: 7,
                 effective_at_height: 8,
                 next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
@@ -1319,7 +1317,6 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
     }
     assert!(
         PrivacyProtocolLimitsUpdateV1 {
-            private_settlement_drain_blocks: None,
             scheduled_at_height: 7,
             effective_at_height: 8,
             next_limits: PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1
@@ -1330,7 +1327,6 @@ fn ordinary_protocol_updates_preserve_bounds_and_cannot_change_protocol_identity
     for (scheduled, effective) in [(0, 8), (7, 7), (7, 6), (u64::MAX, u64::MAX)] {
         assert!(
             PrivacyProtocolLimitsUpdateV1 {
-                private_settlement_drain_blocks: None,
                 scheduled_at_height: scheduled,
                 effective_at_height: effective,
                 next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
@@ -1527,7 +1523,6 @@ fn pending_ordinary_policy_preserves_exact_committed_height_guards() {
                 },
             ),
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
-                private_settlement_drain_blocks: None,
                 scheduled_at_height: 7,
                 effective_at_height: 8,
                 next_limits: PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(

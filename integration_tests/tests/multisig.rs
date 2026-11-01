@@ -36,7 +36,6 @@ use reqwest::header::CONTENT_TYPE;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
-    path::Path,
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
@@ -130,13 +129,11 @@ fn wait_for_domain_visibility(
         }
         std::thread::sleep(DOMAIN_REGISTRATION_RECOVERY_POLL);
     }
-    if let Some(err) = last_err {
+    last_err.map_or(Ok(false), |err| {
         Err(err).wrap_err_with(|| {
             format!("timed out waiting for multisig test domain `{domain}` visibility")
         })
-    } else {
-        Ok(false)
-    }
+    })
 }
 fn find_account(client: &Client, account_id: &AccountId) -> Result<Option<Account>> {
     use iroha::collections::{Collection, ListQuery, field};
@@ -185,15 +182,18 @@ fn wait_for_account_visibility(
         }
         std::thread::sleep(ACCOUNT_VISIBILITY_POLL);
     }
-    if let Some(err) = last_error {
-        Err(err).wrap_err_with(|| {
-            format!("timed out waiting for account `{account_id}` visibility after {context}")
-        })
-    } else {
-        Err(eyre!(
-            "timed out waiting for account `{account_id}` visibility after {context}"
-        ))
-    }
+    last_error.map_or_else(
+        || {
+            Err(eyre!(
+                "timed out waiting for account `{account_id}` visibility after {context}"
+            ))
+        },
+        |err| {
+            Err(err).wrap_err_with(|| {
+                format!("timed out waiting for account `{account_id}` visibility after {context}")
+            })
+        },
+    )
 }
 fn wait_for_account_metadata_value(
     client: &Client,
@@ -219,16 +219,21 @@ fn wait_for_account_metadata_value(
         }
         std::thread::sleep(ACCOUNT_VISIBILITY_POLL);
     }
-    if let Some(err) = last_error {
-        Err(err).wrap_err_with(|| {
-            format!("timed out waiting for account `{account_id}` metadata `{key}` after {context}")
-        })
-    } else {
-        Err(eyre!(
-            "timed out waiting for account `{account_id}` metadata `{key}` after {context}; last seen: {}",
-            last_seen.unwrap_or_else(|| "nothing".to_owned())
-        ))
-    }
+    last_error.map_or_else(
+        || {
+            Err(eyre!(
+                "timed out waiting for account `{account_id}` metadata `{key}` after {context}; last seen: {}",
+                last_seen.unwrap_or_else(|| "nothing".to_owned())
+            ))
+        },
+        |err| {
+            Err(err).wrap_err_with(|| {
+                format!(
+                    "timed out waiting for account `{account_id}` metadata `{key}` after {context}"
+                )
+            })
+        },
+    )
 }
 fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId) -> Result<()> {
     let register_domain =
@@ -241,8 +246,8 @@ fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId
             }
             let retry = register_domain();
             match retry {
-                Ok(_) => Ok(()),
-                Err(retry_err)
+                Ok(()) => Ok(()),
+                Err(_)
                     if wait_for_domain_visibility(
                         client,
                         domain,
@@ -349,20 +354,18 @@ fn wait_for_multisig_proposal_status(
         }
         std::thread::sleep(Duration::from_millis(250));
     }
-    if let Some(status) = last_status {
-        Err(eyre!(
+    match (last_status, last_error) {
+        (Some(status), _) => Err(eyre!(
             "timed out waiting for multisig proposal `{proposal_id}` status `{expected_status}`; last status `{status}`"
-        ))
-    } else if let Some(err) = last_error {
-        Err(err).wrap_err_with(|| {
+        )),
+        (None, Some(err)) => Err(err).wrap_err_with(|| {
             format!(
                 "timed out waiting for multisig proposal `{proposal_id}` status `{expected_status}`"
             )
-        })
-    } else {
-        Err(eyre!(
+        }),
+        (None, None) => Err(eyre!(
             "timed out waiting for multisig proposal `{proposal_id}` status `{expected_status}`"
-        ))
+        )),
     }
 }
 fn cli_envs_for_signatory(client: &Client, key_pair: &KeyPair) -> Vec<(&'static str, String)> {
@@ -447,14 +450,14 @@ fn wait_for_multisig_proposals(
     ))
 }
 fn run_multisig_list_all_cli(
-    cli_program: &Path,
+    cli_program: &iroha_test_network::ResolvedProgram,
     client: &Client,
     key_pair: &KeyPair,
     multisig_selector: &str,
     extra_args: &[&str],
 ) -> Result<std::process::Output> {
     let cli_dir = tempfile::tempdir().wrap_err("create CLI working directory")?;
-    let mut command = std::process::Command::new(cli_program);
+    let mut command = cli_program.command()?;
     command
         .current_dir(cli_dir.path())
         .envs(cli_envs_for_signatory(client, key_pair));
@@ -486,8 +489,7 @@ fn run_multisig_list_all_cli(
         .arg("--multisig-selector")
         .arg(multisig_selector)
         .args(list_args);
-    output_with_timeout(&mut command, process_timeout())
-        .wrap_err("run `iroha ledger multisig list all`")
+    output_with_timeout(command, process_timeout()).wrap_err("run `iroha ledger multisig list all`")
 }
 #[test]
 fn multisig_normal() -> Result<()> {
@@ -561,7 +563,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .first()
         .expect("network should expose at least one peer")
         .torii_url()
-        .to_string();
+        .clone();
     let propose_cancel = post_torii_app_json(
         &rt,
         &format!("{torii_base}/v1/multisig/cancel"),
@@ -692,7 +694,6 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         .submit_all(
             signatories
                 .keys()
-                .cloned()
                 .map(|account_id| Account::new(account_id.clone()))
                 .map(Register::account),
             FeePaymentIntent::authority(Vec::new(), None),
@@ -854,7 +855,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         "text output should contain one block per proposal entry"
     );
     let first_text_entry = &expected_proposals[0];
-    assert!(blocks[0].contains(&format!("multisig_account_id: {}", multisig_account_id)));
+    assert!(blocks[0].contains(&format!("multisig_account_id: {multisig_account_id}")));
     assert!(blocks[0].contains(&format!("proposal_id: {}", first_text_entry.proposal_id)));
     assert!(blocks[0].contains("status: COLLECTING_SIGNATURES"));
     assert!(blocks[0].contains(&format!(
@@ -1428,7 +1429,6 @@ fn multisig_base(suite: TestSuite, context: &'static str) -> Result<()> {
         .submit_all(
             residents
                 .keys()
-                .cloned()
                 .map(|id| Account::new(id.clone()))
                 .map(Register::account),
             FeePaymentIntent::authority(Vec::new(), None),
@@ -1731,7 +1731,6 @@ fn multisig_recursion_base(context: &'static str) -> Result<()> {
     test_client.submit_all(
         signatories
             .keys()
-            .cloned()
             .map(|id| Account::new(id.clone()))
             .map(Register::account),
         FeePaymentIntent::authority(Vec::new(), None),

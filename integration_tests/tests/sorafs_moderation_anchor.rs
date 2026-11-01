@@ -1,4 +1,4 @@
-//! Four-validator regressions for SoraFS moderation proof admission, sortition and bond settlement.
+//! Four-validator regressions for `SoraFS` moderation proof admission, sortition and bond settlement.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use integration_tests::sandbox;
@@ -128,8 +128,8 @@ fn unix_time_ms() -> Result<u64> {
     .wrap_err("current Unix time does not fit u64 milliseconds")
 }
 
-fn bounded_client(client: Client) -> Client {
-    integration_tests::sync::rebind_blocking_client(&client, |client| {
+fn bounded_client(client: &Client) -> Client {
+    integration_tests::sync::rebind_blocking_client(client, |client| {
         client.torii_request_timeout = Duration::from_secs(5);
         client.transaction_status_timeout = TRANSACTION_TIMEOUT;
         client.transaction_ttl = Some(Duration::from_secs(300));
@@ -220,15 +220,15 @@ async fn wait_for_enrollment_snapshot(
 }
 
 fn bob_client(peer: &iroha_test_network::NetworkPeer) -> Client {
-    bounded_client(peer.client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone()))
+    bounded_client(&peer.client_for(&BOB_ID, BOB_KEYPAIR.private_key().clone()))
 }
 
 fn alice_client(peer: &iroha_test_network::NetworkPeer) -> Client {
-    bounded_client(peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone()))
+    bounded_client(&peer.client_for(&ALICE_ID, ALICE_KEYPAIR.private_key().clone()))
 }
 
 fn carpenter_client(peer: &iroha_test_network::NetworkPeer) -> Client {
-    bounded_client(peer.client_for(&CARPENTER_ID, CARPENTER_KEYPAIR.private_key().clone()))
+    bounded_client(&peer.client_for(&CARPENTER_ID, CARPENTER_KEYPAIR.private_key().clone()))
 }
 
 fn public_key_bytes(keypair: &KeyPair) -> [u8; 32] {
@@ -1695,7 +1695,9 @@ fn moderation_ledger_comparison_preserves_enrollment_counters() -> Result<()> {
         finalized_block_hash: [1; 32],
         finalized_at_unix_ms: 1,
         policy: None,
-        status: Some(Default::default()),
+        status: Some(
+            iroha_data_model::sorafs::moderation_ledger::ModerationLedgerStatusV1::default(),
+        ),
         appeals: Vec::new(),
         cases: Vec::new(),
         events: Vec::new(),

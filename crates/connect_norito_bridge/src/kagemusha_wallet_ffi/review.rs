@@ -150,7 +150,7 @@ pub(super) fn allocate_token() -> Result<u64> {
 }
 fn allocate_from(next: &std::sync::atomic::AtomicU64) -> Result<u64> {
     use std::sync::atomic::Ordering;
-    next.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+    next.try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
         value
             .checked_add(1)
             .filter(|value| *value <= i64::MAX as u64)
@@ -1396,26 +1396,20 @@ mod tests {
             self.base.credit(credit, payment)
         }
     }
-    fn handoff_wallet() -> (
+    /// Wallet handle, exchange origin, selected and unrelated review tokens, the review table
+    /// and the injected handoff faults.
+    type HandoffFixture = (
         u64,
         u64,
         u64,
         u64,
         Arc<Mutex<Tokens<OriginBound<&'static str>>>>,
         Arc<HandoffFaults>,
-    ) {
+    );
+    fn handoff_wallet() -> HandoffFixture {
         handoff_wallet_kind(CapabilityKind::Financial)
     }
-    fn handoff_wallet_kind(
-        kind: CapabilityKind,
-    ) -> (
-        u64,
-        u64,
-        u64,
-        u64,
-        Arc<Mutex<Tokens<OriginBound<&'static str>>>>,
-        Arc<HandoffFaults>,
-    ) {
+    fn handoff_wallet_kind(kind: CapabilityKind) -> HandoffFixture {
         use std::sync::atomic::AtomicUsize;
         let faults = Arc::new(HandoffFaults::default());
         let reviews = Arc::new(Mutex::new(Tokens::default()));

@@ -875,7 +875,7 @@ fn deployment_progress_follows_durable_attempt_and_applied_records_in_exact_orde
         Ok(())
     })?;
     assert_eq!(events.len(), record.transactions.len() * 2);
-    for (index, pair) in events.chunks_exact(2).enumerate() {
+    for (index, pair) in events.as_chunks::<2>().0.iter().enumerate() {
         let expected = progress::stage(&record, index);
         assert!(matches!(&pair[0], DeploymentProgress::Submitting(stage) if stage == &expected));
         assert!(

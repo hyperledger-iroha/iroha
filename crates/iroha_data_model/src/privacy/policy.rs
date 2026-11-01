@@ -18,7 +18,6 @@ impl PrivacyConsensusLimitsV1 {
             max_nullifiers_per_action: TAIRA_PRIVACY_MAX_NULLIFIERS_PER_ACTION_V1,
             max_commitments_per_action: TAIRA_PRIVACY_MAX_COMMITMENTS_PER_ACTION_V1,
             retained_root_count: TAIRA_PRIVACY_RETAINED_ROOT_COUNT_V1,
-            private_settlement: PrivateSettlementValidityLimitsV1::protocol_default(),
         }
     }
     /// Validate non-zero, hard-ceiling, and cross-field ordering invariants.
@@ -122,9 +121,6 @@ impl PrivacyConsensusLimitsV1 {
             PrivacyLimitFieldV1::ActionBytes,
             self.max_action_bytes,
         )?;
-        self.private_settlement
-            .validate()
-            .map_err(PrivacyConsensusLimitsValidationError::PrivateSettlement)?;
         Ok(())
     }
     /// Validate `next` as an ordinary update within canonical hard bounds of this policy.
@@ -187,16 +183,7 @@ impl PrivacyConsensusPolicyUpdateV1 {
         )?;
         current_limits
             .validate_update_to(&self.next_limits)
-            .map_err(PrivacyPolicyValidationErrorV1::ConsensusUpdate)?;
-        if self.next_limits.private_settlement != current_limits.private_settlement {
-            validate_private_settlement_drain_v1(
-                self.scheduled_at_height,
-                current_limits.private_settlement.max_expiry_blocks,
-                self.effective_at_height,
-            )
-            .map_err(PrivacyPolicyValidationErrorV1::PrivateSettlementDrain)?;
-        }
-        Ok(())
+            .map_err(PrivacyPolicyValidationErrorV1::ConsensusUpdate)
     }
 }
 
@@ -278,7 +265,7 @@ impl Default for PrivacyConsensusPolicyV1 {
     }
 }
 
-fn validate_privacy_policy_schedule_heights_v1(
+pub(super) fn validate_privacy_policy_schedule_heights_v1(
     scheduled_at_height: u64,
     effective_at_height: u64,
 ) -> Result<(), PrivacyPolicyValidationErrorV1> {
@@ -328,30 +315,6 @@ impl PrivacyProtocolLimitsUpdateV1 {
         }
         if self.next_limits == *current_limits {
             return Err(PrivacyProtocolLimitsUpdateValidationErrorV1::NoChange);
-        }
-        let closes = private_settlement_protocol_closes_v1(current_limits, &self.next_limits);
-        match (closes, self.private_settlement_drain_blocks) {
-            (true, Some(original_span)) => validate_private_settlement_drain_v1(
-                self.scheduled_at_height,
-                original_span,
-                self.effective_at_height,
-            )
-            .map_err(PrivacyProtocolLimitsUpdateValidationErrorV1::PrivateSettlementDrain)?,
-            (true, None) => {
-                return Err(
-                    PrivacyProtocolLimitsUpdateValidationErrorV1::PrivateSettlementDrain(
-                        PrivateSettlementValidityErrorV1::DrainRequired,
-                    ),
-                );
-            }
-            (false, Some(_)) => {
-                return Err(
-                    PrivacyProtocolLimitsUpdateValidationErrorV1::PrivateSettlementDrain(
-                        PrivateSettlementValidityErrorV1::UnexpectedDrain,
-                    ),
-                );
-            }
-            (false, None) => {}
         }
         Ok(())
     }

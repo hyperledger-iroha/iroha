@@ -67,7 +67,7 @@ fn empty_config_yields_every_default_with_key_dir_under_kura_store_dir() {
             .join("keeper-key")
     );
     assert!(keeper.keepalive);
-    assert_eq!(keeper.keepalive_stagger, Duration::from_millis(15_000));
+    assert_eq!(keeper.keepalive_stagger, Duration::from_secs(15));
     assert!(keeper.watch);
 
     let keeper = &config.sccp.light_client_keeper;
@@ -75,7 +75,7 @@ fn empty_config_yields_every_default_with_key_dir_under_kura_store_dir() {
     assert_eq!(keeper.advance_after, None);
     assert_eq!(
         keeper.advance_after_for(1_209_600_000),
-        Duration::from_millis(302_400_000)
+        Duration::from_hours(84)
     );
     assert_eq!(keeper.poll_interval, Duration::from_millis(60_000));
     assert_eq!(keeper.request_timeout, Duration::from_millis(10_000));

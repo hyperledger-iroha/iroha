@@ -3818,7 +3818,7 @@ mod tests {
         let (r, s) = low_s.split_scalars();
         let high_s =
             P256Signature::from_scalars(r.to_repr(), (-*s).to_repr()).expect("high-s counterpart");
-        assert!(high_s.normalize_s() != high_s);
+        assert_ne!(high_s.normalize_s(), high_s);
         let high_s_bytes = <[u8; 64]>::from(high_s.to_bytes());
         let high_s_witnesses = [
             ZkAmsBatchCredentialWitnessV1::new(&credentials[0], &high_s_bytes, &seed_secrets[0]),

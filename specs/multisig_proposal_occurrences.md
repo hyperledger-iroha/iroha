@@ -56,6 +56,25 @@ signatories, quorum or controller. Old terminal history remains under the origin
 account; approvals do not migrate into a different authority policy. Nested multisig
 signatories remain unsupported, and unreachable automatic relay state is removed.
 
+## Deferred runtime consent
+
+Each pending occurrence owns a kernel-written `multisig/proposal-expectation/<account-hash>/<id>`
+record alongside its proposal. The canonical hash commits the resolved transitive instruction
+bindings, immutable dependencies, host profiles, root execution profiles and the exact installed
+executor bytecode at proposal admission. Executor caches never enter the commitment.
+Adding an unrelated interface leaves a native call's closure unchanged; the conservative baseline
+bundle captures all of its declared native callees. Custom instructions and opaque contract code
+capture the entire callable surface until they carry a bounded authenticated call manifest.
+
+Admission refuses a new proposal while any captured dependency is admission-closed,
+completion-only or disabled, before creating its pending record or initial approval.
+Approval checks the original commitment before adding a signer or executing any instruction.
+A changed closure returns the stable `expectation_mismatch` rejection; restrictions on a retained
+dependency also prevent execution. Fresh consent requires a fresh proposal nonce and fresh
+approvals. The old occurrence remains cancellable or expirable. Completion, cancellation, expiry
+and controller invalidation remove its expectation with its pending record. A missing or malformed
+capture never silently adopts the current selection, including during snapshot restoration.
+
 ## Transport and durable application custody
 
 `/v1/multisig/propose` requires `proposal_nonce`. `/approve` requires both `proposal_id`

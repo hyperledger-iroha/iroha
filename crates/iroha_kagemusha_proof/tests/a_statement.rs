@@ -157,7 +157,7 @@ impl Binding {
                 self.bytes[..4].try_into().unwrap(),
             ))),
         ];
-        for message in self.bytes[4..].chunks_exact(32) {
+        for message in self.bytes[4..].as_chunks::<32>().0 {
             let low = u128::from_le_bytes(message[..16].try_into().unwrap());
             let high = u128::from_le_bytes(message[16..].try_into().unwrap());
             out.extend([

@@ -57,8 +57,8 @@ fn buffered_sparse_challenge_terms_reference(
     let buffered = shake256(&frame, stream_bytes);
     let mask = u64::try_from(ring_degree - 1).unwrap();
     let mut terms = Vec::with_capacity(weight);
-    for candidate in buffered.chunks_exact(8) {
-        let word = u64::from_le_bytes(candidate.try_into().unwrap());
+    for candidate in buffered.as_chunks::<8>().0 {
+        let word = u64::from_le_bytes(*candidate);
         let position = usize::try_from(word & mask).unwrap();
         if terms.iter().any(|(selected, _)| *selected == position) {
             continue;

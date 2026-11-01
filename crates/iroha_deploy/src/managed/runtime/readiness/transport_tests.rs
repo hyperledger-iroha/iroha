@@ -132,13 +132,13 @@ fn peer_zero_submission_reuses_transport_but_rechecks_compatibility_and_all_four
     let submitter = owner.submitter(remaining).unwrap();
     let source = owner.clients[0].client();
     let selected = submitter.client();
-    assert!(selected.endpoint() == source.endpoint());
-    assert!(selected.chain() == source.chain());
-    assert!(selected.network_id() == source.network_id());
-    assert!(selected.account() == source.account());
-    assert!(selected.key_pair() == source.key_pair());
-    assert!(selected.headers() == source.headers());
-    assert!(selected.transaction_ttl() == source.transaction_ttl());
+    assert_eq!(selected.endpoint(), source.endpoint());
+    assert_eq!(selected.chain(), source.chain());
+    assert_eq!(selected.network_id(), source.network_id());
+    assert_eq!(selected.account(), source.account());
+    assert_eq!(selected.key_pair(), source.key_pair());
+    assert_eq!(selected.headers(), source.headers());
+    assert_eq!(selected.transaction_ttl(), source.transaction_ttl());
     assert_eq!(
         selected.account_chain_discriminant(),
         source.account_chain_discriminant()
@@ -191,9 +191,9 @@ fn peer_zero_submission_reuses_transport_but_rechecks_compatibility_and_all_four
     );
     let signed = SignedTransaction::decode_all_versioned(&posts[0].body).unwrap();
     assert_eq!(signed.hash(), hash);
-    assert!(signed.authority() == &expected_account);
-    assert!(signed.network_id() == Some(&expected_network));
-    assert!(signed.fee_payment_intent() == &expected_payment);
+    assert_eq!(signed.authority(), &expected_account);
+    assert_eq!(signed.network_id(), Some(&expected_network));
+    assert_eq!(signed.fee_payment_intent(), &expected_payment);
     signed
         .signature()
         .0
@@ -260,9 +260,9 @@ fn selected_submission_endpoint_is_normalized_and_peer_zero_substitution_refuses
     let original_url = prepared.peers[0].torii_url.clone();
     prepared.peers[0].torii_url = original_url.trim_end_matches('/').to_owned();
     let owner = original(&prepared);
-    assert!(
-        owner.clients[0].client().endpoint()
-            == &prepared.context.load_client_config().unwrap().torii_api_url
+    assert_eq!(
+        owner.clients[0].client().endpoint(),
+        &prepared.context.load_client_config().unwrap().torii_api_url
     );
     drop(owner);
     prepared.peers[0].torii_url = prepared.peers[1].torii_url.clone();

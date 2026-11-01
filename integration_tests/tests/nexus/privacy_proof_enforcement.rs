@@ -79,8 +79,8 @@ fn lane_privacy_proof_allows_compliance() -> Result<()> {
             jurisdiction_override: JurisdictionSet::default(),
         }],
         transfer_limits: Vec::new(),
-        audit_controls: Default::default(),
-        metadata: Default::default(),
+        audit_controls: iroha_data_model::nexus::AuditControls::default(),
+        metadata: iroha_model_base::metadata::Metadata::default(),
     };
     let engine = LaneComplianceEngine::from_policies(vec![policy], false)?;
     // Evaluate with a verified commitment.

@@ -306,14 +306,13 @@ fn ncb_enum_dict_id_delta_small_fixture() {
 fn ncb_enum_offsets_alternating_aa_300_fixture() {
     use ncb::EnumBorrow;
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 10u64;
     for i in 0..16u64 {
+        let id = 10 + i;
         if i % 2 == 0 {
             rows.push((id, EnumBorrow::Name("aa"), true));
         } else {
             rows.push((id, EnumBorrow::Code(300), true));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, false, true);
     let fix = read_hex_fixture("tests/data/enum_offsets_alternating_aa_300.hex");
@@ -323,14 +322,13 @@ fn ncb_enum_offsets_alternating_aa_300_fixture() {
 fn ncb_enum_dict_alternating_zz_77_fixture() {
     use ncb::EnumBorrow;
     let mut rows: Vec<(u64, EnumBorrow<'_>, bool)> = Vec::new();
-    let mut id = 1u64;
     for i in 0..10u64 {
+        let id = 1 + i;
         if i % 2 == 0 {
             rows.push((id, EnumBorrow::Name("zz"), true));
         } else {
             rows.push((id, EnumBorrow::Code(77), true));
         }
-        id += 1;
     }
     let bytes = ncb::encode_ncb_u64_enum_bool(&rows, true, true, true);
     let fix = read_hex_fixture("tests/data/enum_dict_alternating_zz_77.hex");

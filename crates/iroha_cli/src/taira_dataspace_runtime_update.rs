@@ -721,7 +721,9 @@ fn validate_records(
         records.get("config-retirement-installed.json"),
     ) {
         (Some(prepared), Some(installed)) => {
-            crate::taira_public_reset::validate_retirement_records(prepared, installed, plan)?;
+            crate::taira_config_retirement_evidence::validate_retirement_records(
+                prepared, installed, plan,
+            )?;
             Some(rows(field(installed, "rows")?)?)
         }
         (None, None) => None,

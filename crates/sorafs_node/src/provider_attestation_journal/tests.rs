@@ -134,6 +134,7 @@ impl MusubiProviderAttestationJournalTimeV1 for DelayedSecondJournalTime {
 #[derive(Default)]
 struct MemoryJournalStore {
     latest: Mutex<MusubiProviderAttestationJournalStoreSnapshotV1>,
+    cas_calls: AtomicUsize,
 }
 impl Default for MusubiProviderAttestationJournalStoreSnapshotV1 {
     fn default() -> Self {
@@ -169,6 +170,7 @@ impl MusubiProviderAttestationJournalStoreV1 for MemoryJournalStore {
         >,
     > {
         Box::pin(async move {
+            self.cas_calls.fetch_add(1, Ordering::SeqCst);
             let replacement =
                 MusubiProviderAttestationJournalStoreSnapshotV1::from_checkpoint_bytes(
                     replacement_checkpoint_bytes,
@@ -199,8 +201,11 @@ struct MemoryInventory {
     runtime_handle_calls: AtomicUsize,
     qualification_calls: AtomicUsize,
     readiness_calls: AtomicUsize,
+    blocking_readiness_ms: AtomicU64,
     delay_ms: AtomicU64,
     get_delay_ms: AtomicU64,
+    blocking_get_ms: AtomicU64,
+    blocking_put_ms: AtomicU64,
     omit_readback: AtomicBool,
     fail_after_put_once: AtomicBool,
     readback_revision_override: AtomicU64,
@@ -227,8 +232,11 @@ impl Default for MemoryInventory {
             runtime_handle_calls: AtomicUsize::new(0),
             qualification_calls: AtomicUsize::new(0),
             readiness_calls: AtomicUsize::new(0),
+            blocking_readiness_ms: AtomicU64::new(0),
             delay_ms: AtomicU64::new(0),
             get_delay_ms: AtomicU64::new(0),
+            blocking_get_ms: AtomicU64::new(0),
+            blocking_put_ms: AtomicU64::new(0),
             omit_readback: AtomicBool::new(false),
             fail_after_put_once: AtomicBool::new(false),
             readback_revision_override: AtomicU64::new(0),
@@ -254,6 +262,7 @@ impl MusubiProviderAttestationInventorySinkV1 for MemoryInventory {
     ) -> ProviderIngestFutureV1<'a, Result<u64, MusubiProviderAttestationInventoryErrorV1>> {
         Box::pin(async move {
             self.put_calls.fetch_add(1, Ordering::SeqCst);
+            block_current_executor(self.blocking_put_ms.load(Ordering::SeqCst));
             let delay_ms = self.delay_ms.load(Ordering::SeqCst);
             if delay_ms != 0 {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -306,6 +315,7 @@ impl MusubiProviderAttestationInventoryReaderV1 for MemoryInventory {
     > {
         Box::pin(async move {
             self.get_calls.fetch_add(1, Ordering::SeqCst);
+            block_current_executor(self.blocking_get_ms.load(Ordering::SeqCst));
             let delay_ms = self.get_delay_ms.load(Ordering::SeqCst);
             if delay_ms != 0 {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -421,6 +431,7 @@ impl MusubiProviderAttestationInventoryRuntimeV1 for MemoryInventory {
     {
         Box::pin(async move {
             self.readiness_calls.fetch_add(1, Ordering::SeqCst);
+            block_current_executor(self.blocking_readiness_ms.load(Ordering::SeqCst));
             match *self
                 .readiness_error
                 .lock()
@@ -523,6 +534,7 @@ struct FakeApprovalSigner {
     controller_policy_digest: [u8; 32],
     adapter_policy_digest: Mutex<[u8; 32]>,
     delay_ms: AtomicU64,
+    blocking_approve_ms: AtomicU64,
 }
 impl FakeApprovalSigner {
     fn new(fixture: &Fixture) -> Self {
@@ -541,6 +553,7 @@ impl FakeApprovalSigner {
             approve_calls: AtomicUsize::new(0),
             adapter_policy_digest: Mutex::new([0xA7; 32]),
             delay_ms: AtomicU64::new(0),
+            blocking_approve_ms: AtomicU64::new(0),
         }
     }
     fn policy(&self) -> ProviderIngestCompletionSignerPolicyV1 {
@@ -592,6 +605,7 @@ impl MusubiProviderAttestationSignerV1 for FakeApprovalSigner {
     > {
         Box::pin(async move {
             self.approve_calls.fetch_add(1, Ordering::SeqCst);
+            block_current_executor(self.blocking_approve_ms.load(Ordering::SeqCst));
             let delay_ms = self.delay_ms.load(Ordering::SeqCst);
             if delay_ms != 0 {
                 tokio::time::sleep(Duration::from_millis(delay_ms)).await;
@@ -2850,4 +2864,157 @@ async fn distinct_registered_owner_preserves_completion_signer_approval_and_jour
             .verify(&fixture.request.payload().binding)
             .is_err()
     );
+}
+
+// These futures deliberately return Ready only after blocking the current-thread executor.
+// Both the inner result and timeout are ready on that same poll, independent of timer granularity.
+fn block_current_executor(milliseconds: u64) {
+    if milliseconds != 0 {
+        std::thread::sleep(Duration::from_millis(milliseconds));
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn signer_rejects_ready_result_after_blocked_executor_deadline() {
+    let fixture = fixture(0xC1, 0xD1);
+    let signer = FakeApprovalSigner::new(&fixture);
+    signer.blocking_approve_ms.store(10, Ordering::SeqCst);
+    assert_eq!(
+        approve_musubi_provider_attestation_v1(&signer, &fixture.request, 2).await,
+        Err(MusubiProviderAttestationApprovalErrorV1::SignerTimedOut)
+    );
+    assert_eq!(signer.approve_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn pre_enqueue_probe_rejects_ready_result_after_blocked_executor_deadline() {
+    for stall_readiness in [false, true] {
+        let mut policy = test_policy();
+        policy.handoff_timeout_ms = 2;
+        let store = Arc::new(MemoryJournalStore::default());
+        let journal = MusubiProviderAttestationJournalV1::new(store.clone(), policy).unwrap();
+        let fixture = fixture(0xC2, 0xD2);
+        let inventory = MemoryInventory::default();
+        if stall_readiness {
+            inventory.blocking_readiness_ms.store(10, Ordering::SeqCst);
+        } else {
+            inventory.blocking_get_ms.store(10, Ordering::SeqCst);
+        }
+        assert_eq!(
+            journal
+                .probe_pre_enqueue_with_inventory(&fixture.request, &inventory)
+                .await,
+            Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable)
+        );
+        assert_eq!(
+            inventory.get_calls.load(Ordering::SeqCst),
+            usize::from(!stall_readiness),
+            "expired readiness must not dispatch a later inventory read",
+        );
+        assert_eq!(inventory.put_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.cas_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            *store.latest.lock().unwrap(),
+            MusubiProviderAttestationJournalStoreSnapshotV1::empty()
+        );
+        assert!(inventory.entries.lock().unwrap().is_empty());
+        // Normal recovery is covered separately; this control judges only the
+        // blocked external result and its absence of journal/inventory writes.
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn shared_deadline_blocks_late_ready_approval_and_handoff_before_result_cas() {
+    let mut policy = test_policy();
+    policy.lease_ttl_ms = 20;
+    let store = Arc::new(MemoryJournalStore::default());
+    let journal = MusubiProviderAttestationJournalV1::new(store.clone(), policy).unwrap();
+    let fixture = fixture(0xC3, 0xD3);
+    let id = journal
+        .enqueue(&fixture.request)
+        .await
+        .unwrap()
+        .approval_id();
+    let approval = journal
+        .claim_approval(
+            id,
+            MusubiProviderAttestationClaimOwnerV1::new([0xC4; 32]).unwrap(),
+            100,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    let delayed = FakeApprovalSigner::new(&fixture);
+    delayed.blocking_approve_ms.store(10, Ordering::SeqCst);
+    let writes = store.cas_calls.load(Ordering::SeqCst);
+    assert_eq!(
+        journal
+            .approve_claim_with_signer(&approval, &fixture.request, &delayed, &clock_at(101))
+            .await,
+        Err(MusubiProviderAttestationJournalErrorV1::SignerUnavailable)
+    );
+    assert_eq!(delayed.approve_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        store.cas_calls.load(Ordering::SeqCst),
+        writes + 1,
+        "only the existing preflight time fence may write; the late result must not enter CAS"
+    );
+    assert_eq!(
+        journal.status(id).await.unwrap().unwrap().stage,
+        MusubiProviderAttestationJournalStageV1::ApprovalClaimed
+    );
+    // The handoff fixture needs a valid stored approval, not a positive
+    // cryptographic operation measured against the deliberately tiny timeout.
+    assert_eq!(
+        journal
+            .store_approved(
+                &approval,
+                &fixture.request,
+                signed_attestation(&fixture),
+                106
+            )
+            .await
+            .unwrap(),
+        MusubiProviderAttestationApprovalStoreOutcomeV1::Stored
+    );
+    let handoff = journal
+        .claim_handoff(
+            id,
+            MusubiProviderAttestationClaimOwnerV1::new([0xC5; 32]).unwrap(),
+            108,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    for stall_readiness in [false, true] {
+        let inventory = MemoryInventory::default();
+        if stall_readiness {
+            inventory.blocking_readiness_ms.store(10, Ordering::SeqCst);
+        } else {
+            inventory.blocking_put_ms.store(10, Ordering::SeqCst);
+        }
+        let writes = store.cas_calls.load(Ordering::SeqCst);
+        assert_eq!(
+            journal
+                .handoff_claim_with_inventory(&handoff, &inventory, &clock_at(109))
+                .await,
+            Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable)
+        );
+        assert_eq!(
+            inventory.put_calls.load(Ordering::SeqCst),
+            usize::from(!stall_readiness)
+        );
+        assert_eq!(inventory.get_calls.load(Ordering::SeqCst), 0);
+        assert_eq!(store.cas_calls.load(Ordering::SeqCst), writes + 1);
+        assert_eq!(
+            journal.status(id).await.unwrap().unwrap().stage,
+            MusubiProviderAttestationJournalStageV1::HandoffClaimed
+        );
+        // An already-started external put can have committed. Preserve that uncertainty;
+        // the late result still cannot authorize a local Delivered transition.
+        assert_eq!(
+            inventory.entries.lock().unwrap().len(),
+            usize::from(!stall_readiness)
+        );
+    }
 }

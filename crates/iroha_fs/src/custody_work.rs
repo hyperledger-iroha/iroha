@@ -65,7 +65,11 @@ mod tests {
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path().canonicalize().unwrap().join("private");
         let directory = PrivateDirectory::open_or_create(&root).unwrap();
-        let depth = root.components().count() as u64;
+        // A Windows drive prefix and its root separator share one retained root handle.
+        let depth = root
+            .components()
+            .filter(|part| !matches!(part, std::path::Component::Prefix(_)))
+            .count() as u64;
         let before = CustodyWorkV1::current_thread();
         directory.revalidate().unwrap();
         directory.revalidate().unwrap();

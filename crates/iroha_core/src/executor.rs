@@ -1059,7 +1059,7 @@ fn validate_builtin_account_alias_query_permission(
                     catalog
                         .by_alias(dataspace)
                         .map(|entry| entry.id)
-                        .ok_or_else(&deny)
+                        .ok_or_else(deny)
                 })
                 .transpose()?;
             let domain_filter = query
@@ -1472,6 +1472,10 @@ pub enum ExecutorMigrationError {
     /// A completed migration error retains its original VM fields.
     #[error("executor migration rejected: {0}")]
     Rejected(#[source] VMError),
+    /// A live obligation (escrow or lock custody, or an AMX participation) still depends on the
+    /// installed executor's authorization.
+    #[error("executor migration would strand live obligations")]
+    LiveCustody,
     /// The transaction retains the first local refusal. This notice owns no cause and cannot
     /// become a completed rejection; the outer State terminal must export the original once.
     #[error("local executor migration did not complete; original refusal retained in State")]
@@ -4635,7 +4639,7 @@ fn resolve_pipeline_gas_quote_asset(
             ));
         }
         requested
-    } else if requested_is_accepted && requested.as_deref().is_some_and(&sponsor_covers) {
+    } else if requested_is_accepted && requested.as_deref().is_some_and(sponsor_covers) {
         requested.expect("accepted requested pipeline gas asset exists")
     } else {
         pipeline
@@ -4722,6 +4726,7 @@ fn authority_fee_asset_id(
         scope,
     ))
 }
+#[allow(clippy::too_many_arguments)]
 fn evaluate_nexus_fee_admission_payload(
     world: &impl WorldReadOnly,
     nexus: &iroha_config::parameters::actual::Nexus,
@@ -4751,9 +4756,9 @@ fn evaluate_nexus_fee_admission_payload(
     let (tx_bytes_len, instruction_count, gas_used) =
         fee_bound_for_admission_payload(payload, zk_gas)?;
     let mut charges = Vec::with_capacity(2);
-    let fee = compute_nexus_fee_amount(&fees, tx_bytes_len, instruction_count, gas_used)
+    let fee = compute_nexus_fee_amount(fees, tx_bytes_len, instruction_count, gas_used)
         .map_err(validation_fail_to_nexus_fee_admission_error)?;
-    let asset_definition_id = root_fees::currency(world, &fees, observation_time_ms)?;
+    let asset_definition_id = root_fees::currency(world, fees, observation_time_ms)?;
     if !fee.is_zero() {
         charges.push(FeeChargeBound {
             kind: FeeChargeKind::Nexus,
@@ -5844,7 +5849,7 @@ impl Executor {
                 "private-root fee sponsors require a scoped vault owner".into(),
             ));
         }
-        let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
+        let fee = compute_nexus_fee_amount(cfg, tx_bytes_len, instruction_count, gas_used)?;
         if fee.is_zero() {
             return Ok(());
         }
@@ -5855,7 +5860,7 @@ impl Executor {
         };
         let asset_def = match root_fees::currency(
             &state_transaction.world,
-            &cfg,
+            cfg,
             state_transaction.block_unix_timestamp_ms(),
         ) {
             Ok(asset) => asset,
@@ -5886,7 +5891,7 @@ impl Executor {
             sponsor,
             &asset_def,
             &fee,
-            &cfg,
+            cfg,
             tx_bytes_len,
             instruction_count,
             gas_used,
@@ -6338,7 +6343,7 @@ impl Executor {
             entry_index,
         }))
     }
-    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     fn execute_metered_instructions(
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
@@ -6594,7 +6599,7 @@ impl Executor {
                             self.execute_instruction_with_contract_runtime_context(
                                 state_transaction,
                                 &queued.authority,
-                                instruction,
+                                &instruction,
                                 queued.contract_runtime_context.as_ref(),
                             )?;
                         }
@@ -6754,7 +6759,7 @@ impl Executor {
                     state_transaction.arm_direct_parliament_candidate_testing(
                         transaction,
                         authority,
-                        &isi,
+                        isi,
                         index,
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     );
@@ -6978,13 +6983,13 @@ impl Executor {
         trigger_context: Option<(&TriggerId, u64)>,
         mut attachment_frame: Option<attachment_custody::ContractCustody<'_, '_>>,
     ) -> Result<ContractInvocationOutcome, ValidationFail> {
+        // A contract frame cannot inherit a native instruction's signed ordinal.
+        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         if let Some(frame) = attachment_frame.as_mut() {
             frame.require_original_call(call).map_err(|error| {
                 attachment_direct::custody_validation_error(state_transaction, error)
             })?;
         }
-        // A contract frame cannot inherit a native instruction's signed ordinal.
-        use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
         state_transaction.current_direct_privacy_instruction_index = None;
         state_transaction.clear_direct_parliament_candidate_testing();
         state_transaction.current_direct_sccp_forgery = false;
@@ -7197,7 +7202,7 @@ impl Executor {
         let validation_outcome = crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             state_transaction,
             runtime_origin,
         )
@@ -7210,7 +7215,8 @@ impl Executor {
         if validation_outcome == crate::validation_fee::OpaqueDeferredValidationOutcome::NoOp {
             return Ok(ContractInvocationOutcome {
                 gas_used,
-                executed_instructions: Default::default(),
+                executed_instructions:
+                    crate::smartcontracts::ivm::host::ExecutedHostInstructions::default(),
                 next_nft_sequence,
             });
         }
@@ -7524,6 +7530,17 @@ impl Executor {
     ) -> Result<(), ValidationFail> {
         #[cfg(test)]
         signed_source_observation::record(transaction);
+        // The first instruction-dependent step (`specs/live_runtime_upgrades.md` §5.2): every
+        // release stops at the same top-level envelope execution can never apply (unbound, or
+        // kept opaque), before scope, fee, privacy, ballot or any other work that depends on what
+        // an instruction is. Transaction validation already walked the same envelopes against the
+        // same selection (`StateBlock::execute_signed_transaction_in_overlay`); this keeps the
+        // guarantee for every caller of the executor.
+        crate::runtime::envelope::admit_envelopes(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            transaction.instructions(),
+        )?;
         root_scope::ensure_executable_scope(state_transaction, transaction.instructions())?;
         state_transaction.bind_privacy_transaction_intent_v1(None);
         state_transaction.bind_private_settlement_carrier_v1(None);
@@ -7539,7 +7556,7 @@ impl Executor {
         let privacy_intent_binding =
             crate::privacy::signed_privacy_transaction_intent_binding_v1(transaction)?;
         state_transaction.bind_privacy_transaction_intent_v1(privacy_intent_binding);
-        state_transaction.bind_privacy_transaction_source_v1(&transaction)?;
+        state_transaction.bind_privacy_transaction_source_v1(transaction)?;
         let private_settlement_carrier_binding =
             crate::private_settlement::carrier::signed_private_settlement_carrier_binding_v1(
                 transaction,
@@ -7935,7 +7952,7 @@ impl Executor {
                 } else {
                     gas_limit_md
                 };
-                let explicit_instructions = AuthoredBatchInstructions::new(items.as_ref());
+                let explicit_instructions = AuthoredBatchInstructions::new(items);
                 let explicit_gas = explicit_instructions
                     .clone()
                     .try_fold(0_u64, |total, instruction| {
@@ -8559,12 +8576,12 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
     ) -> Result<(), ValidationFail> {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             InstructionExecutionProfile::Runtime,
             None,
         )
@@ -8575,7 +8592,7 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         if contract_runtime_context.is_some() {
@@ -8584,7 +8601,7 @@ impl Executor {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             InstructionExecutionProfile::Runtime,
             contract_runtime_context,
         )
@@ -8620,13 +8637,13 @@ impl Executor {
         &self,
         state_transaction: &mut StateTransaction<'_, '_>,
         authority: &AccountId,
-        instruction: InstructionBox,
+        instruction: &InstructionBox,
         profile: InstructionExecutionProfile,
     ) -> Result<(), ValidationFail> {
         self.execute_instruction_with_profile_and_contract_runtime_context(
             state_transaction,
             authority,
-            &instruction,
+            instruction,
             profile,
             None,
         )
@@ -8681,6 +8698,19 @@ impl Executor {
         if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_)) {
             state_transaction.clear_direct_parliament_candidate_testing();
         }
+        // Resolution comes before any check that depends on what the instruction is: an
+        // envelope execution can never apply (an unbound wire ID, or one this release kept
+        // opaque) is refused with the same stable rejection by every release and every executor,
+        // and a restriction or containment holds on every path below, including the controlled
+        // lock, linked-FI and multisig paths that bypass the native dispatch table
+        // (`specs/live_runtime_upgrades.md` §5.2, §7.1).
+        crate::runtime::envelope::resolve_envelope(
+            state_transaction.world.runtime_selection.get(),
+            state_transaction.block_height(),
+            instruction,
+            || crate::runtime::obligations::step(instruction, &state_transaction.world),
+        )
+        .map_err(ValidationFail::InstructionFailed)?;
         root_scope::ensure_instruction_scope(instruction, state_transaction)?;
         ensure_contract_deployment_permission_mutation_allowed(
             state_transaction,
@@ -9222,6 +9252,7 @@ impl Executor {
     /// # Errors
     ///
     /// - The caller is outside initial genesis and does not hold `CanUpgradeExecutor`;
+    /// - A live escrow or lock still needs the installed executor's settlement authority;
     /// - Failed to load `raw_executor`;
     /// - Failed to prepare the IVM runtime;
     /// - Failed to execute the entrypoint of the IVM bytecode.
@@ -9241,6 +9272,15 @@ impl Executor {
                 .map_err(|_| ExecutorMigrationError::Rejected(VMError::PermissionDenied))?
         {
             return Err(ExecutorMigrationError::Rejected(VMError::PermissionDenied));
+        }
+        // A replacement can deny the original completion instructions or delete their
+        // permissions when its data model is installed. Even identical bytecode reruns
+        // migration and can change those permissions. Every live obligation (escrow, lock or
+        // AMX participation) keeps the authorization it was admitted under. TODO(§7.2): permit
+        // replacement only through captured completion executor authority or a certified
+        // obligation transfer.
+        if !crate::runtime::obligations::LiveObligations::of(&state_transaction.world).is_empty() {
+            return Err(ExecutorMigrationError::LiveCustody);
         }
         // Load new executor bytecode
         let loaded_executor = LoadedExecutor::load(raw_executor).map_err(|error| {

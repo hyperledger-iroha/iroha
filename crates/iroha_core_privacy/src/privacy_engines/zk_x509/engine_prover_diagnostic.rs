@@ -781,10 +781,21 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
         if let Some(staging) = staging {
             let fft = staging.fft();
             record(format!(
-                "metal_fft_staging_batches={}\nmetal_fft_flatten_seconds={:.6}\nmetal_fft_wait_seconds={:.6}",
+                concat!(
+                    "metal_fft_staging_batches={}\nmetal_fft_flatten_seconds={:.6}\n",
+                    "metal_fft_wait_seconds={:.6}\nmetal_fft_timestamped_commands={}\n",
+                    "metal_fft_gpu_execution_seconds={:.6}\n",
+                    "metal_fft_cpu_driver_scheduling_seconds={:.6}\n",
+                    "metal_fft_pre_gpu_queue_seconds={:.6}\n",
+                    "metal_fft_timing_scope=successful-command-intervals-not-additive",
+                ),
                 fft.batches,
                 fft.flatten_ms / 1_000.0,
                 fft.wait_ms / 1_000.0,
+                fft.timestamped_commands,
+                fft.gpu_execution_ms / 1_000.0,
+                fft.cpu_driver_scheduling_ms / 1_000.0,
+                fft.pre_gpu_queue_ms / 1_000.0,
             ));
         }
     }
@@ -797,11 +808,10 @@ fn complete_credential_proof_with_retained_public_receipt_v1(maximum_shape: bool
     }
     let observation = observation.finish_v1();
     record(observation.public_text_v1());
-    // TODO: X.3 owns the complete X509 run under scripts/zk_resource_harness.py
-    // and the phases that close the remaining attribution gap. The last
-    // retained maximum receipt left about 4.45% of the proving time outside
-    // every top-level phase, so this record is expected to report
-    // `phase_tree_within_one_percent=false` until those phases exist.
+    // TODO: X.3 owns a complete current-candidate X509 run under
+    // scripts/zk_resource_harness.py. The added phase owners have focused
+    // coverage; only the complete invocation can establish the one-percent
+    // attribution bound and the unchanged time and memory requirements.
     record(
         retain_phase_tree_v1(
             &directory,
@@ -965,6 +975,10 @@ fn holder_refusal_category_v1(
 
 // A fresh diagnostic directory may contain only one real encoded candidate.
 // The existing reader checks its exact digest name, file kind and byte cap.
+#[expect(
+    clippy::case_sensitive_file_extension_comparisons,
+    reason = "only the exact lowercase names this diagnostic writes are candidates"
+)]
 fn read_single_public_candidate_v1(directory: &Path) -> io::Result<Vec<u8>> {
     let mut candidate = None;
     for entry in fs::read_dir(directory)? {
@@ -1150,7 +1164,7 @@ fn ordinary_holder_lifecycle_with_retained_public_receipt() {
     let trusted_block_timestamp_ms =
         reference.statement.presentation_not_before_unix_seconds * 1_000;
     let fixture = build_zk_x509_network_release_fixture_v1(
-        reference.statement.context.clone(),
+        reference.statement.context,
         trusted_block_timestamp_ms,
         reference.statement.wallet_account.clone(),
     )

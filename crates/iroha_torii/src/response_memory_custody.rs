@@ -180,7 +180,7 @@ fn impossible(error: std::convert::Infallible) -> axum::Error {
 /// Exact wrappers for the closed, single-buffer native finality response.
 /// The original encoded owner and the extracted data-frame wrapper coexist;
 /// cloning or slicing either `Bytes` retains those same controls.
-pub(crate) fn native_response_control_bytes() -> Option<usize> {
+pub fn native_response_control_bytes() -> Option<usize> {
     type Source = http_body_util::combinators::MapErr<
         Full<axum::body::Bytes>,
         fn(std::convert::Infallible) -> axum::Error,

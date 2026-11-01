@@ -863,6 +863,10 @@ mod tests {
         statement: VegaExistingCredentialStatementV1,
         witness: VegaMdlWitnessV1,
     }
+    #[expect(
+        clippy::decimal_bitwise_operands,
+        reason = "intentional test notation: RFC 8949 spells additional information 24..=27 in decimal"
+    )]
     fn cbor_head(major: u8, argument: u64) -> Vec<u8> {
         let mut encoded = Vec::new();
         match argument {
@@ -1342,7 +1346,7 @@ mod tests {
             let (r, s) = low_s.split_scalars();
             let high_s = Signature::from_scalars(r.to_repr(), (-*s).to_repr())
                 .expect("high-s counterpart remains a valid scalar pair");
-            assert!(high_s.normalize_s() != high_s);
+            assert_ne!(high_s.normalize_s(), high_s);
             **signature_bytes = high_s.to_bytes().into();
             assert_eq!(
                 validate_mdl_witness(

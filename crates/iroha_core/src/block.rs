@@ -2587,11 +2587,8 @@ mod input_clock_tests {
             Some(Duration::from_millis(1))
         );
         assert_eq!(
-            creation_time_after_inputs(
-                Duration::from_millis(20_000),
-                [&external, &reveal, &sealed]
-            ),
-            Some(Duration::from_millis(20_000))
+            creation_time_after_inputs(Duration::from_secs(20), [&external, &reveal, &sealed]),
+            Some(Duration::from_secs(20))
         );
     }
 
@@ -6457,7 +6454,7 @@ pub(crate) mod valid {
                 if is_genesis_block {
                     if let Some(Err(fail)) = prechecked_signature_result {
                         return Some(BlockValidationError::from(
-                            AcceptedTransaction::signature_admission_failure(tx, fail),
+                            AcceptedTransaction::signature_admission_failure(tx, &fail),
                         ));
                     }
                     return AcceptedTransaction::validate_genesis_with_now(
@@ -9432,8 +9429,8 @@ mod event {
                 return None;
             }
             BlockValidationError::TransactionAccept(fail) => match fail {
-                AcceptTransactionFail::AnonymousBallotUnavailable => return None,
-                AcceptTransactionFail::CryptoImplementationUnavailable(_) => return None,
+                AcceptTransactionFail::AnonymousBallotUnavailable
+                | AcceptTransactionFail::CryptoImplementationUnavailable(_) => return None,
                 AcceptTransactionFail::TransactionLimit(_)
                 | AcceptTransactionFail::SignedAttachments(_)
                 | AcceptTransactionFail::SignatureVerification(_)
@@ -10052,11 +10049,11 @@ pub(crate) mod tests {
         require_height_ttl: bool,
         require_sequence: bool,
     ) -> State {
+        use iroha_data_model::parameter::{Parameter, TransactionParameter};
         let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = Domain::new(domain_id).build(authority);
         let account = Account::new(authority.clone()).build(authority);
         let mut world = World::with([domain], [account], []);
-        use iroha_data_model::parameter::{Parameter, TransactionParameter};
         world
             .set_parameter_for_testing(Parameter::Transaction(
                 TransactionParameter::RequireHeightTtl(require_height_ttl),

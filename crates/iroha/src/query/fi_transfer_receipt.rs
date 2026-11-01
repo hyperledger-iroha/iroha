@@ -26,7 +26,7 @@ impl Client {
     /// noncanonical media/encoding, incomplete results and changed network or key.
     pub fn get_asset_fi_transfer_receipt(
         &self,
-        query: FindAssetFiTransferReceiptV1,
+        query: &FindAssetFiTransferReceiptV1,
         maximum_bytes: usize,
     ) -> Result<Option<AssetFiTransferReceiptV1>, QueryError> {
         if maximum_bytes == 0 || maximum_bytes > MAX_RESPONSE_BYTES {
@@ -55,7 +55,7 @@ impl Client {
                 .assemble_canonical_norito_body_at(body.clone(), &route)
                 .max_response_bytes(maximum_bytes))
         })?;
-        decode_receipt_response(&response, &query, self.network_id, maximum_bytes)
+        decode_receipt_response(&response, query, self.network_id, maximum_bytes)
     }
 }
 

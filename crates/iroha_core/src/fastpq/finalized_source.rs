@@ -163,7 +163,7 @@ impl FinalizedFastpqSource {
         reason = "TODO(P.1): current physical-observation consumer integration remains open"
     )
 )]
-pub(crate) mod physical_transfer;
+pub mod physical_transfer;
 
 #[cfg(test)]
 mod tests;

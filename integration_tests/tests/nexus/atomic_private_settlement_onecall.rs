@@ -451,6 +451,7 @@ impl N3SdkFlow {
         }
         Ok(())
     }
+    #[cfg(unix)]
     pub(super) fn write_evidence(
         &self,
         root: &std::path::Path,

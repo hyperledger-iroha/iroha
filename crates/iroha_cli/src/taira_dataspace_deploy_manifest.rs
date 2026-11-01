@@ -158,7 +158,7 @@ pub(super) fn test_trust() -> finality::TrustV1 {
     use iroha_crypto::Hash;
     use norito::codec::Encode as _;
 
-    let (block, key) = crate::taira_public_reset::deployment_lane_genesis_fixture();
+    let (block, key) = crate::deployment_genesis_fixture::deployment_lane_genesis_fixture();
     let validators = iroha_genesis::signed_genesis_validator_pops(&block).unwrap();
     finality::TrustV1 {
         chain: "fc56984b-2be7-431d-840e-21514d1883f0".into(),

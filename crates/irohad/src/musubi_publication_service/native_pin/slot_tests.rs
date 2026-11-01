@@ -267,7 +267,8 @@ fn held_slot_inspection_refuses_missing_or_replaced_request_and_extraneous_later
         "retired.json",
     ] {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("held");
+        // Slots retain their resolved journal path; avoid macOS `/var` -> `/private/var`.
+        let path = root.path().canonicalize().unwrap().join("held");
         let (_, request, _) = fixture();
         let slot = Slot::create(&path, request).unwrap();
         slot.require_path(&path).unwrap();
@@ -299,7 +300,8 @@ fn held_slot_inspection_refuses_missing_or_replaced_request_and_extraneous_later
 #[test]
 fn held_slot_inspection_preserves_pending_signature_but_refuses_lost_persisted_original() {
     let root = tempfile::tempdir().unwrap();
-    let path = root.path().join("held");
+    // Slots retain their resolved journal path; avoid macOS `/var` -> `/private/var`.
+    let path = root.path().canonicalize().unwrap().join("held");
     let (key, request, payload) = fixture();
     let mut slot = Slot::create(&path, request).unwrap();
     slot.retain_payload(&payload).unwrap();
@@ -339,7 +341,8 @@ fn held_slot_inspection_preserves_pending_signature_but_refuses_lost_persisted_o
 fn held_exposed_slot_revalidates_exact_signature_and_submission_bytes() {
     for name in ["operation.json", "submission.json", "payload.json"] {
         let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("held");
+        // Slots retain their resolved journal path; avoid macOS `/var` -> `/private/var`.
+        let path = root.path().canonicalize().unwrap().join("held");
         let (key, request, payload) = fixture();
         let mut slot = Slot::create(&path, request).unwrap();
         slot.retain_payload(&payload).unwrap();

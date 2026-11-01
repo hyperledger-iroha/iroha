@@ -184,7 +184,6 @@ pub(super) fn plan(
             (offender.lane_id, &offender.validator),
             original.key,
             amount.get(),
-            header.creation_time_ms,
             &liability,
             share_keys,
         )

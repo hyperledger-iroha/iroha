@@ -819,8 +819,8 @@ fn state_certificate_signed_availability_scratch_uses_original_query_allowance()
         norito::core::with_decode_limits_scope(
             norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, limit, 128),
             || {
-                verify_availability(
-                    &current,
+                verify_availability_source(
+                    CertificateSource::Original(&current),
                     &config,
                     &authority.crypto,
                     Some((table.clone(), bytes.clone())),

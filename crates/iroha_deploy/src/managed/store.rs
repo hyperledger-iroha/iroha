@@ -1099,12 +1099,12 @@ fn open_log(
     match directory.open_read(log_name) {
         Ok(file) => Ok(file),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            Err(Error::Invalid(match peer {
-                Some(index) => {
+            Err(Error::Invalid(peer.map_or_else(
+                || "the supervisor has not written a log yet".into(),
+                |index| {
                     format!("validator {index} has not written a log yet; it may not have started")
-                }
-                None => "the supervisor has not written a log yet".into(),
-            }))
+                },
+            )))
         }
         Err(error) => Err(error.into()),
     }

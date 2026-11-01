@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 iroha_derive = { workspace = true }
+iroha_fs = { workspace = true }
 zeroize = { workspace = true }
 
 drop_bomb = { workspace = true }

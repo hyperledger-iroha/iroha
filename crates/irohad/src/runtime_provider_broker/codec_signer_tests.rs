@@ -4,14 +4,14 @@ fn assert_broker_frame_owner<T>(value: &T, owner: &str, limit: usize)
 where
     T: NoritoSerialize + for<'de> NoritoDeserialize<'de>,
 {
-    assert!(T::nominal_name() == owner);
-    assert!(T::frame_name() == owner);
+    assert_eq!(T::nominal_name(), owner);
+    assert_eq!(T::frame_name(), owner);
     let encoded = encode_sensitive_canonical(value, limit).expect("encode current broker owner");
     let view = norito::core::from_bytes_view(&encoded).expect("valid broker frame header");
-    assert!(view.schema() == norito::schema::identity::frame_hash::<T>());
+    assert_eq!(view.schema(), norito::schema::identity::frame_hash::<T>());
     let decoded: T = decode_canonical(&encoded, limit).expect("decode current broker owner");
     let roundtrip = encode_sensitive_canonical(&decoded, limit).expect("re-encode broker owner");
-    assert!(encoded.as_slice() == roundtrip.as_slice());
+    assert_eq!(encoded.as_slice(), roundtrip.as_slice());
     let mut substituted = ScrubbedBytes::new(encoded.to_vec());
     substituted[6] ^= 1;
     assert!(matches!(
@@ -75,21 +75,21 @@ fn broker_same_payload_request_and_result_owners_reject_substitution() {
             .expect("encode sign result");
     let issuer_bytes = encode_sensitive_canonical(&issuer, MAX_GOVERNANCE_SIGNING_FRAME_BYTES_V1)
         .expect("encode issuer result");
-    assert!(
+    assert_eq!(
         norito::core::from_bytes_view(&sign_bytes)
             .expect("sign payload")
+            .as_bytes(),
+        norito::core::from_bytes_view(&lookup_bytes)
+            .expect("lookup payload")
             .as_bytes()
-            == norito::core::from_bytes_view(&lookup_bytes)
-                .expect("lookup payload")
-                .as_bytes()
     );
-    assert!(
+    assert_eq!(
         norito::core::from_bytes_view(&signature_bytes)
             .expect("signature payload")
+            .as_bytes(),
+        norito::core::from_bytes_view(&issuer_bytes)
+            .expect("issuer payload")
             .as_bytes()
-            == norito::core::from_bytes_view(&issuer_bytes)
-                .expect("issuer payload")
-                .as_bytes()
     );
     assert!(matches!(
         decode_canonical::<BillingSignDigestRequestWireV1>(

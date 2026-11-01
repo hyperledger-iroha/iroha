@@ -982,7 +982,7 @@ pub fn sccp_genesis_instruction(reset_nonce: [u8; 32]) -> Result<InstructionBox>
 ///
 /// # Errors
 /// Returns an error when the OS CSPRNG fails.
-pub(crate) fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
+pub fn fresh_sccp_reset_nonce() -> Result<[u8; 32]> {
     use rand::rand_core::TryRng as _;
     let mut nonce = [0_u8; 32];
     rand::rngs::SysRng

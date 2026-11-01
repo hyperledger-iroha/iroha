@@ -579,11 +579,19 @@ pub struct RequiredHostProfiles(std::sync::RwLock<HostProfileSet>);
 impl RequiredHostProfiles {
     /// A process-lifetime cell holding `initial`.
     #[must_use]
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the leaked cell stores the set it is handed"
+    )]
     pub fn leak(initial: HostProfileSet) -> &'static Self {
         Box::leak(Box::new(Self(std::sync::RwLock::new(initial))))
     }
 
     /// Replace the requirement once the committed selection changed.
+    #[expect(
+        clippy::large_types_passed_by_value,
+        reason = "the cell stores the replacement set it is handed"
+    )]
     pub fn set(&self, required: HostProfileSet) {
         *self
             .0
@@ -627,8 +635,10 @@ mod host_profile_set_tests {
         let mut padded = HostProfileSet::new([[1; 32]]).expect("set");
         padded.ids[3] = [9; 32];
         assert!(!padded.is_canonical());
-        let mut overlong = HostProfileSet::default();
-        overlong.len = u8::MAX;
+        let overlong = HostProfileSet {
+            len: u8::MAX,
+            ..HostProfileSet::default()
+        };
         assert!(!overlong.is_canonical());
         assert!(overlong.as_slice().is_empty());
         let encoded = HostProfileSet::new([[5; 32]]).expect("set").encode();

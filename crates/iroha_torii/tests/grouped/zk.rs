@@ -1,5 +1,10 @@
 //! Grouped Torii ZK endpoint integration tests.
 
+#[path = "../../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;
+#[path = "../fixtures.rs"]
+mod fixtures;
+
 #[path = "../zk_attachments_filters_integration.rs"]
 mod zk_attachments_filters_integration;
 #[path = "../zk_attachments_integration.rs"]

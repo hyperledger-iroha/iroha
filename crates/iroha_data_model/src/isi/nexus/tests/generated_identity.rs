@@ -266,10 +266,18 @@ fn retired_lane_relay_instruction_frames_have_no_builtin_decoder() {
                 Err(norito::Error::Message(message)) if message == "unknown instruction wire identifier")
             );
             if let Some(carrier) = case.get("instruction_frame") {
+                // A retired wire ID is unknown to this release: its envelope decodes only
+                // as an opaque envelope, never as a typed instruction
+                // (specs/live_runtime_upgrades.md §5.2).
                 let bytes = hex::decode(carrier.as_str().unwrap()).unwrap();
-                if let Ok(value) = norito::decode_from_bytes::<InstructionBox>(&bytes) {
-                    assert!(value.as_any().is::<crate::isi::InvalidInstruction>());
-                }
+                let value = norito::decode_from_bytes::<InstructionBox>(&bytes)
+                    .expect("a retired envelope decodes as an opaque envelope");
+                assert_eq!(
+                    value
+                        .as_opaque()
+                        .map(crate::isi::OpaqueInstructionV1::wire_id),
+                    Some(wire_id)
+                );
             }
         }
     }

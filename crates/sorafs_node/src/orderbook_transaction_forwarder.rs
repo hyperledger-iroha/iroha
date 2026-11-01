@@ -2070,6 +2070,18 @@ mod tests {
     };
     use std::{fs, sync::Arc, thread, time::Duration};
     use tempfile::TempDir;
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn policy() -> OrderbookTransactionForwarderPolicyV1 {
         OrderbookTransactionForwarderPolicyV1 {
             max_pending: 8,
@@ -2541,7 +2553,7 @@ mod tests {
         let matcher = key(10);
         let settlement = key(11);
         let context = context(&matcher, &settlement, 13, cursor(30, 0xA5));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         let signing_id = {
             let forwarder = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
             let operation_id = forwarder
@@ -2557,7 +2569,7 @@ mod tests {
         assert_eq!(pending[0].state, OrderbookTransactionDeliveryStateV1::Ready);
         assert_eq!(pending[0].attempts, 1);
         drop(recovered);
-        let second = TempDir::new().unwrap();
+        let second = private_state_tempdir().unwrap();
         let (ambiguous_id, exact) = {
             let forwarder = OrderbookTransactionForwarder::open(second.path(), policy()).unwrap();
             let operation_id = forwarder
@@ -2589,7 +2601,7 @@ mod tests {
         let matcher = key(26);
         let settlement = key(27);
         let context = context(&matcher, &settlement, 14, cursor(35, 0xB3));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         let operation_id = {
             let forwarder = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
             let operation_id = forwarder
@@ -2624,7 +2636,7 @@ mod tests {
         let matcher = key(12);
         let settlement = key(13);
         let context = context(&matcher, &settlement, 15, cursor(40, 0xA6));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         let operation = match_operation(&context);
         let exact = signed_operation(&matcher, operation, 30);
         let operation_id = {
@@ -2704,7 +2716,7 @@ mod tests {
         let matcher = key(16);
         let settlement = key(17);
         let context = context(&matcher, &settlement, 19, cursor(60, 0xAD));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         {
             let forwarder = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
             forwarder
@@ -2720,7 +2732,7 @@ mod tests {
             OrderbookTransactionForwarder::open(temp.path(), policy()),
             Err(OrderbookTransactionForwarderError::InvalidCheckpoint)
         ));
-        let oversized = TempDir::new().unwrap();
+        let oversized = private_state_tempdir().unwrap();
         fs::create_dir_all(oversized.path()).unwrap();
         let mut restrictive = policy();
         restrictive.checkpoint_max_bytes = 32;
@@ -2742,7 +2754,7 @@ mod tests {
         let settlement = key(25);
         let first_context = context(&matcher, &settlement, 22, cursor(80, 0xB2));
         let second_context = context(&matcher, &settlement, 23, cursor(80, 0xB2));
-        let temp = TempDir::new().unwrap();
+        let temp = private_state_tempdir().unwrap();
         let first = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
         let stale = OrderbookTransactionForwarder::open(temp.path(), policy()).unwrap();
         first
@@ -2818,7 +2830,7 @@ mod tests {
     fn persisted_checkpoint_and_operation_frames_use_distinct_declared_identities() {
         let context = context(&key(1), &key(2), 7, cursor(10, 0xA1));
         let operation = match_operation(&context);
-        let directory = TempDir::new().unwrap();
+        let directory = private_state_tempdir().unwrap();
         let forwarder = OrderbookTransactionForwarder::open(directory.path(), policy()).unwrap();
         let id = forwarder
             .enqueue_unsigned_operation(operation.clone(), &context)

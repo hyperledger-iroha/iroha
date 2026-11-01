@@ -16,7 +16,6 @@ use crate::{
         live_proposal_instructions_for_approval, multisig_instruction_decode_attempt,
     },
     state::StateTransaction,
-    tx::TransactionRejectionReason,
 };
 use core::fmt;
 use iroha_data_model::{
@@ -89,28 +88,6 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
     }
 }
 
-/// Reject committee preparation, monetary staking and SCCP outbound records derived by opaque
-/// deferred groups.
-///
-/// Deferred multisig approvals are resolved against this execution overlay, so a live
-/// proposal cannot smuggle a command that its signers never reviewed as an instruction.
-///
-/// # Errors
-/// Any nested committee, monetary staking or `RecordSccpMessage` instruction, an unresolved
-/// approval, or an excessively deep proposal graph.
-pub fn reject_opaque_deferred_authority(
-    instruction_groups: &std::collections::BTreeMap<AccountId, Vec<InstructionBox>>,
-    state_transaction: &StateTransaction<'_, '_>,
-) -> Result<(), Attempt<TransactionRejectionReason>> {
-    reject_opaque_instruction_authority(
-        instruction_groups
-            .values()
-            .flat_map(|instructions| instructions.iter()),
-        state_transaction,
-    )
-    .map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))
-}
-
 /// Validate the actual effects produced by an opaque host or verified replay.
 ///
 /// Borrow the original ordered effects so every consumption boundary applies the
@@ -119,10 +96,6 @@ pub fn reject_opaque_deferred_authority(
 /// # Errors
 /// Rejects nested committee, monetary staking or `RecordSccpMessage` instructions,
 /// unresolved live multisig approvals, and proposal graphs exceeding the traversal bound.
-#[expect(
-    single_use_lifetimes,
-    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
-)]
 pub fn reject_opaque_instruction_authority<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     state_transaction: &StateTransaction<'_, '_>,
@@ -152,7 +125,7 @@ fn monetary_staking_wire_id(instruction: &InstructionBox) -> Option<&'static str
     macro_rules! classify {
         ($($ty:ty),+ $(,)?) => {$(
             if instruction.as_any().downcast_ref::<$ty>().is_some() {
-                return iroha_data_model::isi::instruction_wire_id(instruction);
+                return iroha_data_model::isi::wire_id_of::<$ty>();
             }
         )+};
     }
@@ -236,10 +209,6 @@ fn executable_derives_sccp_outbound_record(executable: &Executable, depth: usize
     }
 }
 
-#[expect(
-    single_use_lifetimes,
-    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
-)]
 fn instructions_derive_sccp_outbound_record<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     depth: usize,
@@ -268,10 +237,6 @@ fn instructions_derive_sccp_outbound_record<'a>(
     })
 }
 
-#[expect(
-    single_use_lifetimes,
-    reason = "Rust 1.93 requires a named lifetime for reference items in impl IntoIterator bounds"
-)]
 fn reject_opaque_committee_operations_with<'a, F>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     visited: &mut std::collections::BTreeSet<String>,
@@ -454,6 +419,32 @@ mod tests {
             0,
             &mut |_| Ok(proposal.map(|body| (iroha_test_samples::ALICE_ID.clone(), body.to_vec()))),
         )
+    }
+
+    #[test]
+    fn envelopes_kept_opaque_are_no_deferred_authority_operation() {
+        // An envelope this release keeps opaque is none of this release's staking, committee or
+        // SCCP operations; execution refuses it as `definition_inactive`
+        // (`specs/live_runtime_upgrades.md` §5.2).
+        let opaque: InstructionBox = iroha_data_model::isi::OpaqueInstructionV1::new(
+            "test.unreleased.instruction.v1",
+            vec![0xA5; 8],
+        )
+        .expect("well-formed wire id")
+        .into();
+        assert_eq!(monetary_staking_wire_id(&opaque), None);
+        assert_eq!(monetary_staking_wire_id(&log("ordinary")), None);
+        for instructions in [
+            vec![log("first"), opaque.clone()],
+            vec![propose(vec![opaque.clone()])],
+            vec![register_by_call_trigger("opaque_body", vec![opaque])],
+        ] {
+            assert_eq!(
+                check(&instructions, None)
+                    .map_err(crate::execution_attempt::expect_completed_rejection),
+                Ok(())
+            );
+        }
     }
 
     #[test]

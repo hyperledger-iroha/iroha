@@ -247,7 +247,7 @@ mod tests {
             assert_eq!(encode_bytes, shape.encoded_bytes() + scratch_bytes);
             let budget = AllocationBudget::new(encode_bytes);
             let encoded = encode_funded(shape, &payload, &budget).unwrap();
-            assert!(encoded.codeword() == expected.as_slice());
+            assert_eq!(encoded.codeword(), expected.as_slice());
             assert!(encoded.belongs_to(&budget));
             assert_eq!(encoded.shape(), shape);
             assert_eq!(budget.peak_reserved_bytes(), encode_bytes);
@@ -271,15 +271,15 @@ mod tests {
             let restored =
                 reconstruct_funded(shape, &received, &budget, |index, row| row == row_of(index))
                     .unwrap();
-            assert!(restored.payload() == payload.as_slice());
-            assert!(restored.codeword() == expected.as_slice());
+            assert_eq!(restored.payload(), payload.as_slice());
+            assert_eq!(restored.codeword(), expected.as_slice());
             assert!(restored.belongs_to(&budget));
             assert_eq!(restored.shape(), shape);
             assert_eq!(budget.peak_reserved_bytes(), reconstruct_bytes);
             assert_eq!(budget.reserved_bytes(), shape.encoded_bytes() + len);
             let owner = restored.into_payload();
             assert_eq!(budget.reserved_bytes(), len);
-            assert!(owner.as_slice() == payload.as_slice());
+            assert_eq!(owner.as_slice(), payload.as_slice());
             drop(owner);
             assert_eq!(budget.reserved_bytes(), 0);
             assert!(matches!(

@@ -35,7 +35,7 @@ use norito::{
     codec::Encode,
     json::{self, JsonDeserialize, JsonSerialize, Map, Number, Value},
 };
-use sha2::{Digest as ShaDigest, Sha256};
+use sha2::Sha256;
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 #[cfg(windows)]

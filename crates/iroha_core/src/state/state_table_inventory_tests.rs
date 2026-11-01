@@ -518,10 +518,7 @@ const ROOTS: &[Root] = &[
             r"iroha:world-state:profile:lthash16:v1\0",
             r"iroha:world-state:root:v1\0",
             r"iroha:world-state:schema:field:v1\0",
-            r"iroha:world-state:schema:no-key:v1\0",
             r"iroha:world-state:schema:selection:v1\0",
-            r"iroha:world-state:schema:start:v1\0",
-            r"iroha:world-state:schema:value:v1\0",
         ],
         evidence: &[
             (
@@ -1940,6 +1937,14 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
         owner: UseOwner::Roots(&["execution_witness_roots"]),
     },
     ConstructionUse {
+        path: "crates/iroha_core/src/sumeragi/node/replay/check.rs",
+        uses: &[("MerkleTree", 2)],
+        owner: UseOwner::Other(
+            Use::Name,
+            "The replay check renders the root and leaf count of a certified result's Merkle commitments in its divergence report: it builds no tree and computes no root",
+        ),
+    },
+    ConstructionUse {
         path: "crates/iroha_core/src/telemetry.rs",
         uses: &[("ConfidentialTree", 5)],
         owner: UseOwner::Accumulator("confidential_note_tree"),
@@ -2046,7 +2051,7 @@ const CONSTRUCTION_USES: &[ConstructionUse] = &[
     },
     ConstructionUse {
         path: "crates/iroha_data_model/src/kaigi.rs",
-        uses: &[("MerkleTree", 2)],
+        uses: &[("MerkleTree", 3)],
         owner: UseOwner::Accumulator("kaigi_roster_root"),
     },
     ConstructionUse {

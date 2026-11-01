@@ -66,7 +66,10 @@ async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
     assert_eq!(resp.status(), http::StatusCode::OK);
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
     let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    assert_eq!(v.get("ok").and_then(|x| x.as_bool()), Some(true));
+    assert_eq!(
+        v.get("ok").and_then(norito::json::native::Value::as_bool),
+        Some(true)
+    );
     let statuses = v
         .get("statuses")
         .and_then(|x| x.as_array())

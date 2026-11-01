@@ -12,6 +12,10 @@ pub mod authenticated_genesis;
 pub mod beacon_bootstrap;
 /// Read-only `--check-config --json` and `--check-storage` compatibility probes.
 mod compatibility_probe;
+/// The supervising parent owns the stdin pipe until graceful shutdown.
+#[path = "main/input_close.rs"]
+mod input_close;
+use input_close::spawn_input_close_shutdown;
 /// Field-level explanation of a signed genesis policy mismatch for `--check-config`.
 mod genesis_policy_diagnostics;
 /// Iroha server command-line interface and node bootstrap entrypoint.
@@ -28,6 +32,8 @@ mod panic_recovery;
 /// Synchronizes peer-gossip voter authority with the committed validator roster.
 #[path = "main/peers_gossiper_topology_sync.rs"]
 mod peers_gossiper_topology_sync;
+/// `--check-replay`: replay a copy of the stopped node's store with this build.
+mod replay_check;
 /// Platform-fixed local runtime-provider broker used by the stock launcher.
 mod runtime_provider_broker;
 /// Deployment-owned runtime-provider registry boundary for the standard launcher.
@@ -178,7 +184,7 @@ use startup_artifact::{
     read_genesis_unlocked_with_bytes,
 };
 #[cfg(target_os = "windows")]
-use std::os::windows::{ffi::OsStrExt, fs::MetadataExt as _};
+use std::os::windows::fs::MetadataExt as _;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -894,6 +900,16 @@ pub struct StartupArgs {
     /// `--check-config`).
     #[arg(long, conflicts_with = "check_config")]
     pub check_storage: bool,
+    /// Replay a copy of the stopped node's store with this build, print the result as one Norito
+    /// JSON object and exit nonzero when a block does not reproduce its certified result or the
+    /// store lacks a block body the replay needs.
+    ///
+    /// Opens the store read-only and takes its store-root lock as `--check-storage` does, copies
+    /// its blocks into a temporary directory, restores the newest snapshot there (or re-executes
+    /// signed genesis) and re-executes every later block. It never writes the store, the
+    /// snapshot directory or the tiered-state directory, and never opens runtime-only secrets.
+    #[arg(long, conflicts_with_all = ["check_config", "check_storage", "managed_listeners"])]
+    pub check_replay: bool,
     /// Require this registered account to retain `SoraCloud` deployment authority
     /// after executing the exact signed genesis during offline validation.
     #[arg(long, value_name = "ACCOUNT_ID", requires = "check_config")]
@@ -1020,6 +1036,8 @@ pub enum MainError {
     IrohaRun,
     /// `--check-storage` could not read the store or its snapshot restore dry run failed.
     CheckStorage,
+    /// `--check-replay` could not replay the store, or a replayed block diverged or lacked its body.
+    CheckReplay,
 }
 /// Read-only Torii adapter that refuses committed reputation reads whenever
 /// the supervised daemon is not ready.
@@ -1130,6 +1148,9 @@ impl std::fmt::Display for MainError {
             MainError::IrohaStart => "error.start",
             MainError::IrohaRun => "error.run",
             MainError::CheckStorage => "error.check_storage",
+            MainError::CheckReplay => {
+                return f.write_str("The node store failed the replay check with this build");
+            }
         };
         write!(f, "{}", i18n::t(key))
     }
@@ -4806,9 +4827,8 @@ impl Iroha {
                     iroha_logger::error!(?err, "Torii failed to terminate gracefully");
                     shutdown_on_failure.send();
                     std::process::exit(1);
-                } else {
-                    iroha_logger::debug!("Torii exited normally");
                 }
+                iroha_logger::debug!("Torii exited normally");
             }),
             OnShutdown::Wait(Duration::from_secs(5)),
         ));
@@ -6301,7 +6321,7 @@ fn insufficient_storage_headroom(
 }
 /// Basis points as a percentage, for operator messages.
 fn basis_points_percent(bps: u16) -> String {
-    if bps % 100 == 0 {
+    if bps.is_multiple_of(100) {
         format!("{}%", bps / 100)
     } else {
         format!("{}.{:02}%", bps / 100, bps % 100)
@@ -6633,9 +6653,7 @@ fn filesystem_identity(path: &Path) -> Option<String> {
 }
 #[cfg(target_os = "windows")]
 fn filesystem_identity(path: &Path) -> Option<String> {
-    let volume_mount_point = windows_volume_mount_point(path)?;
-    let volume_name = windows_volume_name_for_mount_point(&volume_mount_point)?;
-    Some(normalize_windows_volume_identity(&volume_name))
+    iroha_fs::windows::observe_volume_identity(path).ok()
 }
 #[cfg(unix)]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
@@ -6653,18 +6671,7 @@ fn statvfs_fragment_size(fragment_size: u64, block_size: u64) -> Option<u64> {
 }
 #[cfg(target_os = "windows")]
 fn filesystem_space(path: &Path) -> Option<(u64, u64)> {
-    let wide_path = windows_wide_path(path);
-    let mut free_bytes_available = 0_u64;
-    let mut total_bytes = 0_u64;
-    let ok = unsafe {
-        GetDiskFreeSpaceExW(
-            wide_path.as_ptr(),
-            &mut free_bytes_available,
-            &mut total_bytes,
-            std::ptr::null_mut(),
-        )
-    };
-    (ok != 0).then_some((free_bytes_available, total_bytes))
+    iroha_fs::windows::observe_volume_space(path).ok()
 }
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
@@ -6673,83 +6680,6 @@ fn filesystem_space(_path: &Path) -> Option<(u64, u64)> {
 #[cfg(not(any(unix, target_os = "windows")))]
 fn filesystem_identity(_path: &Path) -> Option<String> {
     None
-}
-#[cfg(any(target_os = "windows", test))]
-fn normalize_windows_volume_mount_point(volume_mount_point: &str) -> String {
-    let mut normalized = volume_mount_point.replace('/', "\\");
-    if !normalized.ends_with('\\') {
-        normalized.push('\\');
-    }
-    normalized
-}
-#[cfg(any(target_os = "windows", test))]
-fn normalize_windows_volume_identity(volume_name: &str) -> String {
-    let mut normalized = normalize_windows_volume_mount_point(volume_name);
-    normalized.make_ascii_lowercase();
-    format!("volume:{normalized}")
-}
-#[cfg(any(target_os = "windows", test))]
-fn windows_string_from_wide_buffer(buffer: &[u16]) -> Option<String> {
-    let end = buffer.iter().position(|&unit| unit == 0)?;
-    Some(String::from_utf16_lossy(&buffer[..end]))
-}
-#[cfg(target_os = "windows")]
-const WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN: usize = 32_768;
-#[cfg(target_os = "windows")]
-#[allow(non_snake_case)]
-unsafe extern "system" {
-    fn GetDiskFreeSpaceExW(
-        lp_directory_name: *const u16,
-        lp_free_bytes_available_to_caller: *mut u64,
-        lp_total_number_of_bytes: *mut u64,
-        lp_total_number_of_free_bytes: *mut u64,
-    ) -> i32;
-    fn GetVolumeNameForVolumeMountPointW(
-        lpsz_volume_mount_point: *const u16,
-        lpsz_volume_name: *mut u16,
-        cch_buffer_length: u32,
-    ) -> i32;
-    fn GetVolumePathNameW(
-        lpsz_file_name: *const u16,
-        lpsz_volume_path_name: *mut u16,
-        cch_buffer_length: u32,
-    ) -> i32;
-}
-#[cfg(target_os = "windows")]
-fn windows_wide_path(path: &Path) -> Vec<u16> {
-    path.as_os_str()
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
-#[cfg(target_os = "windows")]
-fn windows_wide_string(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(std::iter::once(0)).collect()
-}
-#[cfg(target_os = "windows")]
-fn windows_query_volume_string<F>(mut query: F) -> Option<String>
-where
-    F: FnMut(*mut u16, u32) -> i32,
-{
-    let mut buffer = vec![0_u16; WINDOWS_FILESYSTEM_PROBE_BUFFER_LEN];
-    (query(buffer.as_mut_ptr(), buffer.len() as u32) != 0)
-        .then(|| windows_string_from_wide_buffer(&buffer))
-        .flatten()
-}
-#[cfg(target_os = "windows")]
-fn windows_volume_mount_point(path: &Path) -> Option<String> {
-    let wide_path = windows_wide_path(path);
-    windows_query_volume_string(|buffer, len| unsafe {
-        GetVolumePathNameW(wide_path.as_ptr(), buffer, len)
-    })
-    .map(|mount_point| normalize_windows_volume_mount_point(&mount_point))
-}
-#[cfg(target_os = "windows")]
-fn windows_volume_name_for_mount_point(volume_mount_point: &str) -> Option<String> {
-    let wide_mount_point = windows_wide_string(volume_mount_point);
-    windows_query_volume_string(|buffer, len| unsafe {
-        GetVolumeNameForVolumeMountPointW(wide_mount_point.as_ptr(), buffer, len)
-    })
 }
 pub(crate) fn apply_ivm_acceleration_config(
     accel: &iroha_config::parameters::actual::Acceleration,
@@ -6974,7 +6904,7 @@ metadata = {}
         .expect("multilane config")
     }
     const NEXUS_DEFAULTS_BLAKE2B: &str =
-        "37af6d032c455549e0e10568d910720bc0ec6b5b67f03ffe47fc62469a90f65d";
+        "4ba3c287c81a746c34afaf55040a2eff7b4107ca787e1c1a208a5f34d9822493";
     fn file_blake2b_hex(path: &Path) -> String {
         let bytes = std::fs::read(path).expect("read file");
         Hash::new(bytes).to_string()
@@ -8330,6 +8260,9 @@ fn run_main_with_config_guard(
     if args.startup.check_storage {
         return compatibility_probe::run_check_storage(&config);
     }
+    if args.startup.check_replay {
+        return replay_check::run_check_replay(&config);
+    }
     if args.startup.check_config {
         let validated_genesis = validate_config_and_genesis_for_check(
             &config,
@@ -8420,9 +8353,7 @@ fn run_main_with_config_guard(
     // oversubscription with the IVM scheduler. Keep a slightly higher minimum
     // to prevent HTTP/p2p tasks from starving under consensus body/chunk load, and use the
     // available parallelism as the auto baseline instead of a fixed floor.
-    let auto_budget = std::thread::available_parallelism()
-        .map(std::num::NonZeroUsize::get)
-        .unwrap_or(4);
+    let auto_budget = std::thread::available_parallelism().map_or(4, std::num::NonZeroUsize::get);
     let budget = if max > 0 {
         max
     } else if min > 0 {
@@ -9620,36 +9551,6 @@ async fn run_node(
     }
     supervisor_fut.await.change_context(MainError::IrohaRun)
 }
-/// Shut the daemon down once `input` reaches end-of-file (`lifecycle.exit_on_stdin_close`).
-///
-/// A supervising parent holds the write end of the child's stdin pipe. When the parent exits for
-/// any reason, including SIGKILL, the pipe closes and the node shuts down cleanly through the same
-/// signal a panic uses. Bytes written to the pipe are discarded; a read error also shuts down.
-fn spawn_input_close_shutdown(
-    input: impl std::io::Read + Send + 'static,
-    signal: ShutdownSignal,
-) -> std::io::Result<()> {
-    std::thread::Builder::new()
-        .name("stdin-close-shutdown".to_owned())
-        .spawn(move || {
-            drain_until_eof(input);
-            iroha_logger::info!("standard input closed, shutting down...");
-            signal.send();
-        })
-        .map(drop)
-}
-/// Read and discard `input` until end-of-file or a read error.
-fn drain_until_eof(mut input: impl std::io::Read) {
-    let mut buffer = [0_u8; 256];
-    loop {
-        match input.read(&mut buffer) {
-            Ok(0) => return,
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return,
-        }
-    }
-}
 #[cfg(all(test, feature = "daemon", unix))]
 #[path = "main/node_file_tests.rs"]
 mod node_file_tests;
@@ -10311,7 +10212,7 @@ mod tests {
             "letlive_query_store=ifemergency_fast{live_query_store.into_inert_handle()}else{let(handle,child)=live_query_store.start();supervisor.monitor(child);handle};"
         ));
         assert!(compact_source.contains(
-            "lettelemetry_profile=if!emergency_fast{config.telemetry_profile}else{iroha_config::parameters::actual::TelemetryProfile::Disabled};"
+            "lettelemetry_profile=ifemergency_fast{iroha_config::parameters::actual::TelemetryProfile::Disabled}else{config.telemetry_profile};"
         ));
         assert!(
             compact_source.contains(
@@ -10384,7 +10285,7 @@ mod tests {
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
         ));
         assert!(compact_source.contains(
-            "letmutacceleration=config.accel.clone();acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
+            "letmutacceleration=config.accel;acceleration.enable_simd=false;acceleration.enable_metal=false;acceleration.enable_cuda=false;acceleration.max_gpus=Some(0);apply_ivm_acceleration_config(&acceleration);rs16::set_simd_enabled(false);"
         ));
         assert!(compact_source.contains(
             "if!emergency_fast{letdeadlock_shutdown=supervisor.shutdown_signal();supervisor.monitor(tokio::spawn(asyncmove{loop{tokio::select!{()=deadlock_shutdown.receive()=>break,()=tokio::time::sleep(Duration::from_secs(10))=>{}}"
@@ -10652,7 +10553,7 @@ mod tests {
             .0;
         assert!(
             run_main_source.contains(
-                "runtime_provider_registry::resolve_runtime_deps(&config,runtime_provider_registry)"
+                "runtime_provider_registry::resolve_runtime_deps(config,runtime_provider_registry)"
             ),
             "standard CLI startup must resolve the sanitized deployment registry request"
         );
@@ -10710,7 +10611,7 @@ mod tests {
             .expect("stock runtime-provider broker construction in run_main");
         let resolution = run_main_source
             .find(
-                "runtime_provider_registry::resolve_runtime_deps(&config,runtime_provider_registry)",
+                "runtime_provider_registry::resolve_runtime_deps(config,runtime_provider_registry)",
             )
             .expect("provider resolution in run_main");
         let runtime_start = run_main_source
@@ -11296,7 +11197,11 @@ mod tests {
                 .try_get_matches_from(["iroha3d", "--version"])
                 .expect_err("version display exits through clap");
             assert_eq!(error.kind(), clap::error::ErrorKind::DisplayVersion);
-            assert_eq!(error.render().to_string(), "iroha3d executable-version\n");
+            // The version names its source because one package version can span sources.
+            assert_eq!(
+                error.render().to_string(),
+                "iroha3d executable-version (source local-fast-build)\n"
+            );
         }
         #[test]
         fn whitespace_only_arguments_are_ignored() {
@@ -12639,6 +12544,7 @@ mod tests {
                     check_config: false,
                     json: false,
                     check_storage: false,
+                    check_replay: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,
@@ -12708,6 +12614,7 @@ mod tests {
                     check_config: false,
                     json: false,
                     check_storage: false,
+                    check_replay: false,
                     require_genesis_inrou_deployment_authority: None,
                     trace_config: false,
                     config_blake3: None,

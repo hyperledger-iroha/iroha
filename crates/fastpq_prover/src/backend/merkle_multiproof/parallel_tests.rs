@@ -58,7 +58,9 @@ fn parallel_parents_preserve_complete_sha3_trees_roots_and_work() {
                 levels
                     .last()
                     .unwrap()
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .enumerate()
                     .map(|(i, pair)| parent(levels.len(), i, pair[0], pair[1]).unwrap())
                     .collect(),

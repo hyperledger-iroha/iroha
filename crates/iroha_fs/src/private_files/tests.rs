@@ -10,6 +10,43 @@ fn store() -> (tempfile::TempDir, PrivateDirectory) {
 }
 
 #[test]
+fn owner_directory_publishes_bounded_private_files_without_replacing_existing_names() {
+    let temporary = tempfile::tempdir().unwrap();
+    let directory = OwnerDirectory::open(temporary.path()).unwrap();
+    let mut pending = directory.create_retained_private("collecting", 3).unwrap();
+    pending.write_all(b"abc").unwrap();
+    assert!(pending.write_all(b"d").is_err());
+    assert!(directory.create_retained_private("collecting", 3).is_err());
+    let sealed = pending.seal_read_only().unwrap();
+    let original = sealed.identity().unwrap();
+    let mut published = sealed.publish_new_name("complete").unwrap();
+    assert_eq!(published.identity().unwrap(), original);
+    published.rewind().unwrap();
+    let mut bytes = Vec::new();
+    published.read_to_end(&mut bytes).unwrap();
+    assert_eq!(bytes, b"abc");
+    assert!(!temporary.path().join("collecting").exists());
+    drop(published);
+
+    let mut pending = directory.create_retained_private("another", 3).unwrap();
+    pending.write_all(b"new").unwrap();
+    assert!(
+        pending
+            .seal_read_only()
+            .unwrap()
+            .publish_new_name("complete")
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(temporary.path().join("complete")).unwrap(),
+        b"abc"
+    );
+    for name in ["../escape", "CON", "alternate:stream"] {
+        assert!(directory.create_retained_private(name, 3).is_err());
+    }
+}
+
+#[test]
 fn portable_name_checks_preserve_case_insensitive_device_and_unicode_boundaries() {
     for device in [
         "CON", "con", "CoN", "PrN", "aUX", "nuL", "conIn$", "CoNoUt$", "com1", "CoM9", "Lpt1",
@@ -358,6 +395,34 @@ fn inventory_rejects_nonfiles_and_directory_mutation_during_callback() {
             .is_err()
     );
     drop(file);
+}
+
+#[test]
+fn inventory_refuses_transient_namespace_mutation_even_when_names_are_restored() {
+    let (_temporary, directory) = store();
+    let original = directory.create_retained_private("original", 64).unwrap();
+    for _ in 0..8 {
+        assert!(
+            directory
+                .visit_private_files(2, |_, _| {
+                    let transient = directory.create_retained_private("transient", 64)?;
+                    drop(transient);
+                    assert!(directory.remove_private("transient")?);
+                    Ok(())
+                })
+                .is_err()
+        );
+        assert!(!directory.path().join("transient").exists());
+    }
+    let mut names = Vec::new();
+    directory
+        .visit_private_files(1, |name, _| {
+            names.push(name.to_owned());
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(names, [std::ffi::OsString::from("original")]);
+    drop(original);
 }
 
 #[test]

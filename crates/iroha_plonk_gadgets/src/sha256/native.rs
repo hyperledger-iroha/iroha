@@ -192,11 +192,13 @@ pub fn pad(message: &[u8]) -> Option<Vec<[u32; BLOCK_WORDS]>> {
     bytes.extend_from_slice(&bit_len.to_be_bytes());
     Some(
         bytes
-            .chunks_exact(64)
+            .as_chunks::<64>()
+            .0
+            .iter()
             .map(|chunk| {
                 let mut block = [0_u32; BLOCK_WORDS];
-                for (word, bytes) in block.iter_mut().zip(chunk.chunks_exact(4)) {
-                    *word = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+                for (word, bytes) in block.iter_mut().zip(chunk.as_chunks::<4>().0) {
+                    *word = u32::from_be_bytes(*bytes);
                 }
                 block
             })
@@ -209,7 +211,7 @@ pub fn pad(message: &[u8]) -> Option<Vec<[u32; BLOCK_WORDS]>> {
 #[must_use]
 pub fn state_bytes(state: &[u32; STATE_WORDS]) -> [u8; 32] {
     let mut out = [0_u8; 32];
-    for (bytes, word) in out.chunks_exact_mut(4).zip(state) {
+    for (bytes, word) in out.as_chunks_mut::<4>().0.iter_mut().zip(state) {
         bytes.copy_from_slice(&word.to_be_bytes());
     }
     out
@@ -288,7 +290,7 @@ pub const fn small_sigma1_spread_sum(x: u32) -> u64 {
 pub fn canonical_u32_limbs<D: PastaField>(value: &D) -> [u32; 8] {
     let limbs = value.to_canonical_limbs();
     let mut out = [0_u32; 8];
-    for (pair, limb) in out.chunks_exact_mut(2).zip(limbs) {
+    for (pair, limb) in out.as_chunks_mut::<2>().0.iter_mut().zip(limbs) {
         let bytes = limb.to_le_bytes();
         pair[0] = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
         pair[1] = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
@@ -301,7 +303,12 @@ pub fn canonical_u32_limbs<D: PastaField>(value: &D) -> [u32; 8] {
 #[must_use]
 pub fn digest_message<D: PastaField>(m: &D) -> [u8; 32] {
     let mut out = [0_u8; 32];
-    for (bytes, limb) in out.chunks_exact_mut(4).zip(canonical_u32_limbs(m)) {
+    for (bytes, limb) in out
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
+        .zip(canonical_u32_limbs(m))
+    {
         bytes.copy_from_slice(&limb.to_le_bytes());
     }
     out
@@ -314,8 +321,8 @@ pub fn digest_message<D: PastaField>(m: &D) -> [u8; 32] {
 pub fn digest_block<D: PastaField>(m: &D) -> [u32; BLOCK_WORDS] {
     let bytes = digest_message(m);
     let mut block = [0_u32; BLOCK_WORDS];
-    for (word, chunk) in block.iter_mut().zip(bytes.chunks_exact(4)) {
-        *word = u32::from_be_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    for (word, chunk) in block.iter_mut().zip(bytes.as_chunks::<4>().0) {
+        *word = u32::from_be_bytes(*chunk);
     }
     block[8..].copy_from_slice(&DIGEST_PADDING);
     block
@@ -398,7 +405,7 @@ mod tests {
             assert_eq!(spread(x), reference);
         }
         let sample = words(2, 96);
-        for chunk in sample.chunks_exact(3) {
+        for chunk in sample.as_chunks::<3>().0 {
             let [a, b, c] = [chunk[0], chunk[1], chunk[2]];
             let (even, odd) = split(spread(a) + spread(b) + spread(c));
             assert_eq!(even, a ^ b ^ c);
@@ -416,8 +423,8 @@ mod tests {
     #[test]
     fn compress_matches_sha2_on_random_one_block_messages() {
         let sample = words(3, 16 * 8);
-        for block in sample.chunks_exact(16) {
-            let block: [u32; 16] = block.try_into().expect("16 words");
+        for block in sample.as_chunks::<16>().0 {
+            let block: [u32; 16] = *block;
             let mut bytes = Vec::new();
             for word in block {
                 bytes.extend_from_slice(&word.to_be_bytes());

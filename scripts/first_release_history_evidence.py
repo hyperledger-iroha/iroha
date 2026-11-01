@@ -133,7 +133,7 @@ def reported_values(storage: dict, config: dict) -> dict:
         "tip_hash": storage.get("tip_hash"),
         "protocol_version": config.get("protocol_version"),
         "wire_schema_hash": config.get("wire_schema_hash"),
-        "gas_schedule_hash": config.get("gas_schedule_hash"),
+        "host_profiles": config.get("host_profiles"),
         "build_version": build.get("version"),
         "build_source_revision": build.get("source_revision"),
         "build_fingerprint": build.get("build_fingerprint"),

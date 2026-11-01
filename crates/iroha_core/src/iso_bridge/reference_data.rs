@@ -10,6 +10,7 @@ use super::profiles::ReferenceDatasetRequirement;
 use core::convert::TryFrom;
 use eyre::{self, WrapErr as _};
 use iroha_config::parameters::actual;
+use iroha_fs::FileMetadata;
 use iroha_logger::{error, info, warn};
 use iroha_telemetry::metrics;
 use ivm::iso20022::{self, IdentifierKind};
@@ -1660,7 +1661,7 @@ fn read_dataset_json_bounded(
     kind: DatasetKind,
     budget: &mut ReferenceDataLoadBudget,
 ) -> eyre::Result<String> {
-    let initial = fs::symlink_metadata(path).wrap_err_with(|| {
+    let initial = FileMetadata::symlink_metadata(path).wrap_err_with(|| {
         format!(
             "failed to inspect ISO reference dataset at {}",
             path.display()
@@ -1688,26 +1689,9 @@ fn read_dataset_json_bounded(
             REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES
         );
     }
-    let mut options = fs::OpenOptions::new();
-    options.read(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt as _;
-        let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
-            .expect("NOFOLLOW flag bits fit the platform custom-flags type");
-        options.custom_flags(nofollow);
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::OpenOptionsExt as _;
-        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
-        options.custom_flags(FILE_FLAG_OPEN_REPARSE_POINT);
-    }
-    let mut file = options
-        .open(path)
+    let mut file = open_dataset_file(path)
         .wrap_err_with(|| format!("failed to open ISO reference dataset at {}", path.display()))?;
-    let opened = file
-        .metadata()
+    let opened = FileMetadata::of(&file)
         .wrap_err_with(|| format!("failed to inspect opened ISO dataset at {}", path.display()))?;
     if !opened.is_file() || !same_dataset_snapshot(&initial, &opened) {
         eyre::bail!(
@@ -1731,13 +1715,13 @@ fn read_dataset_json_bounded(
             REFERENCE_DATA_MAX_DATASET_BYTES
         );
     }
-    let after_read = file.metadata().wrap_err_with(|| {
+    let after_read = FileMetadata::of(&file).wrap_err_with(|| {
         format!(
             "failed to re-inspect opened ISO dataset at {}",
             path.display()
         )
     })?;
-    let current = fs::symlink_metadata(path).wrap_err_with(|| {
+    let current = FileMetadata::symlink_metadata(path).wrap_err_with(|| {
         format!(
             "failed to re-inspect ISO reference dataset at {}",
             path.display()
@@ -1761,8 +1745,31 @@ fn read_dataset_json_bounded(
         )
     })
 }
+fn open_dataset_file(path: &Path) -> std::io::Result<File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let nofollow = i32::try_from(rustix::fs::OFlags::NOFOLLOW.bits())
+            .expect("NOFOLLOW flag bits fit the platform custom-flags type");
+        options.custom_flags(nofollow);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+        const FILE_SHARE_READ: u32 = 1;
+        // Keep the selected bytes stable until all descriptor and named checks finish.
+        // Metadata comparisons alone cannot detect a rewrite with restored timestamps.
+        options
+            .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+            .share_mode(FILE_SHARE_READ);
+    }
+    options.open(path)
+}
 #[cfg(unix)]
-fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn same_dataset_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     left.dev() == right.dev()
         && left.ino() == right.ino()
@@ -1772,9 +1779,20 @@ fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
         && left.ctime() == right.ctime()
         && left.ctime_nsec() == right.ctime_nsec()
 }
-#[cfg(not(unix))]
-fn same_dataset_snapshot(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    left.len() == right.len() && left.modified().ok() == right.modified().ok()
+#[cfg(windows)]
+fn same_dataset_snapshot(left: &FileMetadata, right: &FileMetadata) -> bool {
+    use std::os::windows::fs::MetadataExt as _;
+    left.identity() == right.identity()
+        && left.links() == right.links()
+        && left.len() == right.len()
+        && left.creation_time() == right.creation_time()
+        && left.last_write_time() == right.last_write_time()
+        && left.file_attributes() == right.file_attributes()
+        && left.file_attributes() & 0x400 == 0
+}
+#[cfg(not(any(unix, windows)))]
+fn same_dataset_snapshot(_left: &FileMetadata, _right: &FileMetadata) -> bool {
+    false
 }
 fn mic_is_active(status: Option<&str>) -> bool {
     match status {
@@ -1832,17 +1850,101 @@ mod tests {
         io::Write as _,
         sync::{Mutex, OnceLock},
     };
-    use tempfile::{NamedTempFile, TempDir};
+    use tempfile::{NamedTempFile, TempDir, TempPath};
     fn iso_reference_test_guard() -> std::sync::MutexGuard<'static, ()> {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         LOCK.get_or_init(|| Mutex::new(()))
             .lock()
             .expect("iso reference test lock poisoned")
     }
-    fn write_snapshot(contents: &str) -> NamedTempFile {
+    fn write_snapshot(contents: &str) -> TempPath {
         let mut file = NamedTempFile::new().expect("temp file");
         file.write_all(contents.as_bytes()).expect("write snapshot");
-        file
+        file.into_temp_path()
+    }
+    #[test]
+    fn equal_length_and_time_datasets_have_distinct_native_identities() {
+        let directory = TempDir::new().unwrap();
+        let first = directory.path().join("first.json");
+        let second = directory.path().join("second.json");
+        fs::write(&first, b"{}").unwrap();
+        fs::write(&second, b"{}").unwrap();
+        let timestamp = std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        for path in [&first, &second] {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(fs::FileTimes::new().set_modified(timestamp))
+                .unwrap();
+        }
+        let first_metadata = FileMetadata::symlink_metadata(&first).unwrap();
+        let second_metadata = FileMetadata::symlink_metadata(&second).unwrap();
+        assert_eq!(first_metadata.len(), second_metadata.len());
+        assert_eq!(
+            first_metadata.modified().unwrap(),
+            second_metadata.modified().unwrap()
+        );
+        assert!(!same_dataset_snapshot(&first_metadata, &second_metadata));
+        let mut budget = ReferenceDataLoadBudget::default();
+        assert_eq!(
+            read_dataset_json_bounded(&first, DatasetKind::IsinCusip, &mut budget).unwrap(),
+            "{}"
+        );
+        assert_eq!(budget.input_bytes, REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES - 2);
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_dataset_reader_excludes_writers_and_namespace_changes() {
+        let directory = TempDir::new().unwrap();
+        let path = directory.path().join("dataset.json");
+        let renamed = directory.path().join("renamed.json");
+        fs::write(&path, b"{}").unwrap();
+        let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(open_dataset_file(&path).is_err());
+        drop(writer);
+
+        let mut original = open_dataset_file(&path).unwrap();
+        assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(fs::remove_file(&path).is_err());
+        assert!(fs::rename(&path, &renamed).is_err());
+        let mut bytes = String::new();
+        original.read_to_string(&mut bytes).unwrap();
+        assert_eq!(bytes, "{}");
+        drop(original);
+
+        fs::write(&path, b"[]").unwrap();
+        fs::rename(&path, &renamed).unwrap();
+        fs::remove_file(&renamed).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn windows_dataset_snapshot_detects_new_hardlinks_and_reparse_inputs() {
+        let directory = TempDir::new().unwrap();
+        let source = directory.path().join("source.json");
+        fs::write(&source, b"{}").unwrap();
+        let before = FileMetadata::symlink_metadata(&source).unwrap();
+        fs::hard_link(&source, directory.path().join("alias.json")).unwrap();
+        let after = FileMetadata::symlink_metadata(&source).unwrap();
+        assert_eq!(before.identity(), after.identity());
+        assert!(!same_dataset_snapshot(&before, &after));
+        let junction = directory.path().join("junction");
+        let destination = directory.path().join("destination");
+        fs::create_dir(&destination).unwrap();
+        assert!(
+            std::process::Command::new("cmd")
+                .arg("/C")
+                .arg("mklink")
+                .arg("/J")
+                .arg(&junction)
+                .arg(&destination)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let mut budget = ReferenceDataLoadBudget::default();
+        assert!(read_dataset_json_bounded(&junction, DatasetKind::IsinCusip, &mut budget).is_err());
+        assert_eq!(budget.input_bytes, REFERENCE_DATA_MAX_TOTAL_INPUT_BYTES);
     }
     #[test]
     fn missing_snapshots_default_to_missing_state() {
@@ -1869,8 +1971,9 @@ mod tests {
                     .expect("dataset byte limit fits u64"),
             )
             .expect("create oversized sparse dataset");
+        let file = file.into_temp_path();
         let config = IsoReferenceData {
-            isin_crosswalk_path: Some(file.path().to_path_buf()),
+            isin_crosswalk_path: Some(file.to_path_buf()),
             ..IsoReferenceData::default()
         };
         let snapshots = ReferenceDataSnapshots::from_config(&config);
@@ -1895,7 +1998,7 @@ mod tests {
             records: 0,
             ..Default::default()
         };
-        let error = load_isin_crosswalk(file.path(), &mut budget).unwrap_err();
+        let error = load_isin_crosswalk(&file, &mut budget).unwrap_err();
         assert!(error.to_string().contains("aggregate limit"));
     }
     #[test]
@@ -1934,7 +2037,7 @@ mod tests {
         }"#;
         let file = write_snapshot(contents);
         let config = IsoReferenceData {
-            isin_crosswalk_path: Some(file.path().to_path_buf()),
+            isin_crosswalk_path: Some(file.to_path_buf()),
             ..IsoReferenceData::default()
         };
         let snapshots = ReferenceDataSnapshots::from_config(&config);
@@ -1980,7 +2083,7 @@ mod tests {
         }"#;
         let file = write_snapshot(bic_snapshot);
         let config = IsoReferenceData {
-            bic_lei_path: Some(file.path().to_path_buf()),
+            bic_lei_path: Some(file.to_path_buf()),
             ..IsoReferenceData::default()
         };
         let snapshots = ReferenceDataSnapshots::from_config(&config);
@@ -2033,7 +2136,7 @@ mod tests {
         let file = write_snapshot(contents);
         let cache_dir = TempDir::new().expect("cache dir");
         let config = IsoReferenceData {
-            isin_crosswalk_path: Some(file.path().to_path_buf()),
+            isin_crosswalk_path: Some(file.to_path_buf()),
             cache_dir: Some(cache_dir.path().to_path_buf()),
             ..IsoReferenceData::default()
         };
@@ -2085,7 +2188,7 @@ mod tests {
         }"#;
         let file = write_snapshot(mic_snapshot);
         let config = IsoReferenceData {
-            mic_directory_path: Some(file.path().to_path_buf()),
+            mic_directory_path: Some(file.to_path_buf()),
             ..IsoReferenceData::default()
         };
         let snapshots = ReferenceDataSnapshots::from_config(&config);
@@ -2125,10 +2228,10 @@ mod tests {
             }"#,
         );
         let config = IsoReferenceData {
-            isin_crosswalk_path: Some(instrument_snapshot.path().to_path_buf()),
-            csd_venue_path: Some(csd_snapshot.path().to_path_buf()),
-            securities_account_path: Some(account_snapshot.path().to_path_buf()),
-            cash_leg_path: Some(cash_snapshot.path().to_path_buf()),
+            isin_crosswalk_path: Some(instrument_snapshot.to_path_buf()),
+            csd_venue_path: Some(csd_snapshot.to_path_buf()),
+            securities_account_path: Some(account_snapshot.to_path_buf()),
+            cash_leg_path: Some(cash_snapshot.to_path_buf()),
             ..IsoReferenceData::default()
         };
         let snapshots = ReferenceDataSnapshots::from_config(&config);
@@ -2177,10 +2280,10 @@ mod tests {
             }"#,
         );
         let config = IsoReferenceData {
-            isin_crosswalk_path: Some(instrument_snapshot.path().to_path_buf()),
-            csd_venue_path: Some(csd_snapshot.path().to_path_buf()),
-            securities_account_path: Some(account_snapshot.path().to_path_buf()),
-            cash_leg_path: Some(cash_snapshot.path().to_path_buf()),
+            isin_crosswalk_path: Some(instrument_snapshot.to_path_buf()),
+            csd_venue_path: Some(csd_snapshot.to_path_buf()),
+            securities_account_path: Some(account_snapshot.to_path_buf()),
+            cash_leg_path: Some(cash_snapshot.to_path_buf()),
             ..IsoReferenceData::default()
         };
         let snapshots = ReferenceDataSnapshots::from_config(&config);

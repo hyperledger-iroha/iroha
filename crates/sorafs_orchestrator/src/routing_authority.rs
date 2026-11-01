@@ -322,7 +322,7 @@ impl RoutingAuthorityCache {
     }
 }
 fn increment(counter: &AtomicU64) {
-    let _ = counter.fetch_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
+    let _ = counter.try_update(AtomicOrdering::Relaxed, AtomicOrdering::Relaxed, |value| {
         Some(value.saturating_add(1))
     });
 }

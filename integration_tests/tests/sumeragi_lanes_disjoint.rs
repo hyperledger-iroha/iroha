@@ -27,7 +27,9 @@ fn policy(entries: &[GenesisTopologyEntry]) -> SumeragiLanePolicy {
     );
     policy.stall_window = 10_000;
     policy.fixed = entries
-        .chunks_exact(MEMBERS)
+        .as_chunks::<MEMBERS>()
+        .0
+        .iter()
         .zip(LANES)
         .map(|(entries, lane)| {
             let mut committee = entries
@@ -276,7 +278,10 @@ fn disjoint_lane_committees_keep_progress_when_one_stops_and_all_restart() -> Re
         running_peer(&network)?
             .client()
             .client()
-            .wait_for_transaction_applied(stalled.hash(), Default::default())?;
+            .wait_for_transaction_applied(
+                stalled.hash(),
+                iroha::client::TransactionWaitOptions::default(),
+            )?;
         let height = committed_height(&network)?;
         for peer in network.all_peers() {
             rt.block_on(peer.shutdown());

@@ -8505,6 +8505,18 @@ mod tests {
         .expect("initial provider qualification");
         (provider, qualified)
     }
+    fn private_state_tempdir() -> std::io::Result<tempfile::TempDir> {
+        let temporary = tempfile::tempdir()?;
+        #[cfg(windows)]
+        {
+            // Recreate only this fresh empty fixture through the canonical private creator.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn ready_service(
         root: &Path,
     ) -> (
@@ -8578,7 +8590,7 @@ mod tests {
         outcome
     }
     fn signed_statement_fixture() -> SignedGovernedBillingStatementV1 {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:qualification:1", "10")]);
@@ -8896,7 +8908,7 @@ mod tests {
     include!("hedging_billing_service/schema_preserved_tests.rs");
     #[test]
     fn committed_accrual_to_acknowledgement_survives_restart() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, feed_policy, reference, verifier, publisher, ack_authority) =
             ready_service(root.path());
         let first_page = page(vec![event(1, "storage:event:1", "10")]);
@@ -9073,7 +9085,7 @@ mod tests {
     }
     #[test]
     fn checkpoint_rejects_omitted_intent_and_acknowledgement_substitution() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first_page = page(vec![event(1, "storage:event:1", "10")]);
@@ -9128,7 +9140,7 @@ mod tests {
     }
     #[test]
     fn finalized_forks_gaps_semantic_replay_and_late_events_fail_closed() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first_page = page(vec![event(1, "storage:event:1", "10")]);
@@ -9176,7 +9188,7 @@ mod tests {
     }
     #[test]
     fn incomplete_consensus_tail_cannot_close_or_sign() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let mut incomplete = page(vec![event(1, "storage:event:1", "10")]);
@@ -9205,7 +9217,7 @@ mod tests {
     }
     #[test]
     fn governed_overflow_projection_never_blocks_billing_close() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:overflow", "101")]);
@@ -9247,7 +9259,7 @@ mod tests {
     }
     #[test]
     fn retained_history_bound_requires_an_authenticated_epoch_transition() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let feed_policy = feed_policy();
         let mut policy = service_policy();
         policy.max_retained_source_pages = 1;
@@ -9272,7 +9284,7 @@ mod tests {
     }
     #[test]
     fn policy_rotation_is_fail_closed_without_a_governed_checkpoint_transition() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, feed_policy, _reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         service
@@ -9305,7 +9317,7 @@ mod tests {
     }
     #[test]
     fn non_genesis_policy_cannot_bootstrap_without_a_sealed_predecessor() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (next_policy, next_feed_policy) = rotated_policies();
         let verifier = Arc::new(TestJournalVerifier::default());
         assert!(matches!(
@@ -9323,7 +9335,7 @@ mod tests {
     }
     #[test]
     fn authenticated_epoch_transition_compacts_rotates_and_reopens_after_local_rename() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &reference);
@@ -9400,7 +9412,7 @@ mod tests {
     }
     #[test]
     fn epoch_transition_retains_latest_chronological_account_base() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, feed_policy, first_reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &first_reference);
@@ -9461,7 +9473,7 @@ mod tests {
     }
     #[test]
     fn epoch_transition_releases_capacity_at_the_configured_hard_limit() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let feed_policy = feed_policy();
         let reference = governed_reference(&feed_policy);
         let mut policy = service_policy();
@@ -9515,7 +9527,7 @@ mod tests {
     }
     #[test]
     fn epoch_transition_rejects_unsettled_state_before_witness_write() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:1", "10")]);
@@ -9539,7 +9551,7 @@ mod tests {
     }
     #[test]
     fn epoch_transition_rejects_oversized_proof_before_signing_or_witness_write() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         settle_first_period(&service, &reference);
@@ -9560,7 +9572,7 @@ mod tests {
     }
     #[test]
     fn sealed_epoch_witness_recovers_crash_before_local_checkpoint_rename() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &reference);
@@ -9616,7 +9628,7 @@ mod tests {
     }
     #[test]
     fn epoch_witness_tamper_and_rollback_fail_closed() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &reference);
@@ -9668,7 +9680,7 @@ mod tests {
     }
     #[test]
     fn epoch_witness_rejects_valid_same_epoch_non_base_checkpoint_substitution() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &reference);
@@ -9732,7 +9744,7 @@ mod tests {
     }
     #[test]
     fn skipped_epoch_and_immutable_archive_fork_fail_closed() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         settle_first_period(&service, &reference);
@@ -9790,7 +9802,7 @@ mod tests {
     }
     #[test]
     fn rejected_journal_proof_does_not_advance_durable_state() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, _reference, verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         verifier.reject_pages.store(true, Ordering::Relaxed);
@@ -9810,7 +9822,7 @@ mod tests {
     }
     #[test]
     fn cross_page_position_rollback_is_rejected_atomically() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:1", "10")]);
@@ -9835,7 +9847,7 @@ mod tests {
     }
     #[test]
     fn checkpoint_cannot_inject_a_ready_for_signing_statement() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:1", "10")]);
@@ -9867,7 +9879,7 @@ mod tests {
     include!("hedging_billing_service/replay_digest_tests.rs");
     #[test]
     fn invalid_signer_output_is_not_persisted_or_published() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first_page = page(vec![event(1, "storage:event:1", "10")]);
@@ -9897,7 +9909,7 @@ mod tests {
     }
     #[test]
     fn ambiguous_publication_requires_authoritative_lookup() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, publisher, _ack_authority) =
             ready_service(root.path());
         let first_page = page(vec![event(1, "storage:event:1", "10")]);
@@ -9930,7 +9942,7 @@ mod tests {
     }
     #[test]
     fn publisher_lookup_prevents_duplicate_write_after_local_rollback() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:1", "10")]);
@@ -9971,7 +9983,7 @@ mod tests {
     }
     #[test]
     fn startup_reconciliation_repairs_publisher_and_acknowledgement_rollback() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, feed_policy, reference, verifier, publisher, acknowledgement_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:1", "10")]);
@@ -10162,7 +10174,7 @@ mod tests {
     }
     #[test]
     fn operator_authorized_execution_is_policy_bound_and_idempotent() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, _ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:1", "10")]);
@@ -10204,7 +10216,7 @@ mod tests {
     include!("hedging_billing_service/finalized_account_validation_tests.rs");
     #[test]
     fn owner_api_is_anchor_bound_terminal_only_and_oracle_safe() {
-        let root = tempfile::tempdir().expect("state root");
+        let root = private_state_tempdir().expect("state root");
         let (service, _feed_policy, reference, _verifier, _publisher, ack_authority) =
             ready_service(root.path());
         let first = page(vec![event(1, "storage:event:owner-api", "10")]);

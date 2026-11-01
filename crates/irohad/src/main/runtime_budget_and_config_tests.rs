@@ -29,6 +29,7 @@ fn runtime_reconciliation_keeps_read_only_key_config_bytes_mode_and_inode() -> e
             check_config: false,
             json: false,
             check_storage: false,
+            check_replay: false,
             require_genesis_inrou_deployment_authority: None,
             trace_config: false,
             config_blake3: None,
@@ -197,33 +198,6 @@ fn operator_explicit_budget_shortfall_accounts_for_managed_bytes() -> eyre::Resu
         None
     );
     Ok(())
-}
-#[test]
-fn normalize_windows_volume_mount_point_adds_trailing_separator() {
-    assert_eq!(
-        normalize_windows_volume_mount_point(r"C:\nexus\storage"),
-        r"C:\nexus\storage\"
-    );
-    assert_eq!(
-        normalize_windows_volume_mount_point(r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"),
-        r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"
-    );
-}
-#[test]
-fn normalize_windows_volume_identity_uses_lowercased_guid_path() {
-    assert_eq!(
-        normalize_windows_volume_identity(r"\\?\Volume{ABCDEF12-3456-7890-ABCD-EF1234567890}\"),
-        r"volume:\\?\volume{abcdef12-3456-7890-abcd-ef1234567890}\"
-    );
-}
-#[test]
-fn windows_string_from_wide_buffer_stops_at_first_nul() {
-    let buffer: Vec<u16> = "Volume\0ignored".encode_utf16().collect();
-    assert_eq!(
-        windows_string_from_wide_buffer(&buffer).as_deref(),
-        Some("Volume")
-    );
-    assert_eq!(windows_string_from_wide_buffer(&[]), None);
 }
 #[test]
 fn validate_config_io_flags_address_conflict() -> eyre::Result<()> {

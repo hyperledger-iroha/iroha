@@ -1874,7 +1874,7 @@ mod tests {
         assert!(genesis_participant_committee_key_instructions(&entries, &[]).is_empty());
         let peer = entries[0].peer.clone();
         let instructions =
-            genesis_participant_committee_key_instructions(&entries, &[peer.clone()]);
+            genesis_participant_committee_key_instructions(&entries, std::slice::from_ref(&peer));
         assert_eq!(instructions.len(), 3);
         let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
         let expected_permission = Permission::from(CanManageConsensusKeys);

@@ -31,7 +31,10 @@ fn admission_parameters_keep_the_original_view_across_policy_publication() {
     publish_policy(&world, Algorithm::Ed25519, 131_072);
     let original_view = world.view();
     let original = original_view.transaction_admission_parameters();
-    assert!(std::ptr::eq(original, &**original_view.parameters.get()));
+    assert!(std::ptr::eq(
+        original,
+        &raw const **original_view.parameters.get()
+    ));
     publish_policy(&world, Algorithm::Secp256k1, 262_144);
     let current_view = world.view();
     let current = current_view.transaction_admission_parameters();
@@ -67,7 +70,7 @@ fn admission_parameters_do_not_substitute_an_absent_original_policy() {
     let view = world.view();
     norito::with_decode_limits_scope(norito::DecodeLimits::new(0, 0, 0, 0, 128), || {
         let original = view.transaction_admission_parameters();
-        assert!(std::ptr::eq(original, &**view.parameters.get()));
+        assert!(std::ptr::eq(original, &raw const **view.parameters.get()));
         assert!(original.crypto_policy().is_none());
         assert_eq!(
             original.require_crypto_policy().unwrap_err(),

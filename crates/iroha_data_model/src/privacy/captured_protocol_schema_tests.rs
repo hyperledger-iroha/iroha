@@ -1,4 +1,6 @@
 //! Immutable compiler-captured identities for this source owner’s existing codecs.
+//! Policy types introduced after the September capture use their retained paired owner capture;
+//! both original evidence files remain unchanged.
 
 const CASES: &[crate::captured_schema_tests::Case] = &[
     crate::captured_schema_tests::Case::bidirectional::<super::PrivacyP256PointV1>(

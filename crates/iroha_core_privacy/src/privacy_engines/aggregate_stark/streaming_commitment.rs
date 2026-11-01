@@ -31,9 +31,19 @@ pub(super) fn payload_bound_v1() -> Result<usize, AggregateStarkErrorV1> {
         .ok_or(AggregateStarkErrorV1::InvalidLayout)
 }
 
-struct DigestTileV1(Vec<PrivacyOuterDigestV1>);
+/// Initial pairs alone need reconstructed original finalizers and serialized
+/// scratch. Selected replay keeps the original scalar bound above.
+pub(super) fn initial_payload_bound_v1() -> Result<usize, AggregateStarkErrorV1> {
+    let scalar = payload_bound_v1()?;
+    TILE_ROWS
+        .checked_mul(crate::privacy_engines::privacy_outer_hash::paired_stream_workspace_bytes_v1())
+        .and_then(|paired| scalar.checked_add(paired))
+        .ok_or(AggregateStarkErrorV1::InvalidLayout)
+}
+
+pub(super) struct DigestTileV1(pub(super) Vec<PrivacyOuterDigestV1>);
 impl DigestTileV1 {
-    fn new(rows: usize) -> Result<Self, AggregateStarkErrorV1> {
+    pub(super) fn new(rows: usize) -> Result<Self, AggregateStarkErrorV1> {
         if rows == 0 || rows > TILE_ROWS || !rows.is_power_of_two() {
             return Err(AggregateStarkErrorV1::InvalidLayout);
         }
@@ -47,7 +57,7 @@ impl DigestTileV1 {
         values.resize(rows, PrivacyOuterDigestV1::default());
         Ok(Self(values))
     }
-    fn clear_v1(&mut self) {
+    pub(super) fn clear_v1(&mut self) {
         for value in &mut self.0 {
             value.zeroize_v1();
         }
@@ -62,7 +72,7 @@ impl Drop for DigestTileV1 {
 }
 
 /// Prefer the earliest public position, independent of worker completion order.
-fn first_error_v1(
+pub(super) fn first_error_v1(
     left: Option<(usize, AggregateStarkErrorV1)>,
     right: Option<(usize, AggregateStarkErrorV1)>,
 ) -> Option<(usize, AggregateStarkErrorV1)> {
@@ -256,6 +266,76 @@ pub(super) fn finish_rows_retaining_v1(
             .map_err(map_digest_stream_error_v1)
             .map_err(map_transparent_error_v1)
     })
+}
+
+pub(super) fn finish_owned_rows_retaining_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    streams: &mut RowStreamsV1,
+    cut: &mut retained_commitment::RetainedMerkleCutV1,
+) -> Result<(), AggregateStarkErrorV1> {
+    match streams {
+        RowStreamsV1::Scalar(values) => finish_rows_retaining_v1(accumulator, values, cut),
+        RowStreamsV1::InitialPairs(values) => {
+            finish_pairs_with_cut_v1(accumulator, values, Some(cut))
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) fn finish_owned_rows_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    streams: &mut RowStreamsV1,
+) -> Result<(), AggregateStarkErrorV1> {
+    match streams {
+        RowStreamsV1::Scalar(values) => finish_rows_v1(accumulator, values),
+        RowStreamsV1::InitialPairs(values) => finish_pairs_with_cut_v1(accumulator, values, None),
+    }
+}
+
+fn finish_pairs_with_cut_v1(
+    accumulator: &mut StreamingMerkleAccumulatorV1,
+    streams: &mut [crate::privacy_engines::privacy_outer_hash::PrivacyOuterLastFieldPairV1],
+    mut cut: Option<&mut retained_commitment::RetainedMerkleCutV1>,
+) -> Result<(), AggregateStarkErrorV1> {
+    if streams.len().checked_mul(2) != Some(accumulator.leaf_count)
+        || accumulator.next_leaf != 0
+        || accumulator.leaf_count < 2
+    {
+        return Err(AggregateStarkErrorV1::InvalidProofShape);
+    }
+    let rows = accumulator.leaf_count.min(TILE_ROWS);
+    let mut tile = DigestTileV1::new(rows)?;
+    for batch in streams.chunks_mut(rows / 2) {
+        if batch.len() != rows / 2 {
+            return Err(AggregateStarkErrorV1::InvalidProofShape);
+        }
+        let first = accumulator.next_leaf;
+        let failure = batch
+            .par_iter_mut()
+            .zip(tile.0.par_chunks_exact_mut(2))
+            .enumerate()
+            .map(|(index, (stream, target))| {
+                let target: &mut [PrivacyOuterDigestV1; 2] = match target.try_into() {
+                    Ok(target) => target,
+                    Err(_) => {
+                        return Some((first + 2 * index, AggregateStarkErrorV1::InternalInvariant));
+                    }
+                };
+                stream.finalize_into_v1(target).err().map(|(lane, error)| {
+                    (
+                        first + 2 * index + lane,
+                        map_transparent_error_v1(map_digest_stream_error_v1(error)),
+                    )
+                })
+            })
+            .reduce(|| None, first_error_v1);
+        if let Some((_, error)) = failure {
+            return Err(error);
+        }
+        append_tile_with_cut_v1(accumulator, &mut tile.0, cut.as_deref_mut())?;
+        tile.clear_v1();
+    }
+    Ok(())
 }
 
 fn finish_rows_with_cut_v1(

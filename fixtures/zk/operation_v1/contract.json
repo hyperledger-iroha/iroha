@@ -401,6 +401,34 @@
       {
         "class": "refused",
         "details_repeat_reject_code": true,
+        "envelope_code": "definition_inactive",
+        "reject_code": "PRTRY:RUNTIME_REJECTED",
+        "status": 400
+      },
+      {
+        "class": "refused",
+        "details_repeat_reject_code": true,
+        "envelope_code": "definition_restricted",
+        "reject_code": "PRTRY:RUNTIME_REJECTED",
+        "status": 400
+      },
+      {
+        "class": "refused",
+        "details_repeat_reject_code": true,
+        "envelope_code": "expectation_mismatch",
+        "reject_code": "PRTRY:RUNTIME_REJECTED",
+        "status": 400
+      },
+      {
+        "class": "refused",
+        "details_repeat_reject_code": true,
+        "envelope_code": "malformed_payload",
+        "reject_code": "PRTRY:RUNTIME_REJECTED",
+        "status": 400
+      },
+      {
+        "class": "refused",
+        "details_repeat_reject_code": true,
         "envelope_code": "unregistered_authority",
         "reject_code": "PRTRY:UNREGISTERED_AUTHORITY",
         "status": 403

@@ -32,10 +32,12 @@ fn memory_words(output: &CompileOutput) -> usize {
         .unwrap()
         .code_offset;
     output.artifact[offset..]
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|bytes| {
             matches!(
-                instruction::wide::opcode(u32::from_le_bytes((*bytes).try_into().unwrap())),
+                instruction::wide::opcode(u32::from_le_bytes(**bytes)),
                 instruction::wide::memory::LOAD64 | instruction::wide::memory::STORE64
             )
         })

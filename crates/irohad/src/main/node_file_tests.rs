@@ -363,30 +363,3 @@ fn check_flags_parse_and_conflict() {
     assert!(Args::try_parse_from(["iroha3d", "--json"]).is_err());
     assert!(Args::try_parse_from(["iroha3d", "--check-storage", "--check-config"]).is_err());
 }
-
-#[test]
-fn drain_until_eof_consumes_the_whole_input() {
-    let mut input = std::io::Cursor::new(vec![0x5A; 1_000]);
-    drain_until_eof(&mut input);
-    assert_eq!(input.position(), 1_000);
-}
-
-#[test]
-fn closing_the_input_sends_the_shutdown_signal() {
-    let (reader, writer) = rustix::pipe::pipe().expect("pipe");
-    let signal = ShutdownSignal::new();
-    spawn_input_close_shutdown(fs::File::from(reader), signal.clone()).expect("watch input");
-    let mut writer = fs::File::from(writer);
-    std::io::Write::write_all(&mut writer, b"keepalive").expect("write to the pipe");
-    std::thread::sleep(Duration::from_millis(50));
-    assert!(!signal.is_sent(), "open input keeps the node running");
-    drop(writer);
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !signal.is_sent() {
-        assert!(
-            std::time::Instant::now() < deadline,
-            "end-of-file must send the shutdown signal"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
-}

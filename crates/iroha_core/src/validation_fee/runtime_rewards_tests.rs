@@ -1,6 +1,6 @@
 //! Native service capture, scheduled funded conversion, certified replay, and signed withdrawals.
 
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 #[path = "runtime_reward_crash_tests.rs"]
 mod crash_tests;
 #[path = "runtime_policy_history_tests.rs"]

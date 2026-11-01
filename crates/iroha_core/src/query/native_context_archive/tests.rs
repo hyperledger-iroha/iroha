@@ -47,6 +47,28 @@ fn stage_path(root: &Path) -> std::path::PathBuf {
         .join(RecordName::new(2, hash(), true).as_str())
 }
 
+fn write_stage_fixture(writer: &NativeContextArchive, root: &Path, bytes: &[u8]) {
+    #[cfg(not(windows))]
+    {
+        let _ = writer;
+        fs::write(stage_path(root), bytes).unwrap();
+    }
+    #[cfg(windows)]
+    {
+        let _ = root;
+        let ArchiveDirectory::Owner(owner) = &writer.directory else {
+            panic!("fixture retains original write owner")
+        };
+        owner
+            .write_atomic(
+                RecordName::new(2, hash(), true).as_str(),
+                bytes,
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+    }
+}
+
 #[test]
 fn exact_canonical_projection_owns_original_pool_until_last_drop() {
     let dir = tempfile::tempdir().unwrap();
@@ -210,7 +232,7 @@ fn interrupted_unlinked_stage_rewrites_only_from_original_bytes() {
     let lanes = SumeragiLaneState::default();
     let writer = archive(dir.path(), AllocationBudget::new(4096), 4096);
     let original = writer.encode_projection(&projection(&lanes)).unwrap();
-    fs::write(stage_path(dir.path()), b"interrupted incomplete staging").unwrap();
+    write_stage_fixture(&writer, dir.path(), b"interrupted incomplete staging");
     writer.publish(&original).unwrap();
     assert_eq!(
         fs::read(canonical_path(dir.path())).unwrap(),
@@ -220,6 +242,24 @@ fn interrupted_unlinked_stage_rewrites_only_from_original_bytes() {
 }
 
 #[test]
+fn canonical_retry_preserves_an_inconsistent_private_stage() {
+    let dir = tempfile::tempdir().unwrap();
+    let lanes = SumeragiLaneState::default();
+    let writer = archive(dir.path(), AllocationBudget::new(4096), 4096);
+    let original = writer.encode_projection(&projection(&lanes)).unwrap();
+    writer.publish(&original).unwrap();
+    let changed = b"inconsistent retained stage";
+    write_stage_fixture(&writer, dir.path(), changed);
+    assert!(writer.publish(&original).is_err());
+    assert_eq!(fs::read(stage_path(dir.path())).unwrap(), changed);
+    assert_eq!(
+        fs::read(canonical_path(dir.path())).unwrap(),
+        original.canonical_bytes()
+    );
+}
+
+#[test]
+#[cfg(unix)]
 fn interruption_after_link_cleans_identical_stage_on_original_retry() {
     let dir = tempfile::tempdir().unwrap();
     let lanes = SumeragiLaneState::default();
@@ -233,6 +273,64 @@ fn interruption_after_link_cleans_identical_stage_on_original_retry() {
         fs::read(canonical_path(dir.path())).unwrap(),
         original.canonical_bytes()
     );
+}
+
+#[test]
+#[cfg(windows)]
+fn interruption_after_native_rename_retries_the_same_single_link_original() {
+    let dir = tempfile::tempdir().unwrap();
+    let lanes = SumeragiLaneState::default();
+    let writer = archive(dir.path(), AllocationBudget::new(4096), 4096);
+    let original = writer.encode_projection(&projection(&lanes)).unwrap();
+    let ArchiveDirectory::Owner(owner) = &writer.directory else {
+        panic!("writer owner")
+    };
+    let mut stage = owner
+        .create_retained_private(RecordName::new(2, hash(), true).as_str(), 4096)
+        .unwrap();
+    stage.write_all(original.canonical_bytes()).unwrap();
+    let stage = stage.finish_private().unwrap();
+    let identity = stage.identity().unwrap();
+    let mut published = false;
+    assert!(
+        stage
+            .move_no_replace_observed(owner, RecordName::new(2, hash(), false).as_str(), |step| {
+                if step == iroha_fs::FileMoveStep::Published {
+                    published = true;
+                    return Err(io::Error::other("interrupted after exact native rename"));
+                }
+                Ok(())
+            })
+            .is_err()
+    );
+    assert!(published);
+    assert!(!stage_path(dir.path()).exists());
+    let file = fs::File::open(canonical_path(dir.path())).unwrap();
+    let metadata = iroha_fs::FileMetadata::of(&file).unwrap();
+    assert_eq!(metadata.identity(), identity);
+    assert_eq!(metadata.links(), 1);
+    drop(file);
+    writer.publish(&original).unwrap();
+    assert_eq!(
+        fs::read(canonical_path(dir.path())).unwrap(),
+        original.canonical_bytes()
+    );
+    assert!(!stage_path(dir.path()).exists());
+}
+
+#[test]
+#[cfg(windows)]
+fn production_open_retains_native_kura_root_and_kernel_excludes_substitution() {
+    let kura = Kura::blank_kura_for_testing();
+    let budget = AllocationBudget::new(4096);
+    let bound =
+        NativeContextArchive::open(&kura, budget, kura.native_context_archive_max_bytes()).unwrap();
+    let original = kura.native_context_archive_root().unwrap();
+    assert_eq!(bound.root.identity().unwrap(), original.identity().unwrap());
+    let path = kura.store_root();
+    assert!(fs::rename(&path, path.with_extension("retained-original")).is_err());
+    assert!(fs::rename(path.join("native-contexts"), path.join("displaced-archive")).is_err());
+    bound.recheck_namespace().unwrap();
 }
 
 #[test]

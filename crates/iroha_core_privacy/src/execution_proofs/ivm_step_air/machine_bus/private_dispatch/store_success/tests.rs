@@ -220,8 +220,8 @@ impl Fixture {
                         ),
                     ),
                     schedule.clock(36),
-                    17_u128.to_le_bytes(),
-                    u128::from(17 | selected).to_le_bytes(),
+                    0x0011_u128.to_le_bytes(),
+                    u128::from(0x0011 | selected).to_le_bytes(),
                     [0, 0],
                     true,
                 ),
@@ -244,7 +244,7 @@ impl Fixture {
             set_port(&mut rows[3], 3 + i, dispatch.packets.fields[18 + i]);
         }
         rows[3][..effect::WIDTH].copy_from_slice(&effect::witness(
-            address, true, policies, prior_mask, 17, tracked, value,
+            address, true, policies, prior_mask, 0x0011, tracked, value,
         ));
         let mut carry = [F::ZERO; CARRY_WIDTH];
         carry[ADDRESS..ADDRESS + 4].copy_from_slice(&addr);

@@ -31,13 +31,22 @@ impl Kura {
         ]
         .iter()
         .any(|path| !matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == ErrorKind::NotFound));
+        #[cfg(windows)]
+        let pending = pending || self.native_pipeline_pending();
         if !pending {
             return true;
         }
         let mutation = self
             .begin_total_disk_usage_mutation()
             .with_resource_paths(Self::sidecar_physical_resource_paths(data_path, index_path));
-        if !Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind) {
+        #[cfg(not(windows))]
+        let recovered = Self::recover_indexed_sidecar_artifacts(data_path, index_path, kind);
+        #[cfg(windows)]
+        let recovered = {
+            let _ = kind;
+            self.recover_native_pipeline(data_path, index_path)
+        };
+        if !recovered {
             return false;
         }
         // Recovery can replace or remove stable and temporary data as well as

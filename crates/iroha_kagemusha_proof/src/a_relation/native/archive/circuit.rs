@@ -158,12 +158,14 @@ impl Cells {
             self.value(u128::try_from(raw.len()).map_err(|_| Error::BoundsFailure)?),
         )?;
         let messages = raw
-            .chunks_exact(32)
+            .as_chunks::<32>()
+            .0
+            .iter()
             .map(|chunk| {
                 iroha_plonk_gadgets::bytes::element::LeElement::assign(
                     &mut chip.uint(),
                     region,
-                    self.value(chunk.try_into().map_err(|_| Error::Synthesis)?),
+                    self.value(*chunk),
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -913,7 +915,7 @@ impl Stage {
             words.push(Fp::from(
                 u64::try_from(view.len()).map_err(|_| super::Error::Input)?,
             ));
-            for message in view.chunks_exact(32) {
+            for message in view.as_chunks::<32>().0 {
                 words.push(Fp::from_u128(u128::from_le_bytes(
                     message[..16].try_into().map_err(|_| super::Error::Input)?,
                 )));

@@ -1847,7 +1847,9 @@ where
             .checked_mul(core::mem::size_of::<u64>())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for (encoded, coefficient) in scratch[..encoded_bytes]
-            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(chunk)
         {
             encoded.copy_from_slice(&coefficient.to_be_bytes());
@@ -2065,13 +2067,13 @@ impl StreamingCollectiveLimbReaderV1 {
             }
             for (destination, encoded) in destination[filled..filled + take_coefficients]
                 .iter_mut()
-                .zip(scratch[..read].chunks_exact(core::mem::size_of::<u64>()))
+                .zip(
+                    scratch[..read]
+                        .as_chunks::<{ core::mem::size_of::<u64>() }>()
+                        .0,
+                )
             {
-                let residue = u64::from_be_bytes(
-                    encoded
-                        .try_into()
-                        .map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?,
-                );
+                let residue = u64::from_be_bytes(*encoded);
                 if residue >= modulus {
                     return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
                 }
@@ -2568,7 +2570,9 @@ where
             .checked_mul(core::mem::size_of::<u64>())
             .ok_or(ZkAmsMkheErrorV1::ResourceCeilingExceeded)?;
         for (encoded, coefficient) in scratch[..encoded_bytes]
-            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(chunk)
         {
             encoded.copy_from_slice(&coefficient.to_be_bytes());

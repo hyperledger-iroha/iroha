@@ -1510,9 +1510,8 @@ fn prepared_worker_refusal_and_unwind_join_all_before_payload_cleanup() {
                 if already_unwinding {
                     let _prepared = prepared;
                     std::panic::panic_any(outer_panic);
-                } else {
-                    let _ = prepared.finish_refusal(DriverError::StorageClosed);
                 }
+                let _ = prepared.finish_refusal(DriverError::StorageClosed);
             });
         });
         let entered = observed.recv_timeout(std::time::Duration::from_secs(5));
@@ -1578,18 +1577,17 @@ fn original_joiner_and_terminal_driver_drop_contain_payload_panic_during_unwind(
                     .unwrap(),
                 ));
                 std::panic::panic_any(outer.clone());
-            } else {
-                let Fixture {
-                    driver,
-                    start,
-                    owners,
-                } = fixture(Arc::new(SystemClock::new()));
-                assert!(backends.set(owners).is_ok());
-                let mut owner = driver.spawn(DriverConfig::default(), start).unwrap();
-                owner.join_failure = Some(OriginalWorkerPanic::new(Box::new(payload)));
-                let _owner = owner;
-                std::panic::panic_any(outer.clone());
             }
+            let Fixture {
+                driver,
+                start,
+                owners,
+            } = fixture(Arc::new(SystemClock::new()));
+            assert!(backends.set(owners).is_ok());
+            let mut owner = driver.spawn(DriverConfig::default(), start).unwrap();
+            owner.join_failure = Some(OriginalWorkerPanic::new(Box::new(payload)));
+            let _owner = owner;
+            std::panic::panic_any(outer.clone());
         }));
         let exact = outcome
             .as_ref()

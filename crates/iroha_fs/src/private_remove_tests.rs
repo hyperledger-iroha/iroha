@@ -263,17 +263,134 @@ fn private_removal_refuses_readonly_native_file_then_original_retry() {
         .unwrap();
     let path = directory.path().join("record");
     let original = FileIdentity::of(&directory.open_read("record").unwrap()).unwrap();
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
+    let original_permissions = fs::metadata(&path).unwrap().permissions();
+    let mut permissions = original_permissions.clone();
     permissions.set_readonly(true);
     fs::set_permissions(&path, permissions).unwrap();
     assert!(directory.remove_private("record").is_err());
     assert!(path.is_file());
-    let mut permissions = fs::metadata(&path).unwrap().permissions();
-    permissions.set_readonly(false);
-    fs::set_permissions(&path, permissions).unwrap();
+    fs::set_permissions(&path, original_permissions).unwrap();
     assert_eq!(
         FileIdentity::of(&directory.open_read("record").unwrap()).unwrap(),
         original
     );
     assert!(directory.remove_private("record").unwrap());
+}
+
+#[test]
+fn snapshot_private_removal_preserves_same_byte_substitution_and_accepts_exact_original() {
+    let (_temporary, directory) = store();
+    let owner = OwnerDirectory::open(directory.path()).unwrap();
+    directory
+        .write_atomic("record", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let expected = FileSnapshot::private_journal(&directory.open_read("record").unwrap()).unwrap();
+    assert!(
+        !owner
+            .remove_private_if_snapshot("missing", &expected)
+            .unwrap()
+    );
+    for name in ["", ".", "..", "../record", "record/child"] {
+        assert_eq!(
+            owner
+                .remove_private_if_snapshot(name, &expected)
+                .unwrap_err()
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+    fs::rename(
+        directory.path().join("record"),
+        directory.path().join("saved"),
+    )
+    .unwrap();
+    directory
+        .write_atomic("record", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let replacement =
+        FileSnapshot::private_journal(&directory.open_read("record").unwrap()).unwrap();
+    assert_ne!(expected.local_parts().1, replacement.local_parts().1);
+    assert_eq!(
+        owner
+            .remove_private_if_snapshot("record", &expected)
+            .unwrap_err()
+            .to_string(),
+        changed().to_string()
+    );
+    for name in ["record", "saved"] {
+        assert_eq!(directory.read(name, 8).unwrap().as_slice(), b"original");
+    }
+    assert_eq!(
+        FileSnapshot::private_journal(&directory.open_read("record").unwrap()).unwrap(),
+        replacement
+    );
+    assert!(
+        owner
+            .remove_private_if_snapshot("record", &replacement)
+            .unwrap()
+    );
+    assert!(
+        !owner
+            .remove_private_if_snapshot("record", &replacement)
+            .unwrap()
+    );
+    assert_eq!(directory.read("saved", 8).unwrap().as_slice(), b"original");
+}
+
+#[test]
+fn snapshot_private_removal_preserves_changed_original_extent() {
+    let (_temporary, directory) = store();
+    let owner = OwnerDirectory::open(directory.path()).unwrap();
+    directory
+        .write_atomic("record", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let expected = FileSnapshot::private_journal(&directory.open_read("record").unwrap()).unwrap();
+    fs::OpenOptions::new()
+        .write(true)
+        .open(directory.path().join("record"))
+        .unwrap()
+        .set_len(9)
+        .unwrap();
+    let changed_snapshot =
+        FileSnapshot::private_journal(&directory.open_read("record").unwrap()).unwrap();
+    assert_eq!(changed_snapshot.local_parts().1, expected.local_parts().1);
+    assert_ne!(changed_snapshot.local_parts().2, expected.local_parts().2);
+    assert_eq!(
+        owner
+            .remove_private_if_snapshot("record", &expected)
+            .unwrap_err()
+            .to_string(),
+        changed().to_string()
+    );
+    assert_eq!(
+        directory.read("record", 9).unwrap().as_slice(),
+        b"original\0"
+    );
+    assert!(
+        owner
+            .remove_private_if_snapshot("record", &changed_snapshot)
+            .unwrap()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn snapshot_private_removal_refuses_late_absence_without_deleting_original() {
+    let (_temporary, directory) = store();
+    let owner = OwnerDirectory::open(directory.path()).unwrap();
+    directory
+        .write_atomic("record", b"original", PublishMode::CreateNew)
+        .unwrap();
+    let expected = FileSnapshot::private_journal(&directory.open_read("record").unwrap()).unwrap();
+    let record = directory.path().join("record");
+    let saved = directory.path().join("saved");
+    let destination = saved.clone();
+    let error = platform::with_readonly_named_hook(
+        "record",
+        move || fs::rename(record, destination).unwrap(),
+        || owner.remove_private_if_snapshot("record", &expected),
+    )
+    .unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    assert_eq!(fs::read(saved).unwrap(), b"original");
 }

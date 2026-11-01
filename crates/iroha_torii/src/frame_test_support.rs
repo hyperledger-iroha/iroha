@@ -10,7 +10,7 @@ where
     assert!(T::nominal_name() == owner, "unexpected nominal frame owner");
     assert!(T::frame_name() == owner, "unexpected projected frame owner");
     let encoded = norito::encode_canonical(value).expect("current frame");
-    assert!(encoded[6..22] == norito::schema::identity::frame_hash::<T>());
+    assert_eq!(encoded[6..22], norito::schema::identity::frame_hash::<T>());
     let decoded: T = norito::decode_canonical(&encoded).expect("exact frame roundtrip");
     assert!(
         norito::codec::encode_adaptive(&decoded) == norito::codec::encode_adaptive(value),

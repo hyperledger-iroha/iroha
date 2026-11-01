@@ -272,25 +272,38 @@ pub(crate) const ZK_X509_MAX_PROOF_BYTES_V1: u32 = 9 * 1024 * 1024;
 // stale local profile cannot make itself appear compatible by supplying a
 // protocol-specific theorem certificate.
 const ZK_X509_SHARED_STARK_QUERY_COUNT_V1: u8 = 136;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_BLOWUP_FACTOR_V1: u8 = 8;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_MAIN_LDE_LOG2_V1: u8 = 22;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_MAIN_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_MAIN_COMPOSITION_CHUNKS_V1: u8 = 6;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_MAIN_MASK_DEGREE_V1: u16 = 1_815;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_MAIN_FRI_ROUNDS_V1: u8 = 12;
 // The joint original-column schedule requires 2,100 CA hiding coefficients.
 // Its log-12 native trace and degree-2,099 mask fit the unchanged exclusive
 // FRI degree cap of 9,216. Six binary folds retain the log-10 terminal domain
 // and degree-143 terminal polynomial on the shared log-16 LDE.
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_CA_PADDED_TRACE_LOG2_V1: u8 = 12;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_CA_LDE_LOG2_V1: u8 = 16;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_CA_TERMINAL_LOG2_V1: u8 = 10;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_CA_TERMINAL_DEGREE_BOUND_V1: u16 = 143;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_CA_MASK_DEGREE_V1: u16 = 2099;
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_CA_FRI_ROUNDS_V1: u8 = 6;
 /// Exact maximum inner MAIN proof for the present 5,831-column opening
 /// schedule after applying q=136, blowup eight, Fp4 openings, six composition
 /// chunks, paired FRI leaves, and 48-byte canonical multiproof hashes.
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 7_931_808;
 /// Exact MAIN base-field payload: 136 current-row queries times all 5,831
 /// columns times eight bytes; current/next DEEP values remain complete.
@@ -298,6 +311,7 @@ const ZK_X509_SHARED_STARK_WIDE_MAIN_MAXIMUM_PROOF_BYTES_V1: u32 = 7_931_808;
 const ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_344_128;
 /// Exact maximum compact-CA inner proof after padding its 104 active rows to a
 /// log-12 native trace and using four composition chunks on the shared log-16 LDE.
+#[cfg(test)]
 const ZK_X509_SHARED_STARK_PADDED_CA_MAXIMUM_PROOF_BYTES_V1: u32 = 1_498_816;
 
 /// Whether zk-X509 has completed the non-negotiable shared-STARK hard cut.

@@ -229,7 +229,7 @@ impl<'a> PrefixRef<'a> {
 }
 
 impl<'a> CheckedFrameRef<'a> {
-    pub(super) fn extends(self, parent: ParentProjection) -> bool {
+    pub(super) fn extends(self, parent: &ParentProjection) -> bool {
         parent.height.checked_add(1) == Some(self.parent.height)
             && self.previous_iroha_hash == Some(parent.iroha_hash)
             && self.header.is_some_and(|header| {

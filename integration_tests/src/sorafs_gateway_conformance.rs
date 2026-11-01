@@ -1323,14 +1323,14 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
         .wrap_err("failed to write payload fixture (.bin)")?;
     fs::write(
         output_dir.join(PAYLOAD_DIGEST_FILE),
-        format!("{}\n", &metadata.payload_blake3_hex),
+        format!("{}\n", metadata.payload_blake3_hex),
     )
     .wrap_err("failed to write payload digest fixture")?;
     fs::write(output_dir.join(CAR_BIN_FILE), &bundle.car_bytes)
         .wrap_err("failed to write CAR fixture (.car)")?;
     fs::write(
         output_dir.join(CAR_DIGEST_FILE),
-        format!("{}\n", &metadata.car_blake3_hex),
+        format!("{}\n", metadata.car_blake3_hex),
     )
     .wrap_err("failed to write CAR digest fixture")?;
     fs::write(
@@ -1352,7 +1352,7 @@ pub fn write_fixture_bundle(output_dir: &Path) -> EyreResult<FixtureMetadata> {
     );
     metadata_map.insert(
         "released_at_unix".into(),
-        Value::from(metadata.released_at_unix as u64),
+        Value::from(metadata.released_at_unix),
     );
     metadata_map.insert(
         "fixtures_digest_blake3_hex".into(),
@@ -1514,6 +1514,15 @@ fn car_digest_matches_manifest_fixture() {
 }
 #[test]
 fn council_envelope_signs_manifest_fixture() {
+    const SMALL_ORDER_R: [u8; 32] = [
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0,
+    ];
+    const NONCANONICAL_R: [u8; 32] = [
+        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0x7f,
+    ];
     let bundle = canonical_fixture_bundle();
     verify_council_envelope(
         &bundle.manifest,
@@ -1543,15 +1552,6 @@ fn council_envelope_signs_manifest_fixture() {
         err.to_string().contains("signature"),
         "unexpected error: {err:?}"
     );
-    const SMALL_ORDER_R: [u8; 32] = [
-        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-        0, 0,
-    ];
-    const NONCANONICAL_R: [u8; 32] = [
-        0xee, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
-        0xff, 0x7f,
-    ];
     for (label, replacement_r) in [
         ("small-order", SMALL_ORDER_R),
         ("noncanonical", NONCANONICAL_R),

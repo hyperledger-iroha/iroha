@@ -162,7 +162,7 @@ fn each_actual_single_decode_allocation_fails_fallibly_and_refunds() {
             .unwrap()
             .retained_allocation_layout(),
         Layout::array::<u64>(canonical.len().div_ceil(8)).unwrap(),
-        Layout::array::<u8>((canonical.len() * 8 + 5) / 6).unwrap(),
+        Layout::array::<u8>((canonical.len() * 8).div_ceil(6)).unwrap(),
     ];
     let pool = AllocationBudget::new(1 << 20);
     let (owner, requests) = measured(|| decode(&wire, &pool));

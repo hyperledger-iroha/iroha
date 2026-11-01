@@ -243,14 +243,14 @@ impl BootstrapStore {
     pub fn accept(
         &self,
         profile: &InstalledNetworkProfile,
-        native: NativeBootstrap,
+        native: &NativeBootstrap,
     ) -> Result<AuthenticatedBootstrap> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| BootstrapError::Invalid("bootstrap custody update was interrupted"))?;
         self.check_custody(&state)?;
-        let metadata = native_metadata(profile, &native)?;
+        let metadata = native_metadata(profile, native)?;
         let checkpoint = native
             .verifier
             .checkpoint()

@@ -1890,8 +1890,10 @@ fn padded_source_words_v1(
         return Err(ZkX509AccumulatorStarkErrorV1::Shape);
     }
     padded
-        .chunks_exact(4)
-        .map(|word| u32::from_be_bytes(word.try_into().expect("four bytes")))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_be_bytes(*word))
         .collect::<Vec<_>>()
         .try_into()
         .map_err(|_: Vec<u32>| ZkX509AccumulatorStarkErrorV1::Shape)

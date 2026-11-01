@@ -240,10 +240,14 @@ fn measure(label: &str, shape: SigmaShape, options: KeyOptions) {
     let verifier = prover.verifier();
     let bytes = verifier.proof_bytes().expect("descriptor length");
     assert_eq!(bytes, shape.proof_length::<Eq>().expect("shape length"));
-    let descriptor_sha256 = Sha256::digest(verifier.descriptor_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let descriptor_sha256 =
+        Sha256::digest(verifier.descriptor_bytes())
+            .iter()
+            .fold(String::new(), |mut out, byte| {
+                use core::fmt::Write as _;
+                write!(out, "{byte:02x}").expect("string write");
+                out
+            });
     let key_digest = verifier.verifying_key_digest().expect("key digest");
     let key_digest = key_digest.iter().fold(String::new(), |mut out, byte| {
         use core::fmt::Write as _;

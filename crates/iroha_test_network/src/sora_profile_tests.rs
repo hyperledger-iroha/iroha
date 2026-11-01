@@ -54,7 +54,7 @@ fn sora_storage_profile_fixture() -> (tempfile::TempDir, Table) {
                     .expect("canonical signer authority"),
             )
             .write("algorithm", "ed25519")
-            .write("public_key_hex", hex_lower(&public_bytes))
+            .write("public_key_hex", hex_lower(public_bytes))
             .write("revision", 1_i64)
             .write("policy_digest_hex", hex_lower(&[seed; 32]));
         layer = layer.write(
@@ -188,7 +188,7 @@ fn sora_profile_detection_uses_typed_default_catalogs_without_publisher_custody(
         dataspace_catalog = []
         [nexus.routing_policy]
     };
-    let merged = merged_sora_profile_detection_config(&[layer.clone()]);
+    let merged = merged_sora_profile_detection_config(std::slice::from_ref(&layer));
     assert!(merged.get("kagemusha_load_authorizer").is_none());
     assert!(!typed_sora_profile_requirements(&merged).expect("valid explicit default catalogs"));
     assert!(!config_requires_sora_profile(&[layer]));

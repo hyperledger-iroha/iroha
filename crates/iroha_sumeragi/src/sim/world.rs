@@ -1962,11 +1962,9 @@ impl World {
         let m = self.replicas[r].machine;
         let epoch = self.machines[m].epoch;
         let profile = self.machines[m].profile;
-        let budget_bytes = if profile.exec_per_kib == 0 {
-            u64::MAX
-        } else {
-            u64::from(budget_ms).saturating_sub(profile.exec_base) * 1024 / profile.exec_per_kib
-        };
+        let budget_bytes = (u64::from(budget_ms).saturating_sub(profile.exec_base) * 1024)
+            .checked_div(profile.exec_per_kib)
+            .unwrap_or(u64::MAX);
         let limit = u64::from(max_bytes)
             .min(budget_bytes)
             .saturating_sub(self.block_time_bytes());

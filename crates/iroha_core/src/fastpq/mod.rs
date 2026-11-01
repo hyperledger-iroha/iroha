@@ -282,13 +282,6 @@ where
     value.encode_to(writer);
 }
 #[inline]
-fn u64_from_le_bytes(bytes: &[u8]) -> u64 {
-    debug_assert!(bytes.len() >= 8);
-    u64::from_le_bytes([
-        bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-    ])
-}
-#[inline]
 fn partial_u64_from_le_bytes(bytes: [u8; 8], len: usize) -> u64 {
     debug_assert!(len <= bytes.len());
     let word = u64::from_le_bytes(bytes);
@@ -327,11 +320,10 @@ impl<'a> PoseidonWordPacker<'a> {
                 self.pending_len = 0;
             }
         }
-        let mut chunks = bytes.chunks_exact(8);
-        for chunk in &mut chunks {
-            self.words.push(u64_from_le_bytes(chunk));
+        let (chunks, remainder) = bytes.as_chunks::<8>();
+        for chunk in chunks {
+            self.words.push(u64::from_le_bytes(*chunk));
         }
-        let remainder = chunks.remainder();
         if !remainder.is_empty() {
             self.pending_bytes[..remainder.len()].copy_from_slice(remainder);
             self.pending_len = remainder.len();
@@ -1440,13 +1432,31 @@ mod tests {
         delta.amount.encode_to(&mut streamed_preimage);
         streamed_preimage.extend_from_slice(batch_hash.as_ref());
         assert_eq!(streamed_preimage, encoded_preimage);
-        let digest = poseidon_preimage_digest(&delta, &batch_hash);
+        // Pin the input separately from the selected 8-full/57-partial-round
+        // BN254 Poseidon result. The independent hash_bytes implementation in
+        // scripts/zk_bn254_poseidon_reference.py reproduces the raw field bytes
+        // below from this preimage and generate_parameters(3, 8, 57).
         assert_eq!(
-            digest,
-            Hash::prehashed(halo2_poseidon::hash_bytes(&encoded_preimage))
+            hex::encode(&encoded_preimage),
+            concat!(
+                "000000004a2100000000000000010001ce017f01a4016c019d01ce017e01a401",
+                "b1012501e201e3016b01db016301ea01330107013e0175019001ac0192018101",
+                "6a01e101e8016101b70104018b0103000000004a210000000000000001000104",
+                "01ff015b01810104016d01dc01cf011901e201e4015101c4015d01fb016f0153",
+                "0175019d014e01b3010f01a201ef01a801070128014d011c01c30130011601a1",
+                "0158016b019b01e10164014b01040188019a018801c0018e0140011501440501",
+                "0000002a04000000001111111111111111111111111111111111111111111111",
+                "111111111111111111",
+            )
         );
-        // The canonical width-three bank has 8 full and 57 partial rounds.
-        // Checked with scripts/zk_bn254_poseidon_reference.py over this preimage.
+        let raw_digest = halo2_poseidon::hash_bytes(&encoded_preimage);
+        assert_eq!(
+            hex::encode(raw_digest),
+            "f34ee22cc4cd0b2ea90f03d303ce3c92ac5172d067a663cf2c687de7b95c2f1c"
+        );
+        let digest = poseidon_preimage_digest(&delta, &batch_hash);
+        assert_eq!(digest, Hash::prehashed(raw_digest));
+        // Hash reserves the low bit of its final byte for its nonzero invariant.
         assert_eq!(
             hex::encode(digest.as_ref()),
             "f34ee22cc4cd0b2ea90f03d303ce3c92ac5172d067a663cf2c687de7b95c2f1d"

@@ -1,7 +1,7 @@
 // Finalized billing-account validation regressions.
 #[test]
 fn finalized_events_require_exact_canonical_utf8_i105_account_bytes() {
-    let root = tempfile::tempdir().expect("state root");
+    let root = private_state_tempdir().expect("state root");
     let (service, _feed_policy, _reference, _verifier, _publisher, _ack_authority) =
         ready_service(root.path());
     let mut legacy = event(1, "storage:event:legacy-account", "1");

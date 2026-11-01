@@ -695,7 +695,9 @@ mod tests {
         let encoded = proof().encode();
         let mut modulus = [0_u8; JINDO_FIELD_ELEMENT_BYTES_V1];
         for (chunk, limb) in modulus
-            .chunks_exact_mut(8)
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
             .zip(JindoFieldElementV1::MODULUS)
         {
             chunk.copy_from_slice(&limb.to_le_bytes());
@@ -746,7 +748,9 @@ mod tests {
         let offset = MASK_SPLIT_EVALUATION_OFFSET + index * JINDO_FIELD_ELEMENT_BYTES_V1;
         let mut field = encoded;
         for (chunk, limb) in field[offset..offset + JINDO_FIELD_ELEMENT_BYTES_V1]
-            .chunks_exact_mut(8)
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
             .zip(JindoFieldElementV1::MODULUS)
         {
             chunk.copy_from_slice(&limb.to_le_bytes());

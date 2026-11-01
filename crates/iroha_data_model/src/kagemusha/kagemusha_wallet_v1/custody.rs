@@ -1243,7 +1243,7 @@ fn capsule_point_v1<C: iroha_pasta::PastaCurve<ScalarExt = iroha_pasta::Fp>>(
     use iroha_pasta::{Fp, PastaField};
     let scalar = |bytes: &[u8; 32]| {
         let mut limbs = zeroize::Zeroizing::new([0_u64; 4]);
-        for (limb, chunk) in limbs.iter_mut().zip(bytes.chunks_exact(8)) {
+        for (limb, chunk) in limbs.iter_mut().zip(bytes.as_chunks::<8>().0) {
             let mut word = zeroize::Zeroizing::new([0; 8]);
             word.copy_from_slice(chunk);
             *limb = u64::from_le_bytes(*word);

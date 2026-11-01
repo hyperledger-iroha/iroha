@@ -17,10 +17,17 @@ pub(super) struct BuiltInWireId {
     frame_len: fn(usize) -> Option<usize>,
     #[cfg(test)]
     pub(super) governance_only: bool,
+    /// Registered tolerantly: an instruction added after the frozen baseline
+    /// (`specs/live_runtime_upgrades.md` §5.2, [`InstructionRegistry::register_with_id_tolerant`]).
+    pub(super) tolerant: bool,
+    /// Structural layout of the payload type ([`super::payload_layout`]), pinned for every
+    /// baseline instruction.
+    #[cfg(test)]
+    pub(super) layout: fn() -> String,
     register: Registrar,
 }
 macro_rules! built_in_wire_id_with_scope {
-    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal, register = $register:expr) => {
+    ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal, tolerant = $tolerant:literal, register = $register:expr) => {
         BuiltInWireId {
             #[cfg(test)]
             type_label: stringify!($ty),
@@ -30,15 +37,32 @@ macro_rules! built_in_wire_id_with_scope {
             frame_len: crate::isi::framed_instruction_payload_len_for::<$ty>,
             #[cfg(test)]
             governance_only: $governance_only,
+            tolerant: $tolerant,
+            #[cfg(test)]
+            layout: super::payload_layout::<$ty>,
             register: $register,
         }
     };
 }
+/// One built-in instruction's registration.
+///
+/// The baseline forms register strictly. An instruction added after the frozen baseline (an
+/// addition of `iroha_core::runtime::catalog::additions`) uses a `tolerant` form instead: releases
+/// without it keep its envelopes opaque, so this release must never fail to decode one either
+/// (`specs/live_runtime_upgrades.md` §5.2).
+#[cfg_attr(
+    not(test),
+    allow(
+        unused_macro_rules,
+        reason = "no instruction is added after the frozen baseline yet; the first addition uses the tolerant forms"
+    )
+)]
 macro_rules! built_in_wire_id {
     ($ty:ty => $wire_id:literal) => {
         built_in_wire_id_with_scope!(
             $ty => $wire_id,
             governance_only = false,
+            tolerant = false,
             register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
         )
     };
@@ -46,7 +70,24 @@ macro_rules! built_in_wire_id {
         built_in_wire_id_with_scope!(
             $ty => $wire_id,
             governance_only = false,
+            tolerant = false,
             register = |registry| registry.register_with_id::<$ty>($wire_id)
+        )
+    };
+    ($ty:ty => $wire_id:literal, tolerant) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            tolerant = true,
+            register = |registry| registry.register_with_id_slice_tolerant::<$ty>($wire_id)
+        )
+    };
+    ($ty:ty => $wire_id:literal, register, tolerant) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = false,
+            tolerant = true,
+            register = |registry| registry.register_with_id_tolerant::<$ty>($wire_id)
         )
     };
 }
@@ -55,7 +96,16 @@ macro_rules! governance_wire_id {
         built_in_wire_id_with_scope!(
             $ty => $wire_id,
             governance_only = true,
+            tolerant = false,
             register = |registry| registry.register_with_id_slice::<$ty>($wire_id)
+        )
+    };
+    ($ty:ty => $wire_id:literal, tolerant) => {
+        built_in_wire_id_with_scope!(
+            $ty => $wire_id,
+            governance_only = true,
+            tolerant = true,
+            register = |registry| registry.register_with_id_slice_tolerant::<$ty>($wire_id)
         )
     };
 }
@@ -462,6 +512,7 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     governance_wire_id!(governance::ProposeContractEmergencyHold => "iroha.instruction.v1::governance::ProposeContractEmergencyHold"),
     governance_wire_id!(governance::ProposeGlobalDataTriggerPermissionGovernance => "iroha.instruction.v1::governance::ProposeGlobalDataTriggerPermissionGovernance"),
     governance_wire_id!(governance::ProposeRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeRuntimeUpgradeProposal"),
+    governance_wire_id!(governance::ProposeEndorsedRuntimeUpgradeProposal => "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal", tolerant),
     governance_wire_id!(governance::ProposeSccpRouteGovernance => "iroha.instruction.v1::governance::ProposeSccpRouteGovernance"),
     governance_wire_id!(governance::ProposeSorafsProviderGovernance => "iroha.instruction.v1::governance::ProposeSorafsProviderGovernance"),
     governance_wire_id!(governance::ProposeValidationFeePolicy => "iroha.instruction.v1::governance::ProposeValidationFeePolicy"),
@@ -496,4 +547,62 @@ pub(super) fn register_all() -> InstructionRegistry {
         .fold(InstructionRegistry::new(), |registry, entry| {
             (entry.register)(registry)
         })
+}
+
+#[cfg(test)]
+mod tests {
+    //! Registration forms of the built-in inventory (`specs/live_runtime_upgrades.md` §5.2).
+    use super::*;
+
+    #[test]
+    fn tolerant_forms_register_tolerantly_and_baseline_forms_do_not() {
+        let cases = [
+            (
+                built_in_wire_id!(Log => "test.tolerant.slice.v1", tolerant),
+                true,
+            ),
+            (
+                built_in_wire_id!(Log => "test.tolerant.register.v1", register, tolerant),
+                true,
+            ),
+            (built_in_wire_id!(Log => "test.strict.slice.v1"), false),
+            (
+                built_in_wire_id!(Log => "test.strict.register.v1", register),
+                false,
+            ),
+            (
+                governance_wire_id!(Log => "test.strict.governance.v1"),
+                false,
+            ),
+        ];
+        for (entry, tolerant) in cases {
+            assert_eq!(entry.tolerant, tolerant, "{}", entry.wire_id);
+            let registry = (entry.register)(InstructionRegistry::new());
+            assert!(registry.contains(entry.wire_id));
+            assert_eq!(
+                registry.is_tolerant(entry.wire_id),
+                tolerant,
+                "{}",
+                entry.wire_id
+            );
+        }
+    }
+
+    #[test]
+    fn the_baseline_inventory_is_strict_and_well_formed() {
+        // Every current entry belongs to the frozen baseline; a later addition registers
+        // tolerantly. Every wire ID satisfies the envelope wire-ID rule, so the release-independent
+        // framing check never refuses a registered instruction.
+        let registry = register_all();
+        for entry in ALL {
+            assert!(!entry.tolerant, "{}", entry.wire_id);
+            assert!(!registry.is_tolerant(entry.wire_id), "{}", entry.wire_id);
+            assert!(
+                crate::isi::is_well_formed_wire_id(entry.wire_id),
+                "{}",
+                entry.wire_id
+            );
+        }
+        assert!(super::super::built_in_instruction_schemas().all(|schema| !schema.tolerant));
+    }
 }

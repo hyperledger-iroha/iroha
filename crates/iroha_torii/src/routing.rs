@@ -14,7 +14,7 @@ mod account_history_sse;
 #[cfg(feature = "app_api")]
 pub use account_history_sse::{AccountHistorySseRequest, handle_v1_account_history_sse};
 #[cfg(feature = "app_api")]
-pub(crate) mod asset_movements;
+pub mod asset_movements;
 #[cfg(feature = "app_api")]
 pub mod collection_sources;
 #[cfg(feature = "app_api")]
@@ -315,7 +315,7 @@ struct ExactAccountReadScope {
 /// call. Scans and counters check many accounts and assets against one World inside their
 /// read's allocation budget, so they decode that immutable root once here; each check then
 /// reads only the committed account directory.
-pub(crate) struct WorldReadVisibility<'a, W> {
+pub struct WorldReadVisibility<'a, W> {
     visibility: &'a DataspaceReadVisibility,
     world: &'a W,
     root: Option<iroha_data_model::block::consensus::SumeragiRootScope>,
@@ -5918,7 +5918,6 @@ mod proof_query_envelope_tests {
 }
 /// Maximum registered consensus-key records returned by the operator snapshot.
 const CONSENSUS_KEY_RESPONSE_CAP: usize = 128;
-#[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_consensus_key_records<'a>(
     records: impl IntoIterator<Item = &'a ConsensusKeyRecord>,
 ) -> Vec<ConsensusKeyRecord> {
@@ -6459,7 +6458,6 @@ mod bridge_finality_attestation_progress_tests {
 
 /// Maximum voting-roster identities returned by the BLS-key operator snapshot.
 const BLS_KEY_RESPONSE_CAP: usize = iroha_sumeragi::types::MAX_COMMITTEE_SIZE;
-#[expect(single_use_lifetimes, reason = "impl Trait requires a named lifetime")]
 fn bounded_bls_key_map<'a>(
     peers: impl IntoIterator<Item = &'a PeerId>,
 ) -> std::collections::BTreeMap<String, Option<String>> {
@@ -7928,6 +7926,22 @@ mod evidence_list_query_contract_tests {
             panic!("SCCP DATA")
         };
         material.offenders.clear();
+        // SCCP §4.9 step 7 retains forgery DATA even when no signer is slashable.
+        let empty_original = record.encode();
+        let empty_projection = evidence_to_json(&record).expect("empty offender list is valid");
+        assert_eq!(
+            empty_projection["value"]["record"]["offenders"]
+                .as_array()
+                .map(Vec::len),
+            Some(0)
+        );
+        assert_eq!(record.encode(), empty_original);
+        let RecordedEvidenceV1::SccpForgery(material) = &mut record.evidence else {
+            panic!("SCCP DATA")
+        };
+        // Match attribution so only the malformed zero start height causes refusal.
+        material.start_height = 0;
+        record.attribution.height = 0;
         assert!(matches!(
             evidence_to_json(&record),
             Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -15935,8 +15949,7 @@ const DEFAULT_CONTRACT_ARGUMENT_GAS_LIMIT: u64 = 1_500_000;
 fn current_time_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
-        .unwrap_or(0)
+        .map_or(0, |elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
 }
 }
 pub fn asset_alias_observation_time_ms(state: &CoreState) -> u64 {
@@ -37965,13 +37978,12 @@ mod explorer_lookup_tests {
             let summaries = summaries.clone();
             async move {
                 let response = handle_v1_explorer_blocks_with_summaries(
-                    state,
-                    visibility,
-                    crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 },
+                    &state,
+                    &visibility,
+                    &crate::explorer::ExplorerCursorQuery { cursor: None, limit: 10 },
                     EXPLORER_BLOCK_HEIGHTS_ALL,
-                    summaries,
+                    &summaries,
                 )
-                .await
                 .expect("block page");
                 let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.expect("body");
                 let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
@@ -49475,7 +49487,7 @@ nonce: u32,
         .with_metadata(metadata)
         .with_instructions(instructions)
         ;
-        builder.set_creation_time(Duration::from_millis(4_000_000_000_000));
+        builder.set_creation_time(Duration::from_secs(4_000_000_000));
         builder.set_ttl(Duration::from_secs(3_600));
         builder.set_nonce(NonZeroU32::new(nonce).expect("non-zero fixture nonce"));
         builder.sign(signer)
@@ -54095,25 +54107,25 @@ pub async fn handle_v1_explorer_blocks(
         crate::explorer_history::EXPLORER_BLOCK_SUMMARY_CACHE_CAPACITY,
     ));
     crate::history_producer::HistoryProducerOwner::for_test().physical_scope(|| {
-        handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination, (heights, &summaries))
+        handle_v1_explorer_blocks_sync(&state, &telemetry, &visibility, &pagination, (heights, &summaries))
     })
 }
 
 #[cfg(test)]
-pub async fn handle_v1_explorer_blocks_with_summaries(
-    state: Arc<CoreState>,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
+pub fn handle_v1_explorer_blocks_with_summaries(
+    state: &Arc<CoreState>,
+    visibility: &DataspaceReadVisibility,
+    pagination: &crate::explorer::ExplorerCursorQuery,
     heights: ExplorerBlockHeightRange,
-    summaries: Arc<crate::explorer_history::ExplorerBlockSummaryCache>,
+    summaries: &crate::explorer_history::ExplorerBlockSummaryCache,
 ) -> Result<AxResponse, Error> {
     crate::history_producer::HistoryProducerOwner::for_test().physical_scope(|| {
         handle_v1_explorer_blocks_sync(
             state,
-            MaybeTelemetry::disabled(),
+            &MaybeTelemetry::disabled(),
             visibility,
             pagination,
-            (heights, &summaries),
+            (heights, summaries),
         )
     })
 }
@@ -54130,11 +54142,11 @@ pub async fn handle_v1_explorer_blocks_admitted(
         // This route has a separate source ceiling so a spent decode grant
         // cannot consume its cursor/output reserve. Retain original admission
         // throughout the worker; each phase installs its original owner explicitly.
-        let _admission = admission;
-        let owner = crate::history_producer::HistoryProducerOwner::from_admission(&_admission)?;
+        let admission = admission;
+        let owner = crate::history_producer::HistoryProducerOwner::from_admission(&admission)?;
         owner.physical_scope(|| {
             let (heights, summaries) = feed;
-            handle_v1_explorer_blocks_sync(state, telemetry, visibility, pagination, (heights, &summaries))
+            handle_v1_explorer_blocks_sync(&state, &telemetry, &visibility, &pagination, (heights, &summaries))
         })
     });
     crate::panic_recovery::join_recoverable(worker).await
@@ -54201,14 +54213,13 @@ fn explorer_feed_block_row(
         let block = state.read_canonical_history_block(height, &owner.canonical_history_budget())?;
         // An append or source change during decoding disables retention for
         // this read; only equal before/after source images can warm the cache.
-        if let Some(token) = source_token {
-            if state.canonical_history_summary_source_token(height)? == Some(token) {
+        if let Some(token) = source_token
+            && state.canonical_history_summary_source_token(height)? == Some(token) {
                 let summary = summaries.insert(crate::explorer_history::ExplorerBlockSummary::from_block(
                     &block, visibility, token,
                 ));
                 return Ok(summary.row());
             }
-        }
         Ok(crate::explorer_history::HistoryBlockRow::from_block(
             &block, |index| visibility.allows_external_entrypoint(&block, index),
         ))
@@ -54266,11 +54277,11 @@ fn walk_block_feed(
     Ok(next_position)
 }
 
-pub(crate) fn handle_v1_explorer_blocks_sync(
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    visibility: DataspaceReadVisibility,
-    pagination: crate::explorer::ExplorerCursorQuery,
+pub fn handle_v1_explorer_blocks_sync(
+    state: &Arc<CoreState>,
+    telemetry: &MaybeTelemetry,
+    visibility: &DataspaceReadVisibility,
+    pagination: &crate::explorer::ExplorerCursorQuery,
     (heights, summaries): (ExplorerBlockHeightRange, &crate::explorer_history::ExplorerBlockSummaryCache),
 ) -> Result<AxResponse, Error> {
     let started = std::time::Instant::now();
@@ -54281,8 +54292,8 @@ pub(crate) fn handle_v1_explorer_blocks_sync(
             let filter_digest = explorer_blocks_filter_digest(heights)?;
             resolve_explorer_history_request(
             state.as_ref(),
-            &visibility,
-            &pagination,
+            visibility,
+            pagination,
             collection,
                 filter_digest,
             )
@@ -54294,11 +54305,11 @@ pub(crate) fn handle_v1_explorer_blocks_sync(
             explorer_blocks_walk_start(scope.resume, scope.snapshot_height, heights),
             (scope.limit, heights.0),
             &mut items,
-            |height| explorer_feed_block_row(state.as_ref(), height, &visibility, summaries),
+            |height| explorer_feed_block_row(state.as_ref(), height, visibility, summaries),
         )))?;
         let pagination_meta = owner.scope(|| explorer_history_meta(
             collection,
-            &pagination,
+            pagination,
             &scope,
             next_position,
         ))?;
@@ -54308,7 +54319,7 @@ pub(crate) fn handle_v1_explorer_blocks_sync(
         };
         owner.json_with_limit(&body, owner.source_frame_bytes())
     })();
-    record_explorer_endpoint_result(&telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
+    record_explorer_endpoint_result(telemetry, ENDPOINT_EXPLORER_BLOCKS, started, &response);
     response
 }
 }
@@ -54408,7 +54419,7 @@ routing_test! { async explorer_blocks_falls_back_to_hash_only_committed_journal
     );
 }
 #[cfg(all(test, feature = "app_api"))]
-pub(crate) fn explorer_blocks_seek_test_state(blocks: u8) -> Arc<CoreState> {
+pub fn explorer_blocks_seek_test_state(blocks: u8) -> Arc<CoreState> {
     let state = Arc::new(CoreState::new_for_testing(
         World::default(),
         Kura::blank_kura_for_testing(),
@@ -55523,10 +55534,7 @@ fn collect_transaction_summaries(
     let mut scanned_candidates = 0_usize;
     let mut inspected_entrypoints = 0_usize;
     let mut next_visible_position = None;
-    'history: loop {
-        let Some(position) = scan_position else {
-            break;
-        };
+    'history: while let Some(position) = scan_position {
         if scanned_blocks == EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
             return Err(explorer_scan_capacity_error());
         }
@@ -55659,10 +55667,7 @@ fn collect_instruction_history(
     let mut scanned_candidates = 0_usize;
     let mut inspected_entrypoints = 0_usize;
     let mut next_visible_position = None;
-    'history: loop {
-        let Some(position) = scan_position else {
-            break;
-        };
+    'history: while let Some(position) = scan_position {
         if scanned_blocks == EXPLORER_HISTORY_MAX_SCANNED_BLOCKS_V1 {
             return Err(explorer_scan_capacity_error());
         }
@@ -56460,10 +56465,7 @@ const ISSUANCE_SERIES_DAYS: usize = 30;
     let mut read_budget = HistoryReadBudget::new();
     if max_height > 0 {
         let mut height = max_height;
-        loop {
-            let Some(nonzero_height) = nonzero_height(height) else {
-                break;
-            };
+        while let Some(nonzero_height) = nonzero_height(height) {
             let block = read_budget.read(state.as_ref(), nonzero_height)?;
             let block_ref = block.as_ref();
             let block_ms: u64 = block_ref
@@ -60710,11 +60712,10 @@ pub async fn handle_post_soranet_privacy_event(
         || PrivacyBucketConfig::default().bucket_secs,
         |handle| handle.soranet_privacy().config().bucket_secs,
     );
-    let bucket_start = if bucket_secs > 0 {
-        Some((event.timestamp_unix / bucket_secs) * bucket_secs)
-    } else {
-        None
-    };
+    let bucket_start = event
+        .timestamp_unix
+        .checked_div(bucket_secs)
+        .map(|bucket| bucket * bucket_secs);
     if let Err(err) = telemetry.record_soranet_privacy_event(&event) {
         iroha_logger::warn!(
             ?err,

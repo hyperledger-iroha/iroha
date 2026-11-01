@@ -17,8 +17,9 @@ Purpose
     manifest.
 
 Prerequisites
-    Python 3.9+, ``git``, and the sibling modules in ``scripts/``. No other
-    dependency. The record schema is read from
+    Python 3.9+, ``git``, and the sibling modules in ``scripts/``. Linux also
+    requires the independently published native process bridge and explicit
+    module, provenance, source and native-target trust inputs. The record schema is read from
     ``crates/iroha_measurement/fixtures/record_schema_v1.json``, which the Rust
     crate generates and checks, so the schema has one owner.
 
@@ -63,7 +64,8 @@ Safe defaults
 Measurements never affect validity. This tool reports; it gates nothing.
 
 Exit status: 0 accepted or salvageable, 1 rejected (evidence retained),
-2 refused before any run directory was created.
+2 admission or delivery refused. An admitted Linux workload may retain rejected
+evidence before a later delivery refusal withholds public acknowledgement.
 """
 from __future__ import annotations
 
@@ -95,6 +97,10 @@ import private_settlement_process_observer as observer
 import private_settlement_session_control as control
 from nexus import resource_process as native_process
 from nexus import resource_process_exit as native_exit
+import linux_owned_process_observer as linux_owned
+import linux_root_observer_abi as linux_abi
+import linux_owned_process_evidence as linux_evidence
+import resource_observation_contract as observation_contract
 
 SCHEMA_PATH = REPOSITORY / "crates" / "iroha_measurement" / "fixtures" / "record_schema_v1.json"
 DEFAULT_OUTPUT_ROOT = REPOSITORY / "dist" / "zk-resource-harness"
@@ -131,7 +137,8 @@ IMAGE_MISMATCH_REASONS = frozenset({
 # from retained files; a run that carries one was rejected.
 RUNTIME_ONLY_REASONS = ("address_space_limit_not_applied", "command_not_started",
                         "harness_failure:", "executable_changed_during_run",
-                        "address_space_limit_differs_from_kernel")
+                        "address_space_limit_differs_from_kernel",
+                        "process_observation_exception:")
 # Kernel rusage reports CPU in microseconds; a record read from the clock a
 # moment earlier may differ from the final total by at most this much.
 CPU_ROUNDING_SLACK_NS = 2_000_000
@@ -544,9 +551,38 @@ def unclassified_numbers(descriptor: dict[str, Any], view: Any, path: str = "rec
 # Source and artifact identity.
 # --------------------------------------------------------------------------
 
+# This pure entry policy matches the canonical scanner sanitizer. Importing the
+# scanner here would preinstall a custody owner before its reviewed registry.
+def _git_read_only_environment() -> dict[str, str]:
+    """Return a closed environment for read-only repository inspection."""
+
+    environment = os.environ.copy()
+    # Git's environment surface is open-ended. Trace variables can create or
+    # append caller-selected files, while discovery, pathspec, object-store,
+    # and configuration variables can silently redirect what is inspected.
+    # Start with no caller-provided `GIT_*` setting, then add only the closed
+    # read-only policy below.
+    for name in tuple(environment):
+        if name.startswith("GIT_"):
+            environment.pop(name, None)
+    environment["GIT_NO_LAZY_FETCH"] = "1"
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+    environment["GIT_OPTIONAL_LOCKS"] = "0"
+    environment["GIT_CONFIG_NOSYSTEM"] = "1"
+    environment["GIT_CONFIG_GLOBAL"] = os.devnull
+    environment["GIT_CONFIG_COUNT"] = "2"
+    environment["GIT_CONFIG_KEY_0"] = "core.hooksPath"
+    environment["GIT_CONFIG_VALUE_0"] = os.devnull
+    environment["GIT_CONFIG_KEY_1"] = "core.fsmonitor"
+    environment["GIT_CONFIG_VALUE_1"] = "false"
+    return environment
+
+
 def _git(repository: Path, *arguments: str) -> subprocess.CompletedProcess:
+    """Inspect the caller's repository without ambient redirects or index refresh."""
     return subprocess.run(["git", "-C", str(repository), *arguments],
-                          capture_output=True, check=False)
+                          capture_output=True, check=False,
+                          env=_git_read_only_environment())
 
 
 def sha256_file(path: Path) -> tuple[str, int]:
@@ -580,8 +616,10 @@ def source_state(repository: Path) -> dict[str, Any]:
         return {"source_commit": commit, "source_dirty": False, "source_dirty_digest": None}
     digest = hashlib.sha256(DIRTY_DOMAIN)
     with subprocess.Popen(
-            ["git", "-C", str(repository), "diff", "HEAD", "--binary", "--no-ext-diff",
-             "--no-color"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as diff:
+            ["git", "-c", "diff.autoRefreshIndex=false", "-C", str(repository),
+             "diff", "HEAD", "--binary", "--no-ext-diff",
+             "--no-color"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            env=_git_read_only_environment()) as diff:
         assert diff.stdout is not None
         while True:
             chunk = diff.stdout.read(1 << 20)
@@ -789,13 +827,13 @@ def _try_reap(pid: int) -> tuple[int, Any] | None:
     return (status, usage) if reaped == pid else None
 
 
-def _kill_own_child(pid: int) -> tuple[int, Any]:
+def _kill_own_child(pid: int, *, reap: bool = True) -> tuple[int, Any] | None:
     """Kill the harness's own child after its deadline and take its totals."""
     try:
         os.kill(pid, signal.SIGKILL)
     except ProcessLookupError:
         pass
-    return os.wait4(pid, 0)[1:]
+    return os.wait4(pid, 0)[1:] if reap else None
 
 
 def _exit_fact(status: int) -> dict[str, Any]:
@@ -817,8 +855,17 @@ def _owned_child_monitor(reader, pid, image):
                                                reader.cpu_numer, reader.cpu_denom)
 
 
+def _observer_exception_fact(stage: str, error: BaseException) -> dict[str, Any]:
+    """Retain the exact trusted exception type, never its payload or pathname."""
+    error_type = type(error)
+    number = getattr(error, "errno", None)
+    return {"stage": stage, "type": error_type.__module__ + "." + error_type.__qualname__,
+            "errno": number if type(number) is int and 0 <= number <= 4095 else None}
+
+
 def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, records: Any,
-                  interval_ms: int, timeout_ms: int) -> dict[str, Any]:
+                  interval_ms: int, timeout_ms: int, *,
+                  exception_reasons: list[str] | None = None, owned=None) -> dict[str, Any]:
     """Sample the pinned child until it exits, then take the kernel's totals.
 
     Sampling reuses the observer's identity-pinned ``ProcessScope`` and its
@@ -833,7 +880,7 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
     observer could not authenticate the process: a running image other than
     the pinned executable is reported as ``executable_image_differs``.
     """
-    started = time.monotonic_ns()
+    started = time.monotonic_ns() if owned is None else owned.started_ns
     deadline = started + timeout_ms * 1_000_000
     policy = observer.resource_window_policy(timeout_ms, interval_ms)
     sampled: dict[str, Any] = {"state": "failed", "reason": "not_started"}
@@ -844,6 +891,30 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
     native_failure = None
     registration_failure = None
     timed_out = False
+    observation_exceptions: list[dict[str, Any]] = []
+    exception_owners: list[BaseException] = []
+
+    def retain_exception(stage: str, error: BaseException) -> None:
+        """Keep each original observation exception through cleanup and reaping."""
+        # The first error is never replaced by a later authentication, publication
+        # or close error. Keep the original object until all cleanup has finished.
+        if owned is not None and error is not owned.retention_error:
+            owned.retain(stage, error)
+            if owned.reader is not None and owned.reader.cleanup_error is not None:
+                owned.retain('executable_close', owned.reader.cleanup_error)
+        if not any(original is error for original in exception_owners):
+            exception_owners.append(error)
+            observation_exceptions.append(_observer_exception_fact(stage, error))
+
+    def retain_failure_reason() -> None:
+        """Preserve the first exception fact in the caller's rejection record."""
+        # The outer runner owns this list before observing starts. A later wait4,
+        # close, output or publication failure cannot erase its first error.
+        if exception_reasons is not None and observation_exceptions:
+            first = observation_exceptions[0]
+            reason = "process_observation_exception:" + first['type'] + ":" + str(first['errno'])
+            if reason not in exception_reasons:
+                exception_reasons.append(reason)
 
     def reap_child():
         """Poll only the original child and retain the first observed deadline breach."""
@@ -851,17 +922,18 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
         # Check after wait4: a poll or terminal authentication may cross the
         # deadline. A child already reaped must never be signalled afterward.
         nonlocal timed_out
-        result = _try_reap(child.pid)
+        result = _try_reap(child.pid) if owned is None else owned.try_reap()
         if result is not None and time.monotonic_ns() >= deadline:
             timed_out = True
         return result
 
     try:
-        reader = observer.native_reader()
+        reader = observer.native_reader() if owned is None else owned.scope_reader
         scope = None
         try:
             monitor = _owned_child_monitor(reader, child.pid, image)
         except (ValueError, OSError) as error:
+            retain_exception('monitor_registration', error)
             error_number = getattr(error, 'errno', None)
             registration_failure = {'operation': 'owned_child_monitor_registration',
                 'errno': error_number if type(error_number) is int and 0 <= error_number <= 4095 else None}
@@ -872,6 +944,7 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
                   "pgid": os.getpgid(child.pid), "image": "command"}], reader,
                 {"command": image})
         except (ValueError, OSError) as error:
+            retain_exception('baseline', error)
             if type(error) is native_process.NativeProcessUnavailable and error.pid == child.pid:
                 native_failure = error.fact()
                 native_exit.validate_failure(native_failure)
@@ -886,6 +959,8 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
             else:
                 sampled = {"state": "failed", "reason": (
                     "executable_image_differs" if _image_differs(error) else type(error).__name__)}
+        if sampled.get('state') == 'failed' and observation_exceptions:
+            retain_failure_reason()
         if scope is not None:
             journal = observer.ResourceObservationJournal(records, "observations", policy)
             baseline = scope.initial
@@ -907,20 +982,48 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
                     if failure is None and monitor is not None:
                         monitor.check()
                     break
+                remaining_ns = deadline - time.monotonic_ns()
+                if remaining_ns <= 0:
+                    break
+                time.sleep(min(interval_ms * 1_000_000, remaining_ns) / 1_000_000_000)
+                # Waking can overshoot even a bounded sleep. Do not start a
+                # live observation after the original overall deadline.
                 if time.monotonic_ns() >= deadline:
                     break
-                time.sleep(interval_ms / 1000)
+                # A short command can exit while the sampler sleeps. Reap it
+                # before requesting another live /proc sample: a Linux zombie
+                # has no loaded image or resident set to authenticate. Errors
+                # from an attempted observation still remain failures below.
+                if monitor is None:
+                    reaped = reap_child()
+                    if reaped is not None:
+                        break
                 if failure is not None:
                     continue
+                # Original reap/monitor work can itself cross the deadline.
+                # An observation already attempted still follows the unchanged
+                # error and journal validation paths; none is silently dropped.
+                if time.monotonic_ns() >= deadline:
+                    break
                 try:
                     observation = scope.observe()
+                except linux_owned.LinuxOwnedTerminalObservation as error:
+                    # Retire the failed ProcessScope. Retain only closed public
+                    # numeric facts, never the exception or its transient frames.
+                    if owned is None:
+                        raise
+                    owned.terminal_fact = error.projection()
+                    error.__traceback__ = None
+                    break
                 except (ValueError, OSError) as error:
+                    retain_exception('sample', error)
                     if type(error) is native_process.NativeProcessUnavailable:
                         native_failure = error.fact()
                         if monitor is not None:
                             try:
                                 terminal = monitor.authenticate(error)
-                            except (ValueError, OSError):
+                            except (ValueError, OSError) as terminal_error:
+                                retain_exception('terminal_authentication', terminal_error)
                                 failure = "native_terminal_authentication_failed"
                             else:
                                 break
@@ -929,6 +1032,7 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
                     else:
                         failure = ("executable_image_differs" if _image_differs(error)
                                    else "process_observation_failed")
+                    retain_failure_reason()
                     continue
                 # Storage, malformed observations and CPU failures are never terminal evidence.
                 if monitor is not None:
@@ -971,25 +1075,36 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
                            "sampled_peak_rss_bytes": metrics["sampled_peak_rss_bytes"],
                            "maximum_observation_gap_ns": metrics["maximum_observation_gap_ns"]}
     except (ValueError, OSError) as error:
+        retain_exception('reader_journal_or_window', error)
         # Reader, journal or window failure: the run is still reaped and
         # reported; only a fixed reason is recorded.
         sampled = ({"state": "failed", "reason": "native_monitor_registration_failed",
                     "monitor_failure": registration_failure} if registration_failure is not None
                    else {"state": "failed", "reason": type(error).__name__})
+        retain_failure_reason()
     finally:
         if monitor is not None:
             try:
                 monitor.close()
-            except (ValueError, OSError):
-                sampled = {"state": "failed", "reason": "native_monitor_close_failed"}
-        if reader is not None:
-            reader.close()
+            except (ValueError, OSError) as error:
+                retain_exception('monitor_close', error)
+                if sampled.get('state') != 'failed':
+                    sampled = {"state": "failed", "reason": "native_monitor_close_failed"}
+                retain_failure_reason()
+        if reader is not None and owned is None:
+            try:
+                reader.close()
+            except (ValueError, OSError) as error:
+                retain_exception('reader_close', error)
+                if sampled.get('state') != 'failed':
+                    sampled = {"state": "failed", "reason": "native_reader_close_failed"}
+                retain_failure_reason()
     while reaped is None:
         reaped = reap_child()
         if reaped is None:
             if time.monotonic_ns() >= deadline:
                 timed_out = True
-                reaped = _kill_own_child(child.pid)
+                reaped = _kill_own_child(child.pid, reap=owned is None)
             else:
                 time.sleep(interval_ms / 1000)
     status, usage = reaped
@@ -1006,9 +1121,23 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
                        "native_failure": native_failure}
         try:
             sampled['terminal'] = records.publish("observations/terminal.json", control.canonical(terminal))
-        except (ValueError, OSError):
+        except (ValueError, OSError) as error:
+            retain_exception('terminal_publication', error)
             sampled = {"state": "failed", "reason": "native_terminal_publication_failed",
                        "native_failure": native_failure}
+    if owned is not None:
+        for stage, error in owned.diagnostics():
+            retain_exception(stage, error)
+        try:
+            sampled['linux_owned'] = _publish_linux_owned(owned, records, status, usage, sampled)
+            if owned.first is not None:
+                sampled.update(state='failed', reason='linux_owned_observation_failed')
+        except (ValueError, OSError, RuntimeError) as error:
+            retain_exception('linux_owned_evidence', error)
+            sampled.update(state='failed', reason='linux_owned_evidence_invalid')
+    if sampled.get('state') == 'failed' and observation_exceptions:
+        retain_failure_reason()
+        sampled['observation_exceptions'] = observation_exceptions
     return {"classification": "measured", "pid": child.pid, "exit": _exit_fact(status),
             "timed_out": timed_out, "wall_ns": finished - started,
             "cpu_user_ns": _rusage_ns(usage.ru_utime),
@@ -1017,9 +1146,16 @@ def observe_child(child: subprocess.Popen, image: observer.ExecutableImage, reco
             "peak_rss_source": "kernel_child_rusage", "sampled": sampled}
 
 
+def _publish_linux_owned(owned, records, status, usage, sampled):
+    """Publish only bounded public original-observation facts after actual reap."""
+    return linux_evidence.publish(owned, records, status,
+        _rusage_ns(usage.ru_utime), _rusage_ns(usage.ru_stime), sampled,
+        CPU_ROUNDING_SLACK_NS)
+
+
 def _limit_address_space(limit: int) -> Callable[[], None]:
-    # TODO: Darwin refuses RLIMIT_AS, so the applied-limit path has only been
-    # exercised with this function replaced in tests. Run it once on Linux.
+    # Native Linux child controls exercise 8 and 32 GiB limits; see
+    # docs/validation/linux_resource_harness.md. Darwin refusal stays explicit.
     def apply() -> None:
         import resource
         resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
@@ -1120,7 +1256,8 @@ def _evidence_kind(name: str, context_file: str) -> str | None:
             return "context"
         if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\.(json|norito)", leaf):
             return "view" if leaf.endswith(".json") else "binary"
-    if directory == "observations" and (leaf in {"baseline.json", "window.json", "native-admission.json", "terminal.json"}
+    if directory == "observations" and (leaf in {"baseline.json", "window.json", "native-admission.json", "terminal.json", "linux-root-admission.json",
+                "linux-root-lifecycle.json", "linux-root-terminal.json"}
             or re.fullmatch(r"chunk-[0-9]{20}\.json", leaf)):
         return "observation"
     return None
@@ -1255,12 +1392,14 @@ class _EvidenceSnapshot:
             leaf = path.rsplit("/", 1)[-1]
             if kind == "view" and leaf not in allowed_views:
                 continue
-            maximum = (native_exit.MAX_TERMINAL_BYTES if leaf in {"native-admission.json", "terminal.json"}
+            maximum = (linux_evidence.MAX_BYTES if path in linux_evidence.PATHS.values()
+                       else native_exit.MAX_TERMINAL_BYTES if leaf in {"native-admission.json", "terminal.json"}
                        else MAX_RECORD_BYTES if kind in {"view", "binary"} else MAX_EVIDENCE_BYTES)
             try:
                 binding, raw = directory._read(path, maximum, kind in {"view", "context"}
                                                or path in {"report.json", "observations/baseline.json",
-                                                           "observations/native-admission.json", "observations/terminal.json"})
+                                                           "observations/native-admission.json", "observations/terminal.json"}
+                                               or path in linux_evidence.PATHS.values())
             except (OSError, ValueError):
                 self.reasons.append(f"unsafe_or_oversize_evidence:{index}")
                 continue
@@ -1273,8 +1412,12 @@ class _EvidenceSnapshot:
         directory._validate()
 
 
-def _terminal_evidence_reasons(process, snapshot):
+def _terminal_evidence_reasons(process, snapshot, context=None, *, required_linux=False, expected_delivery=None):
     """Replay the closed terminal proof from the same hashed evidence byte snapshot."""
+    linux_reasons = linux_evidence.replay(process, snapshot, context, CPU_ROUNDING_SLACK_NS,
+                                          required_linux=required_linux, expected_delivery=expected_delivery)
+    if linux_reasons:
+        return linux_reasons
     try:
         sampled = process['sampled']
         if 'monitor_failure' in sampled:
@@ -1365,7 +1508,7 @@ def _terminal_evidence_reasons(process, snapshot):
 
 def judge_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any],
                   process: dict[str, Any], requirements: dict[str, Any],
-                  *, snapshot: _EvidenceSnapshot | None = None,
+                  *, snapshot: _EvidenceSnapshot | None = None, required_linux: bool = False, expected_delivery=None,
                   ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str],
                              list[dict[str, Any]]]:
     """Decode and judge every record the command wrote into ``run/child``.
@@ -1379,7 +1522,7 @@ def judge_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any]
     if snapshot is None:
         with _EvidenceDirectory(run) as directory:
             snapshot = _EvidenceSnapshot(directory, descriptor)
-    reasons: list[str] = list(snapshot.reasons) + _terminal_evidence_reasons(process, snapshot)
+    reasons: list[str] = list(snapshot.reasons) + _terminal_evidence_reasons(process, snapshot, context, required_linux=required_linux, expected_delivery=expected_delivery)
     decoded: list[dict[str, Any]] = []
     present = snapshot.child_names
     names = [name for name in present
@@ -1470,10 +1613,10 @@ def judge_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any]
 
 def collect_records(descriptor: dict[str, Any], run: Path, context: dict[str, Any],
                     process: dict[str, Any], requirements: dict[str, Any],
-                    *, snapshot: _EvidenceSnapshot | None = None,
+                    *, snapshot: _EvidenceSnapshot | None = None, required_linux: bool = False, expected_delivery=None,
                     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
     """Report entries, orphaned Norito files and reasons for one run directory."""
-    return judge_records(descriptor, run, context, process, requirements, snapshot=snapshot)[:3]
+    return judge_records(descriptor, run, context, process, requirements, snapshot=snapshot, required_linux=required_linux, expected_delivery=expected_delivery)[:3]
 
 
 def write_manifest(run: Path, records: Any, context: dict[str, Any],
@@ -1536,8 +1679,17 @@ def _consumer_reasons(original: dict[str, Any], consumer: dict[str, Any]) -> lis
     return reasons
 
 
-def run_command(arguments: argparse.Namespace) -> int:
-    """Run the command once and write its report; never raises after spawn."""
+def run_command(arguments: argparse.Namespace, *, linux_observer_factory=None, expected_delivery=None, summary_sink=None) -> int:
+    """Run once with mandatory admitted Linux custody and preserve original cleanup."""
+    if sys.platform.startswith('linux') and linux_observer_factory is None:
+        raise HarnessRefusal('Linux run requires the independently admitted native observer')
+    if not sys.platform.startswith('linux') and linux_observer_factory is not None:
+        raise HarnessRefusal('Linux observer factory requires Linux')
+    try:
+        observation_contract.validate(observation_contract.LINUX if linux_observer_factory is not None
+                                      else observation_contract.ORDINARY,expected_delivery)
+    except ValueError as error:
+        raise HarnessRefusal('independent observation delivery is incomplete') from error
     descriptor = load_descriptor()
     repository = Path(arguments.repository).resolve()
     command = list(arguments.command)
@@ -1571,8 +1723,11 @@ def run_command(arguments: argparse.Namespace) -> int:
     run = new_run_directory(root)
     records = control.RecordDirectory(run)
     reasons: list[str] = []
+    observation_exception_reasons: list[str] = []
     report: dict[str, Any] = {
         "schema": REPORT_SCHEMA, "context": context,
+        "observation_contract": ("linux_owned_root_group_v1" if linux_observer_factory is not None
+                                 else "ordinary_native_v1"),
         "command": {"executable": str(executable), "executable_sha256": executable_sha256,
                     "arguments_sha256": arguments_digest(command[1:]),
                     "arguments": recorded_arguments},
@@ -1593,58 +1748,96 @@ def run_command(arguments: argparse.Namespace) -> int:
         argv = [str(executable)] + [
             argument.replace(OUTPUT_PLACEHOLDER, str(run / "child")) for argument in command[1:]]
         with observer.ExecutableImage(executable, executable_sha256) as image:
+            owned = None
             try:
-                # The harness is single-threaded here, and setrlimit must run
-                # in the child between fork and exec to bind only that child.
-                child = subprocess.Popen(
-                    argv, stdin=arguments.stdin or subprocess.DEVNULL,
-                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
-                    cwd=str(repository),
-                    preexec_fn=None if limit is None  # noqa: PLW1509
-                    else _limit_address_space(limit))
-            except subprocess.SubprocessError:
-                # The only step between fork and exec is setrlimit: the
-                # platform refused the limit, so nothing was started.
-                reasons.append("address_space_limit_not_applied")
-                child = None
-            except OSError:
-                reasons.append("command_not_started")
-                child = None
-            if child is not None:
-                assert child.stdout is not None and child.stderr is not None
-                streams = {"stdout": StreamDigest(child.stdout.fileno(), tail_bytes),
-                           "stderr": StreamDigest(child.stderr.fileno(), tail_bytes)}
-                for stream in streams.values():
-                    stream.start()
-                kernel_limit = kernel_address_space_limit(child.pid)
-                process = observe_child(child, image, records, arguments.interval_ms,
-                                        arguments.timeout_seconds * 1000)
-                process["address_space"] = address_space_enforcement(limit, kernel_limit)
-                report["process"] = process
-                output = {name: stream.result(records, f"{name}.tail.log")
-                          for name, stream in streams.items()}
-                output.update(classification="measured",
-                              retention="tail" if tail_bytes else "digest_only")
-                report["output"] = output
-                for name, pipe in (("stdout", child.stdout), ("stderr", child.stderr)):
-                    if output[name]["complete"]:
-                        pipe.close()
-                reasons.extend(process_reasons(process, output))
-                if limit is not None and kernel_limit not in (None, (limit, limit)):
-                    reasons.append("address_space_limit_differs_from_kernel")
+                if linux_observer_factory is not None:
+                    if not sys.platform.startswith('linux'):
+                        raise HarnessRefusal('Linux observer factory requires Linux')
+                    owned = linux_observer_factory(image, tail_bytes)
+                    owned.prepare(arguments.timeout_seconds * 1000, OUTPUT_DRAIN_SECONDS)
                 try:
-                    image.validate()
-                except ValueError:
-                    reasons.append("executable_changed_during_run")
-                with _EvidenceDirectory(run) as directory:
-                    snapshot = _EvidenceSnapshot(directory, descriptor)
-                entries, orphans, record_reasons = collect_records(
-                    descriptor, run, context, process, requirements, snapshot=snapshot)
-                report["records"], report["orphans"] = entries, orphans
-                reasons.extend(record_reasons)
+                    # The harness is single-threaded here, and setrlimit must run
+                    # in the child between fork and exec to bind only that child.
+                    launch = subprocess.Popen if owned is None else owned.popen
+                    child = launch(
+                        argv, stdin=arguments.stdin or subprocess.DEVNULL,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+                        cwd=str(repository),
+                        preexec_fn=None if limit is None  # noqa: PLW1509
+                        else _limit_address_space(limit))
+                except subprocess.SubprocessError as error:
+                    if owned is not None:
+                        owned.retain('popen', error)
+                    # Popen may already have forked and internally reaped a
+                    # pre-exec failure. The native owner must prove complete no-EXEC
+                    # creation evidence before its preparation can close.
+                    reasons.append("address_space_limit_not_applied")
+                    child = None
+                except OSError as error:
+                    if owned is not None:
+                        owned.retain('popen', error)
+                    reasons.append("command_not_started")
+                    child = None
+                if child is not None:
+                    if owned is not None:
+                        owned.install(child, arguments.timeout_seconds * 1000)
+                        owned.start_streams(StreamDigest)
+                    else:
+                        assert child.stdout is not None and child.stderr is not None
+                        streams = {"stdout": StreamDigest(child.stdout.fileno(), tail_bytes),
+                                   "stderr": StreamDigest(child.stderr.fileno(), tail_bytes)}
+                        for stream in streams.values():
+                            stream.start()
+                    kernel_limit = kernel_address_space_limit(child.pid)
+                    process = observe_child(child, image, records, arguments.interval_ms,
+                                            arguments.timeout_seconds * 1000,
+                                            exception_reasons=observation_exception_reasons, owned=owned)
+                    process["address_space"] = address_space_enforcement(limit, kernel_limit)
+                    report["process"] = process
+                    if owned is not None:
+                        owned.complete(lambda pid: _kill_own_child(pid, reap=False))
+                        output = owned.output(records, "tail" if tail_bytes else "digest_only")
+                    else:
+                        output = {name: stream.result(records, f"{name}.tail.log")
+                                  for name, stream in streams.items()}
+                        output.update(classification="measured",
+                                      retention="tail" if tail_bytes else "digest_only")
+                    report["output"] = output
+                    for name, pipe in (("stdout", child.stdout), ("stderr", child.stderr)):
+                        if output[name]["complete"]:
+                            pipe.close()
+                    reasons.extend(process_reasons(process, output))
+                    if limit is not None and kernel_limit not in (None, (limit, limit)):
+                        reasons.append("address_space_limit_differs_from_kernel")
+                    try:
+                        image.validate()
+                    except ValueError:
+                        reasons.append("executable_changed_during_run")
+                    with _EvidenceDirectory(run) as directory:
+                        snapshot = _EvidenceSnapshot(directory, descriptor)
+                    entries, orphans, record_reasons = collect_records(
+                        descriptor, run, context, process, requirements, snapshot=snapshot,
+                        required_linux=linux_observer_factory is not None, expected_delivery=expected_delivery)
+                    report["records"], report["orphans"] = entries, orphans
+                    reasons.extend(record_reasons)
+            except BaseException as error:
+                if owned is not None:
+                    owned.retain('outer_run', error)
+                raise
+            finally:
+                if owned is not None:
+                    owned.cleanup(lambda pid: _kill_own_child(pid, reap=False))
+                    for stage, error in owned.diagnostics():
+                        fact = _observer_exception_fact(stage, error)
+                        reason = 'process_observation_exception:' + fact['type'] + ':' + str(fact['errno'])
+                        if reason not in observation_exception_reasons:
+                            observation_exception_reasons.append(reason)
+                        if reason not in reasons:
+                            reasons.append(reason)
         if not reasons:
             report["verdict"] = "accepted"
     except Exception as error:  # noqa: BLE001 - the failed run must still be retained
+        reasons.extend(observation_exception_reasons)
         reasons.append("harness_failure:" + type(error).__name__)
     finally:
         try:
@@ -1654,13 +1847,18 @@ def run_command(arguments: argparse.Namespace) -> int:
         except Exception as error:  # noqa: BLE001
             with open(run / "harness_failure.json", "xb") as stream:
                 stream.write(control.canonical(
-                    {"schema": FAILURE_SCHEMA, "reason": type(error).__name__}))
+                    {"schema": FAILURE_SCHEMA, "reason": type(error).__name__,
+                     "observation_exceptions": observation_exception_reasons}))
             report["verdict"] = "rejected"
         records.close()
-    print(json.dumps({
+    summary = {
         "run_directory": str(run), "verdict": report["verdict"], "reasons": reasons,
         "manifest_sha256": None if manifest_reference is None else manifest_reference["sha256"],
-    }, sort_keys=True))
+    }
+    if summary_sink is None:
+        print(json.dumps(summary, sort_keys=True))
+    else:
+        summary_sink(summary)
     return 0 if report["verdict"] == "accepted" else 1
 
 
@@ -1690,7 +1888,7 @@ def validate_files(arguments: argparse.Namespace) -> int:
     return 1 if rejected else 0
 
 
-REPORT_KEYS = frozenset({"schema", "context", "command", "limits", "requirements", "host",
+REPORT_KEYS = frozenset({"schema", "context", "command", "limits", "requirements", "host", "observation_contract",
                          "process", "output", "records", "orphans", "verdict", "reasons"})
 
 
@@ -1761,7 +1959,7 @@ def _requirement_observations_match(report: dict[str, Any], requirements: dict[s
 
 def _derived_reasons(descriptor: dict[str, Any], run: Path, report: dict[str, Any],
                      scope: dict[str, Any], snapshot: _EvidenceSnapshot,
-                     consumer: dict[str, Any]) -> tuple[list[str], dict[str, dict[str, Any]]]:
+                     consumer: dict[str, Any], *, expected_observation_contract, expected_delivery) -> tuple[list[str], dict[str, dict[str, Any]]]:
     """Reproduce the original experiment before checking the separate consumer contract."""
     process, output, requirements = report["process"], report["output"], report["requirements"]
     if type(process) is not dict or type(output) is not dict:
@@ -1770,7 +1968,9 @@ def _derived_reasons(descriptor: dict[str, Any], run: Path, report: dict[str, An
     try:
         derived = process_reasons(process, output)
         entries, orphans, record_reasons, decoded = judge_records(
-            descriptor, run, report["context"], process, requirements, snapshot=snapshot)
+            descriptor, run, report["context"], process, requirements, snapshot=snapshot,
+            required_linux=expected_observation_contract == observation_contract.LINUX,
+            expected_delivery=expected_delivery)
     except (KeyError, TypeError, ValueError, OSError):
         return ["report_malformed"], {}
     derived += record_reasons
@@ -1794,7 +1994,9 @@ def _derived_reasons(descriptor: dict[str, Any], run: Path, report: dict[str, An
     # observations. Reuse the same captured bytes, never reopen record paths.
     if consumer != requirements:
         _, _, consumer_rejections, _ = judge_records(
-            descriptor, run, report["context"], process, consumer, snapshot=snapshot)
+            descriptor, run, report["context"], process, consumer, snapshot=snapshot,
+            required_linux=expected_observation_contract == observation_contract.LINUX,
+            expected_delivery=expected_delivery)
         reasons += ["consumer_evidence_rejected:" + reason for reason in consumer_rejections]
     documents = {entry["json"]["path"]: record
                  for entry, record in zip((entry for entry in entries if entry["decoded"]), decoded)}
@@ -1803,11 +2005,17 @@ def _derived_reasons(descriptor: dict[str, Any], run: Path, report: dict[str, An
 
 def _inspect_pinned_run(run: Path, scope: dict[str, Any], manifest_sha256: str | None,
                         consumer_requirements: dict[str, Any] | None = None,
-                        consumer_overrides: dict[str, Any] | None = None) -> dict[str, Any]:
+                        consumer_overrides: dict[str, Any] | None = None, *,
+                        expected_observation_contract, expected_delivery=None) -> dict[str, Any]:
     result: dict[str, Any] = {"reasons": [], "report": None, "documents": {},
                               "manifest_sha256": manifest_sha256,
                               "original_requirements": None, "consumer_requirements": None}
     reasons = result["reasons"]
+    try:
+        observation_contract.validate(expected_observation_contract,expected_delivery)
+    except ValueError:
+        reasons.append('independent_observation_requirement_invalid')
+        return result
     if manifest_sha256 is None:
         reasons.append("manifest_digest_required")
         return result
@@ -1849,9 +2057,15 @@ def _inspect_pinned_run(run: Path, scope: dict[str, Any], manifest_sha256: str |
         reasons.append("report_unreadable")
         return result
     if (type(report) is not dict or set(report) != REPORT_KEYS
-            or report["schema"] != REPORT_SCHEMA or type(report["reasons"]) is not list
+            or report["schema"] != REPORT_SCHEMA
+            or type(report['observation_contract']) is not str
+            or report['observation_contract'] not in {'ordinary_native_v1', 'linux_owned_root_group_v1'}
+            or type(report["reasons"]) is not list
             or not all(type(reason) is str for reason in report["reasons"])):
         reasons.append("report_malformed")
+        return result
+    if report['observation_contract'] != expected_observation_contract:
+        reasons.append('observation_contract_differs_from_requirement')
         return result
     try:
         original = validate_requirements(report["requirements"])
@@ -1875,7 +2089,8 @@ def _inspect_pinned_run(run: Path, scope: dict[str, Any], manifest_sha256: str |
     if report["context"] != manifest["context"]:
         reasons.append("manifest_context_differs_from_report")
     if not evidence:
-        derived, documents = _derived_reasons(descriptor, run, report, scope, snapshot, consumer)
+        derived, documents = _derived_reasons(descriptor, run, report, scope, snapshot, consumer,
+            expected_observation_contract=expected_observation_contract, expected_delivery=expected_delivery)
         reasons += derived
         result["documents"] = documents
     for key in sorted(scope):
@@ -1885,18 +2100,21 @@ def _inspect_pinned_run(run: Path, scope: dict[str, Any], manifest_sha256: str |
 
 
 def salvage_reasons(run: Path, scope: dict[str, Any], manifest_sha256: str | None = None,
-                    consumer_requirements: dict[str, Any] | None = None) -> list[str]:
+                    consumer_requirements: dict[str, Any] | None = None, *,
+                    expected_observation_contract, expected_delivery=None) -> list[str]:
     """Read-only refusal reasons under a mandatory externally retained manifest pin.
 
     A missing pin always refuses; there is no unsigned-success mode. The original
     report and requirements are reproduced before optional consumer constraints.
     Files that were hashed are the same held-FD bytes subsequently decoded.
     """
-    return _inspect_pinned_run(run, scope, manifest_sha256, consumer_requirements)["reasons"]
+    return _inspect_pinned_run(run, scope, manifest_sha256, consumer_requirements,
+        expected_observation_contract=expected_observation_contract, expected_delivery=expected_delivery)["reasons"]
 
 
 def read_pinned_run(run: Path, manifest_sha256: str, *, scope: dict[str, Any] | None = None,
-                    consumer_requirements: dict[str, Any] | None = None) -> dict[str, Any]:
+                    consumer_requirements: dict[str, Any] | None = None,
+                    expected_observation_contract, expected_delivery=None) -> dict[str, Any]:
     """Return verified report/documents from one immutable byte snapshot, or refuse.
 
     Consumers must use the returned ``report`` and ``documents`` (keyed by the
@@ -1906,7 +2124,9 @@ def read_pinned_run(run: Path, manifest_sha256: str, *, scope: dict[str, Any] | 
     are still reproduced. Omitted consumer requirements retain the original contract.
     """
     result = _inspect_pinned_run(run, {} if scope is None else scope,
-                                 manifest_sha256, consumer_requirements)
+                                 manifest_sha256, consumer_requirements,
+                                 expected_observation_contract=expected_observation_contract,
+                                 expected_delivery=expected_delivery)
     if result["reasons"]:
         raise HarnessRefusal("pinned run refused: " + ",".join(result["reasons"]))
     return result
@@ -1931,12 +2151,50 @@ def salvage(arguments: argparse.Namespace) -> int:
     # Validate CLI values before reading evidence, including bool-as-int helper input.
     validate_requirements(dict(classification="engineering_target", address_space_limit_bytes=None,
                                thermal_state=False, max_undivided_phase_ppm=None) | overrides)
-    result = _inspect_pinned_run(run, scope, pinned, consumer_overrides=overrides)
+    try:expected_contract,expected_delivery=observation_contract.arguments(arguments)
+    except ValueError as error:raise HarnessRefusal('independent observation requirement is incomplete') from error
+    result = _inspect_pinned_run(run, scope, pinned, consumer_overrides=overrides,
+        expected_observation_contract=expected_contract, expected_delivery=expected_delivery)
     print(json.dumps({"run_directory": str(run), "salvageable": not result["reasons"],
                       "reasons": result["reasons"], "manifest_binding": "external_sha256",
                       "original_requirements": result["original_requirements"],
                       "consumer_requirements": result["consumer_requirements"]}, sort_keys=True))
     return 1 if result["reasons"] else 0
+
+
+def public_run(arguments: argparse.Namespace) -> int:
+    """Admit the Linux publisher/source owners before invoking the workload runner."""
+    flags=('observer_source_root','observer_bridge_root','trusted_observer_sha256','trusted_observer_provenance_sha256',
+           'trusted_source_manifest_sha256','observer_native_target')
+    if not sys.platform.startswith('linux'):
+        if any(getattr(arguments,name,None) is not None for name in flags):
+            raise HarnessRefusal('Linux observer delivery inputs are unsupported on this host')
+        return run_command(arguments)
+    import linux_observer_delivery as delivery
+    summary = [None]
+    def retain_summary(value):
+        """Buffer only one bounded public acknowledgement until all custody has closed."""
+        if summary[0] is not None or type(value) is not dict or set(value) != {
+                'run_directory','verdict','reasons','manifest_sha256'}:
+            raise HarnessRefusal('invalid buffered public summary')
+        encoded = json.dumps(value, sort_keys=True)
+        if len(encoded.encode('utf-8')) > 128 * 1024:
+            raise HarnessRefusal('buffered public summary exceeds its bound')
+        summary[0] = encoded
+    try:
+        source_root,root,pins=delivery.pins_from_arguments(arguments)
+        with delivery.ObserverDelivery(source_root,root,pins,
+                cleanup_original=lambda owner: owner.cleanup(lambda pid: _kill_own_child(pid, reap=False))) as owner:
+            status = run_command(arguments,linux_observer_factory=owner.factory,
+                                 expected_delivery=pins.expected(),summary_sink=retain_summary)
+        if summary[0] is None:
+            raise HarnessRefusal('missing buffered public summary')
+    except (ValueError,OSError,RuntimeError) as error:
+        # Existing immutable report files remain available as failed-invocation
+        # diagnostics. No accepted manifest acknowledgement escapes failed custody.
+        raise HarnessRefusal('independently pinned Linux observer delivery refused') from error
+    print(summary[0])
+    return status
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1986,10 +2244,13 @@ def parser() -> argparse.ArgumentParser:
                      help="reject a record whose largest undivided phase holds more than "
                           "this share of the root, in parts per million; states the "
                           "attribution granularity a consumer needs")
+    for name in ('observer-source-root','observer-bridge-root','trusted-observer-sha256','trusted-observer-provenance-sha256',
+                 'trusted-source-manifest-sha256','observer-native-target'):
+        run.add_argument('--'+name,help='explicit independent Linux observer delivery input')
     run.add_argument("command", nargs=argparse.REMAINDER,
                      help="-- executable [arguments]; {output_dir} in an argument is "
                           "replaced by the record directory")
-    run.set_defaults(handler=run_command, stdin=None)
+    run.set_defaults(handler=public_run, stdin=None)
 
     validate = commands.add_parser("validate", help="judge record JSON views")
     validate.add_argument("records", nargs="+", help="record JSON view files")
@@ -2009,6 +2270,7 @@ def parser() -> argparse.ArgumentParser:
                       help="require that the original run required and observed thermal state")
     keep.add_argument("--max-undivided-phase-ppm", type=int, default=None,
                       help="require an original granularity bound no weaker than this one")
+    observation_contract.add_consumer_arguments(keep)
     keep.add_argument("run_directory", help="an earlier run directory")
     keep.set_defaults(handler=salvage)
     return top

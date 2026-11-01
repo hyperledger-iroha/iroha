@@ -9,6 +9,7 @@ use group::GroupEncoding;
 use iroha_pasta::{Ep, Eq, PastaCurve, msm::MemoryBudget, poseidon::PoseidonField};
 use norito::json::Value;
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 use super::{VerifyError, accumulate_succinct};
 use crate::{
@@ -20,7 +21,9 @@ fn bytes(value: &Value) -> Vec<u8> {
     let text = value.as_str().expect("hex string");
     assert!(text.len().is_multiple_of(2));
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = core::str::from_utf8(pair).expect("ASCII hex");
             let byte = u8::from_str_radix(pair, 16).expect("hex byte");
@@ -100,8 +103,10 @@ where
         assert_eq!(
             Sha256::digest(&proof)
                 .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
+                .fold(String::new(), |mut hex, byte| {
+                    let _ = write!(hex, "{byte:02x}");
+                    hex
+                }),
             case["proof_sha256"].as_str().expect("proof hash")
         );
         let instances: Vec<Vec<C::ScalarExt>> = case["instances"]
@@ -168,8 +173,10 @@ where
         assert_eq!(
             Sha256::digest(&tape)
                 .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
+                .fold(String::new(), |mut hex, byte| {
+                    let _ = write!(hex, "{byte:02x}");
+                    hex
+                }),
             case["tape_sha256"].as_str().expect("tape hash")
         );
         claim

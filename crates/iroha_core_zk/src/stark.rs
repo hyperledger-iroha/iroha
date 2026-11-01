@@ -1555,7 +1555,7 @@ fn merkle_levels_from_values(
         }
         let mut next = Vec::with_capacity(current.len() / 2);
         merkle_depth = merkle_depth.checked_add(1)?;
-        for (index, pair) in current.chunks_exact(2).enumerate() {
+        for (index, pair) in current.as_chunks::<2>().0.iter().enumerate() {
             next.push(merkle_node_hash(
                 params,
                 domain,
@@ -1595,7 +1595,7 @@ fn fri_merkle_levels_from_values(
         }
         merkle_depth = merkle_depth.checked_add(1)?;
         let mut next = Vec::with_capacity(current.len() / 2);
-        for (index, pair) in current.chunks_exact(2).enumerate() {
+        for (index, pair) in current.as_chunks::<2>().0.iter().enumerate() {
             next.push(merkle_node_hash(
                 params,
                 domain,
@@ -1683,7 +1683,7 @@ fn merkle_levels_from_hashes(
         }
         let mut next = Vec::with_capacity(current.len() / 2);
         merkle_depth = merkle_depth.checked_add(1)?;
-        for (index, pair) in current.chunks_exact(2).enumerate() {
+        for (index, pair) in current.as_chunks::<2>().0.iter().enumerate() {
             next.push(merkle_node_hash(
                 params,
                 domain,

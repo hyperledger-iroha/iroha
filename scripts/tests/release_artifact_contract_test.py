@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,28 +10,29 @@ from types import SimpleNamespace
 import pytest
 
 from scripts import release_artifact_contract as contract
+from scripts.tests.release_workspace_fixture import owned_release_workspace
 
 
 @pytest.fixture
 def tmp_path() -> Iterator[Path]:
-    """Keep custody fixtures below the checkout's owned test output directory.
+    """Use the shared owned release workspace for every custody fixture."""
+    with owned_release_workspace("release-artifact-contract-") as directory:
+        yield directory
 
-    These contracts reject every shared writable ancestor, so pytest's ambient
-    system temporary root cannot supply their positive and race fixtures.
-    TemporaryDirectory removes only this test's exclusively created directory.
-    Owned setup uses 077; test bodies use ordinary 022 so explicit safe 0755
-    anchors and 0644 artifacts retain their intended coverage. The caller mask
-    is restored after the test, including failures during creation or cleanup.
-    """
-    original_umask = os.umask(0o077)
+
+def test_owned_release_workspace_restores_umask_after_body_failure() -> None:
+    original_umask = os.umask(0o027)
+    expected = RuntimeError("owned workspace body failure")
+    directory = None
     try:
-        parent = Path(__file__).resolve().parents[2]
-        for component in ("target", "unit-tests", "script-tests"):
-            parent /= component
-            parent.mkdir(mode=0o700, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="release-artifact-contract-", dir=parent) as directory:
-            os.umask(0o022)
-            yield Path(directory).resolve()
+        with pytest.raises(RuntimeError) as raised:
+            with owned_release_workspace("release-workspace-failure-") as directory:
+                assert directory.is_dir()
+                assert os.umask(0o022) == 0o022
+                raise expected
+        assert raised.value is expected
+        assert os.umask(0o027) == 0o027
+        assert directory is not None and not directory.exists()
     finally:
         os.umask(original_umask)
 

@@ -938,6 +938,54 @@ fn first_literal(arm: &str) -> Option<&str> {
     string_literals(arm).first().copied()
 }
 
+/// Stands in for the envelope code a runtime rejection forwards from `rejection.code()`.
+const RUNTIME_REJECTION_CODE: &str = "<RuntimeRejectionV1::code>";
+
+/// The envelope code of a `queue_error_summary` arm: its first literal, unless the arm forwards
+/// the runtime rejection's own stable code.
+fn summary_code(arm: &str) -> Option<&str> {
+    if arm
+        .trim_start()
+        .trim_start_matches('(')
+        .trim_start()
+        .starts_with("rejection.code(),")
+    {
+        return Some(RUNTIME_REJECTION_CODE);
+    }
+    first_literal(arm)
+}
+
+/// Every stable `RuntimeRejectionV1::code()`. The exhaustive match stops compiling when a
+/// rejection is added, so this list and the dispatch table cannot silently fall behind.
+fn runtime_rejection_codes() -> Vec<&'static str> {
+    use iroha_data_model::runtime::{
+        definition::{DefinitionId, RestrictionV1},
+        lifecycle::RuntimeRejectionV1,
+    };
+    let rejections = [
+        RuntimeRejectionV1::DefinitionInactive {
+            wire_id: String::new(),
+        },
+        RuntimeRejectionV1::DefinitionRestricted {
+            definition: DefinitionId([0; 32]),
+            restriction: RestrictionV1::Disabled(0),
+        },
+        RuntimeRejectionV1::ExpectationMismatch { wire_id: None },
+        RuntimeRejectionV1::MalformedPayload {
+            wire_id: String::new(),
+        },
+    ];
+    for rejection in &rejections {
+        match rejection {
+            RuntimeRejectionV1::DefinitionInactive { .. }
+            | RuntimeRejectionV1::DefinitionRestricted { .. }
+            | RuntimeRejectionV1::ExpectationMismatch { .. }
+            | RuntimeRejectionV1::MalformedPayload { .. } => {}
+        }
+    }
+    rejections.iter().map(RuntimeRejectionV1::code).collect()
+}
+
 fn status_name(arm: &str) -> Option<&str> {
     arm.split("StatusCode::")
         .nth(1)?
@@ -1014,7 +1062,7 @@ fn the_non_admission_table_classifies_every_torii_queue_rejection() {
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let statuses = match_arms(&source, "status_code_for_queue_error", status_name);
-    let envelope_codes = match_arms(&source, "queue_error_summary", first_literal);
+    let envelope_codes = match_arms(&source, "queue_error_summary", summary_code);
     let reject_codes = match_arms(&source, "queue_rejection_metadata", first_literal);
     assert!(statuses.len() >= 18, "{statuses:?}");
     assert_eq!(
@@ -1042,44 +1090,56 @@ fn the_non_admission_table_classifies_every_torii_queue_rejection() {
         "SERVICE_UNAVAILABLE" => 503,
         other => panic!("unmapped Torii status `{other}`"),
     };
+    // A runtime rejection forwards one envelope code per stable `RuntimeRejectionV1` code.
+    assert_eq!(
+        envelope_codes.get("RuntimeRejected"),
+        Some(&RUNTIME_REJECTION_CODE),
+        "Torii must forward the runtime rejection's own stable code"
+    );
     let mut classified = Vec::new();
     for (variant, status) in &statuses {
         let status = status_number(status);
-        let envelope_code = envelope_codes[variant];
         let reject_code = reject_codes[variant];
-        let row = DEFINITE_DISPATCH_ROWS
-            .iter()
-            .find(|row| row.envelope_code == envelope_code);
-        if node_side.contains(variant) {
-            assert!(status >= 500, "{variant}");
-            assert!(row.is_none(), "{variant} must stay ambiguous");
-            continue;
-        }
-        let row = row.unwrap_or_else(|| {
-            panic!("Torii queue rejection `{variant}` ({envelope_code}) is not classified")
-        });
-        assert_eq!(row.status, status, "{variant}");
-        assert_eq!(row.reject_code, reject_code, "{variant}");
-        // Only the deferral omits the reject code from the envelope details.
-        assert_eq!(
-            row.details_repeat_reject_code,
-            *variant != "Deferred",
-            "{variant}"
-        );
-        let expected = match *variant {
-            "InBlockchain" | "IsInQueue" => DefiniteDispatchResult::AlreadyKnown,
-            "Deferred"
-            | "Full"
-            | "LatencySaturated"
-            | "MaximumTransactionsPerUser"
-            | "SccpForgeryIngressThrottled" => DefiniteDispatchResult::Deferred,
-            "SccpForgeryIngressDuplicate" | "SccpForgeryIngressRejected" => {
-                DefiniteDispatchResult::Refused
-            }
-            _ => DefiniteDispatchResult::Refused,
+        let codes = if envelope_codes[variant] == RUNTIME_REJECTION_CODE {
+            runtime_rejection_codes()
+        } else {
+            vec![envelope_codes[variant]]
         };
-        assert_eq!(row.result, expected, "{variant}");
-        classified.push(row.envelope_code);
+        for envelope_code in codes {
+            let row = DEFINITE_DISPATCH_ROWS
+                .iter()
+                .find(|row| row.envelope_code == envelope_code);
+            if node_side.contains(variant) {
+                assert!(status >= 500, "{variant}");
+                assert!(row.is_none(), "{variant} must stay ambiguous");
+                continue;
+            }
+            let row = row.unwrap_or_else(|| {
+                panic!("Torii queue rejection `{variant}` ({envelope_code}) is not classified")
+            });
+            assert_eq!(row.status, status, "{variant}");
+            assert_eq!(row.reject_code, reject_code, "{variant}");
+            // Only the deferral omits the reject code from the envelope details.
+            assert_eq!(
+                row.details_repeat_reject_code,
+                *variant != "Deferred",
+                "{variant}"
+            );
+            let expected = match *variant {
+                "InBlockchain" | "IsInQueue" => DefiniteDispatchResult::AlreadyKnown,
+                "Deferred"
+                | "Full"
+                | "LatencySaturated"
+                | "MaximumTransactionsPerUser"
+                | "SccpForgeryIngressThrottled" => DefiniteDispatchResult::Deferred,
+                "SccpForgeryIngressDuplicate" | "SccpForgeryIngressRejected" => {
+                    DefiniteDispatchResult::Refused
+                }
+                _ => DefiniteDispatchResult::Refused,
+            };
+            assert_eq!(row.result, expected, "{variant}");
+            classified.push(row.envelope_code);
+        }
     }
     // No row exists that Torii's queue does not emit.
     for row in DEFINITE_DISPATCH_ROWS {

@@ -8,12 +8,15 @@ use norito::{
     decode_from_bytes,
     json::{self, Value},
 };
+#[cfg(not(windows))]
 use sorafs_car::set_no_follow_flag;
 use sorafs_car::{TrustlessVerifier, TrustlessVerifierConfig, validate_manifest_car_replay};
 use sorafs_manifest::{ManifestV1, ValidationOutcomeV1};
+#[cfg(not(windows))]
+use std::io;
 use std::{
     fs,
-    io::{self, Write},
+    io::Write,
     path::{Path, PathBuf},
     process,
     time::{SystemTime, UNIX_EPOCH},
@@ -178,6 +181,16 @@ fn require_canonical_positive_decimal(label: &str, value: &str) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(windows)]
+#[path = "common/output_fs.rs"]
+mod native_output_fs;
+
+#[cfg(windows)]
+fn open_output_file(path: &Path, label: &str) -> Result<iroha_fs::RetainedOutputFile> {
+    native_output_fs::open_output_file(path, label).map_err(eyre::Report::msg)
+}
+
+#[cfg(not(windows))]
 fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
     validate_output_path(path)?;
     ensure_parent_dir(path)?;
@@ -199,6 +212,7 @@ fn open_output_file(path: &Path, label: &str) -> Result<fs::File> {
     }
     Ok(file)
 }
+#[cfg(not(windows))]
 fn ensure_parent_dir(path: &Path) -> Result<()> {
     if let Some(parent) = path.parent()
         && !parent.as_os_str().is_empty()
@@ -209,6 +223,7 @@ fn ensure_parent_dir(path: &Path) -> Result<()> {
     }
     Ok(())
 }
+#[cfg(not(windows))]
 fn validate_output_path(path: &Path) -> Result<()> {
     match fs::symlink_metadata(path) {
         Ok(metadata) => {
@@ -351,5 +366,93 @@ mod tests {
             !real_dir.join("summary.json").exists(),
             "symlink parent should not receive output"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_verifier_outputs_keep_json_and_rejected_outcome() {
+        let (_temporary, root) = canonical_tempdir();
+        let output = root.join("nested/result.json");
+        let summary = Value::from("public verifier summary");
+        let expected = json::to_string_pretty(&summary).unwrap();
+        json::to_writer_pretty(open_output_file(&output, "JSON output").unwrap(), &summary)
+            .unwrap();
+        assert_eq!(fs::read(&output).unwrap(), expected.as_bytes());
+        let original = iroha_fs::RetainedFile::open_regular(&output)
+            .unwrap()
+            .identity()
+            .unwrap();
+        let outcome = ValidationOutcomeV1::error(
+            "SFS-TEST",
+            "validation",
+            "rejected fixture",
+            "retry with valid input",
+            Vec::new(),
+            Vec::new(),
+            Vec::new(),
+            123,
+        );
+        let args = Args {
+            manifest: PathBuf::new(),
+            car: PathBuf::new(),
+            config: None,
+            json_out: Some(output.clone()),
+            validation_outcome: true,
+            generated_at: Some("123".to_owned()),
+            quiet: true,
+        };
+        emit_validation_outcome(&args, &outcome).unwrap();
+        let bytes = iroha_fs::read_private(&output, 16 * 1024).unwrap();
+        assert_eq!(
+            bytes.as_slice(),
+            format!("{}\n", json::to_string_pretty(&outcome).unwrap()).as_bytes()
+        );
+        let decoded: ValidationOutcomeV1 = json::from_slice(&bytes).unwrap();
+        assert_eq!(decoded, outcome);
+        assert_eq!(
+            iroha_fs::RetainedFile::open_regular(&output)
+                .unwrap()
+                .identity()
+                .unwrap(),
+            original
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_output_adapter_refuses_unsafe_originals_without_damage() {
+        let (temporary, root) = canonical_tempdir();
+        let output = root.join("original");
+        let mut created = open_output_file(&output, "native output test").unwrap();
+        created.write_all(b"keep original").unwrap();
+        created.flush().unwrap();
+        drop(created);
+        let alias = root.join("alias");
+        fs::hard_link(&output, &alias).unwrap();
+        assert!(open_output_file(&output, "native output test").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        assert_eq!(fs::read(&alias).unwrap(), b"keep original");
+        fs::remove_file(alias).unwrap();
+        let writer = fs::OpenOptions::new().write(true).open(&output).unwrap();
+        assert!(open_output_file(&output, "native output test").is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        drop(writer);
+        let junction = root.join("junction");
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        let result = std::process::Command::new("cmd.exe")
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(&target)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "native junction fixture creation failed"
+        );
+        assert!(open_output_file(&junction.join("new-output"), "native output test").is_err());
+        assert!(!target.join("new-output").exists());
+        assert_eq!(fs::read(&output).unwrap(), b"keep original");
+        drop(temporary);
     }
 }

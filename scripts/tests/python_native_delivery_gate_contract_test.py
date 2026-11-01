@@ -12,11 +12,13 @@ from pathlib import Path
 import subprocess
 
 import pytest
+from native_bash_fixture import bash_executable
 
 
 ROOT = Path(__file__).resolve().parents[2]
 PRIVACY = ROOT / "ci/check_privacy_python_sdk.sh"
 HARNESS = ROOT / "ci/privacy_sdk_cargo_lockfile_test.sh"
+BASH = bash_executable()
 
 
 def dispatch_script() -> str:
@@ -36,9 +38,9 @@ def inert_dispatch(tmp_path):
     venv = tmp_path / "venv"
     interpreter = venv / "bin/python"
     interpreter.parent.mkdir(parents=True)
-    interpreter.write_text("#!/bin/bash\nset -euo pipefail\npython_invocation_kind=source-pin\n" + dispatch_script())
+    interpreter.write_text("#!/bin/bash\nset -euo pipefail\npython_invocation_kind=source-pin\n" + dispatch_script(), newline="\n")
     interpreter.chmod(0o700)
-    environment = dict(os.environ, PRIVACY_PYTHON_SDK_ROOT=str(tmp_path))
+    environment = dict(os.environ, PRIVACY_PYTHON_SDK_ROOT=tmp_path.as_posix())
     return tmp_path, helper, venv, interpreter, environment
 
 
@@ -46,12 +48,12 @@ def run_dispatch(fixture, args, *, phase=None):
     root, helper, venv, interpreter, environment = fixture
     if phase:
         environment = dict(environment, FAKE_SOURCE_PIN_REFUSE_PHASE=phase)
-    return subprocess.run([str(interpreter), "-I", "-B", str(helper), *args],
+    return subprocess.run([BASH, interpreter.as_posix(), "-I", "-B", helper.as_posix(), *args],
                           capture_output=True, text=True, timeout=10, env=environment)
 
 
 def test_inert_pin_and_revalidation_have_exact_command_binding_and_no_provenance_claim(inert_dispatch):
-    root = str(inert_dispatch[0])
+    root = inert_dispatch[0].as_posix()
     result = run_dispatch(inert_dispatch, ["pin", "--root", root])
     assert result.returncode == 0, result.stderr
     assert result.stdout == "unqualified-source-pin-dispatch-control\n"
@@ -63,7 +65,7 @@ def test_inert_pin_and_revalidation_have_exact_command_binding_and_no_provenance
 
 @pytest.mark.parametrize("mutation", ["root", "flag", "extra", "absent", "mode", "pin-binding"])
 def test_inert_dispatch_refuses_unsupported_command_before_any_real_owner_execution(inert_dispatch, mutation):
-    root = str(inert_dispatch[0])
+    root = inert_dispatch[0].as_posix()
     args = ["assert-pin", "--root", root, "--source-pin", "unqualified-source-pin-dispatch-control"]
     if mutation == "root": args[2] += "/different"
     elif mutation == "flag": args[1] = "--other-root"
@@ -82,9 +84,9 @@ def test_actual_privacy_before_build_refusal_stops_before_original_maturin_dispa
     start = source.index('SOURCE_BEFORE_PIN="$(')
     end = source.index('cd "${ROOT_DIR}/python/iroha_native"', start)
     command = source[start:end] + '\nprintf dispatched > "$ROOT_DIR/builder-marker"\n'
-    result = subprocess.run(["bash", "-eu", "-c", command], capture_output=True, text=True, timeout=10,
-                            env=dict(environment, ROOT_DIR=str(root), SCRIPT_DIR=str(helper.parent),
-                                     VENV_DIR=str(venv), FAKE_SOURCE_PIN_REFUSE_PHASE="pin"))
+    result = subprocess.run([BASH, "-eu", "-c", command], capture_output=True, text=True, timeout=10,
+                            env=dict(environment, ROOT_DIR=root.as_posix(), SCRIPT_DIR=helper.parent.as_posix(),
+                                     VENV_DIR=venv.as_posix(), FAKE_SOURCE_PIN_REFUSE_PHASE="pin"))
     assert result.returncode == 119
     assert "inert before-build source-pin refusal" in result.stderr
     assert not (root / "builder-marker").exists()
@@ -96,9 +98,9 @@ def test_actual_privacy_input_revalidation_returns_failure_for_original_source_r
     start = source.index('  if [[ -n "${SOURCE_BEFORE_PIN}" ]]; then')
     end = source.index("  fi", start) + len("  fi")
     command = "status=0\n" + source[start:end] + "\nexit \"$status\"\n"
-    result = subprocess.run(["bash", "-eu", "-c", command], capture_output=True, text=True, timeout=10,
-                            env=dict(environment, ROOT_DIR=str(root), SCRIPT_DIR=str(helper.parent),
-                                     VENV_DIR=str(venv), SOURCE_BEFORE_PIN="unqualified-source-pin-dispatch-control",
+    result = subprocess.run([BASH, "-eu", "-c", command], capture_output=True, text=True, timeout=10,
+                            env=dict(environment, ROOT_DIR=root.as_posix(), SCRIPT_DIR=helper.parent.as_posix(),
+                                     VENV_DIR=venv.as_posix(), SOURCE_BEFORE_PIN="unqualified-source-pin-dispatch-control",
                                      FAKE_SOURCE_PIN_REFUSE_PHASE="assert-pin"))
     assert result.returncode == 1
     assert "inert original-source-pin revalidation refusal" in result.stderr

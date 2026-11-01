@@ -2155,8 +2155,7 @@ fn bucket_index(timestamp: SystemTime, bucket_secs: u64) -> u64 {
     }
     timestamp
         .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() / bucket_secs)
-        .unwrap_or(0)
+        .map_or(0, |duration| duration.as_secs() / bucket_secs)
 }
 fn gar_category_hash(category: &str) -> [u8; 8] {
     let mut hasher = Blake3Hasher::new();

@@ -109,7 +109,7 @@ fn contract_code_management_manager_sponsors_registration_and_meters_every_instr
             .execute_instruction(
                 &mut state_transaction,
                 &builder,
-                contract_upload_instruction(code_hash, 0),
+                &contract_upload_instruction(code_hash, 0),
             )
             .expect("the newly authorized builder may upload code");
         assert!(
@@ -222,13 +222,13 @@ fn contract_code_management_management_uses_exact_effective_role_and_borrowed_ga
                 );
             }
             for instruction in [
-                Grant::account_permission(manager_permission.clone(), builder.clone()).into(),
-                Revoke::account_permission(manager_permission.clone(), manager.clone()).into(),
-                Grant::account_role(role_id.clone(), builder.clone()).into(),
-                Revoke::account_role(role_id.clone(), manager.clone()).into(),
-                Grant::role_permission(manager_permission.clone(), role_id.clone()).into(),
-                Unregister::role(role_id.clone()).into(),
-                Register::role(
+                &Grant::account_permission(manager_permission.clone(), builder.clone()).into(),
+                &Revoke::account_permission(manager_permission.clone(), manager.clone()).into(),
+                &Grant::account_role(role_id.clone(), builder.clone()).into(),
+                &Revoke::account_role(role_id.clone(), manager.clone()).into(),
+                &Grant::role_permission(manager_permission.clone(), role_id.clone()).into(),
+                &Unregister::role(role_id.clone()).into(),
+                &Register::role(
                     Role::new("new_managers".parse().expect("role id"), builder.clone())
                         .add_permission(manager_permission.clone()),
                 )
@@ -619,7 +619,7 @@ fn initial_executor_denies_deployment_permission_grant_revoke_and_malformed_payl
         ),
     ] {
         let error = super::Executor::Initial
-            .execute_instruction(&mut state_transaction, &authority, instruction)
+            .execute_instruction(&mut state_transaction, &authority, &instruction)
             .expect_err("deployment permission mutation requires code-management grant authority");
         assert!(matches!(error, ValidationFail::NotPermitted(message) if
             message.contains("CanManageSmartContractCode")));

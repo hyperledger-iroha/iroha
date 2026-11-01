@@ -983,7 +983,8 @@ fn classify_local_moderation_queue_rejection(
         | iroha_core::queue::Error::LaneComplianceDenied { .. }
         | iroha_core::queue::Error::LanePrivacyProofRejected { .. }
         | iroha_core::queue::Error::NexusFeeAdmissionRejected { .. }
-        | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
+        | iroha_core::queue::Error::NexusFeeAdmissionConfigInvalid { .. }
+        | iroha_core::queue::Error::RuntimeRejected(_) => {
             Err(ModerationStrictIngressFailureV1::PermanentRejection)
         }
     }

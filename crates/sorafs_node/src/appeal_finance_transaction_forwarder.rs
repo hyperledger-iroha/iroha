@@ -915,12 +915,11 @@ impl AppealFinanceTransactionForwarder {
             fingerprint
         };
         let mut checkpoint = authenticated_checkpoint.body.clone();
-        let recovered = checkpoint
-            .pending
-            .iter_mut()
-            .fold(false, |recovered, entry| {
-                recover_interrupted_signing(entry) || recovered
-            });
+        // Every interrupted entry is recovered; no short-circuit may skip one.
+        let mut recovered = false;
+        for entry in &mut checkpoint.pending {
+            recovered |= recover_interrupted_signing(entry);
+        }
         let forwarder = Self {
             policy,
             checkpoint_authentication: Some(CheckpointAuthenticationContext {
@@ -2852,6 +2851,18 @@ mod tests {
             Ok(())
         }
     }
+    fn private_state_tempdir() -> std::io::Result<TempDir> {
+        let temporary = TempDir::new()?;
+        #[cfg(windows)]
+        {
+            // Create only this fresh empty fixture through the canonical private owner.
+            std::fs::remove_dir(temporary.path())?;
+            drop(iroha_fs::PrivateDirectory::open_or_create(
+                temporary.path(),
+            )?);
+        }
+        Ok(temporary)
+    }
     fn open_durable(
         directory: &Path,
         runtime: Arc<TestCheckpointRuntime>,
@@ -3296,7 +3307,7 @@ mod tests {
     }
     #[test]
     fn crash_recovery_preserves_attempts_and_retry_exhaustion_dead_letters() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(41));
         let context = drawdown_context();
         let operation_id = {
@@ -3555,7 +3566,7 @@ mod tests {
     }
     #[test]
     fn poisoned_checkpoint_fails_closed() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(42));
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         forwarder
@@ -3570,7 +3581,7 @@ mod tests {
     }
     #[test]
     fn sealed_checkpoint_record_has_one_bounded_canonical_persistence_format() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(49));
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         drop(forwarder);
@@ -3628,7 +3639,7 @@ mod tests {
     }
     #[test]
     fn signed_checkpoint_tamper_fails_closed() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(43));
         let authentication_policy = runtime.authentication_policy();
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
@@ -3652,7 +3663,7 @@ mod tests {
     }
     #[test]
     fn missing_or_rolled_back_sealed_head_fails_closed() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(44));
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         forwarder
@@ -3667,7 +3678,7 @@ mod tests {
     }
     #[test]
     fn validly_signed_same_sequence_substitution_is_a_fork() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(45));
         let authentication_policy = runtime.authentication_policy();
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
@@ -3704,7 +3715,7 @@ mod tests {
     }
     #[test]
     fn crash_after_seal_before_local_rename_recovers_exact_head() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(46));
         let authentication_policy = runtime.authentication_policy();
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
@@ -3800,7 +3811,7 @@ mod tests {
     }
     #[test]
     fn qualification_drift_discards_candidate_before_durable_state_changes() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(51));
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         let checkpoint_before = std::fs::read(checkpoint_path(dir.path())).unwrap();
@@ -3825,7 +3836,7 @@ mod tests {
     }
     #[test]
     fn post_sign_qualification_drift_discards_checkpoint_signature() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(52));
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         let checkpoint_before = std::fs::read(checkpoint_path(dir.path())).unwrap();
@@ -3850,7 +3861,7 @@ mod tests {
     }
     #[test]
     fn post_compare_and_swap_qualification_drift_is_ambiguous() {
-        let dir = TempDir::new().unwrap();
+        let dir = private_state_tempdir().unwrap();
         let runtime = Arc::new(TestCheckpointRuntime::new(53));
         let forwarder = open_durable(dir.path(), runtime.clone()).unwrap();
         let checkpoint_before = std::fs::read(checkpoint_path(dir.path())).unwrap();

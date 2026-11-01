@@ -23,7 +23,7 @@ pub fn unit_return() -> [u8; 16] {
         wide::encode_rr(control::JALR, 0, 1, 0),
     ];
     let mut code = [0; 16];
-    for (slot, instruction) in code.chunks_exact_mut(4).zip(instructions) {
+    for (slot, instruction) in code.as_chunks_mut::<4>().0.iter_mut().zip(instructions) {
         slot.copy_from_slice(&instruction.to_le_bytes());
     }
     code

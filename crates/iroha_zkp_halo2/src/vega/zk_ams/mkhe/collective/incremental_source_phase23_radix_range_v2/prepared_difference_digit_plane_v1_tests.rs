@@ -251,7 +251,7 @@ fn derived_plane_emits_exact_source_transpose_and_rejects_repeated_chunks() {
         let mut fixture = TestPreparedDifferenceDigitV1::new_v1(ordinal);
         for chunk in 0..32 {
             let encoded = fixture.values.emit_next_v1(chunk).unwrap();
-            for (index, bytes) in encoded.as_slice_v1().chunks_exact(32).enumerate() {
+            for (index, bytes) in encoded.as_slice_v1().as_chunks::<32>().0.iter().enumerate() {
                 let v = usize::from(chunk) * 512 + index;
                 let expected = match v {
                     0 => 7_u8,

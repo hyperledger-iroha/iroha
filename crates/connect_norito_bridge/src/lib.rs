@@ -1901,7 +1901,7 @@ thread_local! {
 #[unsafe(no_mangle)]
 pub extern "C" fn connect_norito_chain_discriminant_scope_enter(discriminant: u16) -> u64 {
     let token = NEXT_CHAIN_DISCRIMINANT_SCOPE_TOKEN
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
             current.checked_add(1)
         })
         .unwrap_or(0);

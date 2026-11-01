@@ -287,7 +287,7 @@ fn print_blockchain(
         };
         BLOCK_INDEX_BATCH_LEN
     ];
-    writeln!(writer, "Index file says there are {index_count} blocks.",)?;
+    writeln!(writer, "Index file says there are {index_count} blocks.")?;
     writeln!(
         writer,
         "Printing blocks {}-{}...",

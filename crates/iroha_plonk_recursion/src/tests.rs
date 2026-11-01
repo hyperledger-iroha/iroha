@@ -36,7 +36,7 @@ fn fixture_purpose<C: PastaCurve>() -> FoldPurpose {
 }
 fn syntactic_bytes<C: PastaCurve>() -> Zeroizing<Vec<u8>> {
     let mut bytes = Zeroizing::new(vec![0; FOLD_WITNESS_BYTES]);
-    for chunk in bytes[..FOLD_BODY_BYTES].chunks_exact_mut(32) {
+    for chunk in bytes[..FOLD_BODY_BYTES].as_chunks_mut::<32>().0 {
         chunk.copy_from_slice(&encode_point::<C>(&C::generator().to_affine()));
     }
     bytes[32 * (2 * K + 1)..32 * (2 * K + 2)].copy_from_slice(&C::ScalarExt::ONE.to_repr());

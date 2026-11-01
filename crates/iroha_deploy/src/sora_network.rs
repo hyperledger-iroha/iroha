@@ -1,7 +1,7 @@
 //! Sora network bundles: Nexus, the public Taira chain and the private dataspace presets.
 //!
 //! `kagami sora-network generate` selects a [`SoraProfile`] and, for Taira, the public chain
-//! identity. Every generated network has a Sora profile and runs NPoS. Developer networks,
+//! identity. Every generated network has a Sora profile and runs `NPoS`. Developer networks,
 //! including storage-enabled ones (`kagami localnet up --with-storage`), come from
 //! [`crate::localnet`]; this module also prepares owner-private roots. Its genesis helpers are
 //! shared with [`crate::network`], which signs genesis for validators that hold their own keys.
@@ -3583,7 +3583,7 @@ impl BootstrapRegistrations {
 }
 /// Read the original monetary authority before adding bootstrap instructions.
 /// Public alias bindings are appended later by the localnet author and validated
-/// during native staging; the original NPoS XOR pin must already agree here.
+/// during native staging; the original `NPoS` XOR pin must already agree here.
 pub(crate) fn localnet_bootstrap_staking_policy(
     genesis: &RawGenesisTransaction,
 ) -> Result<PublicLaneStakingPolicy> {
@@ -5273,7 +5273,9 @@ mod private_beacon_launch_tests {
             .map(|_| TcpListener::bind("127.0.0.1:0").unwrap())
             .collect::<Vec<_>>();
         let mut addresses = held
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| [pair[0].local_addr().unwrap(), pair[1].local_addr().unwrap()])
             .collect::<Vec<_>>();
         assert!(

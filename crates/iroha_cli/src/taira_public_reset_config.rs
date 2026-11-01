@@ -1813,7 +1813,7 @@ password = "fixture-password-not-runtime"
             Some("https://taira.sora.org:8443")
         );
         table.insert("torii_url".into(), original["torii_url"].clone());
-        assert!(table == original);
+        assert_eq!(table, original);
     }
 
     #[test]
@@ -2383,17 +2383,20 @@ password = "fixture-password-not-runtime"
             before.account == after.account
                 && before.account_chain_discriminant == after.account_chain_discriminant
         );
-        assert!(before.key_pair.public_key() == after.key_pair.public_key());
+        assert_eq!(before.key_pair.public_key(), after.key_pair.public_key());
         assert_eq!(after.torii_api_url.as_str(), "http://127.0.0.1:18080/");
         let mut original: toml::Table =
             toml::from_str(std::str::from_utf8(&source).unwrap()).unwrap();
         let mut actual: toml::Table =
             toml::from_str(std::str::from_utf8(&projected).unwrap()).unwrap();
         // Boolean assertions do not dump either secret-bearing table on failure.
-        assert!(original["account"]["private_key"] == actual["account"]["private_key"]);
+        assert_eq!(
+            original["account"]["private_key"],
+            actual["account"]["private_key"]
+        );
         original.remove("torii_url");
         actual.remove("torii_url");
-        assert!(original == actual);
+        assert_eq!(original, actual);
     }
 
     #[test]
@@ -2577,7 +2580,7 @@ password = "fixture-password-not-runtime"
         command.run_without_client_config(&mut stdout).unwrap();
         assert!(stdout.is_empty());
         assert_eq!(fd.stream_position().unwrap(), 7);
-        assert!(fs::read(&source_path).unwrap() == source);
+        assert_eq!(fs::read(&source_path).unwrap(), source);
         let projected = Zeroizing::new(fs::read(&output_path).unwrap());
         let (before, _) =
             iroha::config::Config::load_bytes_with_musubi_publication(&source_path, &source)
@@ -2590,7 +2593,7 @@ password = "fixture-password-not-runtime"
                 && before.chain == after.chain
                 && before.network_id == after.network_id
         );
-        assert!(before.key_pair.public_key() == after.key_pair.public_key());
+        assert_eq!(before.key_pair.public_key(), after.key_pair.public_key());
         assert_eq!(after.torii_api_url.as_str(), "https://taira.sora.org:8443/");
         let retained_proof = Path::new(publication.namespace_delegation_file.as_deref().unwrap());
         assert_eq!(retained_proof, public_proof);
@@ -2603,7 +2606,7 @@ password = "fixture-password-not-runtime"
         assert_eq!(published.nlink(), 1);
         assert!(command.run_without_client_config(&mut stdout).is_err());
         assert!(stdout.is_empty());
-        assert!(fs::read(&output_path).unwrap() == projected.as_slice());
+        assert_eq!(fs::read(&output_path).unwrap(), projected.as_slice());
     }
 
     #[cfg(unix)]
@@ -3237,7 +3240,10 @@ password = "fixture-password-not-runtime"
                 .is_err()
             );
             assert!(refused_stdout.is_empty());
-            assert!(Zeroizing::new(fs::read(path).unwrap()).as_slice() == encoded.as_slice());
+            assert_eq!(
+                Zeroizing::new(fs::read(path).unwrap()).as_slice(),
+                encoded.as_slice()
+            );
         }
         assert_ne!(public_keys[0], public_keys[1]);
     }

@@ -46,6 +46,9 @@ struct BoundProgressDirectory {
     entry_name: Option<std::ffi::OsString>,
     file: std::fs::File,
     metadata: SecureMetadata,
+    /// Original native parent chain and no-delete directory handle on Windows.
+    #[cfg(windows)]
+    native_owner: iroha_fs::OwnerDirectory,
 }
 #[derive(Debug)]
 struct BoundProgressNamespace {

@@ -7,8 +7,7 @@ use iroha_core::{kiso::KisoHandle, query::store::LiveQueryStore, state::World};
 use iroha_torii::{MaybeTelemetry, Torii};
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
+use crate::fixtures;
 fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
     iroha_torii::test_utils::mk_minimal_root_cfg()
 }
@@ -94,5 +93,4 @@ async fn status_sse_restricted_under_operator_profile() {
     runtime.shutdown().await;
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

@@ -547,7 +547,7 @@ fn wallet_advance_v1_store_read_and_list_fault_matrix_never_absent() {
         &|store| store.read(&dir(), &name("f"), 1_024),
         &|case| match case.outcome {
             KagemushaWalletReadV1::Present(bytes) => assert_eq!(bytes.as_slice(), BYTES),
-            KagemushaWalletReadV1::Unavailable(_) => assert!(case.step == 0),
+            KagemushaWalletReadV1::Unavailable(_) => assert_eq!(case.step, 0),
             other => panic!("read error became {other:?} at {}", case.label()),
         },
     );

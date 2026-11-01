@@ -441,7 +441,7 @@ mod reference {
 
 fn message(length: usize) -> Vec<u8> {
     (0..length)
-        .map(|index| ((index * 17 + 3) % 251) as u8)
+        .map(|index| u8::try_from((index * 17 + 3) % 251).unwrap())
         .collect()
 }
 
@@ -700,8 +700,8 @@ fn borrowed_fixed_capacity_matches_fresh_reference_rows_products_and_constructio
         let borrowed_bound = borrowed
             .bind_memory_challenges_v1(borrowed_schedule_memory_challenges())
             .unwrap();
-        assert!(borrowed_bound.base_rows == fresh_bound.base_rows);
-        assert!(borrowed_bound.fixed_rows == fresh_bound.fixed_rows);
+        assert_eq!(borrowed_bound.base_rows, fresh_bound.base_rows);
+        assert_eq!(borrowed_bound.fixed_rows, fresh_bound.fixed_rows);
         assert!(
             borrowed_bound.aux_rows == fresh_bound.aux_rows,
             "every bound product and endpoint"

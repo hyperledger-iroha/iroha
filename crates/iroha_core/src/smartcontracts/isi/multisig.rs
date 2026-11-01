@@ -417,7 +417,7 @@ fn multisig_role_for(
     let suffix = account_role_suffix(account);
     let literal = home_domain.map_or_else(
         || format!("{MULTISIG_SIGNATORY}{DELIMITER}{DOMAINLESS_NAMESPACE}{DELIMITER}{suffix}"),
-        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}",),
+        |home_domain| format!("{MULTISIG_SIGNATORY}{DELIMITER}{home_domain}{DELIMITER}{suffix}"),
     );
     literal.parse().expect("multisig role name must be valid")
 }
@@ -1906,7 +1906,7 @@ fn execute_approve(
             &instruction.account,
         )?;
         prune_down(state_transaction, &account, &instruction.proposal_id);
-        for inner in proposal.instructions {
+        for inner in &proposal.instructions {
             executor.execute_instruction(state_transaction, &account, inner)?;
         }
         store_multisig_approval_outcome(
@@ -6131,7 +6131,7 @@ mod tests {
         let register =
             MultisigRegister::with_account(multisig_id.clone(), domain_id.clone(), spec.clone());
         Executor::Initial
-            .execute_instruction(&mut tx, &signer1_id, InstructionBox::from(register))
+            .execute_instruction(&mut tx, &signer1_id, &InstructionBox::from(register))
             .expect("multisig register");
         let policy = multisig_policy_from_spec(&spec).expect("policy");
         let expected_id = AccountId::new_multisig(policy);
@@ -6146,7 +6146,7 @@ mod tests {
         let result = Executor::Initial.execute_instruction(
             &mut tx,
             &signer1_id,
-            InstructionBox::from(propose),
+            &InstructionBox::from(propose),
         );
         match result {
             Err(ValidationFail::NotPermitted(msg)) => {
@@ -6468,7 +6468,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &multisig_id,
-                Grant::account_permission(
+                &Grant::account_permission(
                     iroha_executor_data_model::permission::account::CanModifyAccountMetadata {
                         account: multisig_id.clone(),
                     },
@@ -6808,7 +6808,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
+                &InstructionBox::from(MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&active_instructions)),
                     active_instructions,
@@ -6825,7 +6825,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
+                &InstructionBox::from(MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&expired_instructions)),
                     expired_instructions,
@@ -6863,7 +6863,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer1_id,
-                InstructionBox::from(MultisigPropose::new(
+                &InstructionBox::from(MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&policy_change_instructions)),
                     policy_change_instructions,
@@ -6883,7 +6883,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer2_id,
-                InstructionBox::from(MultisigApprove::new(
+                &InstructionBox::from(MultisigApprove::new(
                     multisig_id.clone(),
                     test_id(&network_id, &multisig_id.clone(), &policy_change_hash),
                     policy_change_hash,
@@ -7429,7 +7429,7 @@ seiyaku TriggerDispatch { permission Admin;
         let parent_id = new_account_id(&parent_key);
         let register = MultisigRegister::with_account(parent_id, domain_id.clone(), parent_spec);
         let err = Executor::Initial
-            .execute_instruction(&mut tx, &owner_id, InstructionBox::from(register))
+            .execute_instruction(&mut tx, &owner_id, &InstructionBox::from(register))
             .expect_err("multisig signatory must be single");
         match err {
             ValidationFail::NotPermitted(msg) => {
@@ -7491,7 +7491,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigPropose::new(
+                &MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&valid_instructions)),
                     valid_instructions,
@@ -7504,7 +7504,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigApprove::new(
+                &MultisigApprove::new(
                     multisig_id.clone(),
                     test_id(&network_id, &multisig_id.clone(), &valid_hash),
                     valid_hash,
@@ -7532,7 +7532,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigPropose::new(
+                &MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&privileged_instructions)),
                     privileged_instructions,
@@ -7545,7 +7545,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigApprove::new(
+                &MultisigApprove::new(
                     multisig_id.clone(),
                     test_id(&network_id, &multisig_id.clone(), &privileged_hash),
                     privileged_hash,
@@ -7573,7 +7573,7 @@ seiyaku TriggerDispatch { permission Admin;
             .execute_instruction(
                 &mut tx,
                 &signer_id,
-                MultisigPropose::new(
+                &MultisigPropose::new(
                     multisig_id.clone(),
                     test_nonce(&HashOf::new(&denied_instructions)),
                     denied_instructions,
@@ -7828,7 +7828,7 @@ seiyaku TriggerDispatch { permission Admin;
             None,
         );
         Executor::Initial
-            .execute_instruction(&mut tx, &proposer, InstructionBox::from(proposal))
+            .execute_instruction(&mut tx, &proposer, &InstructionBox::from(proposal))
             .expect("multisig propose");
         let mut seeded_value = proposal_value(
             &tx,
@@ -7864,7 +7864,7 @@ seiyaku TriggerDispatch { permission Admin;
             instructions_hash,
         );
         Executor::Initial
-            .execute_instruction(&mut tx, &approver, InstructionBox::from(approve))
+            .execute_instruction(&mut tx, &approver, &InstructionBox::from(approve))
             .expect("multisig approve");
         assert!(
             proposal_value(

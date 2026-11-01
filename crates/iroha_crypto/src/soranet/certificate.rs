@@ -1848,16 +1848,16 @@ fn encode_major(buf: &mut Vec<u8>, major: u8, value: u64) {
     if value < 24 {
         buf.push((major << 5) | value_bytes[7]);
     } else if value <= 0xFF {
-        buf.push((major << 5) | 24);
+        buf.push((major << 5) | 0x18);
         buf.push(value_bytes[7]);
     } else if value <= 0xFFFF {
-        buf.push((major << 5) | 25);
+        buf.push((major << 5) | 0x19);
         buf.extend_from_slice(&value_bytes[6..]);
     } else if value <= 0xFFFF_FFFF {
-        buf.push((major << 5) | 26);
+        buf.push((major << 5) | 0x1a);
         buf.extend_from_slice(&value_bytes[4..]);
     } else {
-        buf.push((major << 5) | 27);
+        buf.push((major << 5) | 0x1b);
         buf.extend_from_slice(&value_bytes);
     }
 }

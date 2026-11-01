@@ -128,7 +128,7 @@ async fn check_status(network: &Network, expected_peers: u64) -> Result<()> {
             let status = match peer.status().await {
                 Ok(status) => status,
                 Err(err) => {
-                    last_err = Some(err.into());
+                    last_err = Some(err);
                     all_ok = false;
                     continue;
                 }

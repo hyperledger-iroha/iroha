@@ -152,7 +152,10 @@ fn artifact_paths_alias(left: &Path, right: &Path) -> bool {
         return true;
     }
     matches!(
-        (fs::metadata(left), fs::metadata(right)),
+        (
+            fs::canonicalize(left).and_then(iroha_fs::FileMetadata::symlink_metadata),
+            fs::canonicalize(right).and_then(iroha_fs::FileMetadata::symlink_metadata),
+        ),
         (Ok(left), Ok(right)) if crate::secure_fs::same_file_identity(&left, &right)
     )
 }

@@ -11687,9 +11687,7 @@ const PIPELINE_AUTO_WORKER_MIN: usize = 2;
 const PIPELINE_AUTO_WORKER_MAX: usize = 8;
 fn resolve_pipeline_worker_threads(configured: usize) -> usize {
     if configured == 0 {
-        let detected = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(1);
+        let detected = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
         detected.clamp(PIPELINE_AUTO_WORKER_MIN, PIPELINE_AUTO_WORKER_MAX)
     } else {
         configured.max(1)
@@ -13273,14 +13271,17 @@ impl<'state> StateBlock<'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Returns the world view associated with this block scope.
     #[inline]
@@ -13918,21 +13919,79 @@ impl<'state> StateBlock<'state> {
             crate::privacy::PrivacyBlockBudgetV1::new(pending.next_limits)
                 .expect("validated scheduled privacy limits construct a block budget");
     }
-    fn apply_due_privacy_protocol_limits(&mut self) {
+    fn apply_due_privacy_protocol_limits(
+        &mut self,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+        use crate::pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError};
+        use iroha_data_model::privacy::{PrivacyProtocolIdV1, PrivacyProtocolPolicyKeyV1};
         let incoming_height = self._curr_block.height().get();
+        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let mut private = crate::private_settlement::policy::read(
+            self.world.parameters.get(),
+            self.world.privacy_protocol_policies.get(&key),
+            incoming_height.saturating_sub(1),
+        )?;
         let updates = crate::privacy_state::plan_due_privacy_protocol_limits_v1(
             &self.world.privacy_protocol_policies,
             incoming_height,
         )
-        .unwrap_or_else(|error| {
-            panic!(
-                "persisted privacy protocol policy table is invalid at block height \
-                     {incoming_height}: {error}"
+        .map_err(|error| {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(error.to_string())
+        })?;
+        let limits_due = if let Some(pending) = private.pending_update
+            && pending.effective_at_height == incoming_height
+        {
+            private.current_limits = pending.next_limits;
+            private.pending_update = None;
+            true
+        } else {
+            false
+        };
+        let drain_due = private
+            .protocol_closure_drain
+            .is_some_and(|drain| drain.effective_at_height == incoming_height);
+        if drain_due {
+            private.protocol_closure_drain = None;
+        }
+        let private_changed = limits_due || drain_due;
+        // Prepare the exact retained successor before mutating either committed owner.
+        // An absent extension remains absent during untouched baseline replay.
+        let successor = if private_changed {
+            let parameter = iroha_data_model::parameter::Parameter::Custom(
+                private
+                    .to_custom_parameter()
+                    .map_err(crate::private_settlement::policy::attempt)?,
+            );
+            let pool = self.world.sccp_committee_generations.allocation_budget();
+            let prepared = ParameterIngressAttemptError::observe(|| {
+                self.world
+                    .parameters
+                    .get()
+                    .prepare_parameter(&parameter, pool)
+            })
+            .map_err(|error| parameter_ingress_attempt_error(error, |error| error.to_string()))?;
+            Some(
+                prepared
+                    .into_successor(self.world.parameters.get(), pool)
+                    .map_err(|(_, error)| {
+                        parameter_ingress_attempt_error(
+                            ParameterIngressAttemptError::Original(
+                                ParameterIngressError::Retention(error),
+                            ),
+                            |error| error.to_string(),
+                        )
+                    })?,
             )
-        });
+        } else {
+            None
+        };
         for (key, record) in updates {
             self.world.privacy_protocol_policies.insert(key, record);
         }
+        if let Some(successor) = successor {
+            *self.world.parameters.get_mut() = successor;
+        }
+        Ok(())
     }
     fn activate_due_public_lane_validators(&mut self, current_epoch: u64) {
         let block_height = self._curr_block.height().get();
@@ -14625,14 +14684,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &iroha_data_model::block::consensus::PublicLaneStakingPolicy,
         iroha_data_model::block::consensus::PublicLaneStakingPolicyError,
     > {
-        if let Some(original) = self.genesis_staking_policy {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_staking_policy()
-        }
+        self.genesis_staking_policy.map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_staking_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
 
     /// Borrow the exact ordinary predecessor fee policy without a local mirror.
@@ -14669,14 +14731,17 @@ impl<'block, 'state> StateTransaction<'block, 'state> {
         &self,
     ) -> Result<&iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1, &'static str>
     {
-        if let Some(original) = self.genesis_crypto_policy.as_ref() {
-            original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
-        } else {
-            self.world
-                .parameters
-                .get_before_block()
-                .require_crypto_policy()
-        }
+        self.genesis_crypto_policy.as_ref().map_or_else(
+            || {
+                self.world
+                    .parameters
+                    .get_before_block()
+                    .require_crypto_policy()
+            },
+            |original| {
+                original.policy_for_parameters(&self._curr_block, self.world.parameters.get())
+            },
+        )
     }
     /// Return whether execution is currently inside a scheduled or data-trigger body.
     #[inline]
@@ -14876,7 +14941,7 @@ pub struct StateView<'state> {
     /// Exact transaction security domain for this view.
     pub network_id: iroha_data_model::NetworkId,
     /// Lifetime diagnostic owner; keep last so snapshot fields release first.
-    created_at: StateViewLifetimeDiagnostic,
+    _lifetime_diagnostic: StateViewLifetimeDiagnostic,
 }
 /// Lightweight state snapshot intended for query-heavy paths.
 ///
@@ -15080,7 +15145,7 @@ impl<'state> StateQueryView<'state> {
             self.parameters_before_latest_block
                 .get()
                 .as_ref()
-                .unwrap_or(self.world.parameters.get())
+                .unwrap_or_else(|| self.world.parameters.get())
         } else {
             self.world.parameters.get()
         };
@@ -21639,6 +21704,10 @@ macro_rules! world_ro_accessors {
             cell_ref soradns_history_len: u64;
             /// Authoritative singleton privacy policy (read-only).
             cell_ref privacy_consensus_policy: iroha_data_model::privacy::PrivacyConsensusPolicyV1;
+            /// Outstanding original native private-settlement custody in this exact World cut.
+            storage private_settlement_staged_locks:
+                crate::private_settlement::global_state::PrivateSettlementStagedLockKeyV1 =>
+                crate::private_settlement::global_state::PrivateSettlementStagedLockRecordV1;
             /// Optional committed privacy resource policies (read-only).
             storage privacy_protocol_policies:
                 iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1 =>
@@ -23556,16 +23625,13 @@ impl WorldTransaction<'_, '_> {
             if is_consensus_owned_custom_parameter(id) {
                 continue;
             }
-            let replace = match old_defaults.get(id) {
-                None => true,
-                Some(previous) => {
-                    previous != next
-                        && candidate
-                            .custom()
-                            .get(id)
-                            .is_none_or(|current| current == previous)
-                }
-            };
+            let replace = old_defaults.get(id).is_none_or(|previous| {
+                previous != next
+                    && candidate
+                        .custom()
+                        .get(id)
+                        .is_none_or(|current| current == previous)
+            });
             if replace {
                 let prepared = candidate.prepare_custom_parameter(next, pool)?;
                 candidate = prepared
@@ -26478,10 +26544,7 @@ impl State {
     /// Callers must first acquire the Queue reservation-transition fence when
     /// both owners are needed. On refusal, release all other guards before
     /// waiting on this exact mutex observation; a wake requires a fresh probe.
-    #[expect(
-        dead_code,
-        reason = "TODO: connect nonblocking native publication admission to the lifecycle fence and its exact ReleaseWait observation"
-    )]
+    #[cfg(test)]
     pub(crate) fn try_lock_lane_lifecycle_work_admission(
         &self,
     ) -> Result<PublicationGuard<'_>, iroha_allocation::release::ReleaseWait> {
@@ -27118,10 +27181,6 @@ impl State {
         let mut cursors = self.da_shard_cursors.write();
         self.advance_da_shard_cursors_into(&mut cursors, &lane_config, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_shard_cursors_into<'a>(
         &self,
         cursors: &mut DaShardCursorIndex,
@@ -27218,10 +27277,6 @@ impl State {
         let mut cursors = self.da_receipt_cursors.write();
         self.advance_da_receipt_cursors_into(&mut cursors, block_height, records.iter())
     }
-    #[expect(
-        single_use_lifetimes,
-        reason = "stable Rust requires a named lifetime for borrowed impl Trait items"
-    )]
     fn advance_da_receipt_cursors_into<'a>(
         &self,
         cursors: &mut DaReceiptCursorIndex,
@@ -29581,7 +29636,15 @@ impl State {
         // Privacy resource limits are persisted state, not a verifier-time projection.
         // Plan every due tightening before applying any of them so malformed
         // restored state cannot leave the block overlay partially updated.
-        sb.apply_due_privacy_protocol_limits();
+        sb.apply_due_privacy_protocol_limits()
+            .map_err(|error| match error {
+                crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                    StateBlockStartError::ExecutionDeferred(original)
+                }
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
+                    StateBlockStartError::Policy(error)
+                }
+            })?;
         // Activate any pending public-lane validators whose scheduled epoch has begun.
         let epoch_length = sb
             .world
@@ -31925,7 +31988,7 @@ impl State {
                 settlement_engine: self.settlement_engine.clone(),
                 chain_id: self.chain_id.clone(),
                 network_id: self.network_id,
-                created_at: Instant::now().into(),
+                _lifetime_diagnostic: Instant::now().into(),
             })
         }
     }
@@ -36058,6 +36121,18 @@ static DEFAULT_TEST_IDENTITIES: LazyLock<(
 )> = LazyLock::new(|| {
     let config_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_config/iroha_test_config.toml");
+    // The checked-in testing identities are compiled fixture data. Native Windows
+    // must not require the build checkout's filesystem to expose local file IDs.
+    // Ordinary operator configuration still uses its retained file reader.
+    #[cfg(windows)]
+    let reader = iroha_config::base::read::ConfigReader::new()
+        .without_env()
+        .with_toml_source(iroha_config::base::toml::TomlSource::inline(
+            include_str!("../../iroha_config/iroha_test_config.toml")
+                .parse()
+                .expect("checked-in default testing config must be valid TOML"),
+        ));
+    #[cfg(not(windows))]
     let reader = iroha_config::base::read::ConfigReader::new()
         .without_env()
         .read_toml_with_extends(&config_path)
@@ -37204,6 +37279,7 @@ pub(crate) fn consensus_owned_custom_parameter_ids()
         iroha_data_model::governance::anonymous_ballot::ParliamentCandidateTestingPolicyV1::parameter_id()
             .clone(),
         ReputationFinalizedArchiveRetentionRequestV1::parameter_id(),
+        iroha_data_model::privacy::PrivateSettlementPolicyV1::parameter_id().clone(),
     ];
     ids.extend(crate::pipeline_gas_policy::parameter_ids());
     ids
@@ -37250,6 +37326,7 @@ pub(crate) fn is_consensus_owned_custom_parameter(
             RootFeePolicy::PARAMETER_ID_STR,
             PublicLaneStakingPolicy::PARAMETER_ID_STR,
             "parliament_candidate_testing_v1",
+            "private_settlement_policy_v1",
             iroha_data_model::sorafs::reputation::REPUTATION_FINALIZED_ARCHIVE_RETENTION_REQUEST_PARAMETER_ID_V1,
         ].contains(&name)
         || crate::pipeline_gas_policy::PARAMETER_NAMES.contains(&name)
@@ -42006,6 +42083,27 @@ impl StateTransaction<'_, '_> {
         }
         roster
     }
+    fn private_settlement_policy_v1(
+        &self,
+    ) -> Result<
+        iroha_data_model::privacy::PrivateSettlementPolicyV1,
+        PrivateSettlementGlobalStateErrorV1,
+    > {
+        let key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        );
+        crate::private_settlement::policy::read(
+            self.world.parameters.get(),
+            self.world.privacy_protocol_policies.get(&key),
+            self.block_height(),
+        )
+        .map_err(|error| {
+            if let crate::execution_attempt::ExecutionAttemptError::Deferred(original) = error {
+                self.world.record_execution_deferral(original);
+            }
+            PrivateSettlementGlobalStateErrorV1::Capability
+        })
+    }
     // Native relation availability and committed policy are the admission owner.
     // Local configuration cannot impose an activation event on this first-release path.
     fn ensure_private_settlement_admitted_v1(
@@ -42045,6 +42143,7 @@ impl StateTransaction<'_, '_> {
             .get()
             .validate()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
+        self.private_settlement_policy_v1()?;
         let protocol = iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         if let Some(policy) = self.world.privacy_protocol_policies.get(
             &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol),
@@ -42166,17 +42265,16 @@ impl StateTransaction<'_, '_> {
         if barrier.manifest.network_id != self.network_id {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
-        let policy = self.world.privacy_consensus_policy.get();
+        let policy = self.private_settlement_policy_v1()?;
         let protocol = self.world.privacy_protocol_policies.get(
             &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
                 iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             ),
         );
         let admission_deadline =
-            iroha_data_model::privacy::private_settlement_admission_deadline_v1(policy, protocol);
+            iroha_data_model::privacy::private_settlement_admission_deadline_v1(&policy, protocol);
         policy
             .current_limits
-            .private_settlement
             .validate_admission(
                 barrier.manifest.legs.len(),
                 barrier.manifest.authority_context_height,
@@ -42676,20 +42774,23 @@ impl StateTransaction<'_, '_> {
         if !cfg!(all(test, sumeragi_core_mutation = "HC491")) && self.block_height() <= 1 {
             return Err(PrivateSettlementCarrierBindingErrorV1::GenesisCarrier);
         }
+        let continuation = self
+            .private_settlement_carrier_binding
+            .as_ref()
+            .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?
+            .is_continuation();
+        let max_signed_transaction_bytes = if continuation {
+            iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1
+        } else {
+            self.private_settlement_policy_v1()
+                .map_err(|_| PrivateSettlementCarrierBindingErrorV1::Policy)?
+                .current_limits
+                .max_carrier_bytes
+        };
         let binding = self
             .private_settlement_carrier_binding
             .as_mut()
-            .ok_or(PrivateSettlementCarrierBindingErrorV1::MissingBinding)?;
-        let max_signed_transaction_bytes = if binding.is_continuation() {
-            iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1
-        } else {
-            self.world
-                .privacy_consensus_policy
-                .get()
-                .current_limits
-                .private_settlement
-                .max_carrier_bytes
-        };
+            .expect("original carrier binding was just checked");
         binding.consume(
             payload_digest,
             instruction_digest,
@@ -44327,7 +44428,7 @@ impl StateTransaction<'_, '_> {
         crate::validation_fee::enforce_opaque_deferred_instruction_views(
             artifacts.queued_instruction_views(),
             artifacts.queued_instruction_authority_count(),
-            artifacts.queued_instruction_views(),
+            &artifacts.queued_instruction_views(),
             self,
             None,
         )
@@ -44573,11 +44674,7 @@ impl StateTransaction<'_, '_> {
                             iroha_data_model::transaction::ExecutableBatchItem::Instruction(
                                 instruction,
                             ) => {
-                                executor.execute_instruction(
-                                    self,
-                                    authority,
-                                    instruction.clone(),
-                                )?;
+                                executor.execute_instruction(self, authority, instruction)?;
                                 executed_instructions.push(instruction.clone());
                             }
                             iroha_data_model::transaction::ExecutableBatchItem::ContractCall(
@@ -44881,7 +44978,7 @@ impl StateTransaction<'_, '_> {
                     crate::validation_fee::enforce_opaque_deferred_instruction_views(
                         artifacts.queued_instruction_views(),
                         artifacts.queued_instruction_authority_count(),
-                        artifacts.queued_instruction_views(),
+                        &artifacts.queued_instruction_views(),
                         self,
                         runtime_origin,
                     )?;
@@ -45185,7 +45282,7 @@ impl StateTransaction<'_, '_> {
                                 crate::validation_fee::enforce_opaque_deferred_instruction_views(
                                     artifacts.queued_instruction_views(),
                                     artifacts.queued_instruction_authority_count(),
-                                    artifacts.queued_instruction_views(),
+                                    &artifacts.queued_instruction_views(),
                                     self,
                                     runtime_origin,
                                 )?;
@@ -45247,7 +45344,7 @@ impl StateTransaction<'_, '_> {
     ) -> Result<ExecutionStep, ValidationFail> {
         let executor = self.world.executor.clone();
         for instruction in &instructions {
-            executor.execute_instruction(self, authority, instruction.clone())?;
+            executor.execute_instruction(self, authority, instruction)?;
         }
         Ok(instructions.into())
     }

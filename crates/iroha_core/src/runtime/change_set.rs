@@ -19,19 +19,22 @@ use iroha_data_model::{
         runtime_upgrade_policy::RuntimeUpgradePolicyV1,
     },
     runtime::{
-        definition::{DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1},
+        definition::{
+            DefinitionDescriptorV1, DefinitionId, DefinitionLookup, RootSelectionV1,
+            StorageDescriptorV1, StorageShapeV1,
+        },
         lifecycle::{
-            ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1, ChangeSetStatusV1, ChangeSetV1,
-            RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1, SelectionTransitionV1,
-            SignedSupportAttestationV1, check_change_set_provenance, committee_digest,
-            committee_supports,
+            AppliedChangeSet, ChangeSetEndorsementV1, ChangeSetId, ChangeSetRecordV1,
+            ChangeSetStatusV1, ChangeSetV1, RootScopeV1, RuntimeNoticeV1, RuntimeUpgradeActionV1,
+            SelectionTransitionV1, SignedSupportAttestationV1, check_change_set_provenance,
+            committee_digest, committee_supports,
         },
     },
 };
 use mv::storage::StorageReadOnly;
 
 /// The definitions a World has published, as a [`DefinitionLookup`].
-pub(crate) struct PublishedDefinitions<'a, S>(pub(crate) &'a S);
+pub struct PublishedDefinitions<'a, S>(pub(crate) &'a S);
 
 impl<S> DefinitionLookup for PublishedDefinitions<'_, S>
 where
@@ -44,7 +47,7 @@ where
 
 /// Whether `change_set` restricts or removes anything, which takes the longer disable notice.
 #[must_use]
-pub(crate) fn needs_disable_notice(change_set: &ChangeSetV1) -> bool {
+pub fn needs_disable_notice(change_set: &ChangeSetV1) -> bool {
     change_set.transitions.iter().any(|transition| {
         matches!(
             transition,
@@ -58,10 +61,7 @@ pub(crate) fn needs_disable_notice(change_set: &ChangeSetV1) -> bool {
 
 /// The notice `change_set` must give under `policy`.
 #[must_use]
-pub(crate) fn notice_for(
-    policy: &RuntimeUpgradePolicyV1,
-    change_set: &ChangeSetV1,
-) -> RuntimeNoticeV1 {
+pub fn notice_for(policy: &RuntimeUpgradePolicyV1, change_set: &ChangeSetV1) -> RuntimeNoticeV1 {
     if needs_disable_notice(change_set) {
         policy.disable
     } else {
@@ -74,7 +74,7 @@ pub(crate) fn notice_for(
 ///
 /// # Errors
 /// A scheduled change set no longer applies to the selection it would meet.
-pub(crate) fn projected_selection<S>(
+pub fn projected_selection<S>(
     current: &RootSelectionV1,
     scheduled: &BTreeMap<ChangeSetId, ChangeSetRecordV1>,
     height: u64,
@@ -112,6 +112,7 @@ where
                     format!("scheduled change set {id} no longer applies: {error}").into(),
                 )
             })?;
+        check_transition_support(&record.change_set, &applied, &lookup)?;
         added.extend(applied.published);
         selection = applied.selection;
     }
@@ -142,7 +143,7 @@ where
 ///
 /// # Errors
 /// The first rule the change set violates.
-pub(crate) fn admit<S>(
+pub fn admit<S>(
     change_set: &ChangeSetV1,
     network: &iroha_data_model::NetworkId,
     height: u64,
@@ -187,7 +188,7 @@ where
 ///
 /// # Errors
 /// A scheduled change set or `change_set` itself no longer applies.
-pub(crate) fn successor<S>(
+pub fn successor<S>(
     change_set: &ChangeSetV1,
     id: ChangeSetId,
     current: &RootSelectionV1,
@@ -203,10 +204,97 @@ where
         published,
         added: &staged,
     };
-    change_set
+    let applied = change_set
         .apply(&meets, &lookup)
-        .map(|applied| applied.selection)
-        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))
+        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
+    check_transition_support(change_set, &applied, &lookup)?;
+    Ok(applied.selection)
+}
+
+/// Reject transitions whose effects this lifecycle engine cannot perform (§14.8).
+///
+/// The engine installs storage: a table starts empty and a cell starts at the initial bytes its
+/// published definition declares ([`install_cells`]). Merely recognizing every successor
+/// definition does not implement a migration cutover, a storage retirement or a retained
+/// completion capability. The rule depends only on the change set, never on this release, so
+/// proposal, attestation and activation reject the same transitions on every node; whether a
+/// node's release implements the successor is decided separately, when it attests and at
+/// activation, where an unsupported node stops instead of executing.
+fn check_transition_support(
+    change_set: &ChangeSetV1,
+    applied: &AppliedChangeSet,
+    published: &impl DefinitionLookup,
+) -> Result<(), Error> {
+    let descriptor = |id| {
+        applied
+            .published
+            .get(id)
+            .or_else(|| published.definition(id))
+    };
+    for transition in &change_set.transitions {
+        let unsupported = match transition {
+            SelectionTransitionV1::RetireStorage(_) => Some("storage migration cutover"),
+            SelectionTransitionV1::RetainCompletion(_)
+            | SelectionTransitionV1::ReleaseCompletion(_) => {
+                Some("kernel-registered completion capabilities")
+            }
+            SelectionTransitionV1::Activate(id)
+                if matches!(descriptor(id), Some(DefinitionDescriptorV1::Migration(_))) =>
+            {
+                Some("migration execution")
+            }
+            _ => None,
+        };
+        if let Some(operation) = unsupported {
+            // TODO(§5.4): implement certified cursors, write barriers and atomic cutover before
+            // admitting transitions that require these effects.
+            return Err(Error::InvariantViolation(
+                format!("runtime transition requires unimplemented {operation}").into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Write the initial value of every cell `change_set` installs (§4, "Add storage"): the bytes
+/// its published storage definition declares, decoded by the release that adds the cell.
+///
+/// A table starts empty and needs no write. A node whose release does not implement an installed
+/// cell has no installer for it and stops at the end of block start, because the successor
+/// relies on a definition its release lacks.
+///
+/// # Errors
+/// The release's installer refuses the published bytes: a defect of the release, since the
+/// catalog published exactly those bytes.
+fn install_cells(
+    wtx: &mut crate::state::WorldTransaction<'_, '_>,
+    change_set: &ChangeSetV1,
+    catalog: &crate::runtime::ReleaseCatalog,
+    height: u64,
+) -> Result<(), crate::state::StateStorageAdmissionError> {
+    for transition in &change_set.transitions {
+        let SelectionTransitionV1::InstallStorage(storage) = transition else {
+            continue;
+        };
+        let Some(DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
+            shape: StorageShapeV1::Cell,
+            initial: Some(initial),
+            ..
+        })) = wtx.runtime_definitions.get(storage).cloned()
+        else {
+            continue;
+        };
+        let Some(install) = catalog.cell_installer(storage) else {
+            continue;
+        };
+        install(wtx, &initial).map_err(|reason| {
+            crate::state::StateStorageAdmissionError::UnsupportedRuntime {
+                height,
+                reason: format!("installing cell {storage} failed: {reason}"),
+            }
+        })?;
+    }
+    Ok(())
 }
 
 /// Check one validator's attestation of a scheduled change set (§6, "Attest").
@@ -215,7 +303,7 @@ where
 /// The record is not scheduled, the attestation names another change set, selection, network
 /// or root, its validator is not a current committee member, it is bound to another committee,
 /// it no longer counts at the effective height, or its signature does not verify.
-pub(crate) fn check_attestation(
+pub fn check_attestation(
     record: &ChangeSetRecordV1,
     id: ChangeSetId,
     signed: &SignedSupportAttestationV1,
@@ -252,10 +340,7 @@ pub(crate) fn check_attestation(
 
 /// Record `signed`, replacing an earlier attestation of the same validator; attestations stay
 /// sorted by validator key.
-pub(crate) fn record_attestation(
-    record: &mut ChangeSetRecordV1,
-    signed: SignedSupportAttestationV1,
-) {
+pub fn record_attestation(record: &mut ChangeSetRecordV1, signed: SignedSupportAttestationV1) {
     let validator = signed.attestation.validator.clone();
     match record
         .attestations
@@ -269,7 +354,7 @@ pub(crate) fn record_attestation(
 /// Whether a scheduled change set activates at `height`: every committee member attested for
 /// this committee, and the frozen notice elapsed by the block's committed time `now_ms`.
 #[must_use]
-pub(crate) fn ready(
+pub fn ready(
     record: &ChangeSetRecordV1,
     id: ChangeSetId,
     height: u64,
@@ -292,7 +377,7 @@ pub(crate) fn ready(
 /// # Errors
 /// This release cannot execute the resulting selection. The node stops before executing the
 /// block instead of judging it (§6, "Stop the unsupported").
-pub(crate) fn activate_due(
+pub fn activate_due(
     wtx: &mut crate::state::WorldTransaction<'_, '_>,
     height: u64,
     now_ms: u64,
@@ -311,8 +396,20 @@ pub(crate) fn activate_due(
         .map(|(id, record)| (record.change_set.effective_height, *id))
         .collect();
     due.sort_unstable();
+    let catalog = crate::runtime::release_catalog().map_err(|error| {
+        crate::state::StateStorageAdmissionError::UnsupportedRuntime {
+            height,
+            reason: error.to_string(),
+        }
+    })?;
     let holding = super::containment::holding(wtx);
-    let live = super::obligations::LiveObligations::of(wtx);
+    // Live obligations decide only whether a due change set strands them; an idle height never
+    // scans escrow or AMX State.
+    let live = if due.is_empty() {
+        super::obligations::LiveObligations::default()
+    } else {
+        super::obligations::LiveObligations::of(wtx)
+    };
     for (_, id) in due {
         let Some(mut record) = wtx.runtime_change_sets.get(&id).cloned() else {
             continue;
@@ -324,8 +421,21 @@ pub(crate) fn activate_due(
                 .apply(&current, &PublishedDefinitions(&wtx.runtime_definitions))
                 .ok()
                 .filter(|applied| {
+                    if let Err(reason) = check_transition_support(
+                        &record.change_set,
+                        applied,
+                        &PublishedDefinitions(&wtx.runtime_definitions),
+                    ) {
+                        iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
+                        return false;
+                    }
                     // A successor that strands a live obligation never activates (§7.2).
-                    let stranded = super::obligations::stranded(&applied.selection, &live);
+                    let stranded = super::obligations::stranded(
+                        &current,
+                        &applied.selection,
+                        &PublishedDefinitions(&wtx.runtime_definitions),
+                        &live,
+                    );
                     if let Some(reason) = &stranded {
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                     }
@@ -339,6 +449,7 @@ pub(crate) fn activate_due(
                 wtx.runtime_definitions.insert(definition, descriptor);
             }
             *wtx.runtime_selection.get_mut() = applied.selection;
+            install_cells(wtx, &record.change_set, catalog, height)?;
             record.status = ChangeSetStatusV1::Activated(height);
             RuntimeUpgradeEvent::Activated(RuntimeUpgradeActivated {
                 id,
@@ -353,12 +464,6 @@ pub(crate) fn activate_due(
         wtx.emit_events(Some(event));
     }
     super::containment::resolve_taken_over(wtx, height, &holding);
-    let catalog = crate::runtime::release_catalog().map_err(|error| {
-        crate::state::StateStorageAdmissionError::UnsupportedRuntime {
-            height,
-            reason: error.to_string(),
-        }
-    })?;
     let selection = wtx.runtime_selection.get();
     if let Some(definition) = catalog.unsupported(selection) {
         let named = selection.id().map_or_else(
@@ -379,7 +484,7 @@ pub(crate) fn activate_due(
 }
 
 #[cfg(test)]
-pub(crate) mod test_support;
+pub mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -387,7 +492,7 @@ mod tests;
 ///
 /// # Errors
 /// The policy is not committed or is malformed; there is no default (§6, "Notice").
-pub(crate) fn committed_policy(
+pub fn committed_policy(
     parameters: &iroha_data_model::parameter::Parameters,
 ) -> Result<RuntimeUpgradePolicyV1, Error> {
     let custom = parameters
@@ -407,7 +512,7 @@ pub(crate) fn committed_policy(
 ///
 /// # Errors
 /// The committed policy is malformed; it never falls back to no requirement.
-pub(crate) fn committed_provenance(
+pub fn committed_provenance(
     parameters: &iroha_data_model::parameter::Parameters,
 ) -> Result<Option<RuntimeProvenancePolicyV1>, Error> {
     parameters
@@ -429,7 +534,7 @@ pub(crate) fn committed_provenance(
 /// # Errors
 /// The policy is malformed, the proposal carries endorsements nothing judges or more than the
 /// policy trusts signers, the change set has no identity, or the endorsements fall short.
-pub(crate) fn check_provenance(
+pub fn check_provenance(
     action: &RuntimeUpgradeActionV1,
     provenance: &[ChangeSetEndorsementV1],
     parameters: &iroha_data_model::parameter::Parameters,
@@ -485,25 +590,31 @@ fn scheduled_records(
 }
 
 /// Admit a runtime-upgrade proposal to SORA Parliament: the notice the committed policy requires,
-/// frozen for the proposal, and the committed time of admission. A change set to schedule needs
-/// the endorsements the committed provenance policy requires.
+/// frozen for the proposal, and the committed time of admission.
+///
+/// `provenance` is `Some` for an endorsed proposal (the release addition
+/// `ProposeEndorsedRuntimeUpgradeProposal`): a change set to schedule then needs the endorsements
+/// the committed provenance policy requires. The baseline `ProposeRuntimeUpgradeProposal` passes
+/// `None` and executes as the frozen baseline does, without a provenance check.
 ///
 /// # Errors
-/// The policy is not committed, a change set to schedule fails admission or its provenance
-/// falls short, or a change set to cancel is not scheduled.
-pub(crate) fn admit_proposal(
+/// The policy is not committed, a change set to schedule fails admission or an endorsed
+/// proposal's provenance falls short, or a change set to cancel is not scheduled.
+pub fn admit_proposal(
     action: &RuntimeUpgradeActionV1,
-    provenance: &[ChangeSetEndorsementV1],
+    provenance: Option<&[ChangeSetEndorsementV1]>,
     state_transaction: &crate::state::StateTransaction<'_, '_>,
 ) -> Result<(RuntimeNoticeV1, u64), Error> {
     let policy = committed_policy(crate::state::WorldReadOnly::parameters(
         &state_transaction.world,
     ))?;
-    check_provenance(
-        action,
-        provenance,
-        crate::state::WorldReadOnly::parameters(&state_transaction.world),
-    )?;
+    if let Some(provenance) = provenance {
+        check_provenance(
+            action,
+            provenance,
+            crate::state::WorldReadOnly::parameters(&state_transaction.world),
+        )?;
+    }
     let now_ms = block_ms(state_transaction);
     match action {
         RuntimeUpgradeActionV1::Schedule(change_set) => {
@@ -545,7 +656,7 @@ fn scheduled(
 /// The change set no longer applies to the selection it will meet, its effective height is not
 /// after the approving block, it is already recorded, or the change set to cancel is not
 /// scheduled.
-pub(crate) fn enact(
+pub fn enact(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     proposal: &iroha_data_model::governance::types::RuntimeUpgradeProposal,
 ) -> Result<(), Error> {
@@ -615,7 +726,7 @@ pub(crate) fn enact(
 ///
 /// # Errors
 /// See [`check_attestation`].
-pub(crate) fn attest(
+pub fn attest(
     state_transaction: &mut crate::state::StateTransaction<'_, '_>,
     signed: SignedSupportAttestationV1,
 ) -> Result<(), Error> {

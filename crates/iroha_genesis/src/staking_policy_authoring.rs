@@ -45,7 +45,7 @@ impl GenesisBuilder {
 }
 
 #[cfg(test)]
-pub(super) fn fixture_policy() -> PublicLaneStakingPolicy {
+pub fn fixture_policy() -> PublicLaneStakingPolicy {
     // A producer chooses this fixed fixture profile before any State exists.
     // It is never read by runtime policy admission or execution.
     let custody = iroha_config::parameters::defaults::governance::bond_escrow_account_id();

@@ -36,7 +36,7 @@ const MAX_LANDINGS: usize = 200_000;
 
 /// The block an approval landed in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Landing {
+pub struct Landing {
     /// Block creation time, Unix milliseconds.
     pub(crate) at_ms: u64,
     /// Block height.
@@ -45,7 +45,7 @@ pub(crate) struct Landing {
 
 /// First landing of each (proposal, signer) pair, folded from committed blocks up to `height`.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct MultisigApprovalLandings {
+pub struct MultisigApprovalLandings {
     height: usize,
     tip: Option<HashOf<BlockHeader>>,
     first: BTreeMap<(MultisigProposalId, AccountId), Landing>,
@@ -588,7 +588,7 @@ mod tests {
 
         let landings =
             with_empty_index(|| fold_to_tip(&app_reading(&chain), true, read_block_approvals));
-        assert_eq!(landings.height, chain.height() as usize);
+        assert_eq!(landings.height, usize::try_from(chain.height()).unwrap());
         let at = |height: u64| {
             u64::try_from(
                 chain
@@ -645,7 +645,7 @@ mod tests {
             );
             assert_eq!(
                 fold_to_tip(&app, false, read_block_approvals).height,
-                chain.height() as usize,
+                usize::try_from(chain.height()).unwrap(),
                 "the next read folds the rest"
             );
         });

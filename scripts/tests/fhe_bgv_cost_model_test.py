@@ -52,6 +52,43 @@ def tracked_summary() -> dict:
     return json.loads(SUMMARY.read_text())
 
 
+class CiphertextFrameProjectionTest(unittest.TestCase):
+    """Current packed size projection never rewrites archived measured bytes."""
+
+    def test_archived_manifest_and_source_are_required_for_recorded_word_sizes(self) -> None:
+        runs = tracked_summary()["runs"]
+        self.assertEqual(len(MODEL.ARCHIVED_WORD_FRAME_RUNS), 16)
+        for run in runs:
+            _, name, shape = MODEL.RUN_CONFIGS[run["config"]]
+            profile = MODEL.profile(name, shape)
+            expected = run["sizes"]["input_ciphertext_frame"]["value"]
+            self.assertEqual(MODEL.recorded_ciphertext_bytes(run, profile, profile.top), expected)
+            self.assertLess(profile.ciphertext_bytes(profile.top), expected)
+        run = copy.deepcopy(runs[0])
+        _, name, shape = MODEL.RUN_CONFIGS[run["config"]]
+        profile = MODEL.profile(name, shape)
+        for key in ["artifact", "source_commit", "source_dirty", "source_dirty_digest"]:
+            altered = copy.deepcopy(run)
+            altered["run"][key] = "wrong"
+            with self.assertRaisesRegex(ValueError, "provenance differs"):
+                MODEL.recorded_ciphertext_bytes(altered, profile, 0)
+        run["run"]["manifest_sha256"] = "00" * 32
+        with self.assertRaisesRegex(ValueError, "unlisted archived"):
+            MODEL.recorded_ciphertext_bytes(run, profile, 0)
+        run["run"]["artifact"] = "sha256:" + "11" * 32
+        self.assertEqual(MODEL.recorded_ciphertext_bytes(run, profile, 0), profile.ciphertext_bytes(0))
+
+    def test_current_public_widths_and_resident_key_sizes_are_distinct(self) -> None:
+        profile = MODEL.profile(AFFINE, MODEL.CANDIDATES[AFFINE])
+        for level in range(profile.top + 1):
+            for components in [2, 3]:
+                expected = 36 + 8 * profile.noise_bound_words()
+                expected += components * sum((profile.degree * q.bit_length() + 7) // 8 for q in profile.main[:level + 1])
+                self.assertEqual(profile.ciphertext_bytes(level, components), expected)
+                self.assertEqual(profile.residue_bytes(level, components), 8 * components * (level + 1) * profile.degree)
+        self.assertEqual(profile.public_key_bytes(), 32 + 8 * 2 * (profile.top + 1) * profile.degree)
+
+
 class PinnedRunTest(unittest.TestCase):
     """Cost ingestion consumes one verified snapshot and mandatory external pins."""
 
@@ -94,8 +131,8 @@ class PinnedRunTest(unittest.TestCase):
              patch.object(Path, "read_text", side_effect=AssertionError("evidence reopened")), \
              patch.object(Path, "read_bytes", side_effect=AssertionError("evidence reopened")), \
              patch.object(Path, "glob", side_effect=AssertionError("unsealed directory scan")):
-            block, host = MODEL.read_run(Path("run-original"), self.PIN)
-        reader.assert_called_once_with(Path("run-original"), self.PIN)
+            block, host = MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
+        reader.assert_called_once_with(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1', expected_delivery=None)
         self.assertIs(host, verified["report"]["host"])
         self.assertEqual(block["run"]["manifest_sha256"], self.PIN)
         self.assertEqual(block["workload"], "bgv.synthetic")
@@ -105,7 +142,7 @@ class PinnedRunTest(unittest.TestCase):
         original = MODEL.HARNESS.HarnessRefusal("pinned run refused: manifest_digest_differs")
         with patch.object(MODEL.HARNESS, "read_pinned_run", side_effect=original) as reader:
             with self.assertRaises(MODEL.HARNESS.HarnessRefusal) as refused:
-                MODEL.read_run(Path("run-original"), self.PIN)
+                MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
         self.assertIs(refused.exception, original)
         reader.assert_called_once()
 
@@ -115,22 +152,22 @@ class PinnedRunTest(unittest.TestCase):
             verified["report"]["records"] *= count
             with self.subTest(count=count), patch.object(MODEL.HARNESS, "read_pinned_run", return_value=verified):
                 with self.assertRaisesRegex(SystemExit, "exactly one workload record"):
-                    MODEL.read_run(Path("run-original"), self.PIN)
+                    MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
         verified = self.verified()
         verified["documents"]["child/bgv-synthetic.json"]["outcome"] = "failed"
         with patch.object(MODEL.HARNESS, "read_pinned_run", return_value=verified):
             with self.assertRaisesRegex(SystemExit, "workload did not succeed"):
-                MODEL.read_run(Path("run-original"), self.PIN)
+                MODEL.read_run(Path("run-original"), self.PIN, expected_observation_contract='ordinary_native_v1')
 
     def test_missing_invalid_and_duplicate_pins_refuse_before_reading(self) -> None:
         with patch.object(MODEL, "read_run") as reader:
             with self.assertRaises(TypeError):
-                MODEL.build_summary([Path("run")])
+                MODEL.build_summary([Path("run")], expected_observation_contract='ordinary_native_v1')
             for paths, pins in (([], []), ([Path("run")], []),
                                 ([Path("run")], ["invalid"]),
                                 ([Path("a"), Path("b")], [self.PIN, self.PIN])):
                 with self.subTest(pins=pins), self.assertRaises(ValueError):
-                    MODEL.build_summary(paths, manifest_sha256=pins)
+                    MODEL.build_summary(paths, manifest_sha256=pins, expected_observation_contract='ordinary_native_v1')
         reader.assert_not_called()
 
     def test_builder_uses_returned_host_and_pin_without_reopening_report(self) -> None:
@@ -143,7 +180,9 @@ class PinnedRunTest(unittest.TestCase):
         pins = [by_name[path.name]["run"]["manifest_sha256"] for path in paths]
         original_read = Path.read_text
 
-        def read(path, pin):
+        def read(path, pin, *, expected_observation_contract, expected_delivery):
+            self.assertEqual(expected_observation_contract,'ordinary_native_v1')
+            self.assertIsNone(expected_delivery)
             block = copy.deepcopy(by_name[path.name])
             self.assertEqual(pin, block["run"]["manifest_sha256"])
             return block, host
@@ -155,7 +194,7 @@ class PinnedRunTest(unittest.TestCase):
         with patch.object(MODEL, "read_run", side_effect=read) as reader, \
              patch.object(Path, "read_text", read_text), \
              patch.object(MODEL, "sha256_of", side_effect=AssertionError("post-hoc pin")):
-            rebuilt = MODEL.build_summary(paths, manifest_sha256=pins)
+            rebuilt = MODEL.build_summary(paths, manifest_sha256=pins, expected_observation_contract='ordinary_native_v1')
         self.assertEqual(rebuilt, expected)
         self.assertEqual(reader.call_count, len(paths))
 
@@ -166,7 +205,8 @@ class PinnedRunTest(unittest.TestCase):
             self.assertEqual(refusal.exception.code, 2)
         with patch.object(MODEL, "build_summary", side_effect=MODEL.HARNESS.HarnessRefusal("bad pin")), \
              patch.object(MODEL, "write_outputs") as write, redirect_stderr(StringIO()) as stderr:
-            self.assertEqual(MODEL.main(["--build", "run", "--manifest-sha256", self.PIN, "--write"]), 1)
+            self.assertEqual(MODEL.main(["--build", "run", "--manifest-sha256", self.PIN, "--write",
+                                         "--require-observation-contract", "ordinary_native_v1"]), 1)
         write.assert_not_called()
         self.assertIn("bad pin", stderr.getvalue())
 
@@ -539,7 +579,7 @@ class ModelTest(unittest.TestCase):
         self.assertEqual(toy.multiplication_units(2), 3 * (4 * forward + 4 * n + 3 * inverse) + key_switch)
         self.assertEqual(toy.switch_down_units(2), 2 * n * 8)
         # Sizes of the Rust unit test `sizes_match_the_encoded_objects`.
-        self.assertEqual(toy.ciphertext_bytes(2), 36 + 16 + 8 * 2 * 3 * 16)
+        self.assertEqual(toy.ciphertext_bytes(2), 36 + 16 + 30 * 2 * 3 * 16 // 8)
         self.assertEqual(toy.switching_key_bytes(), 37 + 8 * 2 * 2 * 5 * 16)
         self.assertEqual(toy.secret_key_bytes(), 32 + 4)
         self.assertEqual(toy.residue_bytes(2), 8 * 2 * 3 * 16)

@@ -746,14 +746,44 @@ fn direct_invocation_binding_names_a_matching_instruction() {
         SignedAttachmentErrorV1::InvocationTargetMismatch { action_index: 0 }
     );
 
-    // A wire identifier nobody registered.
+    // A well-formed wire identifier this release does not register is no
+    // structural error (§5.2); it only fails to name the bound instruction.
     let mut unregistered = direct_action(1, slots());
     unregistered.operation =
         ActionOperationV1::NativeInstruction("iroha.unregistered.operation.v1".into());
     assert_eq!(
         rejected(&with_plan(instructions(), single(unregistered))),
-        SignedAttachmentErrorV1::UnregisteredOperation { action_index: 0 }
+        SignedAttachmentErrorV1::InvocationTargetMismatch { action_index: 0 }
     );
+
+    // A wire identifier outside the envelope wire-ID rule.
+    let mut malformed = direct_action(1, slots());
+    malformed.operation = ActionOperationV1::NativeInstruction("iroha.log!".into());
+    assert_eq!(
+        rejected(&with_plan(instructions(), single(malformed))),
+        SignedAttachmentErrorV1::MalformedOperationWireId { action_index: 0 }
+    );
+
+    // An action binds an envelope this release keeps opaque by its wire
+    // identifier, so the payload decodes alike on every release.
+    let opaque_wire_id = "test.unreleased.operation.v1";
+    let opaque = InstructionBox::from(
+        crate::isi::OpaqueInstructionV1::new(opaque_wire_id, vec![0xA5; 40])
+            .expect("well-formed wire identifier"),
+    );
+    let mut on_opaque = direct_action(1, slots());
+    on_opaque.operation = ActionOperationV1::NativeInstruction(opaque_wire_id.into());
+    let payload = with_plan(
+        Executable::Instructions(vec![log("first"), opaque].into()),
+        single(on_opaque),
+    );
+    payload
+        .validate_signed_attachments_v1()
+        .expect("an action binds an opaque envelope by its wire identifier");
+    let framed = norito::encode_canonical(&sign(payload.clone())).expect("canonical frame");
+    let decoded = norito::decode_canonical::<SignedTransaction>(&framed)
+        .expect("the payload decodes without registering the wire identifier");
+    assert_eq!(decoded.payload(), &payload);
 
     // Two actions on one instruction.
     let mut twice = single(direct_action(1, slots()));
@@ -1832,7 +1862,7 @@ fn payload_builder_canonicality_adds_no_output_allocation_after_actual_decode() 
     // Warm the same actual decoder/encoder paths before measuring allocator calls. Retaining
     // both returned graphs outside each observation excludes destructor work from the counts.
     TransactionPayload::decode_from_slice(&bytes).expect("warm payload decoder");
-    TransactionBuilder::decode_payload(&bytes).expect("warm complete builder decoder");
+    let _ = TransactionBuilder::decode_payload(&bytes).expect("warm complete builder decoder");
     let (parsed, parse_requests) = measured(|| TransactionPayload::decode_from_slice(&bytes));
     let (checked, checked_requests) = measured(|| TransactionBuilder::decode_payload(&bytes));
     let (parsed, used) = parsed.expect("actual payload decoder");

@@ -1,0 +1,378 @@
+name: Native Windows and Intel component checks
+
+# Component correctness only. Signed bundles, installed SDKs, named performance
+# baselines and complete node/recovery campaigns retain their own release gates.
+on:
+  pull_request:
+    paths:
+      - "crates/iroha_fs/**"
+      - "crates/iroha/**"
+      - "crates/iroha_release_bundle/**"
+      - "crates/iroha_test_network/**"
+      - "integration_tests/**"
+      - "crates/iroha_cli/**"
+      - "crates/iroha_process_bridge/**"
+      - "crates/iroha_config_base/**"
+      - "crates/iroha_operation_journal/**"
+      - "crates/iroha_fhe/**"
+      - "crates/iroha_measurement/**"
+      - "crates/iroha_plonk/build.rs"
+      - "crates/iroha_plonk/build_support/**"
+      - "crates/iroha_plonk/tests/source_identity.rs"
+      - "crates/iroha_plonk/Cargo.toml"
+      - "tools/iroha_native_source_delivery/**"
+      - "ci/python_native_source_delivery.py"
+      - "ci/verify_privacy_python_wheel.py"
+      - "ci/privacy_sdk_cargo_lockfile_test.sh"
+      - "ci/check_sorafs_python_native_sdk.sh"
+      - "scripts/tests/python_native_source_delivery_test.py"
+      - "scripts/tests/python_native_delivery_gate_contract_test.py"
+      - "scripts/tests/python_wheel_byte_owner_test.py"
+      - "scripts/tests/python_source_owner_admission_test.py"
+      - "scripts/tests/sorafs_python_native_platform_test.py"
+      - "scripts/tests/native_bash_fixture.py"
+      - "scripts/release_entry_owner.py"
+      - "scripts/release_bridge_admission.py"
+      - "scripts/release_process_bridge.py"
+      - "scripts/pipeline_registry.py"
+      - "scripts/environment-policy.json"
+      - "scripts/run_release_pipeline.py"
+      - "scripts/sumeragi_prebuilt_bundle.py"
+      - "scripts/sumeragi_prebuilt_bundle.sh"
+      - "pytests/scripts/test_release_entry_owner.py"
+      - "pytests/scripts/test_release_bridge_admission.py"
+      - "pytests/scripts/test_release_process_bridge.py"
+      - "pytests/scripts/test_native_supervision.py"
+      - "pytests/scripts/test_pipeline_preparation.py"
+      - "pytests/scripts/test_shell_preparation.py"
+      - "pytests/scripts/test_bridge_cli_supervision.py"
+      - "pytests/scripts/support/bridge_cli_fixture.py"
+      - "scripts/compute_workspace_source_manifest.py"
+      - "scripts/workspace_source_keeper.py"
+      - "scripts/workspace_source_keeper_windows.py"
+      - "pytests/scripts/workspace_source_manifest_test.py"
+      - "pytests/scripts/workspace_source_keeper_test.py"
+      - "python/iroha_native/src/iroha_native/**"
+      - "python/iroha_python/tests/conftest.py"
+      - "python/iroha_python/requirements-ci.*"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - ".cargo/**"
+      - ".github/workflows/platform_native.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_BUILD_JOBS: "4"
+  CARGO_INCREMENTAL: "0"
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: core.autocrlf
+  GIT_CONFIG_VALUE_0: "false"
+
+jobs:
+  native:
+    name: Native ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1
+          # Test jobs keep normal compiler warnings; explicit Clippy steps stay strict.
+          rustflags: ""
+          components: clippy
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Require a native host and real link creation
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/platform-native
+          python - <<'PY' | tee target/platform-native/host.log
+          import os
+          from pathlib import Path
+          import platform
+          import subprocess
+          import tempfile
+
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          print(version, flush=True)
+          print(platform.platform(), flush=True)
+          host = next(line[6:] for line in version.splitlines() if line.startswith("host: "))
+          if host != os.environ["EXPECTED_TARGET"]:
+              raise SystemExit("native host differs from the selected target")
+          with tempfile.TemporaryDirectory() as temporary:
+              root = Path(temporary)
+              target = root / "file"
+              target.write_bytes(b"native-link-probe")
+              directory = root / "directory"
+              directory.mkdir()
+              try:
+                  (root / "file-link").symlink_to(target)
+                  (root / "directory-link").symlink_to(directory, target_is_directory=True)
+              except OSError as error:
+                  raise SystemExit("native link tests require symlink privilege or Windows Developer Mode: " + str(error))
+              assert (root / "file-link").is_symlink()
+              assert (root / "directory-link").is_symlink()
+          PY
+      - name: Exercise native filesystem custody and documentation contracts
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_fs --all-targets -- --test-threads=1 2>&1 | tee target/platform-native/filesystem.log
+          cargo test --locked -p iroha_fs --doc 2>&1 | tee target/platform-native/filesystem-doc.log
+          cargo clippy --locked -p iroha_fs --all-targets -- -D warnings 2>&1 | tee target/platform-native/filesystem-clippy.log
+      - name: Exercise canonical release publication and retained native children
+        if: runner.os != 'macOS'
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_release_bundle --all-features --all-targets 2>&1 | tee target/platform-native/release-bundle.log
+          cargo test --locked -p iroha_release_bundle --all-features --doc 2>&1 | tee target/platform-native/release-bundle-doc.log
+          cargo clippy --locked -p iroha_release_bundle --all-features --all-targets -- -D warnings 2>&1 | tee target/platform-native/release-bundle-clippy.log
+      - name: Exercise the shared process bridge and build Python fixture artifacts
+        if: runner.os != 'macOS'
+        # These local artifact paths are fixture inputs, never independent release pins.
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_process_bridge --all-targets -- --test-threads=1 2>&1 | tee target/platform-native/process-bridge.log
+          cargo test --locked -p iroha_process_bridge --doc 2>&1 | tee target/platform-native/process-bridge-doc.log
+          cargo clippy --locked -p iroha_process_bridge --all-targets -- -D warnings 2>&1 | tee target/platform-native/process-bridge-clippy.log
+          cargo build --locked -p iroha_process_bridge --lib
+          cargo build --locked -p iroha_release_bundle --example provenance_fixture
+      - name: Compile the Darwin release owner
+        if: runner.os == 'macOS'
+        # TODO: Qualify original-image launch with child cwd on Darwin before enabling
+        # release process runtime gates; compilation grants no execution qualification.
+        run: |
+          set -euo pipefail
+          cargo check --locked -p iroha_release_bundle -p iroha_process_bridge --all-features --all-targets 2>&1 | tee target/platform-native/release-bundle-check.log
+      - name: Require actual AVX2 instructions and independent arithmetic parity
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_fhe --lib accel::tests::required_avx2_execution -- --ignored --exact --nocapture 2>&1 | tee target/platform-native/avx2.log
+          cargo test --locked -p iroha_fhe --lib --test canonical_vectors --test clearing --test rns_chain_vectors 2>&1 | tee target/platform-native/simd.log
+          cargo test --locked -p iroha_fhe --no-default-features --lib --test canonical_vectors --test clearing --test rns_chain_vectors 2>&1 | tee target/platform-native/scalar.log
+      - name: Exercise native configuration identity and operation journals
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_config_base --lib 2>&1 | tee target/platform-native/configuration.log
+          cargo test --locked -p iroha_operation_journal --lib -- --test-threads=1 2>&1 | tee target/platform-native/operation-journal.log
+      - name: Exercise native CPU and resident-memory observation
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_measurement 2>&1 | tee target/platform-native/measurement.log
+      - name: Exercise native source membership and path identity
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_plonk --test source_identity 2>&1 | tee target/platform-native/source-identity.log
+      - name: Exercise retained Python source delivery
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_native_source_delivery 2>&1 | tee target/platform-native/source-delivery-rust.log
+          cargo clippy --locked -p iroha_native_source_delivery --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
+          cargo build --locked -p iroha_native_source_delivery
+          python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
+          export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
+          python -m pytest -q \
+            scripts/tests/python_native_source_delivery_test.py \
+            scripts/tests/python_native_delivery_gate_contract_test.py \
+            scripts/tests/python_wheel_byte_owner_test.py \
+            scripts/tests/python_source_owner_admission_test.py \
+            scripts/tests/sorafs_python_native_platform_test.py \
+            pytests/scripts/workspace_source_manifest_test.py \
+            pytests/scripts/workspace_source_keeper_test.py \
+            2>&1 | tee target/platform-native/source-delivery-python.log
+      - name: Exercise producer admission and synchronous original-session supervision
+        if: runner.os != 'macOS'
+        # The preceding Python delivery step installs the hashed pytest dependencies.
+        run: |
+          set -euo pipefail
+          # Give fixture callers a valid explicit compiler environment; refusal tests inject overrides.
+          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN
+          export IROHA_TEST_PROCESS_BRIDGE_LIBRARY="$(python -c 'import os; from pathlib import Path; print((Path("target/debug") / ("iroha_process_bridge.dll" if os.name == "nt" else "libiroha_process_bridge.so")).resolve(), end="")')"
+          export IROHA_TEST_PROVENANCE_EMITTER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/examples/provenance_fixture" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
+          python -m pytest -q --junitxml=target/platform-native/release-process-python.xml \
+            pytests/scripts/test_release_entry_owner.py \
+            pytests/scripts/test_release_bridge_admission.py \
+            pytests/scripts/test_release_process_bridge.py \
+            pytests/scripts/test_native_supervision.py \
+            pytests/scripts/test_pipeline_preparation.py \
+            pytests/scripts/test_shell_preparation.py \
+            pytests/scripts/test_bridge_cli_supervision.py \
+            2>&1 | tee target/platform-native/release-process-python.log
+          python - <<'PYTHON'
+          import xml.etree.ElementTree as ET
+
+          cases = ET.parse("target/platform-native/release-process-python.xml").findall(".//testcase")
+          if not cases or any(case.find(tag) is not None for case in cases for tag in ("failure", "error", "skipped")):
+              raise SystemExit("producer controls require nonempty passing actual tests without skips")
+          PYTHON
+      - name: Retain actual native results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: platform-native-${{ matrix.target }}-${{ github.run_id }}
+          path: target/platform-native
+          if-no-files-found: error
+          retention-days: 14
+
+
+  workflow-storage:
+    name: Workflow storage ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1
+          # Test jobs keep normal compiler warnings; explicit Clippy steps stay strict.
+          rustflags: ""
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Require the selected native compiler
+        env:
+          EXPECTED_TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          mkdir -p target/platform-workflow
+          python - <<'PYTHON' | tee target/platform-workflow/host.log
+          import os
+          import platform
+          import subprocess
+
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          print(version, flush=True)
+          print(platform.platform(), flush=True)
+          host = next(line[6:] for line in version.splitlines() if line.startswith("host: "))
+          if host != os.environ["EXPECTED_TARGET"]:
+              raise SystemExit("workflow tests require the selected native compiler")
+          PYTHON
+      - name: Execute the actual Rust SDK storage and engine suites
+        # File storage uses real host custody and locking. These are SDK component
+        # tests; an engine reconstruction test does not establish a process restart.
+        run: |
+          set -euo pipefail
+          for suite in storage engine_tests; do
+            cargo test --locked -p iroha --lib "workflow::$suite" -- --test-threads=1 \
+              2>&1 | tee "target/platform-workflow/$suite.log"
+          done
+          python - <<'PYTHON'
+          from pathlib import Path
+          import re
+
+          for suite in ("storage", "engine_tests"):
+              text = Path(f"target/platform-workflow/{suite}.log").read_text(errors="replace")
+              results = re.findall(
+                  r"test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored;",
+                  text,
+              )
+              if not results:
+                  raise SystemExit(f"{suite}: missing terminal test result")
+              passed, failed, ignored = map(int, results[-1])
+              if passed == 0 or failed != 0 or ignored != 0:
+                  raise SystemExit(f"{suite}: require nonempty, passing, unignored actual tests")
+          PYTHON
+      - name: Retain actual SDK runtime results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: platform-workflow-${{ matrix.target }}-${{ github.run_id }}
+          path: target/platform-workflow
+          if-no-files-found: error
+          retention-days: 14
+
+
+  windows-consumer-check:
+    name: Native Windows consumer test compilation
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659
+        with:
+          toolchain: 1.93.1
+          rustflags: ""
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: "3.12"
+      - name: Require the native Windows compiler
+        run: |
+          set -euo pipefail
+          mkdir -p target/platform-consumers
+          python - <<'PYTHON' | tee target/platform-consumers/host.log
+          import subprocess
+
+          version = subprocess.check_output(["rustc", "-vV"], text=True)
+          print(version, flush=True)
+          host = next(line[6:] for line in version.splitlines() if line.startswith("host: "))
+          if host != "x86_64-pc-windows-msvc":
+              raise SystemExit("consumer checks require native Windows MSVC")
+          PYTHON
+      - name: Compile actual TestNetwork, integration and CLI test consumers
+        # Compilation only: runtime, process-custody and release-corridor gates
+        # remain separate. The cold-settlement feature keeps its consumer compiled.
+        run: |
+          set -euo pipefail
+          cargo check --locked --tests -p iroha_test_network -p integration_tests -p iroha_cli --features integration_tests/atomic-private-settlement-smoke \
+            2>&1 | tee target/platform-consumers/check.log
+      - name: Retain native consumer compilation results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: platform-consumers-x86_64-pc-windows-msvc-${{ github.run_id }}
+          path: target/platform-consumers
+          if-no-files-found: error
+          retention-days: 14

@@ -15,6 +15,7 @@ use iroha_data_model::{
         SignedGenesisPinsV1, SumeragiFinalityVerifier, authenticate_signed_genesis_v1,
     },
 };
+use iroha_fs::ProcessStdio as Stdio;
 use iroha_private_settlement::{
     FilePrivateSettlementArtifacts, OneCallPrivateSettlementOperation,
     OneCallPrivateSettlementRequest, PrivateSettlementBusinessTerms,
@@ -22,7 +23,6 @@ use iroha_private_settlement::{
 use std::{
     io::Read,
     path::Path,
-    process::Stdio,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -899,7 +899,8 @@ pub(super) fn spawn(
     );
     let (pid, stdout, stderr) = runtime.block_on(async {
         use tokio::io::AsyncWriteExt as _;
-        let mut child = tokio::process::Command::new(std::env::current_exe()?)
+        let mut command = iroha_fs::ProcessCommand::new(std::env::current_exe()?)?;
+        command
             .arg(test_filter()?)
             .arg("--exact")
             .arg("--ignored")
@@ -908,8 +909,9 @@ pub(super) fn spawn(
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        let mut child =
+            iroha_test_network::ResolvedAsyncChild::from_development_child(command.spawn()?)?;
         let pid = child
             .id()
             .ok_or_else(|| eyre!("child process identity absent"))?;
@@ -1066,13 +1068,13 @@ fn cold_child_rejects_substituted_signed_genesis_before_wallet_and_binds_reports
             // each network permit before constructing the next fixture, and make
             // the deadline-bearing input last so genesis preparation cannot age it.
             let replacement_genesis = {
-                let replacement = n3_smoke_builder(TopologyShape::new(PARTICIPANT_COUNT))
+                let replacement = localnet_builder(TopologyShape::new(PARTICIPANT_COUNT))
                     .with_base_seed("cold-replacement-pins")
                     .build();
                 replacement.genesis().0.encode_wire().unwrap()
             };
             let mut input = {
-                let original = n3_smoke_builder(TopologyShape::new(PARTICIPANT_COUNT))
+                let original = localnet_builder(TopologyShape::new(PARTICIPANT_COUNT))
                     .with_base_seed("cold-original-pins")
                     .build();
                 test_input(
@@ -1141,7 +1143,8 @@ fn cold_child_rejects_substituted_signed_genesis_before_wallet_and_binds_reports
 #[test]
 fn cold_report_custody_refuses_overflow_collision_and_path_escape() {
     let temp = tempfile::tempdir().unwrap();
-    let root = iroha_fs::PrivateDirectory::open_or_create(temp.path().join("custody")).unwrap();
+    let private = temp.path().join("private");
+    let root = iroha_fs::PrivateDirectory::open_or_create(&private).unwrap();
     root.write_atomic("report", &[1; 16], iroha_fs::PublishMode::CreateNew)
         .unwrap();
     assert!(root.read("report", 15).is_err());

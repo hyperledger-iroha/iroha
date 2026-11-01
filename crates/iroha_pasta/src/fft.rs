@@ -638,7 +638,7 @@ fn dif_stages<F: PastaField, const PARALLEL: bool>(
             if CancellationToken::checkpoint(cancellation).is_err() {
                 return;
             }
-            for pair in chunk.chunks_exact_mut(2) {
+            for pair in chunk.as_chunks_mut::<2>().0 {
                 let (x, y) = (pair[0], pair[1]);
                 pair[0] = x + y;
                 pair[1] = x - y;

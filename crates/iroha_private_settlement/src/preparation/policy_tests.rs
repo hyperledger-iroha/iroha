@@ -23,18 +23,23 @@ fn selected_fixture() -> (
     let client = client.build().unwrap();
     let (mut proof, intent) = cold_context_tests::context(&client);
     for context in &mut proof.contexts {
+        let mut policy = iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+            &context.parameters,
+        )
+        .unwrap();
+        policy.current_limits.max_carrier_bytes = 2 * 1024 * 1024;
         context
-            .privacy_policy
-            .current_limits
-            .private_settlement
-            .max_carrier_bytes = 2 * 1024 * 1024;
-        let hash = world_state_value_hash_v1(&context.privacy_policy).unwrap();
+            .parameters
+            .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                policy.to_custom_parameter().unwrap(),
+            ));
+        let hash = world_state_value_hash_v1(&context.parameters).unwrap();
         context
             .pool
             .world
             .entries
             .iter_mut()
-            .find(|entry| entry.field_id == "world.privacy_consensus_policy")
+            .find(|entry| entry.field_id == "world.parameters")
             .unwrap()
             .value_hash = hash;
     }

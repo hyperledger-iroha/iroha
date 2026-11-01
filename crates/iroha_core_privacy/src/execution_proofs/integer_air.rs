@@ -167,7 +167,7 @@ impl IntegerAirV1 {
         assert!(value.low >= 0 && bits < 50 && value.high < (1_i64 << bits));
         let mut outputs = vec![Value::constant(0); bits as usize];
         let mut bit = 0;
-        while bit + 2 <= bits - 1 {
+        while bit + 2 < bits {
             let out = self.push(Operation::Digit(value, bit), 0, 3);
             self.constraints.push(Constraint::RadixFour(out));
             outputs[bit as usize] = out;

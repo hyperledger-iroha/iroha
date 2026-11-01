@@ -63,7 +63,6 @@ fn npos_zero_field(
             zeroes[index] = matches!(raw, "0" | "-0");
         }
     }
-    drop(object);
     parser.finish_document()?;
     Ok(FIELDS
         .into_iter()
@@ -71,7 +70,7 @@ fn npos_zero_field(
         .find_map(|(field, zero)| zero.then_some(field)))
 }
 
-/// Decode exact original NPoS bytes with funded record, keys, quantities and text.
+/// Decode exact original `NPoS` bytes with funded record, keys, quantities and text.
 pub(super) fn npos(
     source: &Json,
     pool: &AllocationBudget,
@@ -106,9 +105,9 @@ pub(super) fn handshake(
 pub(super) enum PolicyInput {
     /// Signed handshake payload and its separate intrinsic validation.
     Handshake,
-    /// Incoming signed NPoS bytes and the four explicit zero-bound diagnostics.
+    /// Incoming signed `NPoS` bytes and the four explicit zero-bound diagnostics.
     IncomingNpos,
-    /// Previously installed signed NPoS bytes, whose original error was unprefixed.
+    /// Previously installed signed `NPoS` bytes, whose original error was unprefixed.
     InstalledNpos,
 }
 

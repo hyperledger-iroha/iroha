@@ -13,7 +13,7 @@ fn bind(
     owner: &Arc<FileNativePaymentFinality>,
     native: &NativeFinalityFixture,
 ) -> BoundNativePaymentFinality {
-    owner
+    Arc::clone(owner)
         .bind(
             WorkflowId::from_bytes([22; 32]),
             [23; 32],
@@ -169,7 +169,7 @@ fn ciphertext_binds_original_key_workflow_request_root_and_initial_epoch() {
         assert!(matches!(changed.load(), Err(Error::Binding)));
         assert!(matches!(
             changed.compare_and_publish(None, &record),
-            Err(Error::Binding) | Err(Error::Conflict)
+            Err(Error::Binding | Error::Conflict)
         ));
     }
     assert_eq!(stored_bytes(&original), ciphertext);

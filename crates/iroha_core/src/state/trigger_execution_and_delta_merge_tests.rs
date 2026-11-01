@@ -974,7 +974,12 @@ fn trigger_component_window_preserves_original_policy_and_refuses_unsupported_he
     let carrier = trigger_component_block(&state, 2);
     let mut block = state.block(carrier.as_ref().header());
     assert_eq!(
-        crate::resource_coherence::validate_final_policy(&block.world, 3),
+        crate::resource_coherence::validate_final_policy(&block.world, 3).map_err(|error| {
+            match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                error => panic!("unexpected local refusal: {error}"),
+            }
+        }),
         Err(PolicyCoherenceError::MissingScheduledParameters { height: 4 }),
         "the unadvanced component window must fail closed at its unsupported successor"
     );
@@ -994,7 +999,12 @@ fn trigger_component_window_preserves_original_policy_and_refuses_unsupported_he
     crate::resource_coherence::validate_final_policy(&block.world, 3)
         .expect("H3 requires the now retained H4 cap");
     assert_eq!(
-        crate::resource_coherence::validate_final_policy(&block.world, 4),
+        crate::resource_coherence::validate_final_policy(&block.world, 4).map_err(|error| {
+            match error {
+                crate::execution_attempt::ExecutionAttemptError::Rejected(error) => error,
+                error => panic!("unexpected local refusal: {error}"),
+            }
+        }),
         Err(PolicyCoherenceError::MissingScheduledParameters { height: 5 }),
         "explicit component coverage cannot grant an unretained successor"
     );

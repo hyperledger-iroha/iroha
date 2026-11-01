@@ -186,7 +186,9 @@ fn array_root(
 ) -> Result<Word<Fp>, Error> {
     while nodes.len() > 1 {
         nodes = nodes
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pair| sponge.hash_words(region, domain, pair))
             .collect::<Result<_, _>>()?;
     }

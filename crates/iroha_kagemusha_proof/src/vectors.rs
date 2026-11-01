@@ -120,7 +120,7 @@ impl SplitMix64 {
     /// The next 32 bytes.
     pub fn next_bytes(&mut self) -> [u8; 32] {
         let mut bytes = [0_u8; 32];
-        for chunk in bytes.chunks_exact_mut(8) {
+        for chunk in bytes.as_chunks_mut::<8>().0 {
             chunk.copy_from_slice(&self.next_u64().to_le_bytes());
         }
         bytes

@@ -438,9 +438,7 @@ impl MainCaPrivatePlanV1 {
         policy: main_bounded_transform::MainBoundedTransformPolicyV1,
         accumulator: &mut [Vec<Vec<E>>],
     ) -> Result<(), ZkX509StarkErrorV1> {
-        use fastpq_prover::goldilocks_transform::{
-            goldilocks_transform_completion_uncertain_v1, transform_goldilocks_columns_v1,
-        };
+        use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;
         ca.validate_source_plan_v1(&self.shared)
             .map_err(|_| ZkX509StarkErrorV1::ProfileMismatch)?;
         retained.validate_v1(self)?;
@@ -609,17 +607,9 @@ impl MainCaPrivatePlanV1 {
                 main_bounded_transform::check_completion_v1(
                     goldilocks_transform_completion_uncertain_v1(),
                 )?;
-                policy.forward_with_v1(
+                policy.forward_exact_v1(
                     &mut batch,
                     stripe.root,
-                    &mut |words: &mut [Vec<u64>], root, direction| {
-                        transform_goldilocks_columns_v1(
-                            words,
-                            root,
-                            direction,
-                            fastpq_prover::ExecutionMode::Auto,
-                        )
-                    },
                     &mut goldilocks_transform_completion_uncertain_v1,
                 )?;
                 for (offset, &index) in indices.iter().enumerate() {

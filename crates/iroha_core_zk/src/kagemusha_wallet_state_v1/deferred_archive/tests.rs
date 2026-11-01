@@ -30,7 +30,7 @@ fn ready_order_uses_intake_ordinal_even_when_verification_arrives_in_reverse_ord
             .unwrap()
             .unwrap();
         assert_eq!(key, order_key(ordinal));
-        assert_eq!(value, vec![ordinal as u8; 32]);
+        assert_eq!(value, vec![u8::try_from(ordinal).unwrap(); 32]);
         reopened.ready = reopened.ready.remove(&mut archive, &key).unwrap();
     }
     assert!(
@@ -50,13 +50,9 @@ fn count_trigger_is_not_a_cap_and_overflow_or_duplicate_cannot_rewrite_the_root(
         ..DeferredIndex::default()
     };
     for ordinal in 1..=17 {
+        let byte = u8::try_from(ordinal).unwrap();
         index
-            .insert_ready(
-                &mut archive,
-                [ordinal as u8; 32],
-                [ordinal as u8; 32],
-                ordinal,
-            )
+            .insert_ready(&mut archive, [byte; 32], [byte; 32], ordinal)
             .unwrap();
     }
     assert_eq!(

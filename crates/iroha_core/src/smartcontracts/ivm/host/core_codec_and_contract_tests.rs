@@ -213,9 +213,10 @@ fn build_authenticated_test_contract_program_with_states(
 
     assert!(code.len().is_multiple_of(4));
     assert!(
-        code.chunks_exact(4)
-            .all(|word| u32::from_le_bytes(word.try_into().unwrap())
-                != ivm::encoding::wide::encode_halt())
+        code.as_chunks::<4>()
+            .0
+            .iter()
+            .all(|word| u32::from_le_bytes(*word) != ivm::encoding::wide::encode_halt())
     );
     let contract_interface = ivm::EmbeddedContractInterfaceV1 {
         events: Vec::new(),

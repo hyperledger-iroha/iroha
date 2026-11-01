@@ -20,7 +20,7 @@ use std::{path::PathBuf, time::Duration};
 // Deep debug histories can spend over ten seconds on original admission and retirement.
 // Focused short-expiry tests retain their own 500 ms / two-second authorizations.
 const BODY_VALIDITY_MS: u64 = 30_000;
-const CAMPAIGN_BUDGET: Duration = Duration::from_secs(2_520);
+const CAMPAIGN_BUDGET: Duration = Duration::from_mins(42);
 const BODY_EXPIRY_WAIT: Duration = Duration::from_secs(32);
 
 struct OriginalBytes {

@@ -347,8 +347,6 @@ impl GovernanceBlockStartOutputV1 {
 
 #[cfg(test)]
 mod tests {
-    use norito::codec::{Decode as _, Encode as _};
-
     use super::*;
     use crate::governance::anonymous_ballot::{
         BALLOT_CONTEXT_MAX_BYTES_V1, MAX_SEALED_SEATS_V1, ParliamentBallotParametersV1,

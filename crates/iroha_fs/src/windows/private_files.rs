@@ -6,10 +6,14 @@ use windows_sys::Win32::{
         Authorization::SetSecurityInfo, GetSecurityDescriptorDacl,
         PROTECTED_DACL_SECURITY_INFORMATION,
     },
-    Storage::FileSystem::FILE_GENERIC_READ,
+    Storage::FileSystem::{FILE_GENERIC_EXECUTE, FILE_GENERIC_READ},
 };
 
 fn read_only_acl(file: &File) -> io::Result<bool> {
+    sealed_acl(file, FILE_GENERIC_READ)
+}
+
+fn sealed_acl(file: &File, access: u32) -> io::Result<bool> {
     let user = UserSid::current()?;
     let mut owner = null_mut();
     let mut dacl: *mut ACL = null_mut();
@@ -62,8 +66,16 @@ fn read_only_acl(file: &File) -> io::Result<bool> {
     }
     // SAFETY: checked the allowed-ACE type and minimum layout above.
     let allowed = unsafe { &*ace.cast::<ACCESS_ALLOWED_ACE>() };
-    Ok(allowed.Mask == FILE_GENERIC_READ
-        && user.equals(from_ref(&allowed.SidStart).cast_mut().cast()))
+    Ok(allowed.Mask == access && user.equals(from_ref(&allowed.SidStart).cast_mut().cast()))
+}
+
+pub(super) fn validate_executable(file: &File) -> io::Result<()> {
+    if !sealed_acl(file, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE)? {
+        return Err(denied(
+            "private executable requires protected owner-read-execute DACL",
+        ));
+    }
+    Ok(())
 }
 
 pub(super) fn validate_read_only(file: &File) -> io::Result<()> {
@@ -76,6 +88,10 @@ pub(super) fn validate_read_only(file: &File) -> io::Result<()> {
 }
 
 fn set_read_only_acl(file: &File) -> io::Result<()> {
+    set_sealed_acl(file, false)
+}
+
+pub(super) fn set_sealed_acl(file: &File, executable: bool) -> io::Result<()> {
     let user = UserSid::current()?;
     let mut sid_text = null_mut();
     // SAFETY: the current-user SID is valid and the output is owned until return.
@@ -93,7 +109,8 @@ fn set_read_only_acl(file: &File) -> io::Result<()> {
     // SAFETY: measured initialized SID string excludes the terminator.
     let sid = String::from_utf16(unsafe { std::slice::from_raw_parts(sid_text, length) })
         .map_err(|_| invalid("native SID text is invalid"))?;
-    let sddl = wide(OsStr::new(&format!("O:{sid}D:P(A;;FR;;;{sid})")))?;
+    let access = if executable { "FRFX" } else { "FR" };
+    let sddl = wide(OsStr::new(&format!("O:{sid}D:P(A;;{access};;;{sid})")))?;
     let mut descriptor = null_mut();
     // SAFETY: terminated source remains live and output is one owned native allocation.
     unsafe {
@@ -132,7 +149,11 @@ fn set_read_only_acl(file: &File) -> io::Result<()> {
             return Err(io::Error::from_raw_os_error(status.cast_signed()));
         }
     }
-    validate_read_only(file)
+    if executable {
+        validate_executable(file)
+    } else {
+        validate_read_only(file)
+    }
 }
 
 impl Directory {
@@ -145,15 +166,16 @@ impl Directory {
         mut visitor: impl FnMut(&OsStr, PrivateFileMetadata) -> io::Result<()>,
     ) -> io::Result<()> {
         self.revalidate()?;
+        // NTFS directory timestamps can remain unchanged after a fast child mutation.
+        // Keep a latched native notification across the entire streamed callback scan.
+        let changes = InventoryChanges::begin(self.path())?;
         let before = snapshot(&self.current().file, self.current().private, true)?;
-        let mut count = 0usize;
-        for entry in std::fs::read_dir(self.path())? {
+        for (count, entry) in std::fs::read_dir(self.path())?.enumerate() {
             let name = entry?.file_name();
             checked_name(&name)?;
             if count >= maximum {
                 return Err(invalid("directory entry count exceeds the bound"));
             }
-            count += 1;
             let file = open_file(
                 &self.path().join(&name),
                 FILE_READ_ATTRIBUTES,
@@ -175,6 +197,7 @@ impl Directory {
         if before != snapshot(&self.current().file, self.current().private, true)? {
             return Err(changed());
         }
+        changes.require_unchanged()?;
         self.revalidate()
     }
 
@@ -186,11 +209,21 @@ impl Directory {
         RetainedFile::open_read_only(self.clone(), name.to_owned())
     }
 
-    pub(crate) fn open_retained_private_optional(
+    pub(crate) fn open_retained_executable(&self, name: &OsStr) -> io::Result<RetainedFile> {
+        // Ordinary read admission retains a GENERIC_READ handle with FILE_SHARE_READ
+        // only; recovered execution never acquires the creator's write/delete rights.
+        let mut file = self.open_retained(name, false, false)?;
+        file.executable = true;
+        file.revalidate()?;
+        Ok(file)
+    }
+
+    pub(crate) fn open_retained_optional(
         &self,
         name: &OsStr,
+        private: bool,
     ) -> io::Result<Option<RetainedFile>> {
-        // Preserve ordinary retained-private admission's exclusive sharing fence.
+        // Preserve ordinary retained admission's exclusive sharing fence.
         let file = match open_file(
             &self.path().join(name),
             GENERIC_READ,
@@ -203,16 +236,17 @@ impl Directory {
             Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(error),
         };
-        let before = snapshot(&file, true, false)?;
+        let before = snapshot(&file, private, false)?;
         let retained = RetainedFile {
             directory: self.clone(),
             name: name.to_owned(),
             file,
             before,
             links: LinkPolicy::Single,
-            private: true,
+            private,
             writable: false,
             read_only: false,
+            executable: false,
             publishable: false,
             ancestry: AncestryCheck::EachCall,
         };
@@ -268,6 +302,7 @@ impl Directory {
             private: true,
             writable: false,
             read_only: true,
+            executable: false,
             publishable: false,
             ancestry,
         };
@@ -287,6 +322,72 @@ impl Directory {
         name: &'a OsStr,
     ) -> io::Result<RetainedFile<&'a Self, &'a OsStr>> {
         RetainedFile::open_read_only(self, name)
+    }
+}
+
+/// One fixed native namespace/security notification for a retained local NTFS directory.
+#[derive(Debug)]
+pub(super) struct InventoryChanges(isize);
+
+impl InventoryChanges {
+    pub(super) fn begin(path: &Path) -> io::Result<Self> {
+        use windows_sys::Win32::Storage::FileSystem::{
+            FILE_NOTIFY_CHANGE_ATTRIBUTES, FILE_NOTIFY_CHANGE_DIR_NAME,
+            FILE_NOTIFY_CHANGE_FILE_NAME, FILE_NOTIFY_CHANGE_LAST_WRITE,
+            FILE_NOTIFY_CHANGE_SECURITY, FILE_NOTIFY_CHANGE_SIZE,
+        };
+        Self::begin_filtered(
+            path,
+            FILE_NOTIFY_CHANGE_FILE_NAME
+                | FILE_NOTIFY_CHANGE_DIR_NAME
+                | FILE_NOTIFY_CHANGE_ATTRIBUTES
+                | FILE_NOTIFY_CHANGE_SECURITY
+                | FILE_NOTIFY_CHANGE_SIZE
+                | FILE_NOTIFY_CHANGE_LAST_WRITE,
+        )
+    }
+
+    pub(super) fn begin_security(path: &Path) -> io::Result<Self> {
+        Self::begin_filtered(
+            path,
+            windows_sys::Win32::Storage::FileSystem::FILE_NOTIFY_CHANGE_SECURITY,
+        )
+    }
+
+    fn begin_filtered(path: &Path, filter: u32) -> io::Result<Self> {
+        use windows_sys::Win32::Storage::FileSystem::FindFirstChangeNotificationW;
+        let path = wide(path.as_os_str())?;
+        // SAFETY: the path is terminated and its original directory/ancestors remain pinned.
+        let handle = unsafe { FindFirstChangeNotificationW(path.as_ptr(), 0, filter) };
+        if handle == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        // Notification handles are process-wide kernel objects; integer storage allows
+        // shared immutable polling across threads. Only Drop closes this unique handle.
+        Ok(Self(handle as isize))
+    }
+
+    pub(super) fn require_unchanged(&self) -> io::Result<()> {
+        use windows_sys::Win32::{
+            Foundation::{WAIT_FAILED, WAIT_OBJECT_0, WAIT_TIMEOUT},
+            System::Threading::WaitForSingleObject,
+        };
+        // SAFETY: this owner retains the notification handle until Drop. Never reset its latch.
+        match unsafe { WaitForSingleObject(self.0 as _, 0) } {
+            WAIT_TIMEOUT => Ok(()),
+            WAIT_OBJECT_0 => Err(changed()),
+            WAIT_FAILED => Err(io::Error::last_os_error()),
+            _ => Err(io::Error::other("unexpected inventory notification state")),
+        }
+    }
+}
+
+impl Drop for InventoryChanges {
+    fn drop(&mut self) {
+        // SAFETY: exactly this owner closes the live notification; it is not a file handle.
+        unsafe {
+            windows_sys::Win32::Storage::FileSystem::FindCloseChangeNotification(self.0 as _);
+        }
     }
 }
 
@@ -316,6 +417,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             private: true,
             writable: false,
             read_only: true,
+            executable: false,
             publishable: false,
             ancestry: AncestryCheck::EachCall,
         };
@@ -333,6 +435,24 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
         self.before = snapshot(&self.file, true, false)?;
         self.writable = false;
         self.read_only = true;
+        self.directory.borrow().sync()?;
+        self.revalidate()?;
+        Ok(self)
+    }
+
+    pub(crate) fn seal_executable(mut self) -> io::Result<Self> {
+        if !self.publishable || !self.writable {
+            return Err(denied(
+                "only a newly created writer may be sealed executable",
+            ));
+        }
+        self.revalidate()?;
+        self.file.sync_all()?;
+        set_sealed_acl(&self.file, true)?;
+        self.file.sync_all()?;
+        self.before = snapshot(&self.file, true, false)?;
+        self.writable = false;
+        self.executable = true;
         self.directory.borrow().sync()?;
         self.revalidate()?;
         Ok(self)
@@ -372,6 +492,7 @@ impl<D: Borrow<Directory>, N: AsRef<OsStr>> RetainedFile<D, N> {
             private: self.private,
             writable: self.writable,
             read_only: self.read_only,
+            executable: self.executable,
             publishable: false,
             ancestry: self.ancestry,
         };
@@ -390,6 +511,26 @@ impl RetainedFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn executable_acl_is_exact_and_distinct_from_receipt_access() {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory = Directory::open(&temporary.path().join("private"), true).unwrap();
+        let mut pending = directory
+            .create_retained_private(OsStr::new("native"))
+            .unwrap();
+        pending.file_mut().write_all(b"native").unwrap();
+        let sealed = pending.seal_executable().unwrap();
+        assert!(sealed_acl(&sealed.file, FILE_GENERIC_READ | FILE_GENERIC_EXECUTE).unwrap());
+        assert!(!read_only_acl(&sealed.file).unwrap());
+        assert!(validate_read_only(&sealed.file).is_err());
+        sealed.revalidate().unwrap();
+        // The retained creator can alter ACLs internally, but the public capability
+        // exposes no such handle and subsequent custody must reject even narrower access.
+        set_read_only_acl(&sealed.file).unwrap();
+        assert!(read_only_acl(&sealed.file).unwrap());
+        assert!(sealed.revalidate().is_err());
+    }
 
     #[test]
     fn borrowed_reopen_rejects_shared_links_even_with_an_exact_read_only_dacl() {

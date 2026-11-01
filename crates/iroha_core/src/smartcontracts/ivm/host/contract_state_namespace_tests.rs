@@ -315,7 +315,6 @@ fn retail_daily_state_paths_reject_generic_read_write_and_delete_admission() {
         crate::state::asset_uid_enrollment::ENROLLMENT_ROOT,
         crate::state::asset_uid_enrollment::SYSTEM_ROOT,
         crate::state::asset_uid_reader::READER_ROOT,
-
         crate::state::retail_daily_limit_state::ACTIVATION_ROOT,
         crate::state::retail_daily_limit_state::IDENTITY_ROOT,
         crate::state::retail_daily_limit_state::USAGE_ROOT,
@@ -630,8 +629,10 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
         .expect("parse program")
         .code_offset;
     let instruction_gas = program[code_offset..]
-        .chunks_exact(4)
-        .map(|word| ivm::gas::cost_of(u32::from_le_bytes(word.try_into().unwrap())).unwrap())
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| ivm::gas::cost_of(u32::from_le_bytes(*word)).unwrap())
         .sum::<u64>();
     // The authenticated fixture returns one Unit table slot. Its schema node and
     // word validation are charged separately from the emitted JALR instruction.
@@ -708,12 +709,47 @@ fn state_get_reserves_exact_available_gas_for_base_overlay_miss_and_tombstone() 
 
 #[test]
 fn escrow_scope_rejects_forged_generic_durable_writes_and_deletes() {
-    for text in ["sc/native/asset_escrow_scope_v1", "sc/native/asset_escrow_scope_v1/asset/incarnation"] {
+    for text in [
+        "sc/native/asset_escrow_scope_v1",
+        "sc/native/asset_escrow_scope_v1/asset/incarnation",
+    ] {
         let path: StatePath = text.parse().unwrap();
         assert!(validate_reserve_durable_state_path(&path).is_err());
     }
     let unrelated: StatePath = "unrelated_user_scope/value".parse().unwrap();
     assert!(validate_reserve_durable_state_path(&unrelated).is_ok());
+}
+
+#[test]
+fn multisig_runtime_consent_is_opaque_and_cannot_be_replaced_by_durable_artifacts() {
+    for text in [
+        "multisig",
+        "multisig/proposal/account/id",
+        "multisig/proposal-expectation/account/id",
+    ] {
+        let path: StatePath = text.parse().unwrap();
+        assert!(validate_reserve_durable_state_path(&path).is_err());
+        let mut host = local_contract_host(fixture_account("alice"));
+        let mut vm = IVM::new(10_000);
+        let ptr = store_state_path_tlv(&mut vm, &path);
+        let value = norito::to_bytes(&7_u64).unwrap();
+        let value_ptr = store_tlv(&mut vm, PointerType::NoritoBytes, &value);
+        for syscall in [
+            ivm_sys::SYSCALL_STATE_GET,
+            ivm_sys::SYSCALL_STATE_SET,
+            ivm_sys::SYSCALL_STATE_DEL,
+        ] {
+            vm.set_register(10, ptr);
+            vm.set_register(11, value_ptr);
+            assert!(matches!(
+                host.syscall(syscall, &mut vm),
+                Err(ivm::VMError::PermissionDenied)
+            ));
+            assert!(host.durable_state_overlay.is_empty());
+        }
+    }
+    let adjacent: StatePath = "multisignature/user".parse().unwrap();
+    assert!(validate_reserve_durable_state_path(&adjacent).is_ok());
 }
 
 #[test]

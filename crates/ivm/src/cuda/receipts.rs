@@ -54,7 +54,7 @@ impl CompletionCounter {
         // Telemetry must never overflow or affect operation acceptance.
         let _ = self
             .0
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
                 Some(count.saturating_add(1))
             });
     }

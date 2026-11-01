@@ -3184,7 +3184,7 @@ fn temp_artifact_write_error(tmp_path: &Path, err: std::io::Error) -> std::io::E
 }
 fn allocate_artifact_temp_counter(counter: &AtomicU64) -> std::io::Result<u64> {
     counter
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |value| {
             value.checked_add(1)
         })
         .map_err(|_| std::io::Error::other("DA artifact temp suffix counter exhausted"))

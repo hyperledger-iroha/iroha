@@ -128,13 +128,13 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
 }
 #[allow(clippy::too_many_lines)]
 pub(super) async fn run() -> Result<()> {
+    const TIP_POLL: Duration = Duration::from_millis(250);
+    const PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
     init_instruction_registry();
     let _guard = LOCALNET_SMOKE_GUARD
         .get_or_init(|| Mutex::new(()))
         .lock()
         .await;
-    const TIP_POLL: Duration = Duration::from_millis(250);
-    const PROGRESS_TIMEOUT: Duration = Duration::from_secs(60);
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -198,7 +198,7 @@ pub(super) async fn run() -> Result<()> {
         let mut baseline_tips = query_tips()?;
         let mut canonical_baseline_tip = baseline_tips
             .first()
-            .cloned()
+            .copied()
             .ok_or_else(|| eyre!("idle-chain gate started without validators"))?;
         ensure!(
             canonical_baseline_tip.0 == baseline_height
@@ -221,7 +221,7 @@ pub(super) async fn run() -> Result<()> {
             let tips = query_tips()?;
             let canonical_tip = tips
                 .first()
-                .cloned()
+                .copied()
                 .ok_or_else(|| eyre!("idle-chain settling lost all validators"))?;
             ensure!(
                 statuses.len() == 4

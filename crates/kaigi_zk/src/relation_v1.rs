@@ -31,10 +31,7 @@ pub(super) fn sponge(domain: u64, payload: &[Scalar]) -> Scalar {
     ]));
     let mut input = payload.iter().copied().chain(core::iter::once(Scalar::ONE));
     let mut first = Some(Scalar::from(payload.len() as u64));
-    loop {
-        let Some(left) = first.take().or_else(|| input.next()) else {
-            break;
-        };
+    while let Some(left) = first.take().or_else(|| input.next()) {
         let right = input.next().unwrap_or(Scalar::ZERO);
         state.0[0] += left;
         state.0[1] += right;
@@ -179,7 +176,7 @@ pub(super) fn assign_sponge(
                 Value::known(Scalar::from(domain)),
             ];
             let mut state_cells: Option<[Cell; 3]> = None;
-            for (block, pair) in framed.chunks_exact(2).enumerate() {
+            for (block, pair) in framed.as_chunks::<2>().0.iter().enumerate() {
                 let start = offset + block * (POSEIDON_ROUNDS + 1);
                 config.q_absorb.enable(&mut region, start)?;
                 for index in 0..3 {

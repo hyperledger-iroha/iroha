@@ -6,14 +6,15 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{Level, isi::Log},
 };
+use iroha_fs::ProcessStdio as Stdio;
 use iroha_test_network::{
-    Program, fslock_ports::AllocatedPortBlock, init_instruction_registry, repo_root,
+    Program, ResolvedChild, ResolvedProgram, fslock_ports::AllocatedPortBlock,
+    init_instruction_registry, repo_root,
 };
 use std::{
     any::Any,
     fs,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
     time::{Duration, Instant},
 };
 use tempfile::TempDir;
@@ -99,13 +100,13 @@ fn panic_message(panic: &Box<dyn Any + Send>) -> String {
 }
 struct KagamiLocalnet {
     dir: PathBuf,
-    children: Vec<Child>,
+    children: Vec<ResolvedChild>,
     _port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
 }
 impl KagamiLocalnet {
     fn start(
         out_dir: &Path,
-        irohad_bin: &Path,
+        irohad_bin: &ResolvedProgram,
         peers: u16,
         port_reservations: (AllocatedPortBlock, AllocatedPortBlock),
     ) -> Result<Self> {
@@ -124,7 +125,7 @@ impl KagamiLocalnet {
             let log_file_err = log_file
                 .try_clone()
                 .wrap_err_with(|| format!("clone log file {}", log_path.display()))?;
-            let mut cmd = Command::new(irohad_bin);
+            let mut cmd = irohad_bin.command()?;
             cmd.arg("--config").arg(&config_path);
             // Every validator of a fresh chain anchors its key with a first safety record.
             cmd.arg("--sumeragi-assert-fresh-key");
@@ -133,9 +134,10 @@ impl KagamiLocalnet {
             if std::env::var_os("RUST_LOG").is_none() {
                 cmd.env("RUST_LOG", "info");
             }
-            let child = cmd
-                .stdout(Stdio::from(log_file))
+            cmd.stdout(Stdio::from(log_file))
                 .stderr(Stdio::from(log_file_err))
+                .kill_on_drop(true);
+            let child = cmd
                 .spawn()
                 .wrap_err_with(|| format!("spawn iroha3d for peer {idx}"))?;
             children.push(child);
@@ -172,13 +174,11 @@ impl Drop for KagamiLocalnet {
         }
         if cfg!(unix) {
             let script = self.dir.join("stop.sh");
-            if script.exists() {
-                let mut command = Command::new("bash");
+            if script.exists()
+                && let Ok(mut command) = iroha_test_network::development_process_command("bash")
+            {
                 command.arg(script).current_dir(&self.dir);
-                let _ = test_process::output_with_timeout(
-                    &mut command,
-                    test_process::process_timeout(),
-                );
+                let _ = test_process::output_with_timeout(command, test_process::process_timeout());
             }
         }
     }
@@ -196,7 +196,7 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
     let p2p_port = base_p2p_port.to_string();
     let block_cadence = LOCALNET_BLOCK_CADENCE_MS.to_string();
     let out_dir = out_dir.to_string_lossy().to_string();
-    let mut command = Command::new(kagami_bin);
+    let mut command = kagami_bin.command()?;
     command
         .arg("localnet")
         .arg("generate")
@@ -218,7 +218,7 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
         .arg(block_cadence)
         .arg("--out-dir")
         .arg(out_dir);
-    let output = test_process::output_with_timeout(&mut command, test_process::process_timeout())
+    let output = test_process::output_with_timeout(command, test_process::process_timeout())
         .wrap_err("run kagami localnet")?;
     ensure!(
         output.status.success(),

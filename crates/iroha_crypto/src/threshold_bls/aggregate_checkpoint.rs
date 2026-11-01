@@ -143,7 +143,9 @@ impl Destination {
         if let Some(parts) = &self.components {
             for (out, part) in record
                 .components
-                .chunks_exact_mut(32)
+                .as_chunks_mut::<32>()
+                .0
+                .iter_mut()
                 .zip(parts.as_slice()[0].iter())
             {
                 out.copy_from_slice(part);
@@ -210,7 +212,7 @@ impl DecodeField<4, [u8; 96]> for Destination {
                 .expect("single-use prepared original scalar leaf");
             for (out, part) in parts.as_mut_slice()[0]
                 .iter_mut()
-                .zip(bytes.chunks_exact(32))
+                .zip(bytes.as_chunks::<32>().0)
             {
                 out.copy_from_slice(part);
             }

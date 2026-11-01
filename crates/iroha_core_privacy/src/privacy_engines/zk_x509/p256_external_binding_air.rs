@@ -845,7 +845,7 @@ pub fn compile_zk_x509_p256_external_cross_sources_v1(
     let mut rows = Vec::new();
     rows.try_reserve_exact(p256_external_binding_rows_v1(role))
         .map_err(|_| P256ExternalBindingErrorV1::Resource)?;
-    for chunk in sources.chunks_exact(P256_EXTERNAL_BINDINGS_PER_ROW_V1) {
+    for chunk in sources.as_chunks::<P256_EXTERNAL_BINDINGS_PER_ROW_V1>().0 {
         rows.push(core::array::from_fn(|slot| {
             (chunk[slot].fixed != P256ExternalBindingFixedAccessV1::Inactive).then_some(chunk[slot])
         }));
@@ -873,7 +873,7 @@ fn build_external_binding_from_execution_endpoint_v1(
         super::private_table::PrivateTableV1::new(Vec::new(), zeroize_external_binding_rows_v1);
     rows.try_reserve_exact(row_count)
         .map_err(|_| P256ExternalBindingErrorV1::Resource)?;
-    for chunk in expected.chunks_exact(P256_EXTERNAL_BINDINGS_PER_ROW_V1) {
+    for chunk in expected.as_chunks::<P256_EXTERNAL_BINDINGS_PER_ROW_V1>().0 {
         rows.push(P256ExternalBindingRowV1 {
             fixed: core::array::from_fn(|slot| chunk[slot].fixed),
             writer_cells: core::array::from_fn(|slot| chunk[slot].writer),

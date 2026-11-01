@@ -850,9 +850,12 @@ fn admitted_prefix_rebuilds_funded_configuration_for_same_epoch_parameter_change
 // A permitted lag-two update raises the block cap that signed availability consumes, and
 // the activation height carries a genuine payload above the original cap: stale native
 // configuration rejects it even though every individual transaction remains includable.
+#[expect(
+    clippy::cast_possible_truncation,
+    reason = "const evaluation cannot call `TryFrom`; the assertion bounds the value to u32"
+)]
 const ORIGINAL_MAX_TRANSACTION_BYTES: u32 = {
-    let carrier = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default()
-        .private_settlement
+    let carrier = iroha_data_model::privacy::PrivateSettlementValidityLimitsV1::protocol_default()
         .max_carrier_bytes;
     let cleanup = iroha_data_model::privacy::PRIVATE_SETTLEMENT_MAX_CLEANUP_TRANSACTION_BYTES_V1;
     let required = if carrier > cleanup { carrier } else { cleanup };
@@ -893,7 +896,6 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
             .expect("fixture transaction cap includes native cleanup signers' required context"),
     )
     .unwrap();
-    let mut world = World::new();
     // One maximal privacy action and its required signed context fit the transaction cap.
     let mut limits = PrivacyConsensusLimitsV1::taira_default();
     limits.max_proof_bytes_per_action = action;
@@ -906,6 +908,7 @@ fn with_same_epoch_parameter_change(check: fn(&CertifiedTestChain)) {
     limits
         .validate()
         .expect("coherent fixture privacy and original private-cleanup limits");
+    let mut world = World::new();
     world.privacy_consensus_policy = mv::cell::Cell::new(PrivacyConsensusPolicyV1 {
         current_limits: limits,
         pending_update: None,

@@ -254,7 +254,9 @@ impl HiddenRamFheProgramBuilder {
         let fields = Zeroizing::new(instruction_fields(instruction));
         let start = self.tape.count * BYTES_PER_INSTRUCTION;
         for (target, word) in self.tape.bytes[start..start + BYTES_PER_INSTRUCTION]
-            .chunks_exact_mut(8)
+            .as_chunks_mut::<8>()
+            .0
+            .iter_mut()
             .zip(fields.iter())
         {
             let encoded = Zeroizing::new(word.to_le_bytes());
@@ -360,7 +362,7 @@ fn decode_payload(bytes: &[u8]) -> Result<(HiddenRamFheProgram, usize), norito::
         return Err(Error::LengthMismatch);
     }
     // Check every tag and unused word before allocating or copying a private tape.
-    for slot in private.chunks_exact(BYTES_PER_INSTRUCTION) {
+    for slot in private.as_chunks::<BYTES_PER_INSTRUCTION>().0 {
         decode_instruction(slot)?;
     }
     // Account for the private allocation in every active Norito budget before
@@ -403,8 +405,8 @@ fn decode_instruction(slot: &[u8]) -> Result<HiddenRamFheInstruction, norito::co
         return Err(Error::LengthMismatch);
     }
     let mut words = Zeroizing::new([0_u64; WORDS_PER_INSTRUCTION]);
-    for (value, bytes) in words.iter_mut().zip(slot.chunks_exact(8)) {
-        *value = u64::from_le_bytes(bytes.try_into().expect("fixed word"));
+    for (value, bytes) in words.iter_mut().zip(slot.as_chunks::<8>().0) {
+        *value = u64::from_le_bytes(*bytes);
     }
     let index =
         |offset: usize| u16::try_from(words[offset]).map_err(|_| Error::NonCanonicalEncoding);
@@ -508,12 +510,14 @@ pub(super) fn from_public_test_parts(
 ) -> HiddenRamFheProgram {
     let mut bytes = Zeroizing::new(vec![0; instructions.len() * BYTES_PER_INSTRUCTION]);
     for (slot, instruction) in bytes
-        .chunks_exact_mut(BYTES_PER_INSTRUCTION)
+        .as_chunks_mut::<BYTES_PER_INSTRUCTION>()
+        .0
+        .iter_mut()
         .zip(instructions)
     {
         let words = Zeroizing::new(instruction_fields(*instruction));
-        for (word, target) in words.iter().zip(slot.chunks_exact_mut(8)) {
-            target.copy_from_slice(&word.to_le_bytes());
+        for (word, target) in words.iter().zip(slot.as_chunks_mut::<8>().0) {
+            *target = word.to_le_bytes();
         }
     }
     HiddenRamFheProgram(Arc::new(Program {

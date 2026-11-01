@@ -12,6 +12,8 @@ use iroha_torii_shared::{
 };
 use norito::json::Value;
 use tower::ServiceExt as _;
+#[path = "../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;
 #[path = "fixtures.rs"]
 mod fixtures;
 

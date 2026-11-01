@@ -454,7 +454,7 @@ impl<F: PastaField> VariablePBytes<F> {
         let mut state = Some(lane.start(region, raw_initial_state())?);
         let mut outputs = Vec::with_capacity(elements.len() / 2);
         let last = elements.len() / 2 - 1;
-        for (index, pair) in elements.chunks_exact(2).enumerate() {
+        for (index, pair) in elements.as_chunks::<2>().0.iter().enumerate() {
             let block = Absorb::Block([AbsorbInput::Word(&pair[0]), AbsorbInput::Word(&pair[1])]);
             let current = state.take().ok_or(Error::Synthesis)?;
             let output = if index == last {

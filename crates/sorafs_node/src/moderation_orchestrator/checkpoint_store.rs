@@ -221,6 +221,7 @@ impl fmt::Debug for QualifiedModerationCheckpointStoreV1 {
 }
 pub(super) fn open_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
+    cache: &CheckpointCache,
     network_id: &iroha_data_model::NetworkId,
     store: &QualifiedModerationCheckpointStoreV1,
 ) -> Result<
@@ -230,8 +231,7 @@ pub(super) fn open_authoritative_checkpoint(
     ),
     ModerationOrchestratorError,
 > {
-    ensure_secure_parent(&config.checkpoint_path)?;
-    let local_cache = read_bounded_file(&config.checkpoint_path, config.checkpoint_max_bytes)?;
+    let local_cache = cache.read(config.checkpoint_max_bytes)?;
     let observed = store
         .load_latest()
         .map_err(map_checkpoint_store_read_error)?;
@@ -267,11 +267,12 @@ pub(super) fn open_authoritative_checkpoint(
             return Err(ModerationOrchestratorError::CheckpointStoreEquivocation);
         }
     }
-    persist_local_cache(config, &record.checkpoint_bytes)?;
+    cache.write(&record.checkpoint_bytes, config.checkpoint_max_bytes)?;
     Ok((state, record))
 }
 pub(super) fn persist_authoritative_checkpoint(
     config: &ModerationOrchestratorConfigV1,
+    cache: &CheckpointCache,
     network_id: &iroha_data_model::NetworkId,
     store: &QualifiedModerationCheckpointStoreV1,
     previous: &mut ModerationCheckpointStoreRecordV1,
@@ -302,7 +303,7 @@ pub(super) fn persist_authoritative_checkpoint(
             }
         }
     }
-    persist_local_cache(config, &next.checkpoint_bytes)?;
+    cache.write(&next.checkpoint_bytes, config.checkpoint_max_bytes)?;
     *previous = next;
     Ok(())
 }
@@ -424,24 +425,6 @@ fn decode_checkpoint(
     }
     validate_checkpoint(&checkpoint, config, network_id)?;
     Ok(checkpoint)
-}
-fn persist_local_cache(
-    config: &ModerationOrchestratorConfigV1,
-    bytes: &[u8],
-) -> Result<(), ModerationOrchestratorError> {
-    write_atomic(&config.checkpoint_path, bytes)?;
-    let persisted = read_bounded_file(&config.checkpoint_path, config.checkpoint_max_bytes)?
-        .ok_or_else(|| {
-            ModerationOrchestratorError::CheckpointDurabilityUncertain(
-                "checkpoint cache disappeared after atomic rename".to_owned(),
-            )
-        })?;
-    if persisted != bytes {
-        return Err(ModerationOrchestratorError::CheckpointDurabilityUncertain(
-            "checkpoint cache bytes changed after atomic rename".to_owned(),
-        ));
-    }
-    Ok(())
 }
 pub(super) fn checkpoint_namespace(network_id: &iroha_data_model::NetworkId) -> [u8; 32] {
     domain_hash(

@@ -2152,7 +2152,7 @@ fn run_loop(
                 {
                     shared
                         .empty_epoch
-                        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
+                        .try_update(Ordering::AcqRel, Ordering::Acquire, |epoch| {
                             epoch.checked_add(1)
                         })
                         .expect("finite test EMPTY observation epoch");
@@ -2163,7 +2163,7 @@ fn run_loop(
                 #[cfg(test)]
                 shared
                     .empty_epoch
-                    .fetch_update(Ordering::Release, Ordering::Acquire, |epoch| {
+                    .try_update(Ordering::Release, Ordering::Acquire, |epoch| {
                         epoch.checked_add(1)
                     })
                     .expect("finite test EMPTY observation epoch");

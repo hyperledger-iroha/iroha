@@ -16,7 +16,7 @@ impl Inputs {
             length > 0 && length <= maximum as u64,
             "bounded original required"
         );
-        let mut bytes = Vec::with_capacity(length as usize);
+        let mut bytes = Vec::with_capacity(usize::try_from(length)?);
         held.file_mut()
             .take(maximum as u64 + 1)
             .read_to_end(&mut bytes)?;
@@ -51,7 +51,7 @@ impl Inputs {
             "bounded program original required"
         );
         let mut hash = Sha256::new();
-        let mut buffer = [0; 65536];
+        let mut buffer = vec![0; 65536];
         let mut count = 0u64;
         loop {
             let read = held.file_mut().read(&mut buffer)?;

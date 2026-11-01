@@ -469,9 +469,9 @@ fn alias_fixture(
         AliasLeaseAcquisitionV1::new(1, None),
         guard.clone(),
     );
+    let ensure_instruction = InstructionBox::from(ensure.clone());
     let (wire_id, framed_payload) =
-        iroha::data_model::isi::framed_instruction_payload(&InstructionBox::from(ensure.clone()))
-            .unwrap();
+        iroha::data_model::isi::framed_instruction_payload(&ensure_instruction).unwrap();
     let plan = AliasTransactionPlanV1::new(AliasTransactionPlanBodyV1 {
         version: AliasTransactionPlanBodyV1::VERSION,
         authority: config.account.clone(),

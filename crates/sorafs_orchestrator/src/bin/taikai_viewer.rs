@@ -20,6 +20,7 @@ use sorafs_car::platform_no_follow_flag;
 use sorafs_car::taikai::{
     validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
 };
+use iroha_fs::FileMetadata;
 use sorafs_car::{ensure_output_parent_dir, set_no_follow_flag};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;
@@ -668,25 +669,11 @@ fn bounded_input_metadata_is_indirect(metadata: &fs::Metadata) -> bool {
     #[cfg(not(windows))]
     false
 }
-#[cfg(unix)]
-fn bounded_input_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::unix::fs::MetadataExt as _;
-    left.dev() == right.dev() && left.ino() == right.ino()
-}
-#[cfg(windows)]
-fn bounded_input_metadata_same_identity(left: &fs::Metadata, right: &fs::Metadata) -> bool {
-    use std::os::windows::fs::MetadataExt as _;
-    left.volume_serial_number().is_some()
-        && left.file_index().is_some()
-        && left.volume_serial_number() == right.volume_serial_number()
-        && left.file_index() == right.file_index()
-}
-#[cfg(not(any(unix, windows)))]
-fn bounded_input_metadata_same_identity(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
-    false
+fn bounded_input_metadata_same_identity(left: &FileMetadata, right: &FileMetadata) -> bool {
+    left.identity() == right.identity()
 }
 #[cfg(unix)]
-fn bounded_input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn bounded_input_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::unix::fs::MetadataExt as _;
     bounded_input_metadata_same_identity(left, right)
         && left.len() == right.len()
@@ -696,7 +683,7 @@ fn bounded_input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.ctime_nsec() == right.ctime_nsec()
 }
 #[cfg(windows)]
-fn bounded_input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -> bool {
+fn bounded_input_metadata_unchanged(left: &FileMetadata, right: &FileMetadata) -> bool {
     use std::os::windows::fs::MetadataExt as _;
     bounded_input_metadata_same_identity(left, right)
         && left.file_size() == right.file_size()
@@ -704,7 +691,7 @@ fn bounded_input_metadata_unchanged(left: &fs::Metadata, right: &fs::Metadata) -
         && left.creation_time() == right.creation_time()
 }
 #[cfg(not(any(unix, windows)))]
-fn bounded_input_metadata_unchanged(_left: &fs::Metadata, _right: &fs::Metadata) -> bool {
+fn bounded_input_metadata_unchanged(_left: &FileMetadata, _right: &FileMetadata) -> bool {
     false
 }
 fn load_envelope(path: &Path) -> Result<TaikaiSegmentEnvelopeV1, Box<dyn std::error::Error>> {
@@ -887,7 +874,7 @@ fn read_bounded_regular_file_with_post_read(
     max_bytes: usize,
     post_read: impl FnOnce(),
 ) -> io::Result<Vec<u8>> {
-    let before = fs::symlink_metadata(path).map_err(|err| {
+    let before = FileMetadata::symlink_metadata(path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("failed to inspect {label} `{}`: {err}", path.display()),
@@ -927,7 +914,7 @@ fn read_bounded_regular_file_with_post_read(
             format!("failed to open {label} `{}`: {err}", path.display()),
         )
     })?;
-    let opened = file.metadata().map_err(|err| {
+    let opened = FileMetadata::of(&file).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("failed to inspect {label} `{}`: {err}", path.display()),
@@ -939,7 +926,7 @@ fn read_bounded_regular_file_with_post_read(
             format!("{label} `{}` must be a regular file", path.display()),
         ));
     }
-    let linked_after_open = fs::symlink_metadata(path).map_err(|err| {
+    let linked_after_open = FileMetadata::symlink_metadata(path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("failed to re-inspect {label} `{}`: {err}", path.display()),
@@ -991,7 +978,7 @@ fn read_bounded_regular_file_with_post_read(
         ));
     }
     post_read();
-    let opened_after_read = file.metadata().map_err(|err| {
+    let opened_after_read = FileMetadata::of(&file).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!(
@@ -1000,7 +987,7 @@ fn read_bounded_regular_file_with_post_read(
             ),
         )
     })?;
-    let linked_after_read = fs::symlink_metadata(path).map_err(|err| {
+    let linked_after_read = FileMetadata::symlink_metadata(path).map_err(|err| {
         io::Error::new(
             err.kind(),
             format!("failed to re-inspect {label} `{}`: {err}", path.display()),
@@ -1732,6 +1719,37 @@ mod tests {
             "unexpected error: {error}"
         );
     }
+    #[test]
+    fn bounded_input_native_identity_distinguishes_equal_bytes_and_tracks_aliases() {
+        let (_temp, temp_path) = canonical_tempdir();
+        let first = temp_path.join("first.car");
+        let second = temp_path.join("second.car");
+        let alias = temp_path.join("alias.car");
+        fs::write(&first, b"public-car").unwrap();
+        fs::write(&second, b"public-car").unwrap();
+        let before = FileMetadata::symlink_metadata(&first).unwrap();
+        let opened = FileMetadata::of(&open_bounded_input(&first).unwrap()).unwrap();
+        assert!(bounded_input_metadata_unchanged(&before, &opened));
+        assert!(!bounded_input_metadata_same_identity(
+            &before,
+            &FileMetadata::symlink_metadata(&second).unwrap(),
+        ));
+        fs::hard_link(&first, &alias).unwrap();
+        assert!(bounded_input_metadata_same_identity(
+            &before,
+            &FileMetadata::symlink_metadata(&alias).unwrap(),
+        ));
+        assert_eq!(
+            read_bounded_regular_file(&first, "CAR", 32).unwrap(),
+            b"public-car"
+        );
+        fs::write(&first, b"changed-public-car").unwrap();
+        assert!(!bounded_input_metadata_unchanged(
+            &opened,
+            &FileMetadata::symlink_metadata(&first).unwrap(),
+        ));
+    }
+
     #[cfg(unix)]
     #[test]
     fn bounded_input_rejects_symlinks() {
@@ -1768,7 +1786,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-    #[cfg(unix)]
     #[test]
     fn bounded_input_rejects_in_place_size_change_during_read() {
         let (_temp, temp_path) = canonical_tempdir();
@@ -1787,7 +1804,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-    #[cfg(unix)]
     #[test]
     fn bounded_input_rejects_same_length_content_change_during_read() {
         let (_temp, temp_path) = canonical_tempdir();
@@ -1815,7 +1831,6 @@ mod tests {
             "unexpected error: {error}"
         );
     }
-    #[cfg(unix)]
     #[test]
     fn bounded_input_rejects_same_length_path_replacement_during_read() {
         let (_temp, temp_path) = canonical_tempdir();

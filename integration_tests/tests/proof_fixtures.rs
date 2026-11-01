@@ -27,7 +27,7 @@ use std::{
 };
 use zeroize::Zeroizing;
 
-pub(super) fn confidential_attachment(
+pub fn confidential_attachment(
     statement: &str,
     vk_name: &str,
 ) -> (ProofAttachment, verifying_keys::RegisterVerifyingKey) {
@@ -108,13 +108,13 @@ pub(super) fn confidential_attachment(
     )
 }
 
-pub(super) fn rejected_confidential_attachment(statement: &str, vk_name: &str) -> ProofAttachment {
+pub fn rejected_confidential_attachment(statement: &str, vk_name: &str) -> ProofAttachment {
     let (mut attachment, _) = confidential_attachment(statement, vk_name);
     attachment.proof = corrupt_native_proof(&attachment.proof);
     attachment
 }
 
-pub(super) fn corrupt_native_proof(proof: &ProofBox) -> ProofBox {
+pub fn corrupt_native_proof(proof: &ProofBox) -> ProofBox {
     let mut envelope: OpenVerifyEnvelope =
         norito::decode_canonical(&proof.bytes).expect("canonical genuine native envelope");
     // Preserve the canonical carrier, exact public column, schema and key while

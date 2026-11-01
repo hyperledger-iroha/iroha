@@ -10,18 +10,23 @@ use std::{
     time::Duration,
 };
 use tempfile::TempDir;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 #[test]
-fn macos_store_opens_reject_symlinks_in_every_component() {
-    assert_eq!(store_no_follow_flag(), 0x2000_0000);
-}
-#[cfg(all(unix, not(target_os = "macos")))]
-#[test]
-fn store_opens_use_the_target_final_component_no_follow_flag() {
-    assert_eq!(
-        store_no_follow_flag(),
-        crate::fs_flags::platform_no_follow_flag()
-    );
+fn store_opens_reject_symlinks_in_every_component() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = canonical_temp_path(&temporary);
+    let original = root.join("original/payload");
+    write_atomic(&original, b"original").unwrap();
+    let leaf_alias = root.join("leaf-alias");
+    let parent_alias = root.join("parent-alias");
+    std::os::unix::fs::symlink(&original, &leaf_alias).unwrap();
+    std::os::unix::fs::symlink(root.join("original"), &parent_alias).unwrap();
+    for redirected in [leaf_alias, parent_alias.join("payload")] {
+        assert!(read_bounded_regular_file(&redirected, 8).is_err());
+        assert!(write_atomic(&redirected, b"changed!").is_err());
+        assert_eq!(fs::read(&original).unwrap(), b"original");
+    }
+    assert_eq!(read_bounded_regular_file(&original, 8).unwrap(), b"original");
 }
 fn temp_config(temp_dir: &TempDir) -> StorageConfig {
     let temp_path = temp_dir.path().canonicalize().expect("canonical tempdir");
@@ -229,15 +234,32 @@ fn storage_lock_rejects_hard_link() {
     let config = temp_config(&temp_dir);
     fs::create_dir_all(config.data_dir()).expect("create storage root");
     let target = temp_dir.path().join("lock-target");
-    fs::write(&target, b"must remain untouched").expect("write lock target");
-    fs::hard_link(&target, config.data_dir().join(STORAGE_LOCK_FILE_NAME))
-        .expect("create storage lock hard link");
+    OwnerDirectory::open(temp_dir.path())
+        .expect("retain fixture root")
+        .write_atomic(
+            "lock-target",
+            b"must remain untouched",
+            PublishMode::CreateNew,
+        )
+        .expect("create private lock original");
+    let lock_path = config.data_dir().join(STORAGE_LOCK_FILE_NAME);
+    fs::hard_link(&target, &lock_path).expect("create storage lock hard link");
     assert!(matches!(
-        StorageBackend::new(config),
-        Err(StorageError::CorruptStorageState { .. })
+        StorageBackend::new(config.clone()),
+        Err(StorageError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied
     ));
     assert_eq!(
         fs::read(&target).expect("read target"),
+        b"must remain untouched"
+    );
+    assert_eq!(
+        fs::read(&lock_path).expect("read lock alias"),
+        b"must remain untouched"
+    );
+    fs::remove_file(&target).expect("remove the extra alias");
+    let _owner = StorageBackend::new(config).expect("single original lock is now admissible");
+    assert_eq!(
+        fs::read(&lock_path).expect("read admitted original"),
         b"must remain untouched"
     );
 }

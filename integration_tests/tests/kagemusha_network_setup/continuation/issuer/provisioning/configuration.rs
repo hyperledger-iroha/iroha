@@ -1,6 +1,7 @@
 //! Exact issuer TOML from authenticated originals and explicit runtime selections.
 use super::*;
 
+#[derive(Clone, Copy)]
 pub(super) struct Originals<'a> {
     pub scheme: &'a KagemushaWalletSchemeV1,
     pub app: &'a KagemushaWalletAppPolicyV1,

@@ -32,7 +32,7 @@ use support::machine::{
 /// A ring of 128 sparse F257 slots with a chain long enough for one select and more.
 fn profile(main_primes: usize) -> BgvProfile {
     BgvProfile::new(
-        BgvParameters::derive(8, 257, (40, main_primes), (41, 3), 2).expect("parameters"),
+        BgvParameters::derive(8, 257, 1, (40, main_primes), (41, 3), 2).expect("parameters"),
     )
     .expect("profile")
 }
@@ -136,7 +136,7 @@ struct Fixture {
 
 fn fixture(main_primes: usize) -> Fixture {
     let profile = profile(main_primes);
-    let encoding = SlotEncoding::new(&profile).expect("encoding");
+    let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
     let keys = KeySet::generate(&profile, &encoding.broadcast_elements()).expect("keys");
     let plaintext = encoding
         .encode(&profile, &input_slots())
@@ -360,7 +360,7 @@ fn a_chain_too_short_is_refused_at_the_same_instruction_by_both_back_ends() {
     }
     // A chain that cannot hold a fresh ciphertext is refused before the first instruction.
     let narrow =
-        BgvProfile::new(BgvParameters::derive(8, 257, (22, 1), (23, 1), 1).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(8, 257, 1, (22, 1), (23, 1), 1).expect("parameters"))
             .expect("profile");
     assert_eq!(
         plan_tape(&narrow, &tape),

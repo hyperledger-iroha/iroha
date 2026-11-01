@@ -372,7 +372,7 @@ fn native_localnet_staging_refuses_original_minimum_above_unchanged_bootstrap_st
     )
     .expect("exact generated peer configuration");
     let (_, private) = generate_genesis_key_pair(Some(seed.as_bytes()), GENESIS_SEED).unwrap();
-    let signer = KeyPair::from_private_key(private.0).unwrap();
+    let genesis_signer = KeyPair::from_private_key(private.0).unwrap();
     let registrations: Vec<_> = manifest
         .instructions()
         .filter_map(|instruction| {
@@ -426,7 +426,7 @@ fn native_localnet_staging_refuses_original_minimum_above_unchanged_bootstrap_st
     let stage = |source: RawGenesisTransaction| {
         crate::genesis::staging::bind_and_sign_staged_sumeragi_context(
             source,
-            &signer,
+            &genesis_signer,
             Some(&config),
             Some(resolve_localnet_da_proof_policies(&config)),
             iroha_core::state::default_genesis_confidential_policy_hash(),

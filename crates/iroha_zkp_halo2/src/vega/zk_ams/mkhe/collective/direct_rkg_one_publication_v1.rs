@@ -255,8 +255,8 @@ where
         return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
     }
     let mut bytes = [0_u8; ZK_AMS_MKHE_DIRECT_OBJECT_READ_BYTES_V1];
-    for chunk in residues.chunks_exact(RESIDUES_PER_WRITE_V1) {
-        for (encoded, residue) in bytes.chunks_exact_mut(8).zip(chunk) {
+    for chunk in residues.as_chunks::<RESIDUES_PER_WRITE_V1>().0 {
+        for (encoded, residue) in bytes.as_chunks_mut::<8>().0.iter_mut().zip(chunk) {
             encoded.copy_from_slice(&residue.to_be_bytes());
         }
         transaction.write_exact(&bytes)?;

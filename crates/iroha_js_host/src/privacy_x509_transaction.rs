@@ -308,12 +308,12 @@ impl JsPrivacyX509PreparedDirectV1 {
     pub fn ordered_intent_digest(&self) -> Buffer {
         Buffer::from(self.projection.ordered_intent.to_vec())
     }
-    /// Exact original ActionStatement frame, returned as a copy.
+    /// Exact original `ActionStatement` frame, returned as a copy.
     #[napi(getter)]
     pub fn action_statement_norito(&self) -> Buffer {
         Buffer::from(self.projection.action_statement.clone())
     }
-    /// Exact ActionStatement digest, returned as a copy.
+    /// Exact `ActionStatement` digest, returned as a copy.
     #[napi(getter)]
     pub fn action_statement_digest(&self) -> Buffer {
         Buffer::from(self.projection.action_digest.to_vec())

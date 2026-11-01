@@ -388,15 +388,12 @@ where
         if transaction.read_next(provider, &mut scratch[..take_bytes])? != take_bytes {
             return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
         }
-        for (destination, encoded) in output[filled..filled + take_coefficients]
-            .iter_mut()
-            .zip(scratch[..take_bytes].chunks_exact(core::mem::size_of::<u64>()))
-        {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidPolynomial)?,
-            );
+        for (destination, encoded) in output[filled..filled + take_coefficients].iter_mut().zip(
+            scratch[..take_bytes]
+                .as_chunks::<{ core::mem::size_of::<u64>() }>()
+                .0,
+        ) {
+            let residue = u64::from_be_bytes(*encoded);
             if residue >= modulus {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
             }

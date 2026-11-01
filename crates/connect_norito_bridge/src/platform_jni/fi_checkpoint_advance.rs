@@ -35,70 +35,67 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
     height: JByteArray<'_>,
     context: JByteArray<'_>,
 ) -> jni::sys::jobjectArray {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let Some(checkpoint) = read_java_byte_array_bounded(
-            &mut env,
+            env,
             &checkpoint,
             "checkpoint",
             iroha_data_model::sumeragi_finality::MAX_FINALITY_CHECKPOINT_BYTES,
         ) else {
             return std::ptr::null_mut();
         };
-        let Some(network) = read_java_byte_array_bounded(&mut env, &network, "networkId", 74)
-        else {
+        let Some(network) = read_java_byte_array_bounded(env, &network, "networkId", 74) else {
             return std::ptr::null_mut();
         };
-        let Some(chain) = read_java_byte_array_bounded(&mut env, &chain, "chain", 1024) else {
+        let Some(chain) = read_java_byte_array_bounded(env, &chain, "chain", 1024) else {
             return std::ptr::null_mut();
         };
-        let Some(sha) = read_java_byte_array_bounded(&mut env, &sha, "sha256", 32) else {
+        let Some(sha) = read_java_byte_array_bounded(env, &sha, "sha256", 32) else {
             return std::ptr::null_mut();
         };
-        let Some(height) = read_java_byte_array_bounded(&mut env, &height, "height", 20) else {
+        let Some(height) = read_java_byte_array_bounded(env, &height, "height", 20) else {
             return std::ptr::null_mut();
         };
-        let Some(context) = read_java_byte_array_bounded(&mut env, &context, "contextId", 32)
-        else {
+        let Some(context) = read_java_byte_array_bounded(env, &context, "contextId", 32) else {
             return std::ptr::null_mut();
         };
-        let count = match env.get_array_length(&frames) {
+        let count = match frames.len(env) {
             Ok(count) if (2..=4096).contains(&count) => count,
             _ => {
                 throw_java_illegal_argument(
-                    &mut env,
+                    env,
                     "Checkpoint advance requires 2..4096 frames".into(),
                 );
                 return std::ptr::null_mut();
             }
         };
-        let mut proofs = Vec::with_capacity(count as usize);
+        let mut proofs = Vec::with_capacity(count);
         let mut remaining = 16 * 1024 * 1024;
         for index in 0..count {
-            let frame = match env
-                .get_object_array_element(&frames, index as usize)
-                .and_then(|frame| JByteArray::cast_local(&mut env, frame))
+            let frame = match frames
+                .get_element(env, index)
+                .and_then(|frame| JByteArray::cast_local(env, frame))
             {
                 Ok(frame) if !frame.is_null() => frame,
                 _ => {
-                    throw_java_illegal_argument(&mut env, "Invalid checkpoint proof array".into());
+                    throw_java_illegal_argument(env, "Invalid checkpoint proof array".into());
                     return std::ptr::null_mut();
                 }
             };
-            let Some(wire) =
-                read_java_byte_array_bounded(&mut env, &frame, "proofFrame", remaining)
+            let Some(wire) = read_java_byte_array_bounded(env, &frame, "proofFrame", remaining)
             else {
                 return std::ptr::null_mut();
             };
             // A 4096-frame page must not retain 4096 JVM local references.
             env.delete_local_ref(frame);
             if wire.is_empty() {
-                throw_java_illegal_argument(&mut env, "Empty checkpoint proof".into());
+                throw_java_illegal_argument(env, "Empty checkpoint proof".into());
                 return std::ptr::null_mut();
             }
             remaining -= wire.len();
             proofs.push(wire);
         }
-        let Some(result) = catch_unwind_to_java(&mut env, "FI checkpoint advance", || {
+        let Some(result) = catch_unwind_to_java(env, "FI checkpoint advance", || {
             struct Output(*mut std::os::raw::c_uchar);
             impl Drop for Output {
                 fn drop(&mut self) {
@@ -163,7 +160,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
         let fields = match result {
             Ok(fields) => fields,
             Err(error) => {
-                throw_java_illegal_argument(&mut env, error.into());
+                throw_java_illegal_argument(env, error.into());
                 return std::ptr::null_mut();
             }
         };
@@ -172,7 +169,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
             let array = env.new_object_array(2, class, jni::objects::JObject::null())?;
             for (index, bytes) in fields.iter().enumerate() {
                 let value = env.byte_array_from_slice(bytes)?;
-                env.set_object_array_element(&array, index, &value)?;
+                array.set_element(env, index, &value)?;
             }
             Ok::<_, jni::errors::Error>(array.into_raw())
         })();
@@ -180,7 +177,7 @@ pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_client_NativeFinali
             Ok(array) => array,
             Err(error) => {
                 throw_java_illegal_state(
-                    &mut env,
+                    env,
                     format!("Checkpoint advance result allocation failed: {error}"),
                 );
                 std::ptr::null_mut()

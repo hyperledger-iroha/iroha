@@ -17,7 +17,7 @@ use super::private_table::{
 };
 
 #[path = "projection_sha_bus.rs"]
-pub(crate) mod hash_bus;
+pub mod hash_bus;
 use super::sha_call_bus_stark::ZkX509ShaCallBusChallengesV1;
 
 use super::io_air::{
@@ -1924,7 +1924,7 @@ fn fixed_compaction_role_v1(row: ZkX509ProjectionFixedRowV1) -> Option<(bool, u8
 pub fn build_zk_x509_projection_aux_trace_v1(
     base: &ZkX509ProjectionBaseTraceV1,
     fixed: &ZkX509ProjectionFixedTraceV1,
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
 ) -> Result<ZkX509ProjectionAuxTraceV1, ZkX509ProjectionAirErrorV1> {
     challenges.validate()?;
     if base.rows.len() != ZK_X509_PROJECTION_TRACE_SIZE_V1
@@ -2317,7 +2317,7 @@ pub fn evaluate_zk_x509_projection_constraint_residues_v1(
     next_fixed: Option<ZkX509ProjectionFixedRowV1>,
     copy_identity: F,
     copy_sigma: F,
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
     first_row: bool,
     last_row: bool,
 ) -> Result<Vec<F>, ZkX509ProjectionAirErrorV1> {
@@ -2885,7 +2885,7 @@ pub fn evaluate_zk_x509_projection_stark_residues_v1<A: PolynomialAirFieldV1>(
     current_aux: &[A; ZK_X509_PROJECTION_AUX_WIDTH_V1],
     next_aux: &[A; ZK_X509_PROJECTION_AUX_WIDTH_V1],
     fixed: &[A; ZK_X509_PROJECTION_STARK_FIXED_WIDTH_V1],
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
 ) -> Result<Vec<A>, ZkX509ProjectionAirErrorV1> {
     challenges.validate()?;
     if current
@@ -3271,7 +3271,7 @@ pub fn evaluate_zk_x509_projection_stark_residues_v1<A: PolynomialAirFieldV1>(
 pub fn validate_zk_x509_projection_trace_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
     trace: &ZkX509ProjectionTraceV1,
-    challenges: ZkX509ProjectionChallengesV1,
+    challenges: &ZkX509ProjectionChallengesV1,
 ) -> Result<ZkX509ProjectionAuxTraceV1, ZkX509ProjectionAirErrorV1> {
     let expected_fixed = compile_zk_x509_projection_fixed_trace_v1(statement)?;
     if trace.fixed != expected_fixed || trace.base.rows.len() != ZK_X509_PROJECTION_TRACE_SIZE_V1 {
@@ -3327,7 +3327,7 @@ pub mod tests {
             KeyPair::try_from_seed(vec![seed; 32], Algorithm::Ed25519).expect("fixed account seed");
         AccountId::new(key_pair.public_key().clone())
     }
-    pub(crate) fn test_hash_bus_challenges_v1() -> ZkX509ShaCallBusChallengesV1 {
+    pub fn test_hash_bus_challenges_v1() -> ZkX509ShaCallBusChallengesV1 {
         use crate::privacy_engines::zk_x509::sha_call_bus_stark::ZkX509ShaCallBusLaneChallengesV1;
         ZkX509ShaCallBusChallengesV1 {
             lanes: core::array::from_fn(|lane| ZkX509ShaCallBusLaneChallengesV1 {
@@ -3521,7 +3521,7 @@ pub mod tests {
         let (statement, witness) = fixture();
         let trace =
             build_zk_x509_projection_trace_v1(&statement, &witness).expect("projection trace");
-        let aux = validate_zk_x509_projection_trace_v1(&statement, &trace, challenges())
+        let aux = validate_zk_x509_projection_trace_v1(&statement, &trace, &challenges())
             .expect("all algebraic rows");
         assert_eq!(trace.base.rows.len(), ZK_X509_PROJECTION_TRACE_SIZE_V1);
         assert_eq!(trace.fixed.rows.len(), ZK_X509_PROJECTION_TRACE_SIZE_V1);
@@ -3659,7 +3659,7 @@ pub mod tests {
         let trace =
             build_zk_x509_projection_trace_v1(&statement, &witness).expect("projection trace");
         let challenges = challenges();
-        let aux = build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, challenges)
+        let aux = build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, &challenges)
             .expect("projection aux");
         let fixed =
             compile_zk_x509_projection_stark_fixed_rows_v1(&statement).expect("numeric fixed rows");
@@ -3672,7 +3672,7 @@ pub mod tests {
                 &aux.rows[index],
                 &aux.rows[next],
                 fixed_row,
-                challenges,
+                &challenges,
             )
             .expect("numeric residues");
             assert_eq!(residues.len(), ZK_X509_PROJECTION_STARK_CONSTRAINT_COUNT_V1);
@@ -3716,7 +3716,7 @@ pub mod tests {
         witness.attribute_salts.clear();
         let trace =
             build_zk_x509_projection_trace_v1(&statement, &witness).expect("projection trace");
-        validate_zk_x509_projection_trace_v1(&statement, &trace, challenges())
+        validate_zk_x509_projection_trace_v1(&statement, &trace, &challenges())
             .expect("all algebraic rows");
         assert_eq!(trace.base.rows.len(), ZK_X509_PROJECTION_TRACE_SIZE_V1);
         assert_eq!(
@@ -3830,14 +3830,14 @@ pub mod tests {
             let column = if mutation % 2 == 0 { VALUE } else { USED };
             changed.base.rows[index][column] = changed.base.rows[index][column].add(F::ONE);
             assert!(
-                validate_zk_x509_projection_trace_v1(&statement, &changed, challenges()).is_err(),
+                validate_zk_x509_projection_trace_v1(&statement, &changed, &challenges()).is_err(),
                 "mutation {mutation} at row {index} must fail"
             );
         }
         let mut noncanonical = trace.clone();
         noncanonical.base.rows[0][VALUE] = F(GOLDILOCKS_MODULUS_V1);
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&statement, &noncanonical, challenges()),
+            validate_zk_x509_projection_trace_v1(&statement, &noncanonical, &challenges()),
             Err(ZkX509ProjectionAirErrorV1::NonCanonicalField)
         );
     }
@@ -3849,7 +3849,7 @@ pub mod tests {
         let mut changed_sigma = trace.clone();
         changed_sigma.fixed.copy_sigma.swap(0, 1);
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&statement, &changed_sigma, challenges()),
+            validate_zk_x509_projection_trace_v1(&statement, &changed_sigma, &challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
         let mut changed_fixed = trace.clone();
@@ -3862,13 +3862,13 @@ pub mod tests {
             *expected ^= 1;
         }
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&statement, &changed_fixed, challenges()),
+            validate_zk_x509_projection_trace_v1(&statement, &changed_fixed, &challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
         let mut truncated = trace.clone();
         truncated.base.rows.pop();
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&statement, &truncated, challenges()),
+            validate_zk_x509_projection_trace_v1(&statement, &truncated, &challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
     }
@@ -3892,7 +3892,7 @@ pub mod tests {
             PrivacyTransactionIntentDigestV1::new(raw(0xA1));
         let old_trace = build_zk_x509_projection_trace_v1(&statement, &witness).expect("old trace");
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&cross_transaction, &old_trace, challenges()),
+            validate_zk_x509_projection_trace_v1(&cross_transaction, &old_trace, &challenges()),
             Err(ZkX509ProjectionAirErrorV1::Topology)
         );
         let mut leading_zero = witness.clone();
@@ -3923,16 +3923,16 @@ pub mod tests {
         let mut invalid = challenges();
         invalid.copy[0].beta = F::ZERO;
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&statement, &trace, invalid),
+            validate_zk_x509_projection_trace_v1(&statement, &trace, &invalid),
             Err(ZkX509ProjectionAirErrorV1::Challenge)
         );
         let mut repeated = challenges();
         repeated.compaction[1] = repeated.compaction[0];
         assert_eq!(
-            validate_zk_x509_projection_trace_v1(&statement, &trace, repeated),
+            validate_zk_x509_projection_trace_v1(&statement, &trace, &repeated),
             Err(ZkX509ProjectionAirErrorV1::Challenge)
         );
-        let aux = build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, challenges())
+        let aux = build_zk_x509_projection_aux_trace_v1(&trace.base, &trace.fixed, &challenges())
             .expect("aux");
         let index = row_index(&trace, |row| {
             matches!(row, ZkX509ProjectionFixedRowV1::Source { active: true, .. })
@@ -3949,7 +3949,7 @@ pub mod tests {
             trace.fixed.rows.get(index + 1).copied(),
             trace.fixed.copy_identity[index],
             trace.fixed.copy_sigma[index],
-            challenges(),
+            &challenges(),
             index == 0,
             index + 1 == trace.base.rows.len(),
         )
@@ -3976,7 +3976,7 @@ pub mod tests {
         collision
             .validate()
             .expect("valid distinct challenge lanes");
-        validate_zk_x509_projection_trace_v1(&statement, &trace, collision)
+        validate_zk_x509_projection_trace_v1(&statement, &trace, &collision)
             .expect("dual products cannot abort when one denominator factor is zero");
         let zero_numerator_index = (0..trace.base.rows.len())
             .find(|index| {
@@ -3991,7 +3991,7 @@ pub mod tests {
         malformed_fixed.copy_sigma[zero_numerator_index] =
             malformed_fixed.copy_sigma[zero_numerator_index].add(F::ONE);
         assert_eq!(
-            build_zk_x509_projection_aux_trace_v1(&trace.base, &malformed_fixed, collision,),
+            build_zk_x509_projection_aux_trace_v1(&trace.base, &malformed_fixed, &collision,),
             Err(ZkX509ProjectionAirErrorV1::Constraint),
             "the independent non-colliding lanes must reject a malformed copy multiset",
         );

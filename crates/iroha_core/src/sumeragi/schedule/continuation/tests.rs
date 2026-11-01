@@ -462,7 +462,7 @@ fn ordinary_continuation_refuses_changed_source_cut_params_root_pulse_and_foreig
     };
     assert!(
         matches!(
-            original.prepare(&view, &header, Some(unexpected_pulse), expected),
+            original.prepare(&view, &header, Some(&unexpected_pulse), expected),
             Err(ExecutionAttemptError::Rejected(_))
         ),
         "fresh ordinary-height pulse validation cannot be replaced by cached capture authority"

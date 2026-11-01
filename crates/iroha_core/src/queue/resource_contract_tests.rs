@@ -691,6 +691,12 @@ impl QueueAdmissionStateAccess for DeferredInclusionAccess {
                 .expect("one includable assessment transfers the original once"),
         ))
     }
+    fn first_inactive_envelope(
+        &mut self,
+        _transaction: &AcceptedTransaction<'_>,
+    ) -> Option<iroha_data_model::runtime::lifecycle::RuntimeRejectionV1> {
+        panic!("admission continued after a deferred includable assessment")
+    }
     fn sccp_exempt_admission(
         &mut self,
         _queue: &Queue,

@@ -82,17 +82,49 @@ impl MainQuotientStripeV1 {
         coefficients: &[F],
         values: &mut [F],
     ) -> Result<(), ZkX509StarkErrorV1> {
+        const TILE_ROWS_V1: usize = 1 << 14;
+        let parallel = self.rows >= 1 << 16 && rayon::current_num_threads() > 1;
         if self.rows < 2
             || !self.rows.is_power_of_two()
             || self.rows > 1 << MAIN_QUOTIENT_STRIPE_LOG2_V1
             || values.len() != self.rows
             || F::canonical(self.shift.0).is_none()
             || self.shift == F::ZERO
-            || coefficients
-                .iter()
-                .any(|value| F::canonical(value.0).is_none())
+            || if parallel {
+                coefficients
+                    .par_chunks(TILE_ROWS_V1)
+                    .any(|tile| tile.iter().any(|value| F::canonical(value.0).is_none()))
+            } else {
+                coefficients
+                    .iter()
+                    .any(|value| F::canonical(value.0).is_none())
+            }
         {
             return Err(ZkX509StarkErrorV1::ProfileMismatch);
+        }
+        if parallel {
+            // A tile owns disjoint output lanes. Every wrap visits those lanes
+            // in the original coefficient order, including the masked suffix.
+            // Only public shift powers are recomputed; no matrix or private
+            // reduction scratch is allocated by this partition.
+            values
+                .par_chunks_mut(TILE_ROWS_V1)
+                .enumerate()
+                .for_each(|(tile, values)| {
+                    values.fill(F::ZERO);
+                    let first = tile * TILE_ROWS_V1;
+                    for (wrap, coefficients) in coefficients.chunks(self.rows).enumerate() {
+                        if first >= coefficients.len() {
+                            break;
+                        }
+                        let mut power = self.shift.pow((wrap * self.rows + first) as u128);
+                        for (target, coefficient) in values.iter_mut().zip(&coefficients[first..]) {
+                            *target = target.add(coefficient.mul(power));
+                            power = power.mul(self.shift);
+                        }
+                    }
+                });
+            return Ok(());
         }
         values.fill(F::ZERO);
         let mut shift_power = F::ONE;
@@ -109,6 +141,85 @@ impl MainQuotientStripeV1 {
 mod tests {
     use super::*;
     use crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+
+    fn original_fold_v1(stripe: MainQuotientStripeV1, coefficients: &[F], values: &mut [F]) {
+        assert!(
+            coefficients
+                .iter()
+                .all(|value| F::canonical(value.0).is_some())
+        );
+        values.fill(F::ZERO);
+        let mut power = F::ONE;
+        for (index, coefficient) in coefficients.iter().enumerate() {
+            let lane = index % stripe.rows;
+            values[lane] = values[lane].add(coefficient.mul(power));
+            power = power.mul(stripe.shift);
+        }
+    }
+
+    #[test]
+    fn tiled_fold_preserves_every_lane_wrap_and_original_allocation() {
+        let rows = 1 << 16;
+        for workers in [1, 4, 20] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let stripe = MainQuotientStripeV1::new_v1(16, 17, 0).unwrap();
+                    // Explicit public stripes also exercise more than two wraps
+                    // and a partial last tile; production masked tails wrap once.
+                    let stripe = MainQuotientStripeV1 { rows, ..stripe };
+                    for length in [0, 1, rows - 1, rows, rows + 1816, 3 * rows + 71] {
+                        let coefficients = (0..length)
+                            .map(|i| F(GOLDILOCKS_MODULUS_V1 - 1 - (i as u64 % 7919)))
+                            .collect::<Vec<_>>();
+                        let mut expected = vec![F(19); rows];
+                        original_fold_v1(stripe, &coefficients, &mut expected);
+                        let mut actual = vec![F(19); rows];
+                        let allocation = (actual.as_ptr(), actual.capacity());
+                        stripe.fold_into_v1(&coefficients, &mut actual).unwrap();
+                        assert_eq!(actual, expected, "workers={workers}, length={length}");
+                        assert_eq!((actual.as_ptr(), actual.capacity()), allocation);
+                    }
+                    let mut coefficients = vec![F::ONE; rows + 1816];
+                    *coefficients.last_mut().unwrap() = F(GOLDILOCKS_MODULUS_V1);
+                    let mut actual = vec![F(19); rows];
+                    assert!(stripe.fold_into_v1(&coefficients, &mut actual).is_err());
+                    assert!(actual.iter().all(|value| *value == F(19)));
+                });
+        }
+    }
+
+    #[test]
+    #[ignore = "native log19 quotient folding cost diagnostic"]
+    fn native19_tiled_fold_cost_preserves_every_output() {
+        let stripe = MainQuotientStripeV1::new_v1(19, 22, 7).unwrap();
+        let coefficients = (0..stripe.rows + 1816)
+            .map(|i| F(GOLDILOCKS_MODULUS_V1 - 1 - (i as u64 % 7919)))
+            .collect::<Vec<_>>();
+        let mut original = ZeroizingMainTraceColumnV1(vec![F::ZERO; stripe.rows]);
+        let mut tiled = ZeroizingMainTraceColumnV1(vec![F::ZERO; stripe.rows]);
+        for round in 0..3 {
+            let mut times = [std::time::Duration::ZERO; 2];
+            for mode in if round % 2 == 0 { [0, 1] } else { [1, 0] } {
+                let start = std::time::Instant::now();
+                for _ in 0..16 {
+                    if mode == 0 {
+                        original_fold_v1(stripe, &coefficients, &mut original);
+                    } else {
+                        stripe.fold_into_v1(&coefficients, &mut tiled).unwrap();
+                    }
+                }
+                times[mode] = start.elapsed();
+            }
+            assert_eq!(&*original, &*tiled);
+            eprintln!(
+                "native19_fold round={round} original={:?} tiled={:?}",
+                times[0], times[1]
+            );
+        }
+    }
 
     #[test]
     fn folded_coefficient_adapter_rejects_bad_shapes_before_private_output_mutation() {

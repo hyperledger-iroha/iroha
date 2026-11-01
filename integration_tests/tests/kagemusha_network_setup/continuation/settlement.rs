@@ -90,7 +90,7 @@ pub(super) fn failed_execution(
     else {
         return Ok(None);
     };
-    verified.verify_global_scope(network.network_id(), &network.chain_id().to_string())?;
+    verified.verify_global_scope(network.network_id(), network.chain_id().as_ref())?;
     let input_index = u32::try_from(index)?;
     let entrypoint = block
         .network_entrypoint_at(index)
@@ -138,7 +138,7 @@ fn refused(
     network: &Network,
     output: &Path,
     seed: u8,
-    signed: SignedTransaction,
+    signed: &SignedTransaction,
     expected: &TransactionRejectionReason,
     expected_balances: [u128; 4],
     name: &str,
@@ -147,7 +147,7 @@ fn refused(
     let signed_original = canonical_observation(
         output,
         &format!("{name}-signed.norito"),
-        &signed,
+        signed,
         ORIGINAL_MAX,
     )?;
     let mut originals = vec![
@@ -162,7 +162,7 @@ fn refused(
     File::open(output)?.sync_all()?;
     let client = running_peer(network)?.client_for(&account(seed), key(seed).private_key().clone());
     let error = client
-        .submit_transaction_and_wait(&signed)
+        .submit_transaction_and_wait(signed)
         .expect_err("selected Unload must be refused");
     ensure!(
         error
@@ -202,10 +202,10 @@ fn refused(
     let mut verifier = native(network)?;
     let mut committed_failure = None;
     for proof in history {
-        let verified = verifier.verify(&proof)?;
-        if let Some(committed) = failed_execution(&verified, network, &signed, expected)? {
+        let verified_block = verifier.verify(&proof)?;
+        if let Some(committed) = failed_execution(&verified_block, network, signed, expected)? {
             ensure!(committed_failure.is_none(), "duplicate refused transaction");
-            committed_failure = Some(verified.height());
+            committed_failure = Some(verified_block.height());
             originals.push(canonical_observation(
                 output,
                 &format!("{name}-committed.norito"),
@@ -324,17 +324,26 @@ fn verify_bad_sigma(
         "same-length actual sigma mutation required"
     );
     let mut normalized = bad_sigma.clone();
-    normalized.package.step_proof.bytes = claim.package.step_proof.bytes.clone();
-    normalized.package.receipt = claim.package.receipt.clone();
+    normalized
+        .package
+        .step_proof
+        .bytes
+        .clone_from(&claim.package.step_proof.bytes);
+    normalized.package.receipt = claim.package.receipt;
     ensure!(
         norito::encode_canonical(&normalized)? == claim_bytes,
         "negative fixture changed unrelated claim fields"
     );
+    #[expect(
+        clippy::default_trait_access,
+        reason = "The verifier's `MemoryBudget` lives in `iroha_pasta`, which this test crate does not depend on."
+    )]
+    let budget = Default::default();
     ensure!(
         matches!(
             installed
                 .verifier()
-                .verify_package_proofs(&bad_sigma.package, Default::default()),
+                .verify_package_proofs(&bad_sigma.package, budget),
             Err(iroha_core_zk::kagemusha_wallet_proofs_v1::Error::Proof)
         ),
         "model-valid negative must fail the actual installed proof verifier"
@@ -421,9 +430,14 @@ pub(super) fn run(
         "exact C payout required"
     );
     // Genuine proof verification is mandatory even when no adversarial input is selected.
+    #[expect(
+        clippy::default_trait_access,
+        reason = "The verifier's `MemoryBudget` lives in `iroha_pasta`, which this test crate does not depend on."
+    )]
+    let budget = Default::default();
     installed
         .verifier()
-        .verify_package_proofs(&claim.package, Default::default())?;
+        .verify_package_proofs(&claim.package, budget)?;
     let bad_sigma_bytes = if let Some(selection) = adversarial_selection(command)? {
         let (_, bytes) = selected(
             selection,
@@ -500,7 +514,7 @@ pub(super) fn run(
             network,
             &output,
             43,
-            transaction,
+            &transaction,
             &expected_account,
             [900, 0, 100, 0],
             "foreign-account",
@@ -559,7 +573,7 @@ pub(super) fn run(
             network,
             &output,
             43,
-            signed(
+            &signed(
                 network,
                 43,
                 vec![
@@ -600,10 +614,10 @@ pub(super) fn run(
     ];
     let mut settled_hash = None;
     for proof in history {
-        let verified = verifier.verify(&proof)?;
+        let verified_block = verifier.verify(&proof)?;
         if proof.height() == settled_height {
-            inclusion(&verified, network, &transaction)?;
-            settled_hash = Some(hex::encode(verified.block().hash().as_ref()));
+            inclusion(&verified_block, network, &transaction)?;
+            settled_hash = Some(hex::encode(verified_block.block().hash().as_ref()));
             originals.push(publish(&output, "unload-block.norito", &proof.block_wire)?);
         }
         originals.push(publish(

@@ -1202,6 +1202,20 @@ fn taira_doctor_cli_parses_public_root_and_json() {
     assert_eq!(cmd.public_root, "https://taira.sora.org");
     assert!(cmd.json);
 }
+
+#[cfg(windows)]
+#[test]
+fn native_windows_cli_does_not_offer_unix_host_reset_commands() {
+    for command in [
+        "public-reset",
+        "stopped-owner-maintenance",
+        "retire-validator-config",
+    ] {
+        let error = Args::try_parse_from(["iroha", "taira", command]).unwrap_err();
+        assert_eq!(error.kind(), clap::error::ErrorKind::InvalidSubcommand);
+    }
+}
+#[cfg(unix)]
 #[test]
 fn taira_public_reset_exports_source_without_runtime_signing_arguments() {
     let args = Args::try_parse_from([
@@ -1233,6 +1247,7 @@ fn taira_public_reset_exports_source_without_runtime_signing_arguments() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn taira_public_reset_exposes_strict_preflight_and_apply() {
     let args = Args::try_parse_from([
@@ -1320,6 +1335,7 @@ fn taira_public_reset_exposes_strict_preflight_and_apply() {
         assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 }
+#[cfg(unix)]
 #[test]
 fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
     let local = [
@@ -1384,6 +1400,7 @@ fn taira_public_reset_local_inputs_require_a_dedicated_operator_key() {
         assert_eq!(retired.kind(), clap::error::ErrorKind::UnknownArgument);
     }
 }
+#[cfg(unix)]
 #[test]
 fn taira_public_reset_operator_keygen_has_explicit_private_output() {
     let args = Args::try_parse_from([

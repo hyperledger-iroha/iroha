@@ -5,7 +5,7 @@ use crate::execution_attempt::ExecutionAttemptError as Attempt;
 
 /// Exclusive initialization in progress; no not-ready store or unvalidated tip is exposed.
 ///
-/// Opening authenticates only the durable tip frame. Every lower frame carries its own CommitQC
+/// Opening authenticates only the durable tip frame. Every lower frame carries its own `CommitQC`
 /// and availability evidence, and the read that first uses it authenticates it, so opening a
 /// store costs one frame instead of its whole history.
 pub struct LaneStoreOpen {

@@ -824,6 +824,10 @@
     "pattern": "ExecutionProof|^SettleGameSessionV1$",
     "reason": "RaceV1 execution-proof profile, verification and settlement. The other game instructions manage sessions, inputs and payouts without a proof."
    },
+   "game_partition": {
+    "scope": "out",
+    "reason": "Native independent-root game units execute directly in IVM. Imports authenticate Sumeragi-certified source blocks and write-set membership through the native AMX tracker (crates/iroha_core/src/smartcontracts/isi/game_partition.rs), not a ZK or FHE relation."
+   },
    "governance": {
     "scope": "partial",
     "pattern": "Ballot|Conviction|Parliament",
@@ -3095,7 +3099,7 @@
     "symbol": "impl Execute for SubmitPrivacyZkX509CertificateV1"
    },
    "invocation": {
-    "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "symbol": "pub(crate) fn execute_x509_submission("},
+    "entry": {"path": "crates/iroha_core/src/smartcontracts/isi/privacy/x509_submission.rs", "symbol": "pub fn execute_x509_submission("},
     "dispatch": {"path": "crates/iroha_core/src/executor/attachment_direct.rs", "symbol": "pub(super) fn apply_authorized_instruction("},
     "dispatch_guard": "Some(AttachmentExecution::QueuedX509 { binding, proof }) => { privacy::execute_x509_submission(request, binding, proof, authority, state) }",
     "context_parameter": "binding: &X509Binding,",
@@ -7428,6 +7432,10 @@
    "pattern": "zk|proof|privacy|private|kaigi|ram-?lfe|fhe|witness|/wg/|confidential|settlement|ballot|vote|tally|parliament|identifier|decrypt|ciphertext|shield|nullifier|axt|verif|credential|x509|attest",
    "out_of_scope_prefixes": [
     {
+     "prefix": "/v1/game-partitions/",
+     "reason": "Native game-unit discovery and export proofs carry Sumeragi-certified records and write-set membership, not a ZK or FHE relation (registry.modules.game_partition)."
+    },
+    {
      "prefix": "/v1/sorafs/",
      "reason": "SoraFS storage, moderation ballots, PoR/PDP/PoP and reserve proofs; owned by the SoraFS closure (registry.modules.sorafs)."
     },
@@ -11235,8 +11243,8 @@
      {
       "role": "certificate and CRL hashing",
       "algorithm": "SHA-256 AIR",
-      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_word_stark.rs",
-      "symbol": "pub fn evaluate_zk_x509_sha_word_capacity_residues_over_field_v1<A: PolynomialAirFieldV1>("
+      "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/sha_call_bus_stark.rs",
+      "symbol": "pub fn evaluate_zk_x509_sha_batch_local_residues_over_field_v1<A: PolynomialAirFieldV1>("
      }
     ],
     "primitive_roles": [
@@ -12162,7 +12170,6 @@
      "site": "race.source_hash_profile"
     },
     {"token": "inline_key", "path": "crates/iroha_data_model/src/proof.rs", "count": 1, "site": "generic.verify_proof_registry_key"},
-    {"token": "kaigi_policy_key", "path": "crates/iroha_core/src/pipeline_gas_policy/retained.rs", "count": 6, "site": "kaigi.policy_named_key"},
     {
      "token": "kaigi_policy_key",
      "path": "crates/iroha_core/src/smartcontracts/isi/kaigi/privacy.rs",

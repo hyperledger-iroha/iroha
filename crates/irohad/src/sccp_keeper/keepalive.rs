@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn heartbeat_waits_for_exact_deadline_and_canonical_rank_stagger() {
-        let stagger = Duration::from_millis(15_000);
+        let stagger = Duration::from_secs(15);
         assert!(!scheduled(60_000, 0, stagger, 59_999));
         assert!(scheduled(60_000, 0, stagger, 60_000));
         assert!(!scheduled(60_000, 2, stagger, 89_999));
@@ -322,7 +322,7 @@ mod tests {
                 l5_cursors: parking_lot::Mutex::default(),
             }),
             peer,
-            stagger: Duration::from_millis(15_000),
+            stagger: Duration::from_secs(15),
         };
         assert!(!host.tick(1_000_000).unwrap());
     }

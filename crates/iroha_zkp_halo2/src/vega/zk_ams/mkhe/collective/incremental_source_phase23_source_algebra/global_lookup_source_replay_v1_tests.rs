@@ -22,7 +22,7 @@ fn context_axes_v1() -> SourceReplayContextAxesV1 {
 }
 fn encoded_i64_block_v1(value: i64) -> Vec<u8> {
     let mut bytes = vec![0_u8; PHASE23_MAIN_BLOCK_BYTES_V1];
-    for encoded in bytes.chunks_exact_mut(8) {
+    for encoded in bytes.as_chunks_mut::<8>().0 {
         encoded.copy_from_slice(&value.to_be_bytes());
     }
     bytes

@@ -253,7 +253,7 @@ impl PreparationDriver {
         // Keeping nested canonical decoding off the async workflow's call stack also
         // keeps synchronous authentication from blocking its current-thread executor.
         let (saved, returned_lease) = run_native_worker(permit, lease, move || {
-            let result = (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
+            (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
                 let Some((checkpoint, length)) = artifacts.read_finality(key, maximum)? else {
                     return Ok(None);
                 };
@@ -277,8 +277,7 @@ impl PreparationDriver {
                     return Err(OneCallPrivateSettlementError::Binding);
                 }
                 Ok(Some((restored, tip, length)))
-            })();
-            result
+            })()
         })
         .await?;
         lease = returned_lease;
@@ -299,7 +298,7 @@ impl PreparationDriver {
                 .checked_add(1)
                 .ok_or(OneCallPrivateSettlementError::Binding)?;
             self.reads
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
+                .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_sub(1))
                 .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
             let target = next.min(height);
             let response = self
@@ -341,7 +340,7 @@ impl PreparationDriver {
                 .try_acquire_owned()
                 .map_err(|_| OneCallPrivateSettlementError::Capacity)?;
             let (advanced, returned_lease) = run_native_worker(permit, lease, move || {
-                let result = (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
+                (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
                     let proof = response
                         .decode_checked()
                         .map_err(OneCallPrivateSettlementError::Provider)?;
@@ -354,8 +353,7 @@ impl PreparationDriver {
                     candidate.retain_recent_decisions(3);
                     let length = artifacts.publish_finality(key, &checkpoint, maximum)?;
                     Ok((candidate, block, length))
-                })();
-                result
+                })()
             })
             .await?;
             lease = returned_lease;
@@ -463,7 +461,7 @@ impl PreparationDriver {
         let artifacts = self.artifacts.clone();
         let original_block = block.clone();
         let (original, original_lease) = run_native_worker(permit, lease, move || {
-            let result = (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
+            (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
                 proof.verify(
                     request.intent().network_id,
                     request.0.schema,
@@ -498,8 +496,7 @@ impl PreparationDriver {
                     artifacts.publish_context(context_key, &proof, maximum)?;
                 }
                 Ok((Arc::new(proof), digest, max_carrier_bytes))
-            })();
-            result
+            })()
         })
         .await?;
         lease = original_lease;
@@ -523,7 +520,7 @@ impl PreparationDriver {
             let wallet = self.wallet.clone();
             let block = block.clone();
             let (result,original_lease)=run_native_worker(permit,lease,move||{
-                let result=(|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
+                (|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
                     let leg=&request.intent().legs[index];
                     let context=contexts.contexts[index].verify(request.intent().network_id,request.0.schema,
                         PrivateSettlementPoolKeyV1{route:leg.route,pool_id:leg.pool_id},&block)?;
@@ -566,8 +563,7 @@ impl PreparationDriver {
                         return Err(OneCallPrivateSettlementError::Capacity);
                     }
                     Ok(Some((artifact,length)))
-                })();
-                result
+                })()
             }).await?;
             lease = original_lease;
             let Some((artifact, length)) = result? else {

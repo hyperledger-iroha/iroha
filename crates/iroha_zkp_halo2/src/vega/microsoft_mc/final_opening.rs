@@ -748,7 +748,7 @@ mod tests {
         let left = eq_evals(&point[..1]).expect("left equality");
         let right = eq_evals(&point[1..]).expect("right equality");
         let mut row = vec![Scalar::zero(); 4];
-        for (weight, values) in left.iter().zip(polynomial.chunks_exact(4)) {
+        for (weight, values) in left.iter().zip(polynomial.as_chunks::<4>().0) {
             for (output, value) in row.iter_mut().zip(values) {
                 *output += *weight * *value;
             }

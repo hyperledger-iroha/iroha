@@ -231,7 +231,7 @@ const SERIALIZE_NETWORKS_ENV: &str = "IROHA_TEST_SERIALIZE_NETWORKS";
 const NETWORK_PARALLELISM_ENV: &str = "IROHA_TEST_NETWORK_PARALLELISM";
 const NETWORK_PERMIT_WAIT_TIMEOUT_ENV: &str = "IROHA_TEST_NETWORK_PERMIT_WAIT_TIMEOUT";
 const NETWORK_START_ATTEMPTS_ENV: &str = "IROHA_TEST_NETWORK_START_ATTEMPTS";
-const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_secs(5 * 60);
+const NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT: Duration = Duration::from_mins(5);
 /// Test-only switch that turns a sandbox-related network skip into a test failure.
 pub const REQUIRE_NETWORK_ENV: &str = "IROHA_TEST_REQUIRE_NETWORK";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -835,11 +835,11 @@ mod tests {
     fn existing_network_binary_guard() -> ExistingBinaryEnvRestore {
         let permit_dir_owner = tempfile::tempdir().expect("sandbox permit dir");
         let permit_dir = permit_dir_owner.path().to_string_lossy().into_owned();
-        let (iroha_bin, irohad_bin) = reusable_test_network_binaries();
+        let (cli_bin, daemon_bin) = reusable_test_network_binaries();
         ExistingBinaryEnvRestore {
             _permit_dir: EnvRestore::set("IROHA_TEST_NETWORK_PERMIT_DIR", &permit_dir),
-            _iroha_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHA_ENV, iroha_bin),
-            _irohad_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHAD_ENV, irohad_bin),
+            _iroha_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHA_ENV, cli_bin),
+            _irohad_bin: env_override_for_existing_binary(TEST_NETWORK_BIN_IROHAD_ENV, daemon_bin),
             _permit_dir_owner: permit_dir_owner,
         }
     }
@@ -856,12 +856,12 @@ mod tests {
         })
     }
     fn reusable_test_network_binaries() -> (Option<PathBuf>, Option<PathBuf>) {
-        let irohad_bin = crate::binary_resolver::newest_existing_binary_path([
+        let daemon_bin = crate::binary_resolver::newest_existing_binary_path([
             crate::binary_resolver::find_primary_target_irohad_binary_path(),
             crate::binary_resolver::find_existing_irohad_binary_path(),
         ]);
-        let iroha_bin = irohad_bin.as_deref().and_then(sibling_iroha_binary_path);
-        (iroha_bin, irohad_bin)
+        let cli_bin = daemon_bin.as_deref().and_then(sibling_iroha_binary_path);
+        (cli_bin, daemon_bin)
     }
     fn sibling_iroha_binary_path(irohad_bin: &Path) -> Option<PathBuf> {
         let candidate = irohad_bin
@@ -882,11 +882,10 @@ mod tests {
             if in_use == 0 {
                 return;
             }
-            if start.elapsed() >= timeout {
-                panic!(
-                    "{context}: timed out waiting for network permits to drain; {in_use} still in use"
-                );
-            }
+            assert!(
+                start.elapsed() < timeout,
+                "{context}: timed out waiting for network permits to drain; {in_use} still in use"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
     }
@@ -1263,6 +1262,10 @@ mod tests {
         assert_eq!(in_use, 0);
     }
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "The process-wide env lock keeps the binary and parallelism overrides stable until the network shuts down."
+    )]
     async fn serialized_network_shutdown_async_releases_guard() {
         if skip_if_sandboxed("serialized_network_shutdown_async_releases_guard") {
             return;
@@ -1278,7 +1281,7 @@ mod tests {
         let (limit, in_use) = network_permit_snapshot();
         assert_eq!(limit, 1);
         assert_eq!(in_use, 1);
-        serialized.shutdown_and_release().await;
+        Box::pin(serialized.shutdown_and_release()).await;
         let (_, in_use) = network_permit_snapshot();
         assert_eq!(in_use, 0);
     }
@@ -1325,8 +1328,7 @@ mod tests {
                         drop(network);
                         if retry {
                             eprintln!(
-                                "warning: serialized_network_drop_completes_on_current_thread_runtime fresh startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {:?}: {err}",
-                                NETWORK_START_RETRY_DELAY
+                                "warning: serialized_network_drop_completes_on_current_thread_runtime fresh startup attempt {attempt}/{NETWORK_START_ATTEMPTS} failed with retryable error; rebuilding in {NETWORK_START_RETRY_DELAY:?}: {err}"
                             );
                             tokio::time::sleep(NETWORK_START_RETRY_DELAY).await;
                             continue;
@@ -1412,12 +1414,12 @@ mod tests {
             network_permit_wait_timeout(),
             Some(NETWORK_PERMIT_WAIT_TIMEOUT_DEFAULT)
         );
-        let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
+        let timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "25ms");
         assert_eq!(
             network_permit_wait_timeout(),
             Some(Duration::from_millis(25))
         );
-        drop(_timeout_guard);
+        drop(timeout_guard);
         let _timeout_guard = EnvRestore::set(NETWORK_PERMIT_WAIT_TIMEOUT_ENV, "0");
         assert_eq!(network_permit_wait_timeout(), None);
     }
@@ -1543,6 +1545,10 @@ mod tests {
         Ok(())
     }
     #[tokio::test]
+    #[expect(
+        clippy::await_holding_lock,
+        reason = "The process-wide env lock keeps the binary override stable until the network shuts down."
+    )]
     async fn start_network_async_or_skip_includes_trusted_peer_pops() -> Result<()> {
         if skip_if_sandboxed("start_network_async_or_skip_includes_trusted_peer_pops") {
             return Ok(());

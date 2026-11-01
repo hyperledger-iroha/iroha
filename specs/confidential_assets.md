@@ -424,13 +424,13 @@ lockstep.
 
 - **Benchmark harness.** All gas calibration reports MUST be produced with:
   - `CRITERION_HOME=target/criterion cargo bench -p iroha_core --features bench --bench isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
-  - `cargo test -p iroha_core bench_repro -- --ignored` to confirm the deterministic fixture.
+  - `cargo test -p iroha_core --features iroha-core-tests --test iroha_core_group_01 bench_repro::execute_register_domain_like_bench -- --exact` to confirm the deterministic fixture.
   - `CRITERION_HOME=target/criterion cargo bench -p ivm --bench gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` whenever VM opcode costs change.
 
 - **Fixed randomness.** Export `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` before running benches so `iroha_test_samples::gen_account_in` switches to the deterministic `KeyPair::from_seed` path. The harness prints `IROHA_CONF_GAS_SEED_ACTIVE=…` once; if the variable is missing, review MUST fail. Any new calibration utilities must continue honouring this env var when introducing auxiliary randomness.
 
 - **Result capture.**
-  - Upload Criterion summaries (`target/criterion/**/raw.csv`) for each profile into the release artefact.
+  - Upload Criterion summaries (`target/criterion/**/raw.csv`) for each profile into the release artefact. The workspace enables Criterion's `csv_output` feature; retain its original sample columns, units and iteration counts rather than reconstructing samples from console summaries.
   - Store derived metrics (`ns/op`, `gas/op`, `ns/gas`) in `specs/confidential_assets_calibration.md` along with the git commit and compiler version used.
   - Maintain the last two baselines per profile; delete older snapshots once the newest report is validated.
 

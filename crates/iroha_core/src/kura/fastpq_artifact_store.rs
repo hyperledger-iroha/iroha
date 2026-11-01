@@ -14,10 +14,14 @@
 //! TODO: authority-aware retention must preserve every unresolved producer record/artifact.
 
 use std::{
-    fs::File,
     io::ErrorKind,
     path::{Path, PathBuf},
 };
+
+#[cfg(windows)]
+use iroha_fs::PrivateDurabilityFile as ArtifactDurabilityFile;
+#[cfg(not(windows))]
+use std::fs::File as ArtifactDurabilityFile;
 
 use iroha_config::parameters::actual::KuraFastpqArtifactPolicy;
 use iroha_crypto::Hash;
@@ -201,7 +205,9 @@ impl Kura {
 
     /// Bind source transport to the original Kura root after its bounded inventory audit.
     /// Release notifications remain owned here; archive consumers never acquire raw fences.
-    pub(crate) fn fastpq_source_archive_root(&self) -> Result<File> {
+    pub(crate) fn fastpq_source_archive_root(
+        &self,
+    ) -> Result<crate::query::native_context_archive::ArchiveDirectory> {
         let mut sidecar_releases = self.sidecar_lock.defer_notifications();
         let root = self
             .native_context_archive_root()
@@ -342,25 +348,32 @@ impl Kura {
         }
         // Existing bytes might be a previous publication whose directory sync
         // failed. Presence never skips this exact-object sync/readback barrier.
-        let (mut file, metadata) = self.open_bound_regular_file_with_exact_bytes_locked(
-            &namespace,
-            &path,
-            bytes,
-            limits.max_artifact_bytes.get(),
-            KIND,
-        )?;
-        sync_artifact_file(&file).map_err(|error| Error::IO(error, path.clone()))?;
-        Self::sync_bound_evidence_namespace(&namespace, KIND)?;
-        self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
-            &namespace,
-            &path,
-            &mut file,
-            &metadata,
-            bytes,
-            limits.max_artifact_bytes.get(),
-            KIND,
-        )?;
-        self.inventory_fastpq_artifacts(&namespace, limits)?;
+        #[cfg(not(windows))]
+        let _durability_original = {
+            let (mut file, metadata) = self.open_bound_regular_file_with_exact_bytes_locked(
+                &namespace,
+                &path,
+                bytes,
+                limits.max_artifact_bytes.get(),
+                KIND,
+            )?;
+            sync_artifact_file(&file).map_err(|error| Error::IO(error, path.clone()))?;
+            Self::sync_bound_evidence_namespace(&namespace, KIND)?;
+            self.verify_bound_open_regular_file_exact_bytes_after_namespace_mutation_locked(
+                &namespace,
+                &path,
+                &mut file,
+                &metadata,
+                bytes,
+                limits.max_artifact_bytes.get(),
+                KIND,
+            )?;
+            self.inventory_fastpq_artifacts(&namespace, limits)?;
+            file
+        };
+        #[cfg(windows)]
+        let _durability_original =
+            self.finish_native_fastpq_object(&namespace, &path, bytes, limits)?;
         self.validate_fastpq_artifact_root()?;
         publication_child.finish();
         usage_mutation.finish_resources_before_disk_rescan();
@@ -368,6 +381,75 @@ impl Kura {
             reference,
             issuer: self.instance_identity(),
         })
+    }
+
+    #[cfg(windows)]
+    fn finish_native_fastpq_object(
+        &self,
+        namespace: &BoundProgressNamespace,
+        path: &Path,
+        bytes: &[u8],
+        limits: KuraFastpqArtifactPolicy,
+    ) -> Result<ArtifactDurabilityFile> {
+        use std::io::{Read as _, Seek as _};
+        let owner = Self::native_evidence_parent(namespace, path)?;
+        let name = path.file_name().expect("native parent validated the leaf");
+        let io_error = |error| Error::IO(error, path.to_path_buf());
+        // Existing-only native flush access excludes competing writers/deletion. Keep
+        // this exact original through the final inventory rather than reopening it.
+        let mut original = owner.open_private_durability(name).map_err(io_error)?;
+        let before = original.snapshot().map_err(io_error)?;
+        let readback = |original: &mut ArtifactDurabilityFile| -> Result<()> {
+            original.require_name(owner, name).map_err(io_error)?;
+            if before.local_parts().2 != u64::try_from(bytes.len())?
+                || bytes.is_empty()
+                || bytes.len() > limits.max_artifact_bytes.get()
+            {
+                return Err(invalid(path, "FASTPQ original has an unexpected extent"));
+            }
+            original.rewind().map_err(io_error)?;
+            let mut observed = Vec::with_capacity(bytes.len());
+            original
+                .take(u64::try_from(bytes.len())?.saturating_add(1))
+                .read_to_end(&mut observed)
+                .map_err(io_error)?;
+            if observed != bytes {
+                return Err(invalid(
+                    path,
+                    "FASTPQ original differs from exact expected bytes",
+                ));
+            }
+            Ok(())
+        };
+        let result = (|| {
+            readback(&mut original)?;
+            sync_artifact_file(&original).map_err(io_error)?;
+            Self::sync_bound_evidence_namespace(namespace, KIND)?;
+            readback(&mut original)?;
+            self.inventory_fastpq_artifacts_with_original(
+                namespace,
+                limits,
+                Some((path, &original)),
+            )?;
+            Ok(())
+        })();
+        // A failed read/sync/inventory still closes through original and namespace
+        // custody. Preserve the initiating error if either final observation fails.
+        let original_check = (|| {
+            original.require_name(owner, name).map_err(io_error)?;
+            if original.snapshot().map_err(io_error)? != before {
+                return Err(invalid(
+                    path,
+                    "FASTPQ original changed through its durability barrier",
+                ));
+            }
+            Ok(())
+        })();
+        let namespace_check = Self::native_evidence_parent(namespace, path).map(|_| ());
+        result
+            .and(original_check)
+            .and(namespace_check)
+            .map(|()| original)
     }
 
     /// Recover exact bounded bytes for an untrusted reference, without decoding a proof.
@@ -524,7 +606,7 @@ impl Kura {
         super::original_inventory_release_tests::fence_boundary(self, 3);
         // Missing storage remains valid even on a platform that cannot publish artifacts.
         // Supported platforms still bind that absence to the live Kura root identity.
-        #[cfg(all(unix, not(target_os = "espidf")))]
+        #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
         self.validate_fastpq_artifact_root()?;
         if self.canonical_sidecar_directory(&directory)?.is_none() {
             return Ok(());
@@ -534,7 +616,7 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(all(unix, not(target_os = "espidf")))]
+    #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
     fn validate_fastpq_artifact_root(&self) -> Result<()> {
         if !self.bound_storage_directory_unchanged(&self.store_root_directory) {
             return Err(invalid(
@@ -545,7 +627,7 @@ impl Kura {
         Ok(())
     }
 
-    #[cfg(not(all(unix, not(target_os = "espidf"))))]
+    #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
     fn validate_fastpq_artifact_root(&self) -> Result<()> {
         Err(Error::IO(
             std::io::Error::new(
@@ -558,14 +640,14 @@ impl Kura {
 
     fn open_fastpq_artifact_namespace(&self, create: bool) -> Result<BoundProgressNamespace> {
         self.validate_fastpq_artifact_root()?;
-        #[cfg(all(unix, not(target_os = "espidf")))]
+        #[cfg(any(windows, all(unix, not(target_os = "espidf"))))]
         if create {
             self.open_or_create_bound_storage_child_directory(
                 &self.store_root_directory,
                 std::ffi::OsStr::new(DIRECTORY),
             )?;
         }
-        #[cfg(not(all(unix, not(target_os = "espidf"))))]
+        #[cfg(not(any(windows, all(unix, not(target_os = "espidf")))))]
         let _ = create;
         let directory = self.store_root.join(DIRECTORY);
         self.open_bound_progress_namespace(&directory.join("content"), &directory.join(TEMPORARY))
@@ -576,23 +658,58 @@ impl Kura {
         namespace: &BoundProgressNamespace,
         limits: KuraFastpqArtifactPolicy,
     ) -> Result<Inventory> {
+        self.inventory_fastpq_artifacts_with_original(
+            namespace,
+            limits,
+            #[cfg(windows)]
+            None,
+        )
+    }
+
+    fn inventory_fastpq_artifacts_with_original(
+        &self,
+        namespace: &BoundProgressNamespace,
+        limits: KuraFastpqArtifactPolicy,
+        #[cfg(windows)] retained: Option<(&Path, &ArtifactDurabilityFile)>,
+    ) -> Result<Inventory> {
+        #[cfg(windows)]
+        if let Some((path, original)) = retained {
+            let owner = Self::native_evidence_parent(namespace, path)?;
+            original
+                .require_name(owner, path.file_name().expect("native leaf"))
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
+        }
+        #[cfg(windows)]
+        let mut retained_seen = false;
         let directory = self.store_root.join(DIRECTORY);
         let before = self.stable_sidecar_directory_metadata(&directory)?;
-        let entries =
-            std::fs::read_dir(&directory).map_err(|error| Error::IO(error, directory.clone()))?;
+        #[cfg(not(windows))]
+        let entries = std::fs::read_dir(&directory)
+            .map_err(|error| Error::IO(error, directory.clone()))?
+            .enumerate();
+        #[cfg(windows)]
+        let entries = Self::native_evidence_parent(namespace, &directory.join(TEMPORARY))?
+            .entries(limits.max_artifacts.get().saturating_add(1))
+            .map_err(|error| Error::IO(error, directory.clone()))?
+            .into_iter()
+            .enumerate();
         let mut inventory = Inventory::default();
         // A counter, not an unbounded vector/map: stop before metadata work for
         // any entry beyond the configured stable count plus one temporary.
-        for (index, entry) in entries.enumerate() {
+        for (index, entry) in entries {
             if index > limits.max_artifacts.get() {
                 return Err(invalid(
                     &directory,
                     "FASTPQ artifact directory entry cap exceeded",
                 ));
             }
-            let entry = entry.map_err(|error| Error::IO(error, directory.clone()))?;
-            let path = entry.path();
-            let name = entry.file_name();
+            #[cfg(not(windows))]
+            let (path, name) = {
+                let entry = entry.map_err(|error| Error::IO(error, directory.clone()))?;
+                (entry.path(), entry.file_name())
+            };
+            #[cfg(windows)]
+            let (path, name) = (directory.join(&entry), entry);
             let Some(name) = name.to_str() else {
                 return Err(invalid(path, "FASTPQ artifact filename is not canonical"));
             };
@@ -615,6 +732,60 @@ impl Kura {
                 .ok_or_else(|| {
                     invalid(path.clone(), "FASTPQ artifact vanished during inventory")
                 })?;
+            #[cfg(windows)]
+            {
+                let owner = Self::native_evidence_parent(namespace, &path)?;
+                if let Some((_, original)) =
+                    retained.filter(|(retained_path, _)| *retained_path == path.as_path())
+                {
+                    original
+                        .require_name(owner, name)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    let before = original
+                        .snapshot()
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if before.local_parts().2 != metadata.file.len() {
+                        return Err(invalid(path, "FASTPQ retained inventory extent changed"));
+                    }
+                    original
+                        .revalidate()
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if original
+                        .snapshot()
+                        .map_err(|error| Error::IO(error, path.clone()))?
+                        != before
+                    {
+                        return Err(invalid(
+                            path,
+                            "FASTPQ retained original changed during inventory",
+                        ));
+                    }
+                    retained_seen = true;
+                } else {
+                    let original = owner
+                        .open_retained_regular_optional(name)
+                        .map_err(|error| Error::IO(error, path.clone()))?
+                        .ok_or_else(|| {
+                            invalid(
+                                path.clone(),
+                                "FASTPQ artifact vanished during private admission",
+                            )
+                        })?;
+                    iroha_fs::FileSnapshot::of(original.file(), true)
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    let opened = super::secure_file_metadata::from_file(original.file())
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                    if !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened) {
+                        return Err(invalid(
+                            path,
+                            "FASTPQ artifact changed during private admission",
+                        ));
+                    }
+                    original
+                        .revalidate()
+                        .map_err(|error| Error::IO(error, path.clone()))?;
+                }
+            }
             let size = metadata.file.len();
             if (!temporary && size == 0) || size > limits.max_artifact_bytes.get() as u64 {
                 return Err(invalid(
@@ -629,6 +800,16 @@ impl Kura {
                 .ok_or_else(|| {
                     invalid(path, "FASTPQ artifact inventory exceeds aggregate byte cap")
                 })?;
+        }
+        #[cfg(windows)]
+        if let Some((path, original)) = retained {
+            if !retained_seen {
+                return Err(invalid(path, "FASTPQ retained inventory entry is missing"));
+            }
+            let owner = Self::native_evidence_parent(namespace, path)?;
+            original
+                .require_name(owner, path.file_name().expect("native leaf"))
+                .map_err(|error| Error::IO(error, path.to_path_buf()))?;
         }
         let after = self.stable_sidecar_directory_metadata(&directory)?;
         if !Self::stable_sidecar_directory_metadata_unchanged(&before, &after)
@@ -655,17 +836,57 @@ impl Kura {
         if metadata.file.len() > limits.max_artifact_bytes.get() as u64 {
             return Err(invalid(path, "FASTPQ temporary exceeds its byte cap"));
         }
-        let file = Self::open_bound_progress_file(namespace, &path, &metadata)?;
         // A temporary has never earned a reference. Discard only the exact
         // descriptor-bound, single-link object; never promote recovered bytes
         // based solely on their presence or apparent proof structure.
-        Self::remove_bound_progress_file_if_matches(namespace, &path, &file, &metadata)
-            .map_err(|error| Error::IO(error, path))?;
+        #[cfg(not(windows))]
+        {
+            let file = Self::open_bound_progress_file(namespace, &path, &metadata)?;
+            Self::remove_bound_progress_file_if_matches(namespace, &path, &file, &metadata)
+                .map_err(|error| Error::IO(error, path.clone()))?;
+        }
+        #[cfg(windows)]
+        {
+            let owner = Self::native_evidence_parent(namespace, &path)?;
+            let original = owner
+                .open_retained_regular_optional(TEMPORARY)
+                .map_err(|error| Error::IO(error, path.clone()))?
+                .ok_or_else(|| {
+                    invalid(
+                        path.clone(),
+                        "FASTPQ temporary disappeared during admission",
+                    )
+                })?;
+            let snapshot = iroha_fs::FileSnapshot::of(original.file(), true)
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            let opened = super::secure_file_metadata::from_file(original.file())
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            if !Self::sidecar_file_metadata_unchanged(&metadata.file, &opened)
+                || opened.len() > limits.max_artifact_bytes.get() as u64
+            {
+                return Err(invalid(path, "FASTPQ temporary changed before removal"));
+            }
+            original
+                .revalidate()
+                .map_err(|error| Error::IO(error, path.clone()))?;
+            drop(original);
+            // Compare the same bounded original snapshot after opening the canonical
+            // DELETE handle. A substitution in the sharing-mode transfer is refused.
+            if !owner
+                .remove_private_if_snapshot(TEMPORARY, &snapshot)
+                .map_err(|error| Error::IO(error, path.clone()))?
+            {
+                return Err(invalid(
+                    path,
+                    "FASTPQ temporary disappeared before exact removal",
+                ));
+            }
+        }
         Self::sync_bound_evidence_namespace(namespace, KIND)
     }
 }
 
-fn sync_artifact_file(file: &File) -> std::io::Result<()> {
+fn sync_artifact_file(file: &ArtifactDurabilityFile) -> std::io::Result<()> {
     #[cfg(test)]
     if FAIL_NEXT_FILE_SYNC.with(|flag| flag.replace(false)) {
         return Err(std::io::Error::other(
@@ -680,7 +901,7 @@ std::thread_local! {
     static FAIL_NEXT_FILE_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-#[cfg(all(test, unix, not(target_os = "espidf")))]
+#[cfg(all(test, any(windows, all(unix, not(target_os = "espidf")))))]
 mod tests {
     use super::*;
     use std::num::{NonZeroU64, NonZeroUsize};
@@ -707,6 +928,113 @@ mod tests {
 
     fn path(kura: &Kura, reference: FastpqStoredArtifactReference) -> PathBuf {
         kura.store_root.join(DIRECTORY).join(reference.file_name())
+    }
+
+    fn write_fixture(kura: &Kura, path: &Path, bytes: &[u8]) {
+        #[cfg(not(windows))]
+        {
+            let _ = kura;
+            std::fs::write(path, bytes).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            let namespace = kura.open_fastpq_artifact_namespace(false).unwrap();
+            Kura::native_evidence_parent(&namespace, path)
+                .unwrap()
+                .write_atomic(
+                    path.file_name().unwrap(),
+                    bytes,
+                    iroha_fs::PublishMode::Replace,
+                )
+                .unwrap();
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_original_root_and_namespace_exclude_replacement() {
+        let kura = configured_fixture(generous());
+        let receipt = kura.persist_fastpq_artifact(b"abc").unwrap();
+        let namespace = kura.open_fastpq_artifact_namespace(false).unwrap();
+        assert!(
+            std::fs::rename(&kura.store_root, kura.store_root.with_extension("moved")).is_err()
+        );
+        assert!(
+            std::fs::rename(
+                kura.store_root.join(DIRECTORY),
+                kura.store_root.join("displaced")
+            )
+            .is_err()
+        );
+        assert!(Kura::progress_mutation_namespace_unchanged(&namespace));
+        assert_eq!(
+            kura.read_fastpq_artifact(receipt.reference()).unwrap(),
+            b"abc"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_inherited_and_foreign_private_artifacts_are_refused_without_repair() {
+        for foreign_grant in [false, true] {
+            let kura = configured_fixture(generous());
+            let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+            let path = path(&kura, reference);
+            if foreign_grant {
+                assert!(
+                    std::process::Command::new("icacls.exe")
+                        .arg(&path)
+                        .args(["/grant", "*S-1-1-0:R"])
+                        .status()
+                        .unwrap()
+                        .success()
+                );
+            } else {
+                std::fs::remove_file(&path).unwrap();
+                std::fs::write(&path, b"abc").unwrap();
+            }
+            let before = std::process::Command::new("icacls.exe")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert!(kura.read_fastpq_artifact(reference).is_err());
+            assert!(kura.persist_fastpq_artifact(b"abc").is_err());
+            let after = std::process::Command::new("icacls.exe")
+                .arg(&path)
+                .output()
+                .unwrap();
+            assert_eq!(before.stdout, after.stdout);
+            assert_eq!(std::fs::read(&path).unwrap(), b"abc");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_hardlinks_and_junction_namespace_never_supply_artifact_authority() {
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        let target = path(&kura, reference);
+        let alias = kura.store_root.join("alias");
+        std::fs::hard_link(&target, &alias).unwrap();
+        assert!(kura.read_fastpq_artifact(reference).is_err());
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
+        assert_eq!(std::fs::read(&alias).unwrap(), b"abc");
+        std::fs::remove_file(&alias).unwrap();
+        assert_eq!(kura.read_fastpq_artifact(reference).unwrap(), b"abc");
+
+        let kura = configured_fixture(generous());
+        let outside = tempfile::tempdir().unwrap();
+        assert!(
+            std::process::Command::new("cmd.exe")
+                .args(["/C", "mklink", "/J"])
+                .arg(kura.store_root.join(DIRECTORY))
+                .arg(outside.path())
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert!(kura.persist_fastpq_artifact(b"abc").is_err());
+        assert_eq!(std::fs::read_dir(outside.path()).unwrap().count(), 0);
     }
 
     #[test]
@@ -790,7 +1118,7 @@ mod tests {
             assert_eq!(changed.digest(), digest);
             // Give the forged address the actual original bytes. Presence and
             // matching length are insufficient, including the hash marker bit.
-            std::fs::copy(path(&kura, reference), path(&kura, changed)).unwrap();
+            write_fixture(&kura, &path(&kura, changed), b"abc");
             assert!(kura.read_fastpq_artifact(changed).is_err());
             std::fs::remove_file(path(&kura, changed)).unwrap();
         }
@@ -842,7 +1170,7 @@ mod tests {
             let kura = configured_fixture(generous());
             let _initial = kura.persist_fastpq_artifact(b"initial").unwrap();
             let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
-            std::fs::write(&temp, temporary).unwrap();
+            write_fixture(&kura, &temp, temporary);
             let result = kura
                 .persist_fastpq_artifact(b"fresh-verified-caller-bytes")
                 .unwrap();
@@ -866,7 +1194,7 @@ mod tests {
             let kura = configured_fixture(policy);
             let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
             let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
-            std::fs::write(&temp, temporary).unwrap();
+            write_fixture(&kura, &temp, temporary);
             assert!(kura.persist_fastpq_artifact(b"x").is_err());
             assert!(kura.read_fastpq_artifact(reference).is_err());
             assert_eq!(std::fs::read(&temp).unwrap(), temporary);
@@ -889,15 +1217,16 @@ mod tests {
         }
         let kura = configured_fixture(limits(1024, 1, 16384));
         let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
-        std::fs::write(
-            path(&kura, FastpqStoredArtifactReference::for_bytes(b"def")),
+        write_fixture(
+            &kura,
+            &path(&kura, FastpqStoredArtifactReference::for_bytes(b"def")),
             b"def",
-        )
-        .unwrap();
+        );
         assert!(kura.read_fastpq_artifact(reference).is_err());
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlink_and_hardlink_artifacts_are_rejected_without_touching_targets() {
         use std::os::unix::fs::symlink;
         for symlink_attack in [true, false] {
@@ -919,6 +1248,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn symlink_directory_and_temporary_are_never_followed_or_removed() {
         use std::os::unix::fs::symlink;
         let outside = tempfile::tempdir().unwrap();
@@ -944,6 +1274,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn retained_kura_root_identity_rejects_a_replaced_root() {
         let kura = configured_fixture(generous());
         let root = kura.store_root.clone();
@@ -1005,7 +1336,7 @@ mod tests {
         let kura = configured_fixture(generous());
         let _initial = kura.persist_fastpq_artifact(b"abc").unwrap();
         let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
-        std::fs::write(&temp, b"partial").unwrap();
+        write_fixture(&kura, &temp, b"partial");
         super::super::FAIL_NEXT_INDEXED_SIDECAR_DIR_SYNC.with(|flag| flag.set(true));
         assert!(kura.persist_fastpq_artifact(b"def").is_err());
         assert!(!path(&kura, FastpqStoredArtifactReference::for_bytes(b"def")).exists());
@@ -1045,7 +1376,7 @@ mod tests {
         let kura = configured_fixture(generous());
         let _initial = kura.persist_fastpq_artifact(b"abc").unwrap();
         let temp = kura.store_root.join(DIRECTORY).join(TEMPORARY);
-        std::fs::write(&temp, b"partial").unwrap();
+        write_fixture(&kura, &temp, b"partial");
         let before = kura.refresh_total_disk_usage_bytes().unwrap();
         let _next = kura.persist_fastpq_artifact(b"de").unwrap();
         assert!(!temp.exists());
@@ -1141,7 +1472,7 @@ mod tests {
             let kura = configured_fixture(limits(8, 2, 16));
             let _first = kura.persist_fastpq_artifact(b"abc").unwrap();
             let temporary = kura.store_root.join(DIRECTORY).join(TEMPORARY);
-            std::fs::write(&temporary, &temporary_bytes).unwrap();
+            write_fixture(&kura, &temporary, &temporary_bytes);
             let before = observe_actual_physical_fixture(&kura);
             let first_evidence = before[ResourceFamily::EvidenceKeyRecords as usize];
             assert!(
@@ -1429,14 +1760,14 @@ mod tests {
             let namespace = kura.store_root.join(DIRECTORY);
             match invalid {
                 "stable-count" => {
-                    std::fs::write(
-                        namespace.join(FastpqStoredArtifactReference::for_bytes(b"x").file_name()),
+                    write_fixture(
+                        &kura,
+                        &namespace.join(FastpqStoredArtifactReference::for_bytes(b"x").file_name()),
                         b"x",
-                    )
-                    .unwrap();
+                    );
                 }
                 "aggregate-with-temp" => {
-                    std::fs::write(namespace.join(TEMPORARY), b"x").unwrap();
+                    write_fixture(&kura, &namespace.join(TEMPORARY), b"x");
                 }
                 "per-artifact" => {
                     std::fs::write(path(&kura, first.reference()), b"123456789").unwrap();
@@ -1498,6 +1829,179 @@ mod tests {
             .is_err()
         );
         assert!(!store.exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_final_inventory_borrows_the_exact_durability_original() {
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        let path = path(&kura, reference);
+        let namespace = kura.open_fastpq_artifact_namespace(false).unwrap();
+        let owner = Kura::native_evidence_parent(&namespace, &path).unwrap();
+        let original = owner
+            .open_private_durability(path.file_name().unwrap())
+            .unwrap();
+        let before = original.snapshot().unwrap();
+        // The ordinary reader remains strict; the final scan must borrow our original.
+        assert!(
+            kura.inventory_fastpq_artifacts(&namespace, generous())
+                .is_err()
+        );
+        let inventory = kura
+            .inventory_fastpq_artifacts_with_original(
+                &namespace,
+                generous(),
+                Some((&path, &original)),
+            )
+            .unwrap();
+        assert_eq!(inventory.stable_count, 1);
+        assert_eq!(inventory.total_bytes, 3);
+        assert!(!inventory.temporary);
+        assert_eq!(original.snapshot().unwrap(), before);
+        assert!(std::fs::OpenOptions::new().write(true).open(&path).is_err());
+        assert!(std::fs::remove_file(&path).is_err());
+        drop(original);
+        assert_eq!(kura.read_fastpq_artifact(reference).unwrap(), b"abc");
+        assert_eq!(
+            kura.persist_fastpq_artifact(b"abc").unwrap().reference(),
+            reference
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_borrowed_inventory_keeps_other_entries_strict_and_quotas_exact() {
+        let kura = configured_fixture(generous());
+        let first = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        let second = kura.persist_fastpq_artifact(b"defg").unwrap().reference();
+        let first_path = path(&kura, first);
+        let second_path = path(&kura, second);
+        let namespace = kura.open_fastpq_artifact_namespace(false).unwrap();
+        let owner = Kura::native_evidence_parent(&namespace, &first_path).unwrap();
+        let original = owner
+            .open_private_durability(first_path.file_name().unwrap())
+            .unwrap();
+        let writer = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&second_path)
+            .unwrap();
+        assert!(
+            kura.inventory_fastpq_artifacts_with_original(
+                &namespace,
+                generous(),
+                Some((&first_path, &original)),
+            )
+            .is_err()
+        );
+        drop(writer);
+        let inventory = kura
+            .inventory_fastpq_artifacts_with_original(
+                &namespace,
+                generous(),
+                Some((&first_path, &original)),
+            )
+            .unwrap();
+        assert_eq!(inventory.stable_count, 2);
+        assert_eq!(inventory.total_bytes, 7);
+        assert!(
+            kura.inventory_fastpq_artifacts_with_original(
+                &namespace,
+                limits(1024, 1, 1024),
+                Some((&first_path, &original)),
+            )
+            .is_err()
+        );
+        assert!(
+            kura.inventory_fastpq_artifacts_with_original(
+                &namespace,
+                limits(6, 16, 6),
+                Some((&first_path, &original)),
+            )
+            .is_err()
+        );
+        original.revalidate().unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_borrowed_inventory_refuses_other_original_and_late_acl_change() {
+        let kura = configured_fixture(generous());
+        let first = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        let second = kura.persist_fastpq_artifact(b"def").unwrap().reference();
+        let first_path = path(&kura, first);
+        let second_path = path(&kura, second);
+        let namespace = kura.open_fastpq_artifact_namespace(false).unwrap();
+        let owner = Kura::native_evidence_parent(&namespace, &first_path).unwrap();
+        let original = owner
+            .open_private_durability(first_path.file_name().unwrap())
+            .unwrap();
+        let wrong_name = kura
+            .inventory_fastpq_artifacts_with_original(
+                &namespace,
+                generous(),
+                Some((&second_path, &original)),
+            )
+            .err()
+            .expect("another leaf cannot borrow this original");
+        assert!(matches!(wrong_name, Error::IO(ref error, _) if error.raw_os_error() != Some(32)));
+        assert!(
+            std::process::Command::new("icacls.exe")
+                .arg(&first_path)
+                .args(["/grant", "*S-1-1-0:R"])
+                .output()
+                .unwrap()
+                .status
+                .success()
+        );
+        assert!(
+            kura.inventory_fastpq_artifacts_with_original(
+                &namespace,
+                generous(),
+                Some((&first_path, &original)),
+            )
+            .is_err()
+        );
+        assert!(original.revalidate().is_err());
+        drop(original);
+        assert_eq!(std::fs::read(first_path).unwrap(), b"abc");
+        assert_eq!(std::fs::read(second_path).unwrap(), b"def");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn native_durability_retry_preserves_sync_refusal_and_exact_original() {
+        let kura = configured_fixture(generous());
+        let reference = kura.persist_fastpq_artifact(b"abc").unwrap().reference();
+        let path = path(&kura, reference);
+        let before = iroha_fs::RetainedFile::open_private(&path)
+            .unwrap()
+            .snapshot()
+            .unwrap();
+        let namespace = kura.open_fastpq_artifact_namespace(false).unwrap();
+        FAIL_NEXT_FILE_SYNC.with(|flag| flag.set(true));
+        let error = kura
+            .finish_native_fastpq_object(&namespace, &path, b"abc", generous())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("injected FASTPQ artifact file sync failure")
+        );
+        assert!(
+            kura.finish_native_fastpq_object(&namespace, &path, b"bad", generous())
+                .is_err()
+        );
+        kura.finish_native_fastpq_object(&namespace, &path, b"abc", generous())
+            .unwrap();
+        assert_eq!(
+            iroha_fs::RetainedFile::open_private(&path)
+                .unwrap()
+                .snapshot()
+                .unwrap(),
+            before
+        );
+        assert_eq!(kura.read_fastpq_artifact(reference).unwrap(), b"abc");
     }
 
     #[test]

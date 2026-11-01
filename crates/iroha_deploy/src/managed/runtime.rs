@@ -1686,7 +1686,7 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(1);
         sender.send(Ok(())).unwrap();
         let original_start = Instant::now()
-            .checked_sub(Duration::from_secs(86_400))
+            .checked_sub(Duration::from_hours(24))
             .unwrap();
         assert!(original_start.elapsed() > Duration::from_secs(600));
         let renewal_start = Instant::now();

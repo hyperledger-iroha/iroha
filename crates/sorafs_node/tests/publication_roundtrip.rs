@@ -215,7 +215,7 @@ fn rejected_site_inputs_leave_no_manifest_and_release_ingest_reservations() {
 }
 
 #[test]
-fn persisted_site_corruption_is_rejected_on_read_and_restart() {
+fn persisted_site_corruption_is_rejected_on_read_and_quarantined_on_restart() {
     let (plan, payload, manifest, _) = fixture();
     let temp = tempfile::tempdir().expect("provider tempdir");
     let storage = config(&temp.path().canonicalize().expect("canonical root"));
@@ -226,18 +226,28 @@ fn persisted_site_corruption_is_rejected_on_read_and_restart() {
     let backend = node.storage().expect("backend");
     let stored = backend.manifest(&id).expect("manifest");
     let chunk = stored.chunk(0).expect("stored first chunk");
+    let digest = chunk.digest;
     let mut bytes = fs::read(&chunk.path).expect("read persisted chunk");
     bytes[0] ^= 1;
     fs::write(&chunk.path, bytes).expect("inject same-length disk corruption");
     assert!(node.read_payload_range(&id, 0, 1).is_err());
-    assert!(node.read_chunk_by_digest(&id, &chunk.digest).is_err());
+    assert!(node.read_chunk_by_digest(&id, &digest).is_err());
     drop(stored);
     drop(backend);
     drop(node);
+    // Startup quarantines a damaged payload for finalized native repair: its authenticated
+    // metadata is retained, and no read serves the corrupted bytes.
+    let restarted = NodeHandle::try_new(storage).expect("restart retains the damaged site");
+    let backend = restarted.storage().expect("backend");
     assert!(
-        NodeHandle::try_new(storage).is_err(),
-        "restart cannot admit a corrupted persisted site"
+        !backend
+            .manifest(&id)
+            .expect("repair metadata retained")
+            .payload_available(),
+        "restart cannot admit a corrupted persisted site as available"
     );
+    assert!(restarted.read_payload_range(&id, 0, 1).is_err());
+    assert!(restarted.read_chunk_by_digest(&id, &digest).is_err());
 }
 
 #[test]

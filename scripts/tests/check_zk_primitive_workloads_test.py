@@ -332,7 +332,7 @@ class ScanChecks(TreeFixture):
             for primitive in self.spec["digest_primitives"]
             if primitive["kind"] == "watch"
         }
-        self.assertFalse(watch["sinsemilla"]["in_use"] or watch["merlin"]["in_use"])
+        self.assertFalse(any(watch[name]["in_use"] for name in ("sinsemilla", "merlin", "kmac")))
         # Vendored BoringSSL carries RIPEMD-160; no Iroha source may own it.
         self.assertTrue(all(owner["path"].startswith("vendor/") for owner in watch["ripemd"]["owners"]))
 
@@ -353,6 +353,11 @@ class ScannerUnits(unittest.TestCase):
             "lt_hash16": ["lthash"],
             "a monolithic index": [],
             "monolith64": ["monolith"],
+            # Google-style constants are not KMAC.
+            "inline constexpr int kMacAddressLength = 6;": [],
+            "kMacOS": [],
+            "KMAC256(key, data)": ["kmac"],
+            "KmacXof::v128(key)": ["kmac"],
             "poseidon2_simd": ["poseidon2"],
             "poseidon6": ["poseidon"],
             "shake256_into": ["shake"],
@@ -2243,6 +2248,7 @@ class SemanticProfiles(TreeFixture):
     def test_every_role_and_defect_has_a_disposition(self) -> None:
         cases = (
             (lambda s: s["role_dispositions"].pop("kaigi.authorization-identity"), "role dispositions differ from the digest roles"),
+            (lambda s: s["role_dispositions"]["kaigi.authorization-identity"].pop("accepted_level"), "kaigi.authorization-identity: `accepted_level` is missing"),
             (lambda s: s["role_dispositions"]["execution.catalog-identity-sha384"].pop("accepted_level"), "`accepted_level` of the selected native commitment is missing"),
             (lambda s: s["role_dispositions"]["privacy.statement-digest-blake3"].pop("required_property"), "`required_property` is missing"),
             (lambda s: s["role_dispositions"]["kaigi.authorization-identity"].__setitem__("profiles", ["unknown"]), "unknown profile 'unknown'"),

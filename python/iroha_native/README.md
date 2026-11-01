@@ -32,9 +32,16 @@ created ancestor durability is claimed. Private temporary and partial objects
 are retained on refusal, so cleanup never unlinks a shared source name. Backups are diagnostic artifacts and are
 never searched by the loader. An interrupted promotion fails qualification;
 its original artifact and intent remain available for explicit recovery.
-Promotion requires descriptor-relative filesystem operations and the Linux
-`renameat2(RENAME_NOREPLACE)` or macOS `renameatx_np(RENAME_EXCL)` operation.
-Unsupported hosts or filesystems are refused without an overwrite fallback. Owner-only file permissions apply on Unix; this is not a Windows
-ACL guarantee. The delivery tool itself does not load native code or independently
+The POSIX promotion path requires descriptor-relative filesystem operations and
+Linux `renameat2(RENAME_NOREPLACE)` or macOS `renameatx_np(RENAME_EXCL)`.
+Windows promotion requires the same-source
+[`iroha_native_source_delivery` helper](../../tools/iroha_native_source_delivery/README.md)
+passed as `--native-helper`. It retains the original native handles throughout
+the transaction and uses exact protected owner-only SID/DACL custody for newly
+created files and the backup directory. Existing permissions are never repaired.
+The native library is sealed for owner read/execute so Windows can load it;
+intent and receipt files remain owner-read-only.
+Unsupported hosts or filesystems are refused without an overwrite fallback.
+The delivery tool itself does not load native code or independently
 establish build provenance; the maintained build, ABI and installed-wheel owners
 do that.

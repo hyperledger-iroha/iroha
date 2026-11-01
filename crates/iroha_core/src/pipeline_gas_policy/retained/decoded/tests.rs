@@ -148,8 +148,7 @@ fn foreign_nested_leaf_returns_every_owner_and_shell_for_exact_retry() {
     let foreign_bytes = foreign.reserved_bytes();
     let (shell, mut leaves, error) = shell
         .finish(leaves, &pool)
-        .err()
-        .expect("foreign original owner refused");
+        .expect_err("foreign original owner refused");
     assert!(matches!(error, ParameterRetentionError::ForeignPool));
     assert_eq!(pool.reserved_bytes(), original_bytes);
     assert_eq!(foreign.reserved_bytes(), foreign_bytes);

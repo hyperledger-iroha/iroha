@@ -1320,7 +1320,9 @@ impl<'a> RnsNativeTailObjectEncoderV2<'a> {
         let start = self.next_chunk * COEFFICIENTS_PER_CHUNK_V2;
         let end = start + COEFFICIENTS_PER_CHUNK_V2;
         for (encoded, coefficient) in output
-            .chunks_exact_mut(core::mem::size_of::<u64>())
+            .as_chunks_mut::<{ core::mem::size_of::<u64>() }>()
+            .0
+            .iter_mut()
             .zip(&self.coefficients[start..end])
         {
             encoded.copy_from_slice(&coefficient.to_be_bytes());

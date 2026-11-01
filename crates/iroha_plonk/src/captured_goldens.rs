@@ -10,6 +10,7 @@ use ff::Field;
 use iroha_pasta::{Ep, Eq, PastaCurve, PastaField, msm::MemoryBudget, poseidon::PoseidonField};
 use norito::json::Value;
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 
 use crate::{
     cs::{ProofSuffixV1, TranscriptV1},
@@ -30,7 +31,9 @@ fn bytes(value: &Value) -> Vec<u8> {
     let text = value.as_str().expect("hex string");
     assert!(text.len().is_multiple_of(2));
     text.as_bytes()
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|pair| {
             let pair = core::str::from_utf8(pair).expect("ASCII hex");
             let value = u8::from_str_radix(pair, 16).expect("hex byte");
@@ -158,8 +161,10 @@ fn replay_circuit<C: PastaCurve, Ci: Circuit<C::ScalarExt> + Sync>(
                 assert_eq!(
                     Sha256::digest(&expected)
                         .iter()
-                        .map(|byte| format!("{byte:02x}"))
-                        .collect::<String>(),
+                        .fold(String::new(), |mut hex, byte| {
+                            let _ = write!(hex, "{byte:02x}");
+                            hex
+                        }),
                     case["proof_sha256"].as_str().expect("proof hash")
                 );
                 let seed = u8::try_from(case["seed_byte"].as_u64().expect("seed"))

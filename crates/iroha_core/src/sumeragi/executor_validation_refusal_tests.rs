@@ -200,7 +200,7 @@ fn original_post_merge_validation_refusal_retains_worker_owner_and_exact_availab
                 )
                 .unwrap(),
                 None,
-                &mut Default::default(),
+                &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 &crate::execution_attempt::PolicyDecodeControls::try_new(
                     &worker.state.ivm_execution_budget(),
                 )
@@ -597,7 +597,8 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
-                successor_context: Default::default(),
+                successor_context:
+                    crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,
                 parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(
                 ),
@@ -829,7 +830,8 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
-                successor_context: Default::default(),
+                successor_context:
+                    crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,
                 parent_service: crate::sumeragi::certified_chain::ParentServicePreparation::default(
                 ),
@@ -886,7 +888,7 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 )
                 .unwrap(),
                 None,
-                &mut Default::default(),
+                &mut crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 &crate::execution_attempt::PolicyDecodeControls::try_new(
                     &worker.state.ivm_execution_budget(),
                 )

@@ -71,7 +71,7 @@ fn complete_public_leaf_updates_match_canonical() {
     // Public leaf updates cover the complete image; the private memory bitmap
     // batch path has independent sparse/dense, duplicate and cache controls.
     let tree = ByteMerkleTree::new(8, 32).unwrap();
-    for (index, leaf) in data.chunks_exact(32).enumerate() {
+    for (index, leaf) in data.as_chunks::<32>().0.iter().enumerate() {
         tree.update_leaf(index, leaf).unwrap();
     }
     assert_eq!(canonical, tree.root());

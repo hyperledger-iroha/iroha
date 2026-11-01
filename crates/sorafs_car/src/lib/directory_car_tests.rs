@@ -5,13 +5,41 @@ fn empty_input_rejected() {
     assert!(matches!(err, CarPlanError::EmptyInput));
 }
 #[test]
-fn windows_directory_chunk_publication_stays_fail_closed() {
-    let plan = CarBuildPlan::single_file(b"payload").expect("plan");
-    let mut sink = DirectoryChunkSink::new("chunks");
+fn windows_directory_chunk_publication_requires_private_parent() {
+    let bytes = b"payload";
+    let plan = CarBuildPlan::single_file(bytes).expect("plan");
+    let temporary = tempdir().expect("native fixture root");
+    let refused_root = temporary.path().join("chunks");
+    let mut refused = DirectoryChunkSink::new(&refused_root);
     assert!(matches!(
-        sink.prepare(&plan),
-        Err(ChunkStoreError::Io(error)) if error.kind() == io::ErrorKind::Unsupported
+        refused.prepare(&plan),
+        Err(ChunkStoreError::Io(error)) if error.kind() == io::ErrorKind::PermissionDenied
     ));
+    assert!(!refused_root.exists());
+    assert_eq!(std::fs::read_dir(temporary.path()).unwrap().count(), 0);
+    drop(refused);
+
+    let parent = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))
+        .expect("canonical private parent");
+    let root = parent.path().join("chunks");
+    let mut sink = DirectoryChunkSink::new(&root);
+    sink.prepare(&plan).expect("supported native prepare");
+    assert_eq!(plan.chunks.len(), 1);
+    sink.write_chunk(0, &plan.chunks[0], bytes)
+        .expect("original native writer");
+    assert!(
+        !root.exists(),
+        "unpublished chunks stay in original staging"
+    );
+    let output = sink.finish().expect("native publication");
+    assert_eq!(output.publication, DirectoryPublicationStatus::Durable);
+    assert_eq!(output.total_bytes, bytes.len() as u64);
+    assert_eq!(output.records.len(), 1);
+    assert_eq!(
+        std::fs::read(root.join(&output.records[0].file_name)).unwrap(),
+        bytes
+    );
+    assert!(iroha_fs::PrivateDirectory::open(temporary.path()).is_err());
 }
 #[test]
 fn chunk_fetch_specs_reflect_plan() {
@@ -87,7 +115,9 @@ fn directory_car_emits_directory_root() {
     while (cursor as u64) < data_end {
         let (section_len, len_bytes) = decode_uleb128(&bytes[cursor..]);
         cursor += len_bytes;
-        let (cid_len, _) = decode_cid(&bytes[cursor..]);
+        let (cid, cid_len) = verifier::decode_cid(&bytes[cursor..], section_cid_map.len())
+            .expect("canonical directory section CID");
+        assert_eq!(cid.multihash, BLAKE3_256_MULTIHASH_CODE);
         let cid_bytes = bytes[cursor..cursor + cid_len].to_vec();
         cursor += cid_len;
         let data_len = section_len as usize - cid_len;
@@ -129,63 +159,6 @@ fn directory_car_emits_directory_root() {
         assert_eq!(entry.size, size);
     }
 }
-fn decode_cid(data: &[u8]) -> (usize, u64) {
-    let (version, consumed_version) = decode_uleb128(data);
-    assert_eq!(version, 1, "expected CIDv1");
-    let (codec, consumed_codec) = decode_uleb128(&data[consumed_version..]);
-    let (mh_code, consumed_mh) = decode_uleb128(&data[consumed_version + consumed_codec..]);
-    assert_eq!(mh_code, BLAKE3_256_MULTIHASH_CODE);
-    let (digest_len, consumed_len) =
-        decode_uleb128(&data[consumed_version + consumed_codec + consumed_mh..]);
-    let total_len =
-        consumed_version + consumed_codec + consumed_mh + consumed_len + digest_len as usize;
-    (total_len, codec)
-}
-fn decode_cbor_len(expected_major: u8, data: &[u8]) -> (u64, usize) {
-    assert!(!data.is_empty(), "insufficient CBOR data");
-    let first = data[0];
-    assert_eq!(first >> 5, expected_major, "unexpected CBOR major type");
-    let additional = first & 0x1f;
-    match additional {
-        v @ 0..=23 => (v as u64, 1),
-        24 => (data[1] as u64, 2),
-        25 => (u16::from_be_bytes([data[1], data[2]]) as u64, 3),
-        26 => (
-            u32::from_be_bytes([data[1], data[2], data[3], data[4]]) as u64,
-            5,
-        ),
-        27 => (
-            u64::from_be_bytes([
-                data[1], data[2], data[3], data[4], data[5], data[6], data[7], data[8],
-            ]),
-            9,
-        ),
-        31 => panic!("indefinite length CBOR not supported in tests"),
-        _ => unreachable!("invalid CBOR additional info"),
-    }
-}
-fn decode_cbor_map_len(data: &[u8]) -> (u64, usize) {
-    decode_cbor_len(5, data)
-}
-fn decode_cbor_array_len(data: &[u8]) -> (u64, usize) {
-    decode_cbor_len(4, data)
-}
-fn decode_cbor_uint(data: &[u8]) -> (u64, usize) {
-    decode_cbor_len(0, data)
-}
-fn decode_cbor_text(data: &[u8]) -> (String, usize) {
-    let (len, consumed) = decode_cbor_len(3, data);
-    let start = consumed;
-    let end = start + len as usize;
-    let text = String::from_utf8(data[start..end].to_vec()).expect("valid UTF-8");
-    (text, consumed + len as usize)
-}
-fn decode_cbor_bytes(data: &[u8]) -> (Vec<u8>, usize) {
-    let (len, consumed) = decode_cbor_len(2, data);
-    let start = consumed;
-    let end = start + len as usize;
-    (data[start..end].to_vec(), consumed + len as usize)
-}
 #[derive(Debug, Clone)]
 struct DirEntryView {
     name: String,
@@ -223,7 +196,7 @@ fn parse_directory_node(data: &[u8]) -> (Vec<DirEntryView>, u64) {
         idx += consumed;
         let (kind_value, consumed) = decode_cbor_text(&data[idx..]);
         idx += consumed;
-        let kind = match kind_value.as_str() {
+        let kind = match kind_value {
             "file" => DirectoryEntryKind::File,
             "dir" => DirectoryEntryKind::Directory,
             other => panic!("unexpected directory entry kind {other}"),
@@ -234,7 +207,7 @@ fn parse_directory_node(data: &[u8]) -> (Vec<DirEntryView>, u64) {
         let (size_value, consumed) = decode_cbor_uint(&data[idx..]);
         idx += consumed;
         entries.push(DirEntryView {
-            name: name_value,
+            name: name_value.to_owned(),
             kind,
             cid: cid_value,
             size: size_value,
@@ -259,17 +232,4 @@ fn parse_directory_node(data: &[u8]) -> (Vec<DirEntryView>, u64) {
     idx += consumed;
     assert_eq!(idx, data.len());
     (entries, dir_size)
-}
-fn decode_uleb128(data: &[u8]) -> (u64, usize) {
-    let mut value = 0u64;
-    let mut shift = 0;
-    for (idx, byte) in data.iter().enumerate() {
-        let slice = (byte & 0x7F) as u64;
-        value |= slice << shift;
-        if byte & 0x80 == 0 {
-            return (value, idx + 1);
-        }
-        shift += 7;
-    }
-    (value, data.len())
 }

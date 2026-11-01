@@ -1,23 +1,26 @@
 //! Scalar slot encodings: the sparse subalgebra and fully split batching.
 //!
-//! Let `S` be the largest power of two with `t = 1 (mod 2S)` and `S <= N`,
-//! and `zeta` a primitive `2S`-th root of unity modulo `t`. With
+//! Let `S` be the largest power of two with base prime `p = 1 (mod 2S)` and `S <= N`,
+//! and `t = p^k` the effective plaintext modulus. The canonical root is
+//! `zeta_k = zeta_1^(p^(k-1)) mod p^k`, a compatible lift of the base-prime
+//! primitive `2S`-th root. The slot count depends on `p-1`, never `p^k-1`. With
 //! `Y = X^(N/S)`, `X^N + 1 = prod_j (Y - beta_j)` modulo `t` for
 //! `beta_j = zeta^(2j+1)`, `0 <= j < S`. A vector of `S` scalars `v_j` is the
 //! polynomial `g(Y)` of degree below `S` with `g(beta_j) = v_j`; only the
 //! coefficients at multiples of `N/S` can be non-zero. Addition and
 //! multiplication of such polynomials act slot by slot.
 //!
-//! - `S = N` is ordinary fully split batching (`t = 1 mod 2N`).
+//! - `S = N` is ordinary fully split batching (`p = 1 mod 2N`).
 //! - `S < N` is the sparse scalar subalgebra: each factor `Y - beta_j` is a
 //!   polynomial of degree `N/S` in `X` whose residue ring is an extension of
-//!   the prime field (a field when the factor is irreducible, as for
+//!   the base ring (a field at precision one when the factor is irreducible, as for
 //!   `t = 257`), and the encoding uses its constants only. For `t = 257`,
 //!   `S = 128` at every `N >= 128` and `zeta = 3`.
 //!
 //! A plaintext outside the scalar subalgebra is a valid ring element but not
-//! a slot vector, and slot-wise identities such as `x^(t-1) = 1` for non-zero
-//! `x` do not hold for it. [`SlotEncoding::decode`] rejects one; an evaluator
+//! a slot vector. The field identity `x^p = x` holds modulo `p` only for
+//! scalar-slot residues, and is not an identity modulo higher powers of `p`
+//! or on arbitrary extension-ring elements. [`SlotEncoding::decode`] rejects one; an evaluator
 //! that cannot see the plaintext needs a proof of membership from whoever
 //! encrypted it.
 //!
@@ -34,7 +37,9 @@
 //! `S^-1 * beta_j^-k`. Its centered `l1` norm is the same for every `j`
 //! because every `beta_j^-1` generates the same group of order `2S`;
 //! [`SlotEncoding::mask_bound`] is that exact value and is public.
-use super::{BgvError, BgvProfile, Ciphertext, EvaluationKeys, Plaintext, PlaintextBound};
+use super::{
+    BgvError, BgvProfile, Ciphertext, EvaluationKeys, Plaintext, PlaintextBound, PlaintextPrecision,
+};
 use crate::{
     constant_time::{FixedModulus, greater_than_bit_u64, select_u64},
     modular,
@@ -48,7 +53,7 @@ const ROOT_CANDIDATE_LIMIT: u64 = 1 << 16;
 /// The scalar slot encoding of one profile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SlotEncoding {
-    identity: [u8; 32],
+    precision: PlaintextPrecision,
     degree: usize,
     slots: usize,
     plaintext: FixedModulus,
@@ -59,39 +64,53 @@ pub struct SlotEncoding {
 }
 
 impl SlotEncoding {
+    /// Exact effective plaintext context of this encoding.
+    #[must_use]
+    pub const fn plaintext_precision(&self) -> PlaintextPrecision {
+        self.precision
+    }
+
     /// Derive the encoding of a profile.
     ///
     /// The root is `g^((t - 1) / 2S)` for the smallest `g >= 2` that makes it a
     /// primitive `2S`-th root of unity; for `t = 257` that is 3.
     ///
     /// # Errors
-    /// [`BgvError::EncodingUnavailable`] when `t = 3 (mod 4)`, so that no two
+    /// [`BgvError::EncodingUnavailable`] when the base prime `p = 3 (mod 4)`, so no two
     /// slots exist.
-    pub fn new(profile: &BgvProfile) -> Result<Self, BgvError> {
-        let plaintext_modulus = profile.plaintext_modulus();
+    pub fn new(profile: &BgvProfile, precision: PlaintextPrecision) -> Result<Self, BgvError> {
+        precision.check_profile(profile)?;
+        let plaintext_modulus = precision.modulus();
+        let base_prime = precision.prime();
         let degree = profile.degree();
-        // The largest power of two dividing (t - 1) / 2, capped by the ring degree.
-        let two_adic = ((plaintext_modulus - 1) / 2).trailing_zeros().min(63);
-        let slots = (1_usize << two_adic.min(usize::BITS - 2)).min(degree);
-        if slots < 2 {
-            return Err(BgvError::EncodingUnavailable);
-        }
+        let slots = Self::slot_count(profile, precision)?;
         let order = u64::try_from(2 * slots).map_err(|_| BgvError::EncodingUnavailable)?;
-        let root = modular::primitive_root_of_order_with_candidate_limit(
-            plaintext_modulus,
+        let base_root = modular::primitive_root_of_order_with_candidate_limit(
+            base_prime,
             order,
             ROOT_CANDIDATE_LIMIT,
         )
         .ok_or(BgvError::EncodingUnavailable)?;
-        let inverse_root = modular::mod_inv_prime_u64(root, plaintext_modulus)
-            .ok_or(BgvError::EncodingUnavailable)?;
-        let inverse_slots = modular::mod_inv_prime_u64(order / 2, plaintext_modulus)
-            .ok_or(BgvError::EncodingUnavailable)?;
+        // Lift the canonical base-field root to the unique compatible root
+        // of the same 2S order modulo p^k. Slot count depends on p-1, never p^k-1.
+        let arithmetic = precision.fixed();
+        let root = arithmetic.power(base_root, plaintext_modulus / base_prime);
+        if arithmetic.power(root, order / 2) != plaintext_modulus - 1
+            || arithmetic.power(root, order) != 1
+        {
+            return Err(BgvError::EncodingUnavailable);
+        }
+        let inverse_root = arithmetic.power(root, order - 1);
+        let phi = plaintext_modulus - plaintext_modulus / base_prime;
+        let inverse_slots = arithmetic.power(order / 2, phi - 1);
+        if arithmetic.multiply(order / 2, inverse_slots) != 1 {
+            return Err(BgvError::EncodingUnavailable);
+        }
         let mut encoding = Self {
-            identity: *profile.identity(),
+            precision,
             degree,
             slots,
-            plaintext: profile.plaintext_fixed(),
+            plaintext: arithmetic,
             root,
             inverse_root,
             inverse_slots,
@@ -112,6 +131,22 @@ impl SlotEncoding {
             })
             .sum();
         Ok(encoding)
+    }
+
+    // One allocation-free geometry rule shared with composed public planners.
+    // Root derivation and all encoding checks remain in the canonical constructor.
+    pub(super) fn slot_count(
+        profile: &BgvProfile,
+        precision: PlaintextPrecision,
+    ) -> Result<usize, BgvError> {
+        precision.check_profile(profile)?;
+        let two_adic = ((precision.prime() - 1) / 2).trailing_zeros().min(63);
+        let slots = (1_usize << two_adic.min(usize::BITS - 2)).min(profile.degree());
+        if slots < 2 {
+            Err(BgvError::EncodingUnavailable)
+        } else {
+            Ok(slots)
+        }
     }
 
     /// Number of scalar slots `S`.
@@ -158,11 +193,7 @@ impl SlotEncoding {
     }
 
     fn check_profile(&self, profile: &BgvProfile) -> Result<(), BgvError> {
-        if &self.identity == profile.identity() {
-            Ok(())
-        } else {
-            Err(BgvError::ProfileMismatch)
-        }
+        self.precision.check_profile(profile)
     }
 
     fn slots_to_coefficients(&self, values: &mut [u64]) -> Result<(), BgvError> {
@@ -185,7 +216,12 @@ impl SlotEncoding {
         for (index, &coefficient) in slot_coefficients.iter().enumerate() {
             coefficients[index * self.stride()] = coefficient;
         }
-        Plaintext::with_public_bound(profile, std::mem::take(&mut *coefficients), bound)
+        Plaintext::with_public_bound(
+            profile,
+            self.precision,
+            std::mem::take(&mut *coefficients),
+            bound,
+        )
     }
 
     /// Encode up to `S` scalars; missing slots are zero.
@@ -219,9 +255,7 @@ impl SlotEncoding {
     /// [`BgvError::ProfileMismatch`] or [`BgvError::OutsideScalarSubalgebra`]
     /// with the first coefficient that is non-zero off the stride.
     pub fn check_scalar_subalgebra(&self, plaintext: &Plaintext) -> Result<(), BgvError> {
-        if plaintext.profile_identity() != &self.identity {
-            return Err(BgvError::ProfileMismatch);
-        }
+        self.precision.check_same(plaintext.plaintext_precision())?;
         let stride = self.stride();
         plaintext
             .coefficients()
@@ -295,6 +329,64 @@ impl SlotEncoding {
         self.spread(profile, &slots, self.vector_bound())
     }
 
+    /// Exact coefficient bound of a prefix mask whose count is public.
+    ///
+    /// This bound depends on `count`. Never use it to plan a mask with a hidden
+    /// output count: [`Self::prefix_mask`] deliberately retains the count-
+    /// independent [`Self::vector_bound`] for that case. Public count zero has
+    /// bound zero; keeping every slot is the constant one with bound one.
+    ///
+    /// # Errors
+    /// [`BgvError::SlotOutOfRange`] when `count > S`, or an encoding kernel error.
+    pub fn public_prefix_mask_bound(&self, count: usize) -> Result<PlaintextBound, BgvError> {
+        self.public_prefix_coefficients(count)
+            .map(|(_, bound)| bound)
+    }
+
+    /// Encode a prefix mask with the exact bound for its explicitly public count.
+    ///
+    /// This and [`Self::public_prefix_mask_bound`] share the same deterministic
+    /// public coefficient derivation. The bound is public and reveals the
+    /// count; use [`Self::prefix_mask`] when the count may be hidden.
+    ///
+    /// # Errors
+    /// [`BgvError::ProfileMismatch`], [`BgvError::SlotOutOfRange`] when
+    /// `count > S`, or an encoding kernel error.
+    pub fn public_prefix_mask(
+        &self,
+        profile: &BgvProfile,
+        count: usize,
+    ) -> Result<Plaintext, BgvError> {
+        self.check_profile(profile)?;
+        let (coefficients, bound) = self.public_prefix_coefficients(count)?;
+        self.spread(profile, &coefficients, bound)
+    }
+
+    fn public_prefix_coefficients(
+        &self,
+        count: usize,
+    ) -> Result<(Zeroizing<Vec<u64>>, PlaintextBound), BgvError> {
+        if count > self.slots {
+            return Err(BgvError::SlotOutOfRange {
+                index: count,
+                slots: self.slots,
+            });
+        }
+        let mut coefficients = Zeroizing::new(vec![0_u64; self.slots]);
+        // The count and every coefficient in this helper are public.
+        coefficients[..count].fill(1);
+        self.slots_to_coefficients(&mut coefficients)?;
+        let modulus = self.plaintext.modulus;
+        let mut bound = PlaintextBound { linf: 0, l1: 0 };
+        for &coefficient in coefficients.iter() {
+            let magnitude = coefficient.min(modulus - coefficient);
+            bound.linf = bound.linf.max(magnitude);
+            bound.l1 += magnitude;
+        }
+        // S <= N <=2^17 and t<2^31, so the public l1 sum fits u64.
+        Ok((coefficients, bound))
+    }
+
     /// The slot of the argument that slot `slot` of the image under `X -> X^element` reads.
     ///
     /// # Errors
@@ -349,6 +441,8 @@ impl SlotEncoding {
         slot: usize,
         keys: &EvaluationKeys,
     ) -> Result<Ciphertext, BgvError> {
+        self.precision
+            .check_same(ciphertext.plaintext_precision())?;
         let mask = self.slot_mask(profile, slot)?;
         let mut current = profile.mul_plain(ciphertext, &mask)?;
         for element in self.broadcast_elements() {
@@ -378,13 +472,13 @@ mod tests {
 
     fn sparse_profile() -> BgvProfile {
         // N = 256 > 128 slots of F257: stride two.
-        BgvProfile::new(BgvParameters::derive(8, 257, (40, 4), (41, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(8, 257, 1, (40, 4), (41, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
     fn split_profile() -> BgvProfile {
         // 97 = 1 mod 32: sixteen linear factors at N = 16.
-        BgvProfile::new(BgvParameters::derive(4, 97, (30, 4), (31, 2), 2).expect("parameters"))
+        BgvProfile::new(BgvParameters::derive(4, 97, 1, (30, 4), (31, 2), 2).expect("parameters"))
             .expect("profile")
     }
 
@@ -402,7 +496,7 @@ mod tests {
     #[test]
     fn f257_encoding_is_the_sparse_subalgebra_with_root_three() {
         let profile = sparse_profile();
-        let encoding = SlotEncoding::new(&profile).expect("encoding");
+        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
         assert_eq!(encoding.slots(), 128);
         assert_eq!(encoding.stride(), 2);
         assert!(!encoding.is_fully_split());
@@ -463,7 +557,7 @@ mod tests {
     #[test]
     fn a_fully_splitting_modulus_gives_one_slot_per_coefficient() {
         let profile = split_profile();
-        let encoding = SlotEncoding::new(&profile).expect("encoding");
+        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
         assert_eq!(encoding.slots(), 16);
         assert_eq!(encoding.stride(), 1);
         assert!(encoding.is_fully_split());
@@ -485,7 +579,8 @@ mod tests {
             16,
             97,
         );
-        let product = Plaintext::new(&profile, product).expect("plaintext");
+        let product =
+            Plaintext::new(&profile, profile.master_plaintext(), product).expect("plaintext");
         let expected: Vec<u64> = values
             .iter()
             .zip(&other)
@@ -502,7 +597,7 @@ mod tests {
     #[test]
     fn encoding_rejects_invalid_input() {
         let profile = sparse_profile();
-        let encoding = SlotEncoding::new(&profile).expect("encoding");
+        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
         assert_eq!(
             encoding.encode(&profile, &[0; 129]).err(),
             Some(BgvError::SlotOutOfRange {
@@ -531,24 +626,27 @@ mod tests {
         // X itself is not in the scalar subalgebra of the stride-two encoding.
         let mut coefficients = vec![0_u64; 256];
         coefficients[1] = 1;
-        let outside = Plaintext::new(&profile, coefficients).expect("plaintext");
+        let outside =
+            Plaintext::new(&profile, profile.master_plaintext(), coefficients).expect("plaintext");
         let rejected = Some(BgvError::OutsideScalarSubalgebra { index: 1 });
         assert_eq!(encoding.check_scalar_subalgebra(&outside).err(), rejected);
         assert_eq!(encoding.decode(&outside).err(), rejected);
         // Objects of another profile are refused.
         let other = split_profile();
-        let foreign = Plaintext::new(&other, vec![0; 16]).expect("plaintext");
+        let foreign =
+            Plaintext::new(&other, other.master_plaintext(), vec![0; 16]).expect("plaintext");
         let mismatch = Some(BgvError::ProfileMismatch);
         assert_eq!(encoding.encode(&other, &[1]).err(), mismatch);
         assert_eq!(encoding.slot_mask(&other, 0).err(), mismatch);
         assert_eq!(encoding.prefix_mask(&other, 1).err(), mismatch);
         assert_eq!(encoding.decode(&foreign).err(), mismatch);
         // 7 = 3 mod 4 admits no two slots.
-        let no_slots =
-            BgvProfile::new(BgvParameters::derive(2, 7, (20, 1), (21, 1), 1).expect("parameters"))
-                .expect("profile");
+        let no_slots = BgvProfile::new(
+            BgvParameters::derive(2, 7, 1, (20, 1), (21, 1), 1).expect("parameters"),
+        )
+        .expect("profile");
         assert_eq!(
-            SlotEncoding::new(&no_slots).err(),
+            SlotEncoding::new(&no_slots, no_slots.master_plaintext()).err(),
             Some(BgvError::EncodingUnavailable)
         );
     }
@@ -556,7 +654,7 @@ mod tests {
     #[test]
     fn prefix_masks_keep_the_leading_slots() {
         let profile = sparse_profile();
-        let encoding = SlotEncoding::new(&profile).expect("encoding");
+        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
         for count in [0_usize, 1, 64, 128] {
             let mask = encoding.prefix_mask(&profile, count).expect("mask");
             let slots = encoding.decode(&mask).expect("slots");
@@ -578,7 +676,7 @@ mod tests {
     #[test]
     fn automorphisms_permute_slots_as_documented() {
         let profile = sparse_profile();
-        let encoding = SlotEncoding::new(&profile).expect("encoding");
+        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
         let values: Vec<u64> = (0..128_u64).map(|index| (index * 3 + 1) % 257).collect();
         let plaintext = encoding.encode(&profile, &values).expect("plaintext");
         for element in [5_u32, 25, 511, 3] {
@@ -590,7 +688,8 @@ mod tests {
                 &mut image,
             )
             .expect("automorphism");
-            let image = Plaintext::new(&profile, image).expect("plaintext");
+            let image =
+                Plaintext::new(&profile, profile.master_plaintext(), image).expect("plaintext");
             let slots = encoding.decode(&image).expect("slots");
             for slot in 0..128 {
                 let source = encoding.slot_source(element, slot).expect("source");
@@ -629,7 +728,7 @@ mod tests {
             assert_eq!(reached, (0..128).collect::<Vec<usize>>(), "start {start}");
         }
         let split = split_profile();
-        let split_encoding = SlotEncoding::new(&split).expect("encoding");
+        let split_encoding = SlotEncoding::new(&split, split.master_plaintext()).expect("encoding");
         // N = S = 16: 5, 25, 17 (= 625 mod 32), then 31.
         assert_eq!(split_encoding.broadcast_elements(), vec![5, 25, 17, 31]);
     }
@@ -637,7 +736,8 @@ mod tests {
     #[test]
     fn select_and_broadcast_fills_every_slot_under_encryption() {
         for profile in [sparse_profile(), split_profile()] {
-            let encoding = SlotEncoding::new(&profile).expect("encoding");
+            let encoding =
+                SlotEncoding::new(&profile, profile.master_plaintext()).expect("encoding");
             let mut entropy = ScriptedEntropy {
                 results: (0..32_u8).map(|tag| Some(seed(tag + 1))).collect(),
                 calls: 0,
@@ -651,7 +751,7 @@ mod tests {
                 &mut entropy,
             )
             .expect("keys");
-            let modulus = profile.plaintext_modulus();
+            let modulus = profile.master_plaintext_modulus();
             let values: Vec<u64> = (0..encoding.slots() as u64)
                 .map(|index| (index * 31 + 17) % modulus)
                 .collect();
@@ -686,5 +786,107 @@ mod tests {
                 Some(BgvError::WrongSwitchingKey)
             );
         }
+    }
+    /// Independent small-field exponentiation for the interpolation oracle.
+    fn oracle_power(mut base: u64, mut exponent: u64, modulus: u64) -> u64 {
+        let mut value = 1;
+        while exponent != 0 {
+            if exponent & 1 != 0 {
+                value = value * base % modulus;
+            }
+            base = base * base % modulus;
+            exponent >>= 1;
+        }
+        value
+    }
+
+    #[test]
+    fn public_prefix_bounds_match_direct_interpolation_in_split_and_sparse_rings() {
+        for (log_degree, modulus) in [(7, 257_u64), (8, 257), (4, 97), (6, 97), (4, 17)] {
+            let profile = BgvProfile::new(
+                BgvParameters::derive(log_degree, modulus, 1, (30, 3), (31, 2), 2).unwrap(),
+            )
+            .unwrap();
+            let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).unwrap();
+            let slots = encoding.slots();
+            let inverse_slots = oracle_power(slots as u64, modulus - 2, modulus);
+            for count in 0..=slots {
+                let mut expected = vec![0_u64; profile.degree()];
+                for k in 0..slots {
+                    let mut sum = 0;
+                    for j in 0..count {
+                        let point = oracle_power(encoding.root(), (2 * j + 1) as u64, modulus);
+                        let inverse_power =
+                            oracle_power(point, (modulus - 1 - k as u64) % (modulus - 1), modulus);
+                        sum = (sum + inverse_power) % modulus;
+                    }
+                    expected[k * encoding.stride()] = sum * inverse_slots % modulus;
+                }
+                let magnitudes: Vec<_> = expected.iter().map(|&x| x.min(modulus - x)).collect();
+                let exact = PlaintextBound {
+                    linf: *magnitudes.iter().max().unwrap(),
+                    l1: magnitudes.iter().sum(),
+                };
+                let mask = encoding.public_prefix_mask(&profile, count).unwrap();
+                assert_eq!(mask.coefficients(), expected.as_slice());
+                assert_eq!(mask.bound(), exact);
+                assert_eq!(encoding.public_prefix_mask_bound(count).unwrap(), exact);
+                let decoded = encoding.decode(&mask).unwrap();
+                assert!(
+                    decoded
+                        .iter()
+                        .enumerate()
+                        .all(|(slot, &value)| value == u64::from(slot < count))
+                );
+                // The potentially hidden-count API remains uninformative.
+                let hidden = encoding.prefix_mask(&profile, count).unwrap();
+                assert_eq!(hidden.coefficients(), mask.coefficients());
+                assert_eq!(hidden.bound(), encoding.vector_bound());
+            }
+            assert_eq!(
+                encoding.public_prefix_mask_bound(0).unwrap(),
+                PlaintextBound { linf: 0, l1: 0 }
+            );
+            assert_eq!(
+                encoding.public_prefix_mask_bound(slots).unwrap(),
+                PlaintextBound { linf: 1, l1: 1 }
+            );
+            if modulus == 257 {
+                assert_eq!(
+                    encoding.public_prefix_mask_bound(64).unwrap(),
+                    PlaintextBound {
+                        linf: 128,
+                        l1: 4494
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn public_prefix_rejects_wrong_profile_and_out_of_range_counts() {
+        let profile = sparse_profile();
+        let encoding = SlotEncoding::new(&profile, profile.master_plaintext()).unwrap();
+        let other = split_profile();
+        for count in [129, usize::MAX] {
+            assert_eq!(
+                encoding.public_prefix_mask_bound(count).unwrap_err(),
+                BgvError::SlotOutOfRange {
+                    index: count,
+                    slots: 128
+                }
+            );
+            assert_eq!(
+                encoding.public_prefix_mask(&profile, count).unwrap_err(),
+                BgvError::SlotOutOfRange {
+                    index: count,
+                    slots: 128
+                }
+            );
+        }
+        assert_eq!(
+            encoding.public_prefix_mask(&other, 64).unwrap_err(),
+            BgvError::ProfileMismatch
+        );
     }
 }

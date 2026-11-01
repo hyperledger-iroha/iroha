@@ -86,6 +86,8 @@ mod sorafs_repair_ledger;
 mod sorafs_reserve_ledger;
 #[path = "sorting.rs"]
 mod sorting;
+#[path = "support/status_poll.rs"]
+mod status_poll;
 #[path = "telemetry.rs"]
 mod telemetry;
 #[path = "threshold_escrow.rs"]

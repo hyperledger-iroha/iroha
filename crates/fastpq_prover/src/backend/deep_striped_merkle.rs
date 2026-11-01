@@ -543,14 +543,16 @@ fn stream_rows(
             let count = (stripe.rows() - start).min(BATCH);
             let mut indices = [0; BATCH];
             for (offset, packed) in bytes[..count * WIDTH * 8]
-                .chunks_exact_mut(WIDTH * 8)
+                .as_chunks_mut::<{ WIDTH * 8 }>()
+                .0
+                .iter_mut()
                 .enumerate()
             {
                 let index = stripe.global_index(start + offset);
                 indices[offset] = index;
                 stripe.fill_row(start + offset, &mut row)?;
-                for (&value, word) in row.iter().zip(packed.chunks_exact_mut(8)) {
-                    word.copy_from_slice(&value.to_le_bytes());
+                for (&value, word) in row.iter().zip(packed.as_chunks_mut::<8>().0.iter_mut()) {
+                    *word = value.to_le_bytes();
                 }
                 if let Ok(position) = queries.binary_search(&index) {
                     selected[position * WIDTH..(position + 1) * WIDTH].copy_from_slice(&row);
@@ -588,7 +590,7 @@ fn stream_rows(
     let mut rows = Vec::new();
     rows.try_reserve_exact(queries.len())
         .map_err(|_| invalid("DEEP final row opening allocation failed"))?;
-    for (&index, values) in queries.iter().zip(selected.chunks_exact(WIDTH)) {
+    for (&index, values) in queries.iter().zip(selected.as_chunks::<WIDTH>().0) {
         rows.push(RowOpening {
             index: u32::try_from(index)
                 .map_err(|_| invalid("DEEP row opening index exceeds u32"))?,
@@ -624,11 +626,14 @@ pub(super) fn open_cached_rows(
     let opened = cache.open(queries, execution, |indices, output| {
         let mut row = SecretPolynomial::zeroed(WIDTH)?;
         replay.visit_selected_stripes(indices, |stripe| {
-            for (&index, target) in indices.iter().zip(output.chunks_exact_mut(WIDTH * 8)) {
+            for (&index, target) in indices
+                .iter()
+                .zip(output.as_chunks_mut::<{ WIDTH * 8 }>().0.iter_mut())
+            {
                 if index % replay_stripes() == stripe.stripe_index() {
                     stripe.fill_row(index / replay_stripes(), &mut row)?;
-                    for (&value, word) in row.iter().zip(target.chunks_exact_mut(8)) {
-                        word.copy_from_slice(&value.to_le_bytes());
+                    for (&value, word) in row.iter().zip(target.as_chunks_mut::<8>().0.iter_mut()) {
+                        *word = value.to_le_bytes();
                     }
                 }
             }
@@ -640,8 +645,10 @@ pub(super) fn open_cached_rows(
         .map_err(|_| invalid("cached row opening allocation failed"))?;
     for (&index, bytes) in queries.iter().zip(opened.values()) {
         let values = bytes
-            .chunks_exact(8)
-            .map(|word| u64::from_le_bytes(word.try_into().expect("exact row cell")))
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|word| u64::from_le_bytes(*word))
             .collect::<Vec<_>>();
         rows.push(RowOpening {
             index: u32::try_from(index)

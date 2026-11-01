@@ -29,6 +29,13 @@ cargo build -p iroha_cli --bin iroha
 The binary is written to `target/debug/iroha` (`target/debug/iroha.exe` on
 Windows).
 
+Transaction-load journals and traces retain their original file and ancestor handles
+on Windows NTFS as well as supported Unix hosts. Windows traces use bounded private
+writers, owner-read-only sealing and by-handle no-replace publication. Failed output
+leaves its partial evidence for inspection; completed receipts recheck their original
+bytes and namespace. Run `cargo test -p iroha_cli_lib --lib transaction_load::output::`
+on each native host to exercise these custody contracts.
+
 See [Install Iroha 3](https://docs.iroha.tech/get-started/install-iroha.html) for
 the current installation instructions.
 

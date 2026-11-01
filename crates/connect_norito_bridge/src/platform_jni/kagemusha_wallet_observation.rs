@@ -25,13 +25,13 @@ pub extern "system" fn Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWa
     selector: jint,
     identity: JByteArray<'_>,
 ) -> jobject {
-    crate::platform_jni::with_java_env(env, |mut env| {
+    crate::platform_jni::with_java_env(env, |env| {
         let result = wallet::run(|| {
             let selector =
                 u32::try_from(selector).map_err(|_| wallet::Failure::code(wallet::INVALID))?;
-            let identity = read(&mut env, &identity, 32)?;
+            let identity = read(env, &identity, 32)?;
             wallet::observation::observe(handle as u64, selector, &identity)
         });
-        response(&mut env, result)
+        response(env, result)
     })
 }

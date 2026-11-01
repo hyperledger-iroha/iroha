@@ -126,8 +126,8 @@ fn bytes_and_narrowing_are_unsigned_and_little_endian() {
             crate::fastpq::normalized_numeric_to_u64(quantity.as_numeric(), 0),
             u64::try_from(value).ok()
         );
-        for (limb, chunk) in units.limbs().iter().zip(bytes.chunks_exact(4)) {
-            assert_eq!(limb.to_le_bytes().as_slice(), chunk);
+        for (limb, chunk) in units.limbs().iter().zip(bytes.as_chunks::<4>().0) {
+            assert_eq!(limb.to_le_bytes(), *chunk);
         }
     }
     assert_eq!(
@@ -207,7 +207,7 @@ fn deterministic_full_width_arithmetic_matches_independent_bigint_reference() {
         let mut values = Vec::new();
         for _ in 0..2 {
             let mut bytes = [0_u8; 64];
-            for chunk in bytes.chunks_exact_mut(8) {
+            for chunk in bytes.as_chunks_mut::<8>().0 {
                 chunk.copy_from_slice(&random().to_le_bytes());
             }
             bytes[63] &= 0x7f;
@@ -257,7 +257,9 @@ fn wide_limb_split_preserves_low_word_and_carry() {
 fn bigint_from_limbs(limbs: [u32; FASTPQ_QUANTITY_UNIT_LIMBS]) -> BigInt {
     let mut bytes = [0_u8; FASTPQ_QUANTITY_UNIT_BYTES + 1];
     for (chunk, limb) in bytes[..FASTPQ_QUANTITY_UNIT_BYTES]
-        .chunks_exact_mut(4)
+        .as_chunks_mut::<4>()
+        .0
+        .iter_mut()
         .zip(limbs)
     {
         chunk.copy_from_slice(&limb.to_le_bytes());

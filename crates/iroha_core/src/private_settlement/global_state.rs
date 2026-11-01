@@ -3412,9 +3412,11 @@ pub mod tests {
                     register_receipt_prepare(&mut private_state, &receipt)
                         .expect("original registered obligation");
                 }
-                let mut nexus = iroha_config::parameters::actual::Nexus::default();
-                nexus.lane_catalog = lane_catalog.clone();
-                nexus.dataspace_catalog = dataspaces.clone();
+                let mut nexus = iroha_config::parameters::actual::Nexus {
+                    lane_catalog: lane_catalog.clone(),
+                    dataspace_catalog: dataspaces.clone(),
+                    ..iroha_config::parameters::actual::Nexus::default()
+                };
                 nexus.atomic_private_settlement.sidecar_max_total_bytes =
                     NonZeroU64::new(local_cap).expect("positive local capacity");
                 nexus.atomic_private_settlement.sidecar_max_records =
@@ -3427,11 +3429,21 @@ pub mod tests {
                     )
                     .unwrap();
                 let mut policy =
-                    iroha_data_model::privacy::PrivacyConsensusPolicyV1::taira_default();
-                policy.current_limits.private_settlement.max_carrier_bytes =
+                    iroha_data_model::privacy::PrivateSettlementPolicyV1::protocol_default();
+                policy.current_limits.max_carrier_bytes =
                     if tightened { required - 1 } else { required };
                 policy.validate().unwrap();
-                world.privacy_consensus_policy = mv::cell::Cell::new(policy);
+                let mut parameters =
+                    crate::state::parameter_cell_block_for_testing(&world).unwrap();
+                crate::state::set_parameter_cell_for_testing(
+                    &mut parameters,
+                    iroha_data_model::parameter::Parameter::Custom(
+                        policy.to_custom_parameter().unwrap(),
+                    ),
+                    world.sccp_committee_generations.allocation_budget(),
+                )
+                .unwrap();
+                parameters.commit();
                 if (is_finalize || is_abort) && tightened {
                     use iroha_data_model::privacy::{
                         IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,

@@ -276,7 +276,8 @@ fn cdf_155_sample_v1(stream: &mut Aes256CtrV1<'_>) -> usize {
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     clippy::cast_precision_loss,
-    reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and rounding steps."
+    clippy::suboptimal_flops,
+    reason = "The pinned LaZeR Bernoulli sampler requires these exact binary64-to-integer thresholds and separately rounded reduction steps."
 )]
 fn ber_exp_v1(stream: &mut Aes256CtrV1<'_>, mut exponent: f64) -> bool {
     const LN_2: f64 = f64::from_bits(0x3fe6_2e42_fefa_39ef);

@@ -245,8 +245,8 @@ fn exact_inclusive_caps_pass_and_failed_input_or_public_counts_are_atomic() {
         let error = failed
             .append(&first, prefix.poseidon_preimage_digest)
             .unwrap_err();
-        assert!(matches!(error, PrefixLengthError::Input { .. }) == input);
-        assert!(matches!(error, PrefixLengthError::Public { .. }) != input);
+        assert_eq!(matches!(error, PrefixLengthError::Input { .. }), input);
+        assert_ne!(matches!(error, PrefixLengthError::Public { .. }), input);
         assert_eq!(failed.latest(), None);
         assert_eq!(failed.private_deltas.count(), 0);
         assert_eq!(failed.public_deltas.count(), 0);

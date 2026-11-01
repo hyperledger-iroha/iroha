@@ -19,7 +19,7 @@ use iroha_data_model::{
 use iroha_test_samples::private_settlement::{availability_material_fixture_v1, context_fixture};
 use std::sync::atomic::{AtomicUsize, Ordering};
 #[derive(Debug)]
-pub(crate) struct FinalityTransport(pub SumeragiFinalityProof);
+pub struct FinalityTransport(pub SumeragiFinalityProof);
 impl HttpTransport for FinalityTransport {
     fn send_blocking(&self, _: TransportRequest) -> eyre::Result<http::Response<Vec<u8>>> {
         panic!("async original finality required")
@@ -126,7 +126,7 @@ fn row<K: norito::codec::Encode, V: norito::codec::Encode>(
         value_hash: world_state_value_hash_v1(value).unwrap(),
     }
 }
-pub(crate) fn context(
+pub fn context(
     client: &Client,
 ) -> (
     PrivateSettlementContextsProofV1,
@@ -201,10 +201,10 @@ pub(crate) fn context(
         contexts.push(proof);
     }
     add(WorldStateSnapshotEntryV1 {
-        field_id: "world.privacy_consensus_policy".into(),
+        field_id: "world.parameters".into(),
         kind: WorldStateElementKindV1::Cell,
         key_hash: None,
-        value_hash: world_state_value_hash_v1(&template.privacy_policy).unwrap(),
+        value_hash: world_state_value_hash_v1(&template.parameters).unwrap(),
     });
     add(WorldStateSnapshotEntryV1 {
         field_id: "world.sumeragi_lanes".into(),
@@ -222,7 +222,7 @@ pub(crate) fn context(
         material.manifest.proof_intent(),
     )
 }
-pub(crate) fn request(
+pub fn request(
     client: &Client,
     proof: &PrivateSettlementContextsProofV1,
     original: &PrivateSettlementProofIntentV1,
@@ -273,11 +273,12 @@ fn request_at_height(
         original
             .expiry_height
             .checked_add(
-                proof.contexts[0]
-                    .privacy_policy
-                    .current_limits
-                    .private_settlement
-                    .sidecar_retention_blocks,
+                iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+                    &proof.contexts[0].parameters,
+                )
+                .unwrap()
+                .current_limits
+                .sidecar_retention_blocks,
             )
             .unwrap(),
         PRIVATE_SETTLEMENT_MAX_RECEIPT_BYTES_V1 as u64,
@@ -310,22 +311,27 @@ async fn prepare_action(
 }
 
 async fn cold_reopen_preparation(prepare_only: bool) {
-    let mut native = NativeFinalityFixture::start("private-onecall-cold-context");
-    let mut builder =
-        client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
-    builder.network_id = native.network_id();
-    builder.chain = native.chain_id().parse().unwrap();
-    let client = builder.build().unwrap();
-    let (proof, original_intent) = context(&client);
-    let genesis_verifier = native.verifier();
-    let block = native.block_with_submitted_work(native.next_header());
-    let finality =
-        native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
-    let client = client
-        .to_builder()
-        .http_transport(Arc::new(FinalityTransport(finality)))
-        .build()
-        .unwrap();
+    // The native fixture only builds the finality transport; scoping it here keeps it out of
+    // the state this scenario holds across its awaits.
+    let (client, proof, original_intent, genesis_verifier) = {
+        let mut native = NativeFinalityFixture::start("private-onecall-cold-context");
+        let mut builder =
+            client_with_base_url(&"http://context.invalid/".parse().unwrap()).to_builder();
+        builder.network_id = native.network_id();
+        builder.chain = native.chain_id().parse().unwrap();
+        let client = builder.build().unwrap();
+        let (proof, original_intent) = context(&client);
+        let genesis_verifier = native.verifier();
+        let block = native.block_with_submitted_work(native.next_header());
+        let finality =
+            native.certify_with_world_root(block, proof.contexts[0].pool.world.root().unwrap());
+        let client = client
+            .to_builder()
+            .http_transport(Arc::new(FinalityTransport(finality)))
+            .build()
+            .unwrap();
+        (client, proof, original_intent, genesis_verifier)
+    };
     let root = tempfile::tempdir().unwrap();
     let journals = root.path().join("journals");
     let artifacts = root.path().join("artifacts");
@@ -1233,7 +1239,8 @@ async fn private_prepare_pending_prefix_reopens_beyond_read_budget_without_a_car
 
 async fn cold_prefix_preparation(prepare_only: bool) {
     const SELECTED: u64 = 70;
-    let mut native = NativeFinalityFixture::start("private-pending-prefix");
+    // The scenario keeps its native fixture across every await; keep it on the heap.
+    let mut native = Box::new(NativeFinalityFixture::start("private-pending-prefix"));
     let genesis = native.verifier();
     let mut builder = client_with_base_url(&"http://prefix.invalid/".parse().unwrap()).to_builder();
     builder.network_id = native.network_id();
@@ -1281,8 +1288,10 @@ async fn cold_prefix_preparation(prepare_only: bool) {
     let mut original_round = None;
     for (budget, end) in [(64, 65), (4, 69)] {
         let operation = reopen();
-        let mut options = PrivateSettlementRunOptions::default();
-        options.max_finality_proof_reads = budget;
+        let options = PrivateSettlementRunOptions {
+            max_finality_proof_reads: budget,
+            ..PrivateSettlementRunOptions::default()
+        };
         assert!(matches!(
             prepare_action(&operation, &options, prepare_only).await,
             Err(OneCallPrivateSettlementError::Capacity)
@@ -1381,9 +1390,12 @@ async fn cold_prefix_preparation(prepare_only: bool) {
         ordinal: 0,
     };
     let store = FilePrivateSettlementArtifacts::open(&artifact_path, &[41; 32]).unwrap();
-    let foreign = NativeFinalityFixture::new();
     store
-        .publish_finality(key, &foreign.checkpoint(), request.0.max_artifact_bytes)
+        .publish_finality(
+            key,
+            &NativeFinalityFixture::new().checkpoint(),
+            request.0.max_artifact_bytes,
+        )
         .unwrap();
     assert!(matches!(
         prepare_action(
@@ -1954,18 +1966,24 @@ async fn committed_padding_and_retention_refuse_before_original_wallet_effects()
         let (mut proof, intent) = context(&client);
         if !insufficient_retention {
             for member in &mut proof.contexts {
+                let mut policy =
+                    iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
+                        &member.parameters,
+                    )
+                    .unwrap();
+                policy.current_limits.capsule_padding_classes = 1;
                 member
-                    .privacy_policy
-                    .current_limits
-                    .private_settlement
-                    .capsule_padding_classes = 1;
-                let hash = world_state_value_hash_v1(&member.privacy_policy).unwrap();
+                    .parameters
+                    .set_parameter(iroha_data_model::parameter::Parameter::Custom(
+                        policy.to_custom_parameter().unwrap(),
+                    ));
+                let hash = world_state_value_hash_v1(&member.parameters).unwrap();
                 member
                     .pool
                     .world
                     .entries
                     .iter_mut()
-                    .find(|entry| entry.field_id == "world.privacy_consensus_policy")
+                    .find(|entry| entry.field_id == "world.parameters")
                     .unwrap()
                     .value_hash = hash;
             }
@@ -2028,11 +2046,11 @@ async fn committed_padding_and_retention_refuse_before_original_wallet_effects()
         assert!(
             std::fs::read_dir(root.path().join("artifacts"))
                 .unwrap()
-                .all(|entry| !entry
+                .all(|entry| entry
                     .unwrap()
                     .path()
                     .extension()
-                    .is_some_and(|extension| extension == "prepared"))
+                    .is_none_or(|extension| extension != "prepared"))
         );
     }
 }

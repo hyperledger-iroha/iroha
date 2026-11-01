@@ -1808,11 +1808,7 @@ fn collect_summary(app: &AppState) -> SummaryStats {
         rejected,
         queue,
         gas,
-        avg_latency_ms: if latency_count > 0 {
-            Some(latency_total / latency_count)
-        } else {
-            None
-        },
+        avg_latency_ms: latency_total.checked_div(latency_count),
     }
 }
 fn visible_peer_window(

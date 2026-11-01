@@ -274,14 +274,14 @@ mod tests {
             "irohad::external_software_signer::typed_payload::SoftwareSignerTypedPayloadV1",
             "irohad::external_software_signer::typed_payload::SoftwareSignerTypedPayloadV1",
         );
-        assert!(
-            encoded.as_slice()
-                == encode_typed_signing_payload(
-                    SignerRoleV1::BillingStatement,
-                    value.purpose,
-                    &value.message
-                )
-                .expect("typed encoding")
+        assert_eq!(
+            encoded.as_slice(),
+            encode_typed_signing_payload(
+                SignerRoleV1::BillingStatement,
+                value.purpose,
+                &value.message
+            )
+            .expect("typed encoding")
         );
     }
 }

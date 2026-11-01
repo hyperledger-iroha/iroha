@@ -86,6 +86,16 @@ impl Fixture {
         nexus.fees.per_gas_unit_fee = Quantity::zero();
         nexus.fees.fee_asset_id = asset.clone();
         nexus.fees.fee_sink_account_id = sink.clone();
+        // Fees charge only through the signed genesis root policy; author these exact rates there.
+        configuration
+            .genesis_parameters
+            .push(iroha_data_model::parameter::Parameter::Custom(
+                nexus
+                    .fees
+                    .clone()
+                    .into_custom_parameter()
+                    .expect("authored paid root fee policy"),
+            ));
         configuration.nexus = Some(nexus);
         configuration.genesis_instructions = vec![
             Register::asset_definition(AssetDefinition::numeric(

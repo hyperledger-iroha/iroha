@@ -158,7 +158,7 @@ impl WalkStart {
 /// walk or the State's own execution tip established it. It is a node-local
 /// resumption point for a later walk, never imported, decoded or persisted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AuthenticatedExecutionIdentity {
+pub struct AuthenticatedExecutionIdentity {
     height: u64,
     iroha: HashOf<BlockHeader>,
     core: iroha_sumeragi::types::Hash32,

@@ -96,7 +96,7 @@ fn fixed_chunk_leaves(data: &[u8], chunk: usize, leaves: usize) -> Option<HostOu
     let owner = ProcessResources::get()?;
     let mut blocks = owner.try_host_output::<u8>(leaves.checked_mul(64)?).ok()?;
     let bit_len = (chunk as u64 * 8).to_be_bytes();
-    for (index, block) in blocks.chunks_exact_mut(64).enumerate() {
+    for (index, block) in blocks.as_chunks_mut::<64>().0.iter_mut().enumerate() {
         let start = index * chunk;
         let end = start.saturating_add(chunk).min(data.len());
         if start < end {
@@ -247,7 +247,7 @@ fn reduce_attempt(digests: &[[u8; 32]], canonical_merkle: bool) -> Option<Readba
                 if canonical_merkle {
                     // Hash::prehashed marks every child before canonical parent
                     // hashing. Raw SHA pair callers retain their distinct semantics.
-                    for node in cur.chunks_exact_mut(32) {
+                    for node in cur.as_chunks_mut::<32>().0 {
                         node[31] |= 1;
                     }
                 }

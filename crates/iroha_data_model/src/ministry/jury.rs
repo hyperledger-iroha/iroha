@@ -414,8 +414,7 @@ impl PolicyJurySortitionV1 {
                 });
             }
         }
-        let mut expected_rank = 1u32;
-        for entry in &self.waitlist {
+        for (expected_rank, entry) in (1u32..).zip(&self.waitlist) {
             if entry.rank != expected_rank {
                 return Err(PolicyJurySortitionError::WaitlistOutOfOrder {
                     expected: expected_rank,
@@ -427,7 +426,6 @@ impl PolicyJurySortitionV1 {
                     juror_id: entry.juror_id.clone(),
                 });
             }
-            expected_rank += 1;
         }
         if let Some(plan) = self
             .assignments

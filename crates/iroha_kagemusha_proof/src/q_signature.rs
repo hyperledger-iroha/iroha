@@ -324,11 +324,12 @@ impl Circuit<Fq> for QSignatureCircuit {
                         (SignatureKey::Fixed(key), None) => {
                             for (actual, expected) in witness.key.iter().zip([key.x, key.y]) {
                                 // Public input equality binds the witness key too; no ignored bytes.
-                                for (word, fixed) in actual.chunks_exact(2).zip(fixed_raw(
-                                    &mut glue,
-                                    &mut region,
-                                    expected,
-                                )?) {
+                                for (word, fixed) in actual
+                                    .as_chunks::<2>()
+                                    .0
+                                    .iter()
+                                    .zip(fixed_raw(&mut glue, &mut region, expected)?)
+                                {
                                     let integer = u128::from(word[0]) | (u128::from(word[1]) << 64);
                                     let supplied = glue
                                         .witness(&mut region, self.value(Fq::from_u128(integer)))?;

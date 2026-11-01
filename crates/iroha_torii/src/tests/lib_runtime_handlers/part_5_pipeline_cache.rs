@@ -340,12 +340,12 @@ fn pipeline_status_cache_pending_blocks_prune_by_ttl_and_capacity() {
 #[tokio::test]
 async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visibility_and_health()
 {
-    // Keep retired fixture State generations from reopening this original pool.
-    // Only the tested admission and synchronous owner refunds may change capacity.
-    let _constructor_retirement = crossbeam_epoch::pin();
     #[cfg(feature = "app_api")]
     use futures::FutureExt as _;
     use iroha_core::execution_attempt::ExecutionAttemptError;
+    // Keep retired fixture State generations from reopening this original pool.
+    // Only the tested admission and synchronous owner refunds may change capacity.
+    let _constructor_retirement = crossbeam_epoch::pin();
     let (app, tx_hash, chain) = canonical_outcome_test_fixture(false);
     let block = chain.committed(2).block().clone();
     let header = block.header();
@@ -414,8 +414,8 @@ async fn original_history_pool_refusal_preserves_pending_status_and_refuses_visi
     drop(pending);
     // Off-chain history reads retain their actual query owner, independently
     // of the execution pool used by status and event-visibility reads above.
-    let reservation = try_acquire_new_query_fanout_memory(&app)
-        .expect("fund original history query working set");
+    let reservation =
+        try_acquire_new_query_fanout_memory(&app).expect("fund original history query working set");
     #[cfg(feature = "app_api")]
     let admission = COLLECTION_READ_MEMORY_RESERVATION
         .scope(reservation, acquire_query_admission(&app, true))

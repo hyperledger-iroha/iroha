@@ -104,6 +104,7 @@ def test_read_index_folds_reject_raw_thread_workers(relative: str) -> None:
 @pytest.mark.parametrize(
     "relative",
     (
+        "crates/iroha_core/src/executor_custody_tests.rs",
         "crates/iroha_core/src/executor_initial_permission_authority.rs",
         "crates/iroha_core/src/executor_execution_fee.rs",
         "crates/iroha_core/src/executor_execution_effects.rs",

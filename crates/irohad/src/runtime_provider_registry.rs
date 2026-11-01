@@ -3679,8 +3679,9 @@ mod tests {
     }
     #[test]
     fn runtime_provider_slot_wire_ids_are_stable_and_ordered() {
-        let mut seen = [false; 61];
-        for (expected, slot) in (1_u16..=60)
+        // Wire IDs 53 and 60 (the retired Parliament TLE release signer) stay unassigned.
+        let mut seen = [false; 60];
+        for (expected, slot) in (1_u16..=59)
             .filter(|id| *id != 53)
             .zip(IrohaRuntimeProviderSlotV1::ALL)
         {
@@ -3706,7 +3707,7 @@ mod tests {
                 .all(|(index, present)| *present == (index + 1 != 53)),
             "the V1 slot inventory must contain exactly the registered wire IDs"
         );
-        for unknown in [0, 53, 61, u16::MAX] {
+        for unknown in [0, 53, 60, u16::MAX] {
             assert_eq!(
                 IrohaRuntimeProviderSlotV1::from_wire_id(unknown),
                 None,
@@ -5520,15 +5521,15 @@ mod tests {
                 checkpoint_store_handle: EVIDENCE_CHECKPOINT_HANDLE.to_owned(),
                 checkpoint_store_revision: EVIDENCE_CHECKPOINT_QUALIFICATION.revision(),
                 checkpoint_store_policy_digest: EVIDENCE_CHECKPOINT_QUALIFICATION.policy_digest(),
-                session_ttl: Duration::from_secs(15 * 60),
-                grant_ttl: Duration::from_secs(5 * 60),
+                session_ttl: Duration::from_mins(15),
+                grant_ttl: Duration::from_mins(5),
                 challenge_ttl: Duration::from_secs(60),
                 max_range_bytes: Bytes(64 * 1024 * 1024),
                 max_challenges: 1_024,
                 max_sessions: 1_024,
                 max_receipts: 4_096,
                 max_idempotency_records: 4_096,
-                retention_after_expiry: Duration::from_secs(24 * 60 * 60),
+                retention_after_expiry: Duration::from_hours(24),
                 webauthn_rp_id: "review.example".to_owned(),
                 webauthn_allowed_origins: vec!["https://review.example".to_owned()],
                 webauthn_handle: "webauthn://sorafs/evidence-viewer/primary".to_owned(),

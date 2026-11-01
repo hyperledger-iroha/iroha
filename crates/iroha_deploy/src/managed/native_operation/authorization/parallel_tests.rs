@@ -278,7 +278,7 @@ fn parallel_lease_reader_waits_for_actual_claim_and_then_closes_stable_census() 
             .unwrap();
         reader.join().unwrap();
     });
-    assert!(fixture.claim().unwrap().purpose == purpose);
+    assert_eq!(fixture.claim().unwrap().purpose, purpose);
     fixture.assert_original(true);
 }
 

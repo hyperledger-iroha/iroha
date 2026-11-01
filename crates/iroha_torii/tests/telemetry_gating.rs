@@ -111,5 +111,4 @@ async fn full_profile_combines_all_capabilities() {
     assert!(prometheus.contains("sumeragi_view_changes_total{lane=\"global\"} 1"));
 }
 
-#[path = "../src/build_identity_test_fixture.rs"]
-mod build_identity_test_fixture;
+use crate::build_identity_test_fixture;

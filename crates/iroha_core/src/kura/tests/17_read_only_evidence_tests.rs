@@ -1,11 +1,15 @@
 // Native read-only disk admission tests. Disk observation alone is not a finality proof.
-#[cfg(unix)]
-type ReadOnlyFileSnapshot = (Vec<u8>, u32, i64, i64, i64, i64, u64);
-
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 mod canonical_evidence_reader_tests {
     use super::*;
+    #[cfg(unix)]
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _, symlink};
+    #[cfg(windows)]
+    use std::os::windows::fs::symlink_dir as symlink;
+
+    mod fixture_io {
+        include!("17_read_only_evidence_fixture_io.rs");
+    }
 
     struct Fixture {
         _directory: tempfile::TempDir,
@@ -64,10 +68,7 @@ mod canonical_evidence_reader_tests {
                 })
                 .clone();
             let directory = tempfile::tempdir().expect("fixture directory");
-            let root = directory
-                .path()
-                .canonicalize()
-                .expect("absolute real directory");
+            let root = fixture_io::root(&directory);
             let fixture = Self {
                 _directory: directory,
                 root,
@@ -92,20 +93,20 @@ mod canonical_evidence_reader_tests {
                 hashes.extend_from_slice(block.hash().as_ref());
                 data.extend_from_slice(&wire);
             }
-            fs::write(self.root.join(DATA_FILE_NAME), data).unwrap();
-            fs::write(self.root.join(INDEX_FILE_NAME), indices).unwrap();
-            fs::write(self.root.join(HASHES_FILE_NAME), hashes).unwrap();
+            fixture_io::write(&self.root, DATA_FILE_NAME, &data);
+            fixture_io::write(&self.root, INDEX_FILE_NAME, &indices);
+            fixture_io::write(&self.root, HASHES_FILE_NAME, &hashes);
             self.write_marker(&BlockStoreCommitMarker::new(
                 self.blocks.len() as u64,
                 self.blocks.last().map(|b| b.hash()),
             ));
         }
         fn write_marker(&self, marker: &BlockStoreCommitMarker) {
-            fs::write(
-                self.root.join(COUNT_FILE_NAME),
-                norito::encode_canonical(marker).unwrap(),
-            )
-            .unwrap();
+            fixture_io::write(
+                &self.root,
+                COUNT_FILE_NAME,
+                &norito::encode_canonical(marker).unwrap(),
+            );
         }
         fn limits(&self) -> CanonicalKuraEvidenceLimits {
             CanonicalKuraEvidenceLimits {
@@ -116,6 +117,7 @@ mod canonical_evidence_reader_tests {
                 max_carrier_bytes: 1024 * 1024,
                 max_output_bytes: 8 * 1024 * 1024,
                 max_decode_allocation_bytes: 64 * 1024 * 1024,
+                #[cfg(unix)]
                 owner_uid: fs::metadata(&self.root).unwrap().uid(),
             }
         }
@@ -144,22 +146,8 @@ mod canonical_evidence_reader_tests {
             .map(|name| self.root.join(name))
             .to_vec()
         }
-        fn snapshot(&self) -> Vec<ReadOnlyFileSnapshot> {
-            self.files()
-                .iter()
-                .map(|path| {
-                    let metadata = fs::metadata(path).unwrap();
-                    (
-                        fs::read(path).unwrap(),
-                        metadata.mode(),
-                        metadata.mtime(),
-                        metadata.mtime_nsec(),
-                        metadata.ctime(),
-                        metadata.ctime_nsec(),
-                        metadata.ino(),
-                    )
-                })
-                .collect()
+        fn snapshot(&self) -> fixture_io::Snapshot {
+            fixture_io::snapshot(&self.files())
         }
     }
 
@@ -168,7 +156,7 @@ mod canonical_evidence_reader_tests {
         for use_consumer in [false, true] {
             let fixture = Fixture::new();
             for path in fixture.files() {
-                fs::set_permissions(path, fs::Permissions::from_mode(0o400)).unwrap();
+                fixture_io::read_only(&fixture.root, &path);
             }
             let before = fixture.snapshot();
             let mut reader = fixture.open();
@@ -368,17 +356,30 @@ mod canonical_evidence_reader_tests {
                     if error.kind() == norito::core::DecodeAttemptErrorKind::EnclosingLimit
             ));
             // Exercise the actual post-refusal boundary after a genuine refusal,
-            // replacing one admitted inode with byte-identical content.
+            // replacing the Unix inode with identical bytes, or changing native ACL policy
+            // after proving that the Windows original excludes replacement.
             let path = &fixture.files()[source];
-            let bytes = fs::read(path).unwrap();
-            fs::rename(path, path.with_extension("retired")).unwrap();
-            fs::write(path, bytes).unwrap();
-            assert!(matches!(
-                reader.refuse_before_consumer::<Vec<u8>>(error),
-                Err(CanonicalKuraEvidenceError::Invalid(
-                    "held or named source changed"
-                ))
-            ));
+            #[cfg(unix)]
+            {
+                let bytes = fs::read(path).unwrap();
+                fs::rename(path, path.with_extension("retired")).unwrap();
+                fs::write(path, bytes).unwrap();
+                assert!(matches!(
+                    reader.refuse_before_consumer::<Vec<u8>>(error),
+                    Err(CanonicalKuraEvidenceError::Invalid(
+                        "held or named source changed"
+                    ))
+                ));
+            }
+            #[cfg(windows)]
+            {
+                assert!(fs::rename(path, path.with_extension("retired")).is_err());
+                fixture_io::grant_foreign_write(path);
+                assert!(matches!(
+                    reader.refuse_before_consumer::<Vec<u8>>(error),
+                    Err(CanonicalKuraEvidenceError::Io(_))
+                ));
+            }
             assert!(reader.poisoned);
             assert_eq!((reader.next_height, reader.output_bytes), before);
             assert!(reader.finish().is_err(), "changed source {source}");
@@ -414,6 +415,7 @@ mod canonical_evidence_reader_tests {
         assert!(reader.finish().is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn read_only_evidence_marker_recheck_is_allocation_free_and_exact() {
         let fixture = Fixture::new();
@@ -504,7 +506,13 @@ mod canonical_evidence_reader_tests {
             let path = &fixture.files()[source];
             let mut bytes = fs::read(path).unwrap();
             bytes.push(0);
+            #[cfg(unix)]
             fs::write(path, bytes).unwrap();
+            #[cfg(windows)]
+            {
+                assert!(fs::write(path, bytes).is_err());
+                fixture_io::grant_foreign_write(path);
+            }
             assert!(reader.finish().is_err(), "source {source}");
         }
     }
@@ -516,12 +524,19 @@ mod canonical_evidence_reader_tests {
             let path = fixture.root.join(COUNT_FILE_NAME);
             let mut bytes = fs::read(&path).unwrap();
             bytes.push(0);
+            #[cfg(unix)]
             fs::write(path, bytes).unwrap();
+            #[cfg(windows)]
+            {
+                assert!(fs::write(&path, bytes).is_err());
+                fixture_io::grant_foreign_write(&path);
+            }
             Ok(())
         });
         assert!(result.is_err());
         assert!(reader.finish().is_err());
     }
+    #[cfg(unix)]
     #[test]
     fn read_only_evidence_rejects_replaced_parent_and_permission_drift() {
         for change_mode in [false, true] {
@@ -576,6 +591,7 @@ mod canonical_evidence_reader_tests {
         assert!(CanonicalKuraEvidenceReader::open(&fixture.root, fixture.limits()).is_err());
         assert!(!data.exists());
     }
+    #[cfg(unix)]
     #[test]
     fn read_only_evidence_rejects_symlink_hardlink_fifo_and_post_admission_replacement() {
         for kind in 0..4 {
@@ -912,7 +928,14 @@ mod canonical_evidence_reader_tests {
                 2 => limits.max_committed_blocks = 1_000_001,
                 3 => limits.max_store_data_bytes = 1,
                 4 => limits.max_committed_blocks = 2,
-                5 => limits.owner_uid ^= 1,
+                5 => {
+                    #[cfg(unix)]
+                    {
+                        limits.owner_uid ^= 1;
+                    }
+                    #[cfg(windows)]
+                    fixture_io::grant_foreign_write(&fixture.root);
+                }
                 6 => limits.max_carrier_bytes = 32 * 1024 * 1024 + 1,
                 7 => limits.max_output_bytes = 0,
                 8 => limits.max_decode_allocation_bytes = 0,
@@ -982,6 +1005,7 @@ mod canonical_evidence_reader_tests {
             "unrequested old index still validated"
         );
     }
+    #[cfg(unix)]
     #[test]
     fn read_only_evidence_actual_handles_are_nonblocking_close_on_exec_and_read_only() {
         let fixture = Fixture::new();
@@ -1011,17 +1035,30 @@ mod canonical_evidence_reader_tests {
                 .data
                 .read_after_check(0, reader.sources.data.len(), || {
                     let path = fixture.root.join(DATA_FILE_NAME);
-                    if replace {
-                        let bytes = fs::read(&path).expect("preimage");
-                        fs::rename(&path, path.with_extension("old")).expect("old retained inode");
-                        fs::write(&path, bytes).expect("same-byte new inode");
-                    } else {
-                        fs::OpenOptions::new()
-                            .write(true)
-                            .open(path)
-                            .expect("writer")
-                            .set_len(0)
-                            .expect("truncate");
+                    #[cfg(unix)]
+                    {
+                        if replace {
+                            let bytes = fs::read(&path).expect("preimage");
+                            fs::rename(&path, path.with_extension("old"))
+                                .expect("old retained inode");
+                            fs::write(&path, bytes).expect("same-byte new inode");
+                        } else {
+                            fs::OpenOptions::new()
+                                .write(true)
+                                .open(path)
+                                .expect("writer")
+                                .set_len(0)
+                                .expect("truncate");
+                        }
+                    }
+                    #[cfg(windows)]
+                    {
+                        if replace {
+                            assert!(fs::rename(&path, path.with_extension("old")).is_err());
+                        } else {
+                            assert!(fs::OpenOptions::new().write(true).open(&path).is_err());
+                        }
+                        fixture_io::grant_foreign_write(&path);
                     }
                 });
             assert!(result.is_err(), "post-check change {replace}");
@@ -1090,28 +1127,30 @@ mod canonical_evidence_reader_tests {
         let mut reader = fixture.open();
         fixture.read_all(&mut reader);
         let complete = reader.finish().unwrap();
-        let source = fs::metadata(&fixture.root).unwrap();
-        assert!(
-            complete
-                .ensure_publication_ancestry(&[(source.dev(), source.ino())])
-                .is_err()
-        );
+        let source = fixture_io::directory_identity(&fixture.root);
+        assert!(complete.ensure_publication_ancestry(&[source]).is_err());
         assert!(complete.ensure_publication_ancestry(&[]).is_err());
         let unrelated = tempfile::tempdir().unwrap();
-        let outside = fs::metadata(unrelated.path()).unwrap();
-        complete
-            .ensure_publication_ancestry(&[(outside.dev(), outside.ino())])
-            .unwrap();
+        let outside = fixture_io::directory_identity(unrelated.path());
+        complete.ensure_publication_ancestry(&[outside]).unwrap();
         complete.recheck_sources().unwrap();
         let path = fixture.root.join(DATA_FILE_NAME);
         let bytes = fs::read(&path).unwrap();
-        fs::rename(&path, path.with_extension("old")).unwrap();
-        fs::write(&path, bytes).unwrap();
+        #[cfg(unix)]
+        {
+            fs::rename(&path, path.with_extension("old")).unwrap();
+            fs::write(&path, bytes).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            assert!(fs::rename(&path, path.with_extension("old")).is_err());
+            assert!(fs::write(&path, bytes).is_err());
+            complete.recheck_sources().unwrap();
+            fixture_io::grant_foreign_write(&path);
+        }
         assert!(complete.recheck_sources().is_err());
-        assert!(
-            complete
-                .ensure_publication_ancestry(&[(outside.dev(), outside.ino())])
-                .is_err()
-        );
+        assert!(complete.ensure_publication_ancestry(&[outside]).is_err());
     }
+    #[cfg(windows)]
+    include!("17_read_only_evidence_windows_tests.rs");
 }

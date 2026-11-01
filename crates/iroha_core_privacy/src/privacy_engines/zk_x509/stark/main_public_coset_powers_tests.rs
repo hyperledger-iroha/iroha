@@ -100,6 +100,7 @@ fn public_power_reuse_preserves_serial_products_padding_and_one_owner_across_cal
             evaluation_rows: 64,
             device_columns: 2,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: Some(table),
         };
         let address = evaluator.coset_powers.as_ref().unwrap().values.as_ptr();
@@ -139,6 +140,7 @@ fn public_power_reuse_preserves_serial_products_padding_and_one_owner_across_cal
             evaluation_rows: 64,
             device_columns: 1,
             receipt: MainTransformReceiptV1::default(),
+            selected_scratch: selected_coset::SelectedScratchV1::default(),
             coset_powers: table,
         };
         assert!(
@@ -215,7 +217,9 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
     let common = 22;
     let rows = 1usize << common;
     let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
-    let cap = super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1 as usize;
+    let cap =
+        usize::try_from(super::super::super::super::profile::ZK_X509_PROVER_PEAK_MEMORY_BYTES_V1)
+            .unwrap();
     let plan = main_resources::MainProverBufferPlanV1::new_v1(&layout).unwrap();
     let available = cap - plan.joined_transform_admission_v1(288_345_698).unwrap();
     assert!(metal_goldilocks_transform_extra_payload_v1(rows, 8).unwrap() <= available);
@@ -225,7 +229,7 @@ fn joined_full_output_metal_four_and_eight_column_batches_match_exactly() {
                 let values = (0..1usize << native)
                     .map(|row| F((17 * row + 13 * column + 1) as u64))
                     .collect::<Vec<_>>();
-                let mask = (0..MASK_DEGREE + 1)
+                let mask = (0..=MASK_DEGREE)
                     .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                     .collect::<Vec<_>>();
                 Column::from_vec_v1(

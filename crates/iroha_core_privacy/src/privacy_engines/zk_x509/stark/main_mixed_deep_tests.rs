@@ -195,6 +195,124 @@ fn mixed_openings_and_weighted_quotients_match_each_original_horner_and_division
     }
 }
 
+#[test]
+fn widened_mixed_weighted_batches_match_boundary_polynomials_and_partitions() {
+    let log = 5;
+    let width = BATCH;
+    let p = crate::privacy_engines::transparent_stark::GOLDILOCKS_MODULUS_V1;
+    let native = (0..width)
+        .map(|column| {
+            ZeroizingMainTraceColumnV1(
+                (0..1usize << log)
+                    .map(|index| F(p - 1 - ((index + column) % 17) as u64))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let masks = (0..width)
+        .map(|column| {
+            ZeroizingMainTraceColumnV1(
+                (0..MASK_LENGTH)
+                    .map(|index| F(p - 1 - ((index + column) % 31) as u64))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    for retained_bits in [0u8, 1, 0x55, 0xaa, 0xfe, 0xff] {
+        let coefficients = (0..width)
+            .map(|column| {
+                ZeroizingMainTraceColumnV1(if retained_bits & (1 << column) != 0 {
+                    (0..(1usize << log) + MASK_LENGTH)
+                        .map(|degree| F(p - 1 - ((degree + column) % 13) as u64))
+                        .collect()
+                } else {
+                    masked_trace_coefficients_with_mask_v1(&native[column], log, &masks[column])
+                        .unwrap()
+                })
+            })
+            .collect::<Vec<_>>();
+        let points =
+            MainMixedDeepPointsV1::new_v1(log, extension(419), retained_bits != 0, 310_494_720)
+                .unwrap();
+        let columns = (0..width)
+            .map(|column| {
+                let input = if retained_bits & (1 << column) != 0 {
+                    MainMixedInputV1::Retained(&coefficients[column])
+                } else {
+                    MainMixedInputV1::Native(&native[column], &masks[column])
+                };
+                let values = points
+                    .native
+                    .points
+                    .map(|point| horner(&coefficients[column], point));
+                let scales = core::array::from_fn(|side| {
+                    E::from_coefficients(core::array::from_fn(|lane| {
+                        F(p - 1 - (column + side + lane) as u64)
+                    }))
+                    .unwrap()
+                });
+                (input, values, scales)
+            })
+            .collect::<Vec<_>>();
+        let mut expected = zero_column_v1((1 << log) + MASK_LENGTH).unwrap();
+        for (column, (_, values, scales)) in columns.iter().enumerate() {
+            for side in 0..2 {
+                accumulate_base_deep_quotient_v1(
+                    &coefficients[column],
+                    points.native.points[side],
+                    values[side],
+                    scales[side],
+                    &mut expected,
+                )
+                .unwrap();
+            }
+        }
+        let retained_count = retained_bits.count_ones() as usize;
+        for workers in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap();
+            for chunk_width in [1, 3, BATCH] {
+                pool.install(|| {
+                    let mut weighted = MainMixedDeepQuotientV1::new_v1(&points).unwrap();
+                    for batch in columns.chunks(chunk_width) {
+                        weighted.add_batch_v1(&points, batch).unwrap();
+                    }
+                    if let Some(retained) = &weighted.retained {
+                        assert_eq!(retained.columns, retained_count);
+                        for side in 0..2 {
+                            for degree in 0..expected.len() {
+                                let original = columns.iter().fold(E::ZERO, |sum, column| {
+                                    if let MainMixedInputV1::Retained(coefficients) = column.0 {
+                                        sum.add(column.2[side].mul_base(coefficients[degree]))
+                                    } else {
+                                        sum
+                                    }
+                                });
+                                assert_eq!(retained.coefficients[side][degree], original);
+                            }
+                            let original_value = columns.iter().fold(E::ZERO, |sum, column| {
+                                if matches!(column.0, MainMixedInputV1::Retained(_)) {
+                                    sum.add(column.1[side].mul(column.2[side]))
+                                } else {
+                                    sum
+                                }
+                            });
+                            assert_eq!(retained.values[side], original_value);
+                        }
+                    }
+                    let mut actual = zero_column_v1(expected.len()).unwrap();
+                    weighted
+                        .accumulate_v1(width - retained_count, retained_count, &mut actual)
+                        .unwrap();
+                    assert_eq!(&*actual, &*expected);
+                });
+            }
+        }
+    }
+}
+
 fn unchanged(owner: &MainMixedDeepQuotientV1) {
     assert_eq!(owner.native.columns, 0);
     assert!(

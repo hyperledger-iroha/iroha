@@ -139,7 +139,7 @@ impl Inventory {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, norito::NoritoSchema)]
 #[norito_schema(name = "irohad::amx_relay::PendingWalkProgressV1")]
 pub(super) enum Progress {
     /// Durable quota admission before a carrier identity or native checkpoint exists.
@@ -437,8 +437,8 @@ impl PendingCustody {
 
     fn shape(slot: &Slot, progress: &Progress, height: Option<u64>) -> Result<()> {
         let valid = match (slot, progress, height) {
-            (Slot::Pending(_), Progress::Reserved, None) => true,
-            (
+            (Slot::Pending(_), Progress::Reserved, None)
+            | (
                 Slot::Pending(PendingKey {
                     kind: PendingKind::Carrier | PendingKind::HandoffCarrier(_),
                     ..
@@ -886,7 +886,7 @@ impl PendingCustody {
         let body = Body {
             route: self.route.clone(),
             slot: slot.clone(),
-            progress: progress.clone(),
+            progress,
             checkpoint,
         };
         if norito::canonical_frame_len(&body)? > MAX_PENDING_RECORD_BYTES {
@@ -993,7 +993,7 @@ impl PendingCustody {
     }
 
     /// Route completion boundary only, after its original engine result is durable and the
-    /// final exact outcome/effect has been independently checked. Never call from outcome().
+    /// final exact outcome/effect has been independently checked. Never call from `outcome()`.
     /// A rejected carrier alone does not complete its business obligation or authorize retry.
     pub(super) fn retire_after_durable_route_result(
         &self,

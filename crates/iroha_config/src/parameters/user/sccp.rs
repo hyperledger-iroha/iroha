@@ -431,7 +431,7 @@ mod tests {
             PathBuf::from("/srv/iroha/storage/sccp/keeper-key")
         );
         assert!(node.keeper.keepalive);
-        assert_eq!(node.keeper.keepalive_stagger, Duration::from_millis(15_000));
+        assert_eq!(node.keeper.keepalive_stagger, Duration::from_secs(15));
         assert!(node.keeper.watch);
         assert_eq!(
             node.light_client_keeper,

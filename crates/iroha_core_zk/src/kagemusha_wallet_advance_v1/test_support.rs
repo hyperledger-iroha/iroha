@@ -1374,7 +1374,7 @@ pub fn bootstrapped_provider<F: super::KagemushaWalletFsV1>(
 }
 
 /// Enroll an existing state-owner vector through the real provider using explicit test hardware.
-pub(crate) fn enrolled_state_provider<F: super::KagemushaWalletFsV1>(
+pub fn enrolled_state_provider<F: super::KagemushaWalletFsV1>(
     fs: F,
     challenge: &KagemushaWalletEnrollmentChallengeV1,
     key_seed: u8,

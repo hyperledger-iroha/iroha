@@ -1,5 +1,12 @@
 //! Grouped Torii core route integration tests.
 
+#[path = "../../src/build_identity_test_fixture.rs"]
+mod build_identity_test_fixture;
+#[path = "../fixtures.rs"]
+mod fixtures;
+#[path = "../common/norito_rpc_harness.rs"]
+mod norito_rpc_harness;
+
 #[path = "../account_query_subrouter_smoke.rs"]
 mod account_query_subrouter_smoke;
 #[path = "../accounts_endpoints.rs"]

@@ -2,7 +2,7 @@
 //!
 //! This module wires the NX-10 domain-separated Merkle descriptors into a deterministic registry so
 //! admission/compliance logic can look up the commitments advertised by each lane.
-use iroha_crypto::privacy::{LaneCommitmentId, PrivacyError, PrivacyWitness};
+use iroha_crypto::privacy::{LaneCommitmentId, PrivacyError};
 use iroha_data_model::nexus::LanePrivacyProof;
 use iroha_model_base::topology::LaneId;
 use std::collections::BTreeSet;

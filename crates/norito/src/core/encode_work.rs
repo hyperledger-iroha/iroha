@@ -130,7 +130,7 @@ pub(super) fn charge(bytes: usize) -> io::Result<()> {
     let Some(mut state) = ACTIVE.get() else {
         return Ok(());
     };
-    let reason = state.refusal.or_else(|| {
+    let reason = state.refusal.or({
         if state.operations == 0 {
             Some(EncodeWorkRefusal::Operations)
         } else if bytes > state.bytes {
@@ -204,15 +204,5 @@ impl<W: Write + ?Sized> Write for Output<'_, W> {
     fn flush(&mut self) -> io::Result<()> {
         charge(0)?;
         self.inner.flush()
-    }
-}
-
-/// Preserve legacy diagnostics outside this corridor; its refusal path cannot
-/// allocate a boxed diagnostic before the original owner handles the error.
-pub(super) fn io_error(message: &'static str) -> io::Error {
-    if ACTIVE.get().is_some() {
-        io::ErrorKind::InvalidData.into()
-    } else {
-        io::Error::other(message)
     }
 }

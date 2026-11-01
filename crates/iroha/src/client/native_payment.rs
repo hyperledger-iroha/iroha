@@ -302,6 +302,10 @@ impl AccountClient {
 }
 
 impl NativePaymentOperation {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one constructor for the online path and unit tests, which inject account, dispatch, source and driver independently"
+    )]
     fn create(
         request: NativePaymentRequest,
         storage: Arc<dyn WorkflowStorage>,

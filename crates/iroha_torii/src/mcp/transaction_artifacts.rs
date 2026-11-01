@@ -459,10 +459,6 @@ impl SignatureFailureCode {
 
 /// Signature verification outcome for an inspected artifact.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[expect(
-    variant_size_differences,
-    reason = "the bounded Copy outcome borrows static diagnostics without adding heap allocation"
-)]
 pub enum SignatureVerification {
     /// Unsigned payloads have no authorization proof to verify.
     NotPresent,

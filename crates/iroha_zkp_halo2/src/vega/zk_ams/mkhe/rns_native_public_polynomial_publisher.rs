@@ -635,7 +635,12 @@ fn encode_chunk_v1(
     {
         return Err(RnsNativePublicPolynomialPublisherErrorV1::InvalidCoefficient);
     }
-    for (encoded, coefficient) in output.chunks_exact_mut(RESIDUE_BYTES_V1).zip(coefficients) {
+    for (encoded, coefficient) in output
+        .as_chunks_mut::<RESIDUE_BYTES_V1>()
+        .0
+        .iter_mut()
+        .zip(coefficients)
+    {
         encoded.copy_from_slice(&coefficient.to_be_bytes());
     }
     Ok(())

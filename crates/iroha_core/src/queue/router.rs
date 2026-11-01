@@ -7911,23 +7911,19 @@ fn dataspace_scoped_permission_target_needs_state(permission: &Permission) -> bo
         "CanManageAccountAlias" => permission
             .payload()
             .try_into_any_norito::<CanManageAccountAlias>()
-            .ok()
-            .is_some_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
+            .is_ok_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
         "CanResolveAccountAlias" => permission
             .payload()
             .try_into_any_norito::<CanResolveAccountAlias>()
-            .ok()
-            .is_some_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
+            .is_ok_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
         "CanDelegateAccountAliasResolution" => permission
             .payload()
             .try_into_any_norito::<CanDelegateAccountAliasResolution>()
-            .ok()
-            .is_some_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
+            .is_ok_and(|token| matches!(token.scope, AccountAliasPermissionScope::Domain(_))),
         "CanManageAssetDefinitionAlias" => permission
             .payload()
             .try_into_any_norito::<CanManageAssetDefinitionAlias>()
-            .ok()
-            .is_some_and(|token| {
+            .is_ok_and(|token| {
                 matches!(token.scope, AssetDefinitionAliasPermissionScope::Domain(_))
             }),
         "CanManageFeeSponsorProgram" => permission
@@ -9360,8 +9356,7 @@ fn account_matches_alias_scope_with_world<W: WorldReadOnly>(
     if world.account_scope_directory().get(account_id).is_some() {
         return Ok(world
             .account_scope_hierarchy(account_id)
-            .ok()
-            .is_some_and(|hierarchy| {
+            .is_ok_and(|hierarchy| {
                 hierarchy.into_iter().any(|(dataspace_id, domains)| {
                     dataspace_catalog
                         .by_id(dataspace_id)

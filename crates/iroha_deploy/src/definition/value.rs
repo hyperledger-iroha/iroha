@@ -521,7 +521,7 @@ pub fn check_user(user: &str) -> Result<(), ValueError> {
 ///
 /// When `origin` is not the exact serialization of an `http` or `https` origin.
 pub fn check_origin(origin: &str) -> Result<(), ValueError> {
-    let exact = url::Url::parse(origin).ok().is_some_and(|url| {
+    let exact = url::Url::parse(origin).is_ok_and(|url| {
         matches!(url.scheme(), "http" | "https") && url.origin().ascii_serialization() == origin
     });
     if exact {

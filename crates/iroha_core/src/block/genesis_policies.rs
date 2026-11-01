@@ -17,7 +17,7 @@ use crate::state::{State, StateBlock};
 
 /// Both policies selected from the same original authenticated signed source.
 #[derive(Debug)]
-pub(crate) struct GenesisPolicies {
+pub struct GenesisPolicies {
     crypto: GenesisCryptoPolicy,
     staking: GenesisStakingPolicy,
 }

@@ -144,10 +144,7 @@ impl Claims {
         .with_operation_tasks(groups)
         .unwrap();
         let originals = originals(variant);
-        let mut values = original_public(&originals)
-            .chunks_exact(3)
-            .map(|v| v.try_into().unwrap())
-            .collect::<Vec<[Fp; 3]>>();
+        let mut values: Vec<[Fp; 3]> = original_public(&originals).as_chunks::<3>().0.to_vec();
         let tuple = [
             Fp::from(17),
             Fp::from(18),

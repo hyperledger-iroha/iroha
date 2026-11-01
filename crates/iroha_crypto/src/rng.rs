@@ -2,7 +2,7 @@ use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroize;
-/// Deterministic RNG derived from seed material via SHA-256, using the canonical ChaCha20 stream.
+/// Deterministic RNG derived from seed material via SHA-256, using the canonical `ChaCha20` stream.
 ///
 /// # Security
 ///
@@ -15,7 +15,7 @@ pub fn rng_from_seed(mut seed: Vec<u8>) -> ChaCha20Rng {
     rng
 }
 /// Deterministic RNG derived from borrowed seed bytes via SHA-256, using
-/// the canonical ChaCha20 stream.
+/// the canonical `ChaCha20` stream.
 ///
 /// # Security
 ///
@@ -28,12 +28,12 @@ pub fn rng_from_seed_slice(seed: &[u8]) -> ChaCha20Rng {
     key.zeroize();
     rng
 }
-/// Canonical seed stream for w3f-bls's upstream rand_core 0.6 field sampler.
+/// Canonical seed stream for w3f-bls's upstream `rand_core` 0.6 field sampler.
 ///
 /// This generator belongs to that provider boundary; it implements only the
-/// upstream RNG API. Its byte stream equals the public ChaCha20 derivation.
+/// upstream RNG API. Its byte stream equals the public `ChaCha20` derivation.
 #[cfg(feature = "bls")]
-pub(crate) fn bls_rng_from_seed_slice(seed: &[u8]) -> rand_chacha_03::ChaCha20Rng {
+pub fn bls_rng_from_seed_slice(seed: &[u8]) -> rand_chacha_03::ChaCha20Rng {
     use rand_chacha_03::rand_core::SeedableRng as _;
     let mut key: [u8; 32] = Sha256::digest(seed).into();
     let rng = rand_chacha_03::ChaCha20Rng::from_seed(key);

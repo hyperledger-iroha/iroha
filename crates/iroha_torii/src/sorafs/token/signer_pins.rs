@@ -72,8 +72,8 @@ impl StreamTokenSignerPinsV1 {
             || provider_id == [0; 32]
             || u32::try_from(signer_backend.key_revision)
                 .ok()
-                .filter(|v| *v != 0)
-                .is_none()
+                .as_ref()
+                .is_none_or(|v| *v == 0)
         {
             return Err(invalid());
         }

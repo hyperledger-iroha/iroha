@@ -855,7 +855,9 @@ impl MetalState {
                     )
                 };
                 let actual: Vec<[u8; 32]> = words
-                    .chunks_exact(8)
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
                     .map(|chunk| {
                         let mut digest = [0u8; 32];
                         for (index, word) in chunk.iter().enumerate() {
@@ -968,7 +970,9 @@ impl MetalState {
                     let ptr = buf_out.contents().as_ptr() as *const u8;
                     let out_slice = unsafe { std::slice::from_raw_parts(ptr, flat_states.len()) };
                     let actual: Vec<[u8; 16]> = out_slice
-                        .chunks_exact(16)
+                        .as_chunks::<16>()
+                        .0
+                        .iter()
                         .map(|chunk| {
                             let mut block = [0u8; 16];
                             block.copy_from_slice(chunk);
@@ -1758,7 +1762,9 @@ fn metal_ed25519_check_bytes_for_tests(
                 std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32)
             };
             Some(
-                out.chunks_exact(32)
+                out.as_chunks::<32>()
+                    .0
+                    .iter()
                     .map(|chunk| {
                         let mut bytes = [0u8; 32];
                         bytes.copy_from_slice(chunk);
@@ -1810,7 +1816,9 @@ fn metal_ed25519_field_roundtrip_for_tests(inputs: &[[u8; 32]]) -> Option<Vec<[u
                 std::slice::from_raw_parts(buf_out.contents().as_ptr() as *const u8, n * 32)
             };
             Some(
-                out.chunks_exact(32)
+                out.as_chunks::<32>()
+                    .0
+                    .iter()
                     .map(|chunk| {
                         let mut value = [0u8; 32];
                         value.copy_from_slice(chunk);
@@ -1869,7 +1877,9 @@ fn metal_ed25519_point_decompress_for_tests(
             };
             Some((
                 statuses.to_vec(),
-                out.chunks_exact(32)
+                out.as_chunks::<32>()
+                    .0
+                    .iter()
                     .map(|chunk| {
                         let mut value = [0u8; 32];
                         value.copy_from_slice(chunk);

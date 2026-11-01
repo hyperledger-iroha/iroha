@@ -1400,12 +1400,13 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed label of the baseline's reference closures and statements, and the names of baseline definitions, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline subject; none commits to State content, and the State commitment remains the World root",
+        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed labels of the reference closures and statements of the baseline and of each release addition after it, and the names of baseline definitions, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline or addition subject; none commits to State content, and the State commitment remains the World root",
         literals: &[
             r"iroha.events.data.v1",
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
             r"iroha.world.lthash16.v1",
+            r"iroha:runtime:addition:v1\0",
             r"iroha:runtime:baseline:v1\0",
             r"iroha:runtime:definition:v1\0",
             r"iroha:runtime:selection:v1\0",
@@ -1437,6 +1438,18 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Test,
         reason: "Wire identity of the instruction a test change set adds to the baseline selection (cfg(test) change-set fixtures); never bound by a release, a consensus input or a State commitment",
         literals: &[r"iroha.test.added.v1"],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Wire identities of the test-only instructions that envelope and registry tests register strictly or tolerantly, and of a wire ID no release registers (cfg(test) envelope fixtures, specs/live_runtime_upgrades.md §5.2); never bound by a release, a consensus input or a State commitment",
+        literals: &[
+            r"test.strict.governance.v1",
+            r"test.strict.register.v1",
+            r"test.strict.slice.v1",
+            r"test.tolerant.register.v1",
+            r"test.tolerant.slice.v1",
+            r"test.unreleased.instruction.v1",
+        ],
     },
     OtherDomains {
         usage: Use::Test,

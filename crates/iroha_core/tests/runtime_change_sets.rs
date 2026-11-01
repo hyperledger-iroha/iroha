@@ -16,7 +16,7 @@ use iroha_core::{
 use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     NetworkId,
-    isi::governance::ProposeRuntimeUpgradeProposal,
+    isi::governance::{ProposeEndorsedRuntimeUpgradeProposal, ProposeRuntimeUpgradeProposal},
     parameter::{Parameter, RuntimeProvenancePolicyV1, RuntimeUpgradePolicyV1},
     prelude::*,
     runtime::{
@@ -172,7 +172,6 @@ fn change_set_proposals_need_the_permission_a_committed_policy_and_its_notice() 
     let mut stx = block.transaction();
     let propose = |effective_height| ProposeRuntimeUpgradeProposal {
         action: RuntimeUpgradeActionV1::Schedule(deprecate_bundle(network_id, effective_height)),
-        provenance: Vec::new(),
     };
     let rejection = |result: Result<(), _>| format!("{:?}", result.expect_err("rejected"));
 
@@ -304,7 +303,7 @@ fn change_set_proposals_need_the_committed_provenance() {
         ChangeSetEndorsementV1::sign(id, signer.public_key().clone(), signer.private_key())
             .expect("endorse the change set")
     };
-    let propose = |provenance| ProposeRuntimeUpgradeProposal {
+    let propose = |provenance| ProposeEndorsedRuntimeUpgradeProposal {
         action: RuntimeUpgradeActionV1::Schedule(change_set.clone()),
         provenance,
     };

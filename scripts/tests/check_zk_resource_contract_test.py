@@ -2473,10 +2473,10 @@ def test_catalog_lifetime_preimage_detects_added_and_removed_bound_fields(tmp_pa
     ]
 
 
-def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
-    """The borrowed Nexus preimage includes validity bounds and excludes local capacity."""
-    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
-    observed = CHECKER["catalog_fields"]((ROOT / catalog["path"]).read_text(), catalog, "t")
+def _assert_nexus_resource_catalog_retains_frozen_slots(contract: dict, source: str) -> None:
+    """Separate immutable signed slots from dynamic bounds and local custody limits."""
+    catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    observed = CHECKER["catalog_fields"](source, catalog, "t")
     expected = {
         "uploaded_models.max_plaintext_bytes_per_model",
         "uploaded_models.max_chunk_count_per_model",
@@ -2485,16 +2485,108 @@ def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() ->
     }
     assert set(catalog["fields"]) == expected
     assert expected.issubset(observed)
-    assert not any(field.startswith("atomic_private_settlement.") for field in observed)
+    # These original signed V1 slots remain in source order. The independent Rust
+    # literal golden pins their types, values, bytes and position in the preimage.
+    frozen = [
+        "atomic_private_settlement." + name
+        for name in (
+            "proof_profile_version", "max_participants", "max_expiry_blocks",
+            "audit_timeout_blocks", "prepare_timeout_blocks", "commit_timeout_blocks",
+            "capsule_padding_classes_bytes", "max_proof_bytes", "max_capsule_bytes",
+            "max_carrier_bytes", "sidecar_retention_blocks", "sidecar_max_records",
+            "sidecar_max_total_bytes", "default_min_auditor_approvals",
+            "permitted_policy_versions",
+        )
+    ]
+    assert [field for field in observed if field.startswith("atomic_private_settlement.")] == frozen
+    exclusions = [
+        item for item in catalog["excluded"]
+        if any(field.startswith("atomic_private_settlement.") for field in item["fields"])
+    ]
+    assert len(exclusions) == 1
+    assert exclusions[0]["fields"] == frozen
+    reason = exclusions[0]["reason"]
+    assert "NexusConsensusAtomicPrivateSettlementV1::frozen_v1" in reason
+    assert "not runtime admission settings or local capacity ceilings" in reason
+    assert "frozen_private_settlement_v1_matches_original_commitment_bytes_and_position" in reason
+    body = CHECKER["_function_body"](source, catalog["function"], "t", catalog["path"])
+    assert re.search(
+        r"atomic_private_settlement\s*:\s*NexusConsensusAtomicPrivateSettlementV1::frozen_v1\(\)",
+        body,
+    )
     for name in ("sidecar_max_records", "sidecar_max_total_bytes"):
-        assert "atomic_private_settlement." + name not in observed
-        item = bound(CONTRACT, "storage.config_private_settlement_" + name)
+        item = bound(contract, "storage.config_private_settlement_" + name)
         assert item["class"] == "local_defer" and item["source"] == "node_local"
         assert "catalog" not in item and "defect" not in item and "unenforced" not in item
     assert "fees" in observed
     assert {field for field in observed if field.startswith("staking.")} == {
         "staking.public_validator_mode", "staking.restricted_validator_mode", "staking.max_validators"
     }
+
+
+def test_catalog_lifetime_preimage_retains_all_actual_nexus_resource_fields() -> None:
+    """The preimage retains frozen signed slots without committing local capacity."""
+    catalog = next(c for c in CONTRACT["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    _assert_nexus_resource_catalog_retains_frozen_slots(
+        CONTRACT, (ROOT / catalog["path"]).read_text()
+    )
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_slot", "extra_slot", "reordered_slots", "missing_exclusion",
+    "extra_exclusion", "reclassified_slot", "unreasoned_exclusion",
+    "reclassified_capacity", "catalogued_capacity", "dynamic_capacity_leak",
+])
+def test_nexus_frozen_catalog_refuses_slot_and_capacity_drift(mutation: str) -> None:
+    """Small source/catalog mutations cannot erase slots or recouple local capacity."""
+    contract = copy.deepcopy(CONTRACT)
+    catalog = next(c for c in contract["catalogs"] if c["id"] == "nexus_consensus_policy_v1")
+    source = (ROOT / catalog["path"]).read_text()
+    _assert_nexus_resource_catalog_retains_frozen_slots(contract, source)
+    exclusion = next(
+        item for item in catalog["excluded"]
+        if "atomic_private_settlement.proof_profile_version" in item["fields"]
+    )
+    if mutation in {"missing_slot", "extra_slot", "reordered_slots"}:
+        start = source.index("struct NexusConsensusAtomicPrivateSettlementV1 {")
+        end = source.index("\n}", start)
+        original = source[start:end]
+        if mutation == "missing_slot":
+            changed = original.replace("    sidecar_max_records: u32,\n", "")
+        elif mutation == "extra_slot":
+            changed = original + "\n    unreviewed_slot: u32,"
+        else:
+            changed = original.replace(
+                "    proof_profile_version: u16,\n    max_participants: u16,",
+                "    max_participants: u16,\n    proof_profile_version: u16,",
+            )
+        assert changed != original
+        source = source[:start] + changed + source[end:]
+    elif mutation == "missing_exclusion":
+        exclusion["fields"].pop()
+    elif mutation == "extra_exclusion":
+        exclusion["fields"].append("atomic_private_settlement.unreviewed_slot")
+    elif mutation == "reclassified_slot":
+        catalog["fields"]["atomic_private_settlement.max_participants"] = (
+            "transaction.private_settlement_max_participants"
+        )
+    elif mutation == "unreasoned_exclusion":
+        exclusion["reason"] = ""
+    elif mutation == "reclassified_capacity":
+        bound(contract, "storage.config_private_settlement_sidecar_max_records")["class"] = "consensus"
+    elif mutation == "catalogued_capacity":
+        bound(contract, "storage.config_private_settlement_sidecar_max_total_bytes")["catalog"] = {
+            "id": catalog["id"], "field": "atomic_private_settlement.sidecar_max_total_bytes"
+        }
+    else:
+        original = "atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1::frozen_v1(),"
+        assert original in source
+        source = source.replace(original, """atomic_private_settlement: NexusConsensusAtomicPrivateSettlementV1 {
+            sidecar_max_records: nexus.atomic_private_settlement.sidecar_max_records.get(),
+            ..NexusConsensusAtomicPrivateSettlementV1::frozen_v1()
+        },""", 1)
+    with pytest.raises(AssertionError):
+        _assert_nexus_resource_catalog_retains_frozen_slots(contract, source)
 
 
 def test_derived_bounds_are_recomputed_and_join_the_relations() -> None:

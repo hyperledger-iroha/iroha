@@ -394,11 +394,7 @@ fn ceil_power_of_two(value: u32) -> u32 {
     }
 }
 fn floor_power_of_two(value: u32) -> u32 {
-    if value <= 1 {
-        1
-    } else {
-        1 << (31 - value.leading_zeros())
-    }
+    if value <= 1 { 1 } else { 1 << value.ilog2() }
 }
 #[cfg(test)]
 mod tests {

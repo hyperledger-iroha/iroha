@@ -31,7 +31,7 @@ struct VerifiedPublisherSourceV1 {
     plan: CarBuildPlan,
     header_digest: [u8; 32],
     manifest_digest: [u8; 32],
-    identity: fs::Metadata,
+    identity: iroha_fs::FileSnapshot,
     encoded_bytes: u64,
 }
 
@@ -110,13 +110,14 @@ impl VerifiedPublisherSourceV1 {
         validate_real_directory(path.parent().ok_or_else(publisher_source_rejected)?)?;
         validate_real_directory(path)?;
         let file = path.join(PUBLISHER_SOURCE_METADATA_V1);
-        let current = fs::symlink_metadata(&file)?;
+        let original = RetainedFile::open_regular(&file)?;
+        let current = FileMetadata::of(original.file())?;
         validate_bounded_file_metadata(
             &file,
             &current,
             (PUBLISHER_SOURCE_HEADER_MAX_BYTES_V1 + 1024) as u64,
         )?;
-        if !metadata_stable_during_read(&self.identity, &current) {
+        if self.identity != original.snapshot()? {
             return Err(publisher_source_rejected());
         }
         Ok(())
@@ -126,7 +127,8 @@ fn read_publisher_source(path: &Path) -> Result<VerifiedPublisherSourceV1, Stora
     validate_real_directory(path.parent().ok_or_else(publisher_source_rejected)?)?;
     validate_real_directory(path)?;
     let metadata_path = path.join(PUBLISHER_SOURCE_METADATA_V1);
-    let before = fs::symlink_metadata(&metadata_path)?;
+    let original = RetainedFile::open_regular(&metadata_path)?;
+    let before = original.snapshot()?;
     let bytes = read_bounded_regular_file(
         &path.join(PUBLISHER_SOURCE_METADATA_V1),
         (PUBLISHER_SOURCE_HEADER_MAX_BYTES_V1 + 1024) as u64,
@@ -147,8 +149,8 @@ fn read_publisher_source(path: &Path) -> Result<VerifiedPublisherSourceV1, Stora
         .canonical_digest()
         .map_err(|_| publisher_source_rejected())?;
     let manifest_digest = *manifest.digest()?.as_bytes();
-    let identity = fs::symlink_metadata(&metadata_path)?;
-    if !metadata_stable_during_read(&before, &identity) {
+    let identity = original.snapshot()?;
+    if before != identity {
         return Err(publisher_source_rejected());
     }
     Ok(VerifiedPublisherSourceV1 {
@@ -283,7 +285,8 @@ impl StorageBackend {
         fs::create_dir(&target)?;
         sync_directory(&root)?;
         write_atomic(&target.join(PUBLISHER_SOURCE_METADATA_V1), &encoded)?;
-        let identity = fs::symlink_metadata(target.join(PUBLISHER_SOURCE_METADATA_V1))?;
+        let identity =
+            RetainedFile::open_regular(target.join(PUBLISHER_SOURCE_METADATA_V1))?.snapshot()?;
         cache.retain(
             Arc::new(VerifiedPublisherSourceV1 {
                 manifest_digest: *manifest.digest()?.as_bytes(),

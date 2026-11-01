@@ -275,7 +275,7 @@ fn reduce_compact_level_v1(
     parents
         .try_reserve_exact(current.len() / 2)
         .map_err(|_| ZkX509MerkleErrorV1::AllocationFailure)?;
-    for children in current.chunks_exact(2) {
+    for children in current.as_chunks::<2>().0 {
         parents.push(ca_node_v1(level, &children[0], &children[1])?);
     }
     Ok(parents)

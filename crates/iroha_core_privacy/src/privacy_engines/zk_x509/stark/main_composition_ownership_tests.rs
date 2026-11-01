@@ -139,3 +139,155 @@ fn composition_evaluation_clears_prior_results_on_late_error_and_matches_horner(
     assert!(records.iter().all(|record| record.nonzero_after == 0));
     assert!(goldilocks_fp4_evaluate_coset_v1(&[private(31)], 32, F::ZERO, F(7)).is_err());
 }
+
+#[test]
+fn quotient_row_reuse_matches_full_gather_at_task_boundaries_wrap_and_other_strides() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let rows = 17;
+    for registration in layout.registered_segments {
+        let matrix = |width: usize, salt: usize| {
+            (0..width)
+                .map(|column| {
+                    (0..rows)
+                        .map(|row| F((salt + 29 * column + 7 * row) as u64))
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>()
+        };
+        let base = matrix(registration.segment.base_width, 3);
+        let aux = matrix(registration.segment.aux_width, 13);
+        let fixed = matrix(registration.segment.fixed_width, 23);
+        let mut expected = MainQuotientRowScratchV1::new_v1(registration).unwrap();
+        let mut actual = MainQuotientRowScratchV1::new_v1(registration).unwrap();
+        let allocations = |scratch: &MainQuotientRowScratchV1| {
+            let mut owners = [
+                &scratch.base_current,
+                &scratch.base_next,
+                &scratch.aux_current,
+                &scratch.aux_next,
+                &scratch.fixed_current,
+                &scratch.fixed_next,
+            ]
+            .map(|column| (column.as_ptr(), column.0.capacity()));
+            owners.sort_unstable();
+            owners
+        };
+        let original_owners = allocations(&actual);
+        for stride in [1, 2, 8] {
+            for task_start in [0, 3, rows - 1] {
+                for offset in 0..rows + 2 {
+                    let row = (task_start + offset) % rows;
+                    let next = (row + stride) % rows;
+                    expected.fill_v1(row, next, &base, &aux, &fixed);
+                    actual.fill_or_advance_v1(
+                        row,
+                        next,
+                        stride == 1 && offset != 0,
+                        &base,
+                        &aux,
+                        &fixed,
+                    );
+                    for (actual, expected) in [
+                        (&actual.base_current, &expected.base_current),
+                        (&actual.base_next, &expected.base_next),
+                        (&actual.aux_current, &expected.aux_current),
+                        (&actual.aux_next, &expected.aux_next),
+                        (&actual.fixed_current, &expected.fixed_current),
+                        (&actual.fixed_next, &expected.fixed_next),
+                    ] {
+                        assert_eq!(&**actual, &**expected);
+                    }
+                    assert_eq!(allocations(&actual), original_owners);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn reusable_residue_owner_clears_hidden_capacity_on_success_error_and_unwind() {
+    assert_eq!(
+        MainResidueScratchV1::new_v1(usize::MAX).err(),
+        Some(ZkX509StarkErrorV1::AllocationFailure)
+    );
+    for outcome in 0..3 {
+        let (result, records) = inspection::observe_v1(|| {
+            std::panic::catch_unwind(|| -> Result<(), ZkX509StarkErrorV1> {
+                let mut owner = MainResidueScratchV1::new_v1(890)?;
+                let allocation = (owner.values.as_ptr(), owner.values.capacity());
+                owner.values.resize(890, F(47));
+                owner.values.clear();
+                owner.values.extend([F(53); 3]);
+                assert_eq!((owner.values.as_ptr(), owner.values.capacity()), allocation);
+                match outcome {
+                    0 => Ok(()),
+                    1 => Err(ZkX509StarkErrorV1::ProfileMismatch),
+                    _ => panic!("synthetic residue evaluator unwind"),
+                }
+            })
+        });
+        assert_eq!(result.is_err(), outcome == 2);
+        if let Ok(result) = result {
+            assert_eq!(result.is_err(), outcome == 1);
+        }
+        assert_eq!(
+            records.iter().map(|record| record.cells).sum::<usize>(),
+            890
+        );
+        assert!(records.iter().all(|record| record.nonzero_after == 0));
+    }
+}
+
+#[test]
+fn reusable_residue_scratch_is_bounded_by_public_tasks_within_original_runtime_reserve() {
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    for registration in layout.registered_segments.iter().copied() {
+        let scratch = MainQuotientRowScratchV1::new_v1(registration).unwrap();
+        let expected = if matches!(
+            registration.segment.adapter,
+            SegmentAdapterIdV1::StrictDer | SegmentAdapterIdV1::Sha256CallBus
+        ) {
+            registration.segment.constraint_count
+        } else {
+            0
+        };
+        assert_eq!(scratch.residues.values.capacity(), expected);
+        let per_task =
+            expected * core::mem::size_of::<F>() + core::mem::size_of::<MainResidueScratchV1>();
+        assert!(128 * per_task <= main_resources::MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1);
+    }
+    assert_eq!(
+        main_resources::MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1,
+        2_199_552
+    );
+    assert_eq!(
+        main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1,
+        1 << 30
+    );
+    use super::super::super::sha_word_stark::wide_fold::{ShaWordFoldPowersV1, ShaWordWideFoldV1};
+    assert_eq!(
+        main_resources::MAIN_COMPOSITION_SHA_FOLD_BYTES_V1,
+        ShaWordFoldPowersV1::HEAP_PAYLOAD_BYTES_V1
+            + ShaWordFoldPowersV1::CONSTRUCTION_SCRATCH_BYTES_V1
+            + main_resources::MAIN_COMPOSITION_PROVIDER_STORAGE_BYTES_V1
+            + core::mem::size_of::<Option<MainLog19CompositionRegistrationV1<'_, '_, '_>>>()
+            + 128 * core::mem::size_of::<ShaWordWideFoldV1<'_>>()
+    );
+    assert_eq!(
+        main_resources::MAIN_COMPOSITION_PROVIDER_STORAGE_BYTES_V1,
+        2 * core::mem::size_of::<[MainProverConstraintProviderV1<'_, '_>; 6]>()
+            + core::mem::size_of::<MainProverConstraintProviderV1<'_, '_>>()
+            + core::mem::size_of::<Vec<MainProverConstraintProviderV1<'_, '_>>>()
+    );
+    assert_eq!(FULL_PROFILE_TRACE_GROUPS_V1, 6);
+    assert_eq!(ShaWordFoldPowersV1::HEAP_PAYLOAD_BYTES_V1, 14_112);
+    assert_eq!(
+        core::mem::size_of::<ShaWordFoldPowersV1>(),
+        core::mem::size_of::<usize>()
+    );
+    assert!(
+        main_resources::MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+            + main_resources::MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+            < main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+    );
+}

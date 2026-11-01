@@ -257,8 +257,8 @@ impl AtomicWriteRoot {
     }
     /// Bind future writes to an existing, non-symlink directory.
     ///
-    /// Musubi V1 enables this writer on Unix. Other targets fail closed until
-    /// they expose a safe handle-relative replace-existing operation.
+    /// This implementation serves Unix; Windows uses the retained-handle implementation
+    /// in `atomic_io_windows`. Other targets fail closed.
     ///
     /// # Errors
     ///
@@ -266,10 +266,8 @@ impl AtomicWriteRoot {
     /// changes during canonicalization, or cannot be inspected.
     pub fn new(root: &Path) -> Result<Self, AtomicWriteError> {
         if !cfg!(unix) {
-            // TODO: Enable Windows after a safe handle-relative replace-existing primitive is
-            // available to this crate. Dropping a retained directory handle around
-            // `std::fs::rename` would reintroduce the reparse/substitution race this writer is
-            // intended to exclude.
+            // Unsupported non-Unix, non-Windows targets must not replace retained custody
+            // with a pathname rename that permits ancestor substitution.
             return Err(AtomicWriteError::new(
                 AtomicWriteErrorCode::UnsupportedPlatform,
                 root,

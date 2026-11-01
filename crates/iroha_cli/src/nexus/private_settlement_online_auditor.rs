@@ -755,7 +755,20 @@ fn read_owner_only_auditor_restricted_file_v1(
     {
         read_owner_only_auditor_secret_file_unix_v1(path, maximum_bytes)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use eyre::WrapErr as _;
+
+        let maximum_bytes = usize::try_from(maximum_bytes)
+            .map_err(|_| eyre!("private-settlement auditor file bound does not fit"))?;
+        let bytes = iroha_fs::read_private(path, maximum_bytes)
+            .wrap_err("failed to read private-settlement auditor restricted original")?;
+        if bytes.is_empty() {
+            return Err(eyre!("private-settlement auditor restricted file is empty"));
+        }
+        Ok(bytes)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = path;
         let _ = maximum_bytes;
@@ -1717,5 +1730,134 @@ mod tests {
             .arg("-N")
             .arg(&path)
             .status();
+    }
+}
+
+#[cfg(all(test, windows))]
+mod windows_private_file_tests {
+    use super::*;
+
+    fn fixture() -> (tempfile::TempDir, iroha_fs::PrivateDirectory) {
+        let temporary = tempfile::tempdir().expect("native auditor fixture");
+        let private = iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private"))
+            .expect("private auditor directory");
+        (temporary, private)
+    }
+
+    #[test]
+    fn native_secret_and_policy_readers_preserve_exact_nonempty_bounds() {
+        let (_temporary, private) = fixture();
+        for (leaf, bound) in [
+            (
+                "secret",
+                PRIVATE_SETTLEMENT_AUDITOR_SECRET_FILE_MAX_BYTES_V1,
+            ),
+            (
+                "policy",
+                PRIVATE_SETTLEMENT_AUDITOR_BUSINESS_POLICY_FILE_MAX_BYTES_V1,
+            ),
+        ] {
+            let bytes = vec![0x63; usize::try_from(bound).unwrap()];
+            private
+                .write_atomic(leaf, &bytes, iroha_fs::PublishMode::CreateNew)
+                .unwrap();
+            let path = private.path().join(leaf);
+            let read = if leaf == "secret" {
+                read_owner_only_auditor_secret_file_v1(&path)
+            } else {
+                read_owner_only_auditor_business_policy_file_v1(&path)
+            }
+            .unwrap();
+            assert_eq!(read.as_slice(), bytes);
+            assert!(read_owner_only_auditor_restricted_file_v1(&path, bound - 1).is_err());
+            assert!(read_owner_only_auditor_restricted_file_v1(&path, 0).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        }
+        private
+            .write_atomic("empty", &[], iroha_fs::PublishMode::CreateNew)
+            .unwrap();
+        assert!(read_owner_only_auditor_secret_file_v1(&private.path().join("empty")).is_err());
+    }
+
+    #[test]
+    fn native_auditor_files_refuse_competing_writers_hardlinks_and_unsafe_acl() {
+        let (_temporary, private) = fixture();
+        private
+            .write_atomic(
+                "secret",
+                b"auditor-fixture",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        let path = private.path().join("secret");
+        assert_eq!(
+            read_owner_only_auditor_secret_file_v1(&path)
+                .unwrap()
+                .as_slice(),
+            b"auditor-fixture"
+        );
+        let writer = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert!(read_owner_only_auditor_secret_file_v1(&path).is_err());
+        drop(writer);
+        assert!(read_owner_only_auditor_secret_file_v1(&path).is_ok());
+        let link = private.path().join("linked");
+        std::fs::hard_link(&path, &link).unwrap();
+        assert!(read_owner_only_auditor_secret_file_v1(&path).is_err());
+        assert!(read_owner_only_auditor_secret_file_v1(&link).is_err());
+        std::fs::remove_file(link).unwrap();
+        assert!(read_owner_only_auditor_secret_file_v1(&path).is_ok());
+        let change = std::process::Command::new("icacls.exe")
+            .arg(&path)
+            .args(["/grant", "*S-1-1-0:(R)"])
+            .output()
+            .unwrap();
+        assert!(
+            change.status.success(),
+            "{}",
+            String::from_utf8_lossy(&change.stderr)
+        );
+        assert!(read_owner_only_auditor_secret_file_v1(&path).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), b"auditor-fixture");
+    }
+
+    #[test]
+    fn native_auditor_files_refuse_nonlocal_paths_and_junction_ancestry() {
+        let (temporary, private) = fixture();
+        private
+            .write_atomic(
+                "secret",
+                b"auditor-fixture",
+                iroha_fs::PublishMode::CreateNew,
+            )
+            .unwrap();
+        for path in [
+            Path::new("relative-secret"),
+            Path::new(r"\\localhost\share\secret"),
+            Path::new(r"\\?\GLOBALROOT\Device\HarddiskVolumeShadowCopy1\secret"),
+            private.path(),
+        ] {
+            assert!(read_owner_only_auditor_secret_file_v1(path).is_err());
+        }
+        let junction = temporary.path().join("junction");
+        let created = std::process::Command::new("cmd.exe")
+            .current_dir(temporary.path())
+            .args(["/D", "/C", "mklink", "/J"])
+            .arg(&junction)
+            .arg(private.path())
+            .output()
+            .unwrap();
+        assert!(
+            created.status.success(),
+            "{}",
+            String::from_utf8_lossy(&created.stderr)
+        );
+        assert!(read_owner_only_auditor_secret_file_v1(&junction.join("secret")).is_err());
+        std::fs::remove_dir(junction).expect("remove only fixture junction");
+        assert_eq!(
+            read_owner_only_auditor_secret_file_v1(&private.path().join("secret"))
+                .unwrap()
+                .as_slice(),
+            b"auditor-fixture"
+        );
     }
 }

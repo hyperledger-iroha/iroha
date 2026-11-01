@@ -2315,7 +2315,10 @@ verify the deployment before the vote (§4.14.4).
   next request starts at the next endpoint. Default lists of free public RPC
   endpoints per chain are compiled into the `iroha_config` defaults; an
   operator MAY override them and MAY add per-endpoint secret headers read from
-  owner-only files.
+  single-link, current-owner private files (Unix `0400`/`0600`; protected
+  owner-only Windows access). The shared native filesystem owner retains the
+  original file and ancestors throughout each bounded, zeroizing read; unsafe
+  access, links, reparse points and identity changes are refused.
 
   Configuration (user → actual → defaults, file-only, no environment variables;
   every default works without editing):
@@ -5564,7 +5567,7 @@ the control step of step 5.
 - **`crates/iroha_sccp_rpc`** (std; network I/O) is used by the irohad keeper,
   the CLI and the wallet. It holds:
   - endpoint lists with failover, and per-endpoint secret headers read from
-    owner-only files;
+    retained native private files through `iroha_fs`;
   - blocking `reqwest` (rustls, no `json` feature) with `norito::json` parsing;
   - RPC hygiene, because every endpoint is untrusted and validators share the
     compiled lists:

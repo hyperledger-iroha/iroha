@@ -3398,12 +3398,14 @@ fn reconcile_sidecar_staging_v1(
     {
         return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
+    let max_record_bytes = usize::try_from(PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1)
+        .map_err(|_| PrivateSettlementSidecarStoreErrorV1::ConfigurationInvalid)?;
     staging
         .reconcile_atomic_staging(
             &[SIDECAR_WRITER_LOCK_FILE_V1],
             1,
             SIDECAR_MAX_STAGED_FILES_V1,
-            PRIVATE_SETTLEMENT_SIDECAR_MAX_RECORD_BYTES_V1 as usize,
+            max_record_bytes,
         )
         .map_err(|_| PrivateSettlementSidecarStoreErrorV1::Corrupt)?;
     root.revalidate()
@@ -3545,7 +3547,7 @@ fn parse_sidecar_file_name_v1(name: &str) -> Result<Hash, PrivateSettlementSidec
         return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
     let mut digest = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (hex_nibble_v1(pair[0])? << 4) | hex_nibble_v1(pair[1])?;
     }
     let digest = Hash::prehashed(digest);
@@ -3568,7 +3570,7 @@ fn parse_provisional_file_name_v1(
         return Err(PrivateSettlementSidecarStoreErrorV1::Corrupt);
     }
     let mut digest = [0_u8; 32];
-    for (index, pair) in hex.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in hex.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = (hex_nibble_v1(pair[0])? << 4) | hex_nibble_v1(pair[1])?;
     }
     let digest = Hash::prehashed(digest);

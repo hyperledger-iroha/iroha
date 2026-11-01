@@ -390,10 +390,10 @@ fn borrowed_update_mismatch_and_every_partial_refusal_preserve_predecessor() {
     for extra in (0..8192).step_by(17) {
         pool.set_limit_bytes(baseline + extra);
         match source.try_with_update(&replacement.id, Some(&replacement), &pool) {
-            Err(CustomParametersAdmissionError::Admission(_))
-            | Err(CustomParametersAdmissionError::Json(JsonRetentionError::Admission(_))) => {
-                failures += 1
-            }
+            Err(
+                CustomParametersAdmissionError::Admission(_)
+                | CustomParametersAdmissionError::Json(JsonRetentionError::Admission(_)),
+            ) => failures += 1,
             Err(error) => panic!("unexpected finite-pool update cause: {error:?}"),
             Ok(updated) => {
                 assert!(updated.belongs_to(&pool));

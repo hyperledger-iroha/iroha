@@ -561,7 +561,7 @@ fn execute_imported_return_call(
     fixture: &ImportedReturnFixture,
     before: &ImportedReturnSnapshot,
     (label, valid): (&str, bool),
-    signed: iroha_data_model::transaction::SignedTransaction,
+    signed: &iroha_data_model::transaction::SignedTransaction,
     child_hash: Hash,
     child_ordinal: u32,
     cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
@@ -592,7 +592,7 @@ fn execute_imported_return_call(
         tx.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         tx.world.current_dataspace_id = Some(DataSpaceId::UNIVERSAL);
         let result = crate::executor::Executor::Initial
-            .execute_transaction(&mut tx, authority, &signed, cache);
+            .execute_transaction(&mut tx, authority, signed, cache);
         assert!(
             tx.last_tx_gas_used > 0 && tx.last_tx_gas_used < IMPORTED_RETURN_GAS,
             "{label}: actual root/child work must be metered below the unchanged policy"
@@ -856,7 +856,7 @@ fn signed_imported_wrong_returns_roll_back_child_root_and_real_xor_principal() {
             &fixture,
             &before,
             (label, valid),
-            signed,
+            &signed,
             child_hash,
             child_ordinal,
             &mut cache,

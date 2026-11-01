@@ -1147,10 +1147,8 @@ fn wallet_digest<C: PastaCurve>() {
         C::Base::from(vk.permutation_commitments().len() as u64),
         repr,
     ];
-    for chunk in pk.binding().digest().chunks_exact(16) {
-        fields.push(C::Base::from_u128(u128::from_le_bytes(
-            chunk.try_into().expect("16 bytes"),
-        )));
+    for chunk in pk.binding().digest().as_chunks::<16>().0 {
+        fields.push(C::Base::from_u128(u128::from_le_bytes(*chunk)));
     }
     for point in vk
         .fixed_commitments()

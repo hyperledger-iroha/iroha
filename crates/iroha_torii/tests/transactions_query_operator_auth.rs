@@ -12,8 +12,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use tower::ServiceExt as _;
 
-#[path = "fixtures.rs"]
-mod fixtures;
+use crate::fixtures;
 
 fn query_request(path: &'static str, body: Vec<u8>) -> Request<Body> {
     Request::builder()

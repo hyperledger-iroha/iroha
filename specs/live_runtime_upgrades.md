@@ -2,7 +2,8 @@
 
 Status: accepted design, 2026-10-29; implementation in progress (section 14). Independent model
 reviews (Codex, `gpt-6-astra`, read-only) shaped it. The definition contracts, the founded baseline
-selection with selection-aware dispatch, and the change-set lifecycle of the universal root
+selection with selection-aware dispatch, stable instruction envelopes, release additions after the
+frozen baseline with storage installation, and the change-set lifecycle of the universal root
 (proposal, notice, attestation, activation, lapse and the unsupported-node stop) are implemented;
 [`runtime_upgrades.md`](runtime_upgrades.md) records that surface as built. It amends `AGENTS.md`,
 [`first_release_history_cutover.md`](first_release_history_cutover.md),
@@ -56,7 +57,7 @@ on the network.
 
 ### 1.3 Acceptance journey
 
-The design is done when, on Taira after it adopts the foundation (section 13):
+The design is done when, on Taira, which has adopted the foundation (section 13):
 
 1. a release that adds one instruction and one table rolls through the validators one at a time,
    and old and new releases produce identical results until activation;
@@ -219,9 +220,12 @@ running release does not implement yet is rejected; there is no interim path.
 - Storage not installed is inaccessible to execution, not merely unrecorded: dispatch and storage
   capabilities keep it unreachable, and a capture asserts that it is empty.
 - At a transition the parent root uses the predecessor schema and commitment profile, migration
-  reads use predecessor codecs, and the successor root uses successor codecs and profile. Today
-  `WorldStateAccumulator::root` reads one process-global schema and `world_state_transition` uses it
-  for both parent and successor; the replacement takes each from its own selection.
+  reads use predecessor codecs, and the successor root uses successor codecs and profile.
+  `WorldStateAccumulator::root` takes `S` from the selection it is given, and
+  `world_state_transition` computes the parent root under the selection before the block and the
+  result root under the selection after it. Field paths and codecs still come from this release's
+  registry, and only the baseline commitment profile is implemented; migration reads under
+  predecessor codecs arrive with the migration engine (5.4).
 - Cold and incremental roots agree across activation, aborted publication, block replacement and
   restart.
 
@@ -666,40 +670,33 @@ functionality that stays live (7.4).
 
 ## 13. Adopting a running network
 
-Taira does not reset. A running network adopts the foundation once, at a checkpoint authorized on
-its own chain, and that checkpoint becomes its trust anchor. Accounts, assets, contracts and block
-history survive.
+Taira does not reset. A running network adopts the foundation once, at a checkpoint of its own
+chain that becomes its trust anchor. Accounts, assets, contracts and block history survive.
 
-1. **Authorize.** The running chain commits an adoption authorization through the governance it
-   already has: on Taira today the account holding `CanManageRuntimeUpgrades`, and SORA Parliament
-   once it is integrated. It names the foundation release by its artifact digests, the adoption
-   height `H` and the foundation's initial selection. Authority comes from that certified
-   transaction, never from node configuration or from installing software.
-2. **Stop.** The predecessor commits no block after `H`. The authorization is a scheduled runtime
-   upgrade the predecessor release cannot activate, and an unsupported scheduled upgrade halts it at
-   its start height (`State::apply_block_start_world_transitions`). How the predecessor recognizes
-   it is fixed with the adoption carrier (section 14, step 5). This one switch is coordinated, not
-   rolling: the foundation release never executes the predecessor protocol.
-3. **Import.** The foundation release reads the predecessor's State at `H` and checks the World
-   against block `H`'s certified World root under the predecessor's root rule. It maps every
-   predecessor field onto a storage definition of the baseline catalog; a field the foundation
-   retired must be empty, so nothing is dropped. State outside the World root (transaction
-   membership, commit topologies, the canonical runtime; finding G1-D2) comes from the predecessor's
-   signed snapshot. Its correctness rests on the authorization and on every validator importing the
-   same bytes, which their attestations of the resulting keyed root confirm.
-4. **Anchor.** The adoption record (network, `H` and its block hash, the predecessor roots, the keyed
-   root of the imported State, the committee and epoch, and the foundation's selection) becomes the
-   network's trust anchor. All `n` validators attest it before the foundation history continues at
-   `H + 1`. New nodes start from the anchor or a later checkpoint and verify forward; blocks up to
-   `H` are verified only with the archived predecessor release, as "Obsolete histories" requires.
-5. **Delete.** The next release deletes the import, the predecessor's root rule (World-only coverage
-   with a schema digest over every compiled field) and any legacy genesis profile, once every
-   validator has adopted. From then on no
-   release carries pre-foundation code.
+Taira adopted it at its upgrade checkpoint `H` with iroha a660d601da. That release's one-time import
+read the predecessor's (iroha f31b64d8c5) State at `H` and proved the World against block `H`'s
+certified World root under the predecessor's root rule. It mapped every predecessor field onto a
+storage definition of the baseline catalog and founded the runtime definitions and selection on the
+baseline. Node configuration (`snapshot.upgrade_checkpoint`) alone authorized it. No governance
+record did, and no validator attested the result.
 
-An interim checkpoint import that keeps Taira on a newer release before the foundation is ready
-follows the same steps but takes its checkpoint from node configuration. The governed adoption
-replaces it, and it is deleted with the rest of the pre-foundation code.
+What persists is the checkpoint:
+
+1. **History boundary.** Blocks at or below `H` are the predecessor's history. A foundation release
+   never re-executes or replays them. A node restores a snapshot of its own above `H` and executes
+   forward, `--check-replay` refuses to start below `H`, and only the archived predecessor releases
+   verify the blocks up to `H`, as "Obsolete histories" requires. The configuration names `H` and
+   its block hash, and Kura refuses a store whose block at `H` has another hash.
+2. **Anchor.** The adoption record (`AdoptionRecordV1`) is the network's trust anchor. It names the
+   network, `H` and its block hash, the predecessor's World root, the root of the imported State,
+   the committee, the foundation's selection and the authorizing governance record. Taira's is
+   still to be recorded in committed State through governance and attested by all `n` validators.
+   New nodes can then start from the anchor or a later checkpoint and verify forward instead of
+   trusting configuration (section 14, step 5). The startup re-validation of Taira's signed genesis
+   policy is deleted then too.
+3. **Deleted.** The import, its predecessor types and the predecessor's root rule (World-only
+   coverage with a schema digest over every compiled field) are deleted. No later release carries
+   pre-foundation code.
 
 ## 14. Implementation order
 
@@ -720,9 +717,20 @@ not a date: it happens once everything its first selection needs is implemented 
    included, storage capabilities, generic carriers, snapshots through the selection, and staging.
    Pre-foundation compatibility code is deleted. The guard inventories
    definitions, descriptors and reference closures, and the pinned history
-   (`sumeragi/node/tests/history_cutover_tests.rs`, today genesis plus two `Log` blocks), which this
-   cutover regenerates anyway, gains successes, rejections, permissions, triggers, contract emissions
-   and populated State.
+   (`sumeragi/node/tests/history_cutover_tests.rs`, today genesis plus two `Log` blocks), whose
+   original signed frames, state root and execution tip remain fixed. Additional captured histories
+   must cover successes, rejections, permissions, triggers, contract emissions and populated State;
+   they do not replace the original replay regression. Done: historical schema selection, the
+   catalog with its frozen baseline and release additions after it (each its own native
+   implementation, interfaces and storage, activated by a change set the catalog drafts), dispatch
+   to the implementation the selection binds, storage installation (tables empty, cells at their
+   published initial bytes), and stable envelopes: a wire ID a release does not register decodes
+   to an opaque envelope that re-encodes byte for byte, and execution stops at the first unbound
+   or opaque envelope with `definition_inactive` or `malformed_payload` before any type-dependent
+   check. Still open: complete-State coverage, which first needs the policy cells of G1-D3 in
+   committed State and the decision how the pinned history meets the new root; snapshots through
+   the selection, required before the first addition of a World field; storage capabilities and
+   generic carriers.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
@@ -733,29 +741,54 @@ not a date: it happens once everything its first selection needs is implemented 
    block start, the unsupported-node stop with a reason naming the selection, stable rejection
    codes and lifecycle events, handshake host profiles, and native escrow obligations, whose
    continuations and completions run through admission closure and completion-only and which no
-   activation strands. Still open: the other obligation kinds (pending consent, triggers,
-   migration cursors, AMX), captured completion closures, expectations and deferred consent.
+   activation strands. Deferred consent (8.2) is not built: capturing the resolved closure of
+   multisig occurrences and trigger incarnations changes what the baseline's registration,
+   proposal, approval and trigger execution write and decide, so it ships as a release addition
+   rebinding those interfaces, never inside the baseline. Native escrow activation also preserves its original completion closure instead of
+   treating any active replacement as settlement authority. AMX participations are obligations
+   too: an undecided global transaction and an unsettled participant escrow keep completing
+   through admission closure and completion-only, and no activation strands them. Still open: the
+   deferred-consent addition, kernel registration of contract-created obligations and migration
+   cursors, retained completion capabilities across rebinding, explicit current-binding consent
+   and narrower authenticated dynamic-call manifests.
 4. **Governance.** Parliament's Core integration (still a TODO in
    `parameter/parliament_lifecycle.rs`) with its committed timing policy, and the runtime emergency
    panel. Neither gets a temporary substitute on Taira. The panel's containment is implemented
    (`runtime_emergency_panel_v1`, `ContainRuntimeV1`, renewal and expiry), with its bound
    ratification case: governance proposals and approvals that address a contained definition
    record review progress, a renewal needs it, and the containment resolves once change sets take
-   over every restriction it held.
-5. **Checkpoints, adoption and deletion.** Checkpoint export and certificate-chain bootstrap, the
-   startup floor and its advancement, the deletion rule and its guard, the adoption carrier, import
-   and trust anchor (section 13), and a rehearsal that adopts a copy of a running network, physically
-   deletes the pre-foundation code and then starts a node from the oldest accepted checkpoint.
+   over every restriction it held. `SetParameter` validates the canonical lifecycle policy, including
+   its millisecond and body-sizing bounds. Runtime consumption still depends on the frozen
+   governance-clock/anonymous-ballot migration in `parliament_ballot_implementation_goals.md` E2;
+   converting its millisecond windows to node-configured block counts would not implement it.
+5. **Checkpoints, anchor and deletion.** Checkpoint export and certificate-chain bootstrap, the
+   startup floor and its advancement, the deletion rule and its guard, Taira's trust anchor in
+   committed State (section 13), and a rehearsal that physically deletes retired code and then
+   starts a node from the oldest accepted checkpoint. Done: the adoption import, used once on
+   Taira and deleted with the predecessor's root rule; the upgrade checkpoint as the history
+   boundary that Kura checks against the stored block.
 6. **Operations and clients.** `--check-replay`, per-validator Taira tooling with rolling recovery,
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
-   builds.
-7. **Taira adoption** at a governed checkpoint (section 13), then the acceptance journey (1.3). The
-   next release deletes the import and every pre-foundation path.
+   builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the
+   candidate from its newest authenticated snapshot (or signed genesis) and names the first
+   differing commitment component or the first missing body. Still open: the operator route that
+   drafts an addition's activation, the Taira launcher treating `--check-replay` as offline, and
+   the rest of this step.
+7. **Taira** adopted the foundation at its upgrade checkpoint with a660d601da (section 13) before
+   the gates of steps 2 to 6 passed. What those steps still lack reaches Taira through later
+   releases and, where it changes execution, governed change sets. Then the acceptance journey
+   (1.3).
 8. **Later governed upgrades** on the running network, each using only extension contracts that
    already exist: the keyed commitment profile of `sumeragi.md` §16 (G.3), new rebinding
    implementations, specific migrations, the IVM instruction adapter (section 10), and independently
    rooted data spaces with their own selections. A change set that
    asks for anything not yet implemented is rejected.
+
+Storage retirement, cell initialization and migration activation are refused by the successor
+resolver and lapse if encountered in an already scheduled record. They cannot be attested merely
+because the remaining definitions are compiled. The deferred-consent addition must account
+explicitly for the triggers and pending proposals registered before it activates, which carry no
+capture; it never infers earlier consent from the current selection.
 
 Minamoto adopts the foundation only after every gate passes on Taira.
 
@@ -790,8 +823,8 @@ Gates:
 
 Costs:
 
-- One coordinated switch on Taira at the adoption checkpoint: validators stop at `H` and restart on
-  the foundation release.
+- One coordinated switch on Taira at the adoption checkpoint: validators stopped at `H` and
+  restarted on the foundation release (done with a660d601da).
 - Discipline on shared code: a change that alters any active definition's semantics is a new
   definition.
 - A broad execution refactor: direct native calls, authorization, fees, hooks, queries and events
@@ -803,22 +836,23 @@ Costs:
 - All-`n` attestation lets one validator delay an activation.
 - Conditional availability: with four validators, one withholding and one restarting leave fewer
   than three, so a rolling upgrade pauses rather than promising zero downtime.
-- Complete-State coverage for LtHash, checkpoints, Parliament's Core integration and the emergency panel
-  all land before Taira's adoption, which puts it later than the execution foundation alone would.
+- Complete-State coverage for LtHash, checkpoints and Parliament's Core integration were meant to
+  land before Taira's adoption. Taira adopted first, so each now reaches it through a later release
+  and, where it changes execution or the commitment, a governed change set.
 - Some validity inputs still come from node configuration (`status.md`, ZK delivery task F.4, for
   example the rest of the `[governance]` policy); they move to committed State with the
   foundation. A definition must not add fields to the genesis-signed `execution_policy_hash` or
   `nexus_amx_context_hash`.
 
 Decided by the owner: SORA Parliament governs the universal root, and the admins of a permissioned
-data space govern only that data space (section 6). Taira adopts the foundation at a governed
-checkpoint that becomes its trust anchor, keeping balances and history (section 13). The
+data space govern only that data space (section 6). Taira adopts the foundation at a checkpoint
+that becomes its trust anchor, keeping balances and history (section 13); it did so with
+a660d601da under node configuration, and its anchor is to be ratified by governance. The
 first-release rule holds: the import and all pre-foundation code are deleted after adoption, and old
 code is deleted rather than kept (7.4). The foundation starts on the LtHash commitment extended to the
 complete State; the keyed commitment follows as a governed profile transition (5.1).
 
 Recommended by review and written in as committed defaults, for the owner to confirm or change: the
 emergency panel and its leases (7.1), the notice values (section 6), the checkpoint policy (7.3),
-a readiness-gated Taira adoption
-(section 14), and the client contract (8.4). Every value is a committed parameter, so changing one
+and the client contract (8.4). Every value is a committed parameter, so changing one
 later is itself a governed change.

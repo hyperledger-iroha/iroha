@@ -1027,7 +1027,7 @@ impl StageCircuit {
                 signatures: slots.slots(),
             },
         )?;
-        for (slot, expected) in slots.slots().iter().zip(q[0].chunks_exact(10)) {
+        for (slot, expected) in slots.slots().iter().zip(q[0].as_chunks::<10>().0) {
             let actual = std::iter::once(slot.message())
                 .chain(slot.key())
                 .chain(slot.signature())

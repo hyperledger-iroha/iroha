@@ -255,7 +255,7 @@ fn initial_credit_original_roundtrip_and_large_checkpoint_preserve_explicit_abse
             .as_slice(),
         bytes.as_slice()
     );
-    let request = restored.request(&terms, Instant::now() + Duration::from_secs(900));
+    let request = restored.request(&terms, Instant::now() + Duration::from_mins(15));
     assert!(request.current_credit.is_none());
     assert!(request.selection.expected_current.is_none());
     assert_eq!(
@@ -313,7 +313,7 @@ fn initial_credit_retains_full_intent_and_original_fee_utc_after_expiry() {
     original.validate().unwrap();
     let intent = original.intent();
     let deadline = terms.requested_deadline_unix_ms;
-    let options = terms.options(Instant::now() + Duration::from_secs(900));
+    let options = terms.options(Instant::now() + Duration::from_mins(15));
     original
         .matches_intent(&intent)
         .and_then(|()| terms.matches(deadline, &options))

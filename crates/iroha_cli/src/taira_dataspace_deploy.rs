@@ -186,7 +186,7 @@ struct ManifestInputs {
 
 #[path = "taira_dataspace_deploy_definition.rs"]
 mod definition;
-#[cfg(unix)]
+#[cfg(any(unix, windows))]
 pub use profile::PublicInput;
 
 pub fn run_definition<C: RunContext>(
@@ -1835,12 +1835,22 @@ fn record_dispatch_claim(journal: &Journal, name: &str, prepared: &PreparedV1) -
     Ok(true)
 }
 
-/// Descriptor-relative immutable storage. A held flock serializes each operation.
+#[cfg(windows)]
+#[path = "taira_dataspace_deploy_windows.rs"]
+mod windows;
+
+/// Original private directory/file custody under one exclusive operation lock.
 struct Journal {
     path: PathBuf,
+    #[cfg(not(windows))]
     directory: File,
+    #[cfg(windows)]
+    directory: iroha_fs::PrivateDirectory,
     lock: File,
+    #[cfg(not(windows))]
     lock_snapshot: fs::Metadata,
+    #[cfg(windows)]
+    lock_snapshot: iroha_fs::FileSnapshot,
 }
 
 #[cfg(unix)]
@@ -1918,6 +1928,45 @@ fn require_unplanned_entries(path: &Path, directory: &File, allow_lock: bool) ->
 }
 
 impl Journal {
+    #[cfg(unix)]
+    fn require_no_refresh(&self) -> Result<()> {
+        self.revalidate()?;
+        for name in [
+            ".refresh-intent.json",
+            ".refresh-commit.json",
+            ".refresh-original",
+            ".refresh-replacement",
+        ] {
+            match fs::symlink_metadata(self.path.join(name)) {
+                Ok(_) => eyre::bail!(
+                    "pending native unsigned refresh must be recovered on its original host before any journal read or publication"
+                ),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error.into()),
+            }
+        }
+        self.revalidate()
+    }
+
+    #[cfg(unix)]
+    fn entry_names(&self) -> Result<Vec<std::ffi::OsString>> {
+        self.revalidate()?;
+        let mut names = Vec::new();
+        for entry in fs::read_dir(&self.path)? {
+            require(names.len() < 100_002, "journal inventory exceeds bound")?;
+            names.push(entry?.file_name());
+        }
+        self.revalidate()?;
+        Ok(names)
+    }
+
+    #[cfg(unix)]
+    fn require_private_regular(&self, name: &std::ffi::OsStr) -> Result<()> {
+        self.revalidate()?;
+        private_metadata(&fs::symlink_metadata(self.path.join(name))?, false)?;
+        self.revalidate()
+    }
+
     #[cfg(unix)]
     fn open(path: &Path, create: bool) -> Result<Self> {
         Self::open_inner(path, create, false)
@@ -2006,12 +2055,12 @@ impl Journal {
         Ok(value)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn open(_: &Path, _: bool) -> Result<Self> {
         eyre::bail!("durable deployments require Unix descriptor custody")
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn open_unpublished(_: &Path) -> Result<Self> {
         eyre::bail!("durable deployments require Unix descriptor custody")
     }
@@ -2023,7 +2072,7 @@ impl Journal {
         self.revalidate()
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn require_unplanned(&self) -> Result<()> {
         eyre::bail!("durable deployments require Unix descriptor custody")
     }
@@ -2100,7 +2149,7 @@ impl Journal {
         self.revalidate_file_metadata(name, file, before)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn revalidate(&self) -> Result<()> {
         eyre::bail!("Unix required")
     }
@@ -2169,12 +2218,12 @@ impl Journal {
         self.require_unsigned_entries(false)
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn require_definition_only(&self) -> Result<()> {
         eyre::bail!("Unix filesystem custody is required to admit a new plan")
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn require_unprepared_plan(&self, _: &PlanV1) -> Result<()> {
         eyre::bail!("Unix filesystem custody is required to refresh an unsigned plan")
     }
@@ -2245,7 +2294,7 @@ impl Journal {
         result
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn replace_unprepared_plan(&self, _: &PlanV1, _: &PlanV1) -> Result<()> {
         eyre::bail!("Unix filesystem custody is required to refresh an unsigned plan")
     }
@@ -2261,6 +2310,7 @@ impl Journal {
     #[cfg(unix)]
     fn read_optional_bounded(&self, name: &str, maximum: usize) -> Result<Option<Vec<u8>>> {
         use rustix::fs::{Mode, OFlags};
+        self.require_no_refresh()?;
         self.revalidate()?;
         let fd = match rustix::fs::openat(
             &self.directory,
@@ -2296,6 +2346,7 @@ impl Journal {
     #[cfg(unix)]
     fn install_bounded(&self, name: &str, bytes: &[u8], maximum: usize) -> Result<()> {
         use rustix::fs::{AtFlags, Mode, OFlags, RenameFlags};
+        self.require_no_refresh()?;
         require(bytes.len() <= maximum, "journal output exceeds bound")?;
         require(
             !name.is_empty() && !name.contains('/') && name != "." && name != "..",
@@ -2342,18 +2393,65 @@ impl Journal {
         result
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn read_optional_bounded(&self, _: &str, _: usize) -> Result<Option<Vec<u8>>> {
         eyre::bail!("Unix required")
     }
-    #[cfg(not(unix))]
+    #[cfg(not(any(unix, windows)))]
     fn install_bounded(&self, _: &str, _: &[u8], _: usize) -> Result<()> {
         eyre::bail!("Unix required")
     }
 }
 
-#[cfg(all(test, unix))]
+#[cfg(test)]
 mod tests {
+    #[test]
+    fn pending_native_refresh_blocks_reads_and_publication_on_every_host() {
+        let root = private_tempdir();
+        let journal = Journal::open(&root.path().join("pending"), true).unwrap();
+        journal.install("plan.json", b"original").unwrap();
+        fs::write(
+            journal.path.join(".refresh-intent.json"),
+            b"untrusted pending control",
+        )
+        .unwrap();
+        let before = journal.entry_names().unwrap();
+        assert!(journal.read_optional("plan.json").is_err());
+        assert!(
+            journal
+                .install("catalog.prepared.json", b"must not publish")
+                .is_err()
+        );
+        assert_eq!(journal.entry_names().unwrap(), before);
+        assert_eq!(
+            fs::read(journal.path.join("plan.json")).unwrap(),
+            b"original"
+        );
+    }
+
+    #[cfg(windows)]
+    pub(super) struct NativePrivateTempDir {
+        _temporary: tempfile::TempDir,
+        path: PathBuf,
+    }
+    #[cfg(windows)]
+    impl NativePrivateTempDir {
+        pub(super) fn path(&self) -> &Path {
+            &self.path
+        }
+    }
+    #[cfg(windows)]
+    pub(super) fn private_tempdir() -> NativePrivateTempDir {
+        let temporary = tempfile::tempdir().unwrap();
+        let directory =
+            iroha_fs::PrivateDirectory::open_or_create(temporary.path().join("private")).unwrap();
+        NativePrivateTempDir {
+            path: directory.path().to_owned(),
+            _temporary: temporary,
+        }
+    }
+
+    #[cfg(not(windows))]
     pub(super) fn private_tempdir() -> tempfile::TempDir {
         let directory = tempfile::tempdir().unwrap();
         #[cfg(unix)]
@@ -3469,6 +3567,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn journal_creates_and_reopens_relative_output_directory() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3515,6 +3614,7 @@ mod tests {
         assert!(root.path().join("fresh-output/intent.json").is_file());
     }
 
+    #[cfg(unix)]
     #[test]
     fn unplanned_operation_recovers_only_before_any_phase_evidence() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3557,6 +3657,7 @@ mod tests {
         assert!(journal.require_unplanned().is_err());
     }
 
+    #[cfg(unix)]
     #[test]
     fn unsigned_plan_refresh_replaces_exact_snapshot_and_rejects_phase_evidence() {
         use std::os::unix::fs::PermissionsExt as _;
@@ -3642,6 +3743,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn journal_dispatch_claim_is_durable_and_exclusive() {
         let root = tempfile::tempdir().unwrap();
@@ -3677,6 +3779,7 @@ mod tests {
                 .is_err()
         );
     }
+    #[cfg(unix)]
     #[test]
     fn journal_content_revalidation_preserves_offset_and_rejects_metadata_collisions() {
         use std::{
@@ -3728,6 +3831,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[test]
     fn journal_rejects_links_replacement_and_incomplete_records() {
         use std::os::unix::fs::symlink;

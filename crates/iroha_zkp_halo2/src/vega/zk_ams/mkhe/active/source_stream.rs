@@ -444,12 +444,8 @@ pub(in super::super) fn decode_indexed_active_source_proof_v1<R: std::io::Read>(
     while remaining != 0 {
         let take = remaining.min(buffer.len());
         read_active_evidence_io_exact(reader, &mut buffer[..take])?;
-        for encoded in buffer[..take].chunks_exact(8) {
-            responses.push(i64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            ));
+        for encoded in buffer[..take].as_chunks::<8>().0 {
+            responses.push(i64::from_be_bytes(*encoded));
         }
         remaining -= take;
     }
@@ -497,12 +493,8 @@ fn read_indexed_source_limb<R: std::io::Read + std::io::Seek>(
             .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?;
         native.update(&buffer[..take_bytes]);
         wire.update(&buffer[..take_bytes]);
-        for encoded in buffer[..take_bytes].chunks_exact(8) {
-            let residue = u64::from_be_bytes(
-                encoded
-                    .try_into()
-                    .map_err(|_| ZkAmsMkheErrorV1::InvalidWireEncoding)?,
-            );
+        for encoded in buffer[..take_bytes].as_chunks::<8>().0 {
+            let residue = u64::from_be_bytes(*encoded);
             if residue >= modulus {
                 return Err(ZkAmsMkheErrorV1::InvalidPolynomial);
             }

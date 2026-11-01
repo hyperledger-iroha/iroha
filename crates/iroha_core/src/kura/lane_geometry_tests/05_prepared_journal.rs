@@ -1,5 +1,73 @@
 // Exact prepared journal phase ownership, independent of finality authorization.
 
+#[cfg(windows)]
+#[test]
+fn native_prepared_journal_absent_publication_retains_same_original_on_completion() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    let intended = prepared.bytes(LaneGeometryPhase::Intent).to_vec();
+    drop(prepared);
+    let path = kura.lane_geometry_journal_path();
+    fs::remove_file(&path).unwrap();
+    let mut writer =
+        super::retained_journal::RetainedGeometryJournal::capture(&kura, intended.len()).unwrap();
+    assert!(writer.predecessor().is_none());
+    writer
+        .persist(&kura, LaneGeometryPhase::Intent, &intended)
+        .unwrap();
+    let original = secure_file_metadata::from_path(&path).unwrap();
+    writer
+        .reauthenticate_completed(&kura, LaneGeometryPhase::Intent, &intended)
+        .unwrap();
+    writer
+        .persist(&kura, LaneGeometryPhase::Intent, &intended)
+        .unwrap();
+    assert!(Kura::sidecar_file_metadata_unchanged(
+        &original,
+        &secure_file_metadata::from_path(&path).unwrap()
+    ));
+    assert_eq!(fs::read(&path).unwrap(), intended);
+    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn native_prepared_journal_recovered_temp_is_never_rewritten_on_mismatch() {
+    let temp = TempDir::new().unwrap();
+    let root = temp.path().join("kura");
+    let (initial, _) = initial_and_extended_configs();
+    let kura = open_kura(&root, &initial);
+    authenticate_transition_fixture_primary(&kura, &initial, &initial_geometry().0);
+    let prior = fs::read(kura.lane_geometry_journal_path()).unwrap();
+    let journal = unpersisted_create_journal(&kura);
+    let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
+    let owner = iroha_fs::OwnerDirectory::open(&root).unwrap();
+    let mut original = None;
+    owner
+        .create_private_journal_into(JOURNAL_TEMP_FILE_NAME, &mut original)
+        .unwrap();
+    let mut file = original.take().unwrap();
+    file.write_all(b"incomplete recovered bytes").unwrap();
+    file.sync_all().unwrap();
+    drop(file);
+    let temporary = root.join(JOURNAL_TEMP_FILE_NAME);
+    let before = secure_file_metadata::from_path(&temporary).unwrap();
+    for _ in 0..2 {
+        assert!(prepared.persist(&kura, LaneGeometryPhase::Intent).is_err());
+        assert_eq!(fs::read(&temporary).unwrap(), b"incomplete recovered bytes");
+        assert!(Kura::sidecar_file_metadata_unchanged(
+            &before,
+            &secure_file_metadata::from_path(&temporary).unwrap()
+        ));
+        assert_eq!(fs::read(kura.lane_geometry_journal_path()).unwrap(), prior);
+    }
+}
+
 fn unpersisted_create_journal(kura: &Kura) -> LaneGeometryJournal {
     let (previous, updated) = initial_and_extended_configs();
     let (previous_incarnations, previous_activations) = initial_geometry();
@@ -362,20 +430,39 @@ fn prepared_geometry_journal_rejects_parent_directory_replacement() {
     let mut prepared = PreparedGeometryJournalTransition::prepare(&kura, journal, 0).unwrap();
 
     let displaced = temp.path().join("original-kura-root");
-    fs::rename(&root, &displaced).unwrap();
-    fs::create_dir(&root).unwrap();
-    fs::write(root.join(JOURNAL_FILE_NAME), &prior).unwrap();
-    fs::write(root.join("replacement-owner"), b"unrelated directory").unwrap();
-    let original_before = native_observation_tree(&displaced);
-    let replacement_before = native_observation_tree(&root);
-    prepared
-        .persist(&kura, LaneGeometryPhase::Intent)
-        .expect_err("publication must retain the captured parent directory");
-    drop(prepared);
-    assert_eq!(native_observation_tree(&displaced), original_before);
-    assert_eq!(native_observation_tree(&root), replacement_before);
-    assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
-    assert!(!displaced.join(JOURNAL_TEMP_FILE_NAME).exists());
+    #[cfg(windows)]
+    {
+        let before = native_observation_tree(&root);
+        let error = fs::rename(&root, &displaced)
+            .expect_err("the original native parent excludes replacement while retained");
+        assert!(matches!(error.raw_os_error(), Some(5 | 32)));
+        assert_eq!(native_observation_tree(&root), before);
+        assert!(!displaced.exists());
+        assert_eq!(fs::read(kura.lane_geometry_journal_path()).unwrap(), prior);
+        prepared.persist(&kura, LaneGeometryPhase::Intent).unwrap();
+        assert_eq!(
+            fs::read(kura.lane_geometry_journal_path()).unwrap(),
+            prepared.bytes(LaneGeometryPhase::Intent)
+        );
+        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+    }
+    #[cfg(not(windows))]
+    {
+        fs::rename(&root, &displaced).unwrap();
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join(JOURNAL_FILE_NAME), &prior).unwrap();
+        fs::write(root.join("replacement-owner"), b"unrelated directory").unwrap();
+        let original_before = native_observation_tree(&displaced);
+        let replacement_before = native_observation_tree(&root);
+        prepared
+            .persist(&kura, LaneGeometryPhase::Intent)
+            .expect_err("publication must retain the captured parent directory");
+        drop(prepared);
+        assert_eq!(native_observation_tree(&displaced), original_before);
+        assert_eq!(native_observation_tree(&root), replacement_before);
+        assert!(!root.join(JOURNAL_TEMP_FILE_NAME).exists());
+        assert!(!displaced.join(JOURNAL_TEMP_FILE_NAME).exists());
+    }
 }
 
 #[test]

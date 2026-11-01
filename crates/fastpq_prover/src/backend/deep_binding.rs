@@ -538,8 +538,10 @@ impl Context {
 fn canonical_words(bytes: &[u8]) -> bool {
     bytes.len().is_multiple_of(8)
         && bytes
-            .chunks_exact(8)
-            .all(|word| u64::from_le_bytes(word.try_into().expect("exact field word")) < MODULUS)
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .all(|word| u64::from_le_bytes(*word) < MODULUS)
 }
 
 fn ood_bytes(
@@ -561,7 +563,9 @@ fn ood_bytes(
     let mut bytes = super::secret_polynomial::SecretPolynomial::<u8>::zeroed(OOD_VALUES * F::BYTES)
         .map_err(|_| BindingError::Tape)?;
     for (target, value) in bytes
-        .chunks_exact_mut(F::BYTES)
+        .as_chunks_mut::<{ F::BYTES }>()
+        .0
+        .iter_mut()
         .zip(current.iter().chain(next).chain(quotient))
     {
         target.copy_from_slice(&value.to_le_bytes());

@@ -346,7 +346,7 @@ pub mod tests {
         availability_material_fixture_v1, context_fixture,
     };
 
-    pub(crate) fn fixture() -> Artifact {
+    pub fn fixture() -> Artifact {
         let client = client_with_base_url(&"http://mock.local/".parse().unwrap());
         let (material, _) = availability_material_fixture_v1(client.network_id(), client.account());
         Artifact {

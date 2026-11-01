@@ -294,10 +294,7 @@ pub(super) fn validate_directory_string_v1(
     if index == 0 {
         if value.tag() != universal_primitive_tag_v1(19)
             || value.contents().len() != 2
-            || !value
-                .contents()
-                .iter()
-                .all(|byte| byte.is_ascii_uppercase())
+            || !value.contents().iter().all(u8::is_ascii_uppercase)
         {
             return Err(ZkX509RelationErrorV1::InvalidName);
         }

@@ -70,7 +70,7 @@ fn transaction_detail_preserves_native_rejection_metadata_and_lifetime() {
         json::Value::String("test".into()),
     );
     let mut builder = builder().with_metadata(metadata);
-    builder.set_creation_time(StdDuration::from_millis(1_700_000_000));
+    builder.set_creation_time(StdDuration::from_secs(1_700_000));
     builder
         .set_ttl(StdDuration::from_secs(30))
         .set_nonce(NonZeroU32::new(7).unwrap());

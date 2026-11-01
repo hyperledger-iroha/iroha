@@ -145,31 +145,41 @@ impl Directory {
         self.sync_custody_file(name)
     }
     pub(crate) fn sync_custody_file(&self, name: &OsStr) -> io::Result<()> {
+        let retained = self.open_private_durability(name)?;
+        let result = retained.file.sync_all();
+        let final_check = retained.revalidate();
+        result.and(final_check)
+    }
+    pub(crate) fn open_private_durability(&self, name: &OsStr) -> io::Result<RetainedFile> {
         self.revalidate()?;
-        let file = open_file(
-            &self.path().join(name),
-            GENERIC_READ | GENERIC_WRITE,
-            FILE_SHARE_READ,
-            OPEN_EXISTING,
-            false,
-            false,
-        )?;
-        let before = journal_snapshot(&file)?.0;
-        let retained = RetainedFile {
-            directory: self.clone(),
-            name: name.to_owned(),
-            file,
-            before,
-            links: LinkPolicy::Single,
-            private: true,
-            writable: false,
-            read_only: false,
-            publishable: false,
-            ancestry: AncestryCheck::EachCall,
-        };
-        retained.revalidate()?;
-        retained.file.sync_all()?;
-        retained.revalidate()
+        let result = (|| {
+            let file = open_file(
+                &self.path().join(name),
+                GENERIC_READ | GENERIC_WRITE,
+                FILE_SHARE_READ,
+                OPEN_EXISTING,
+                false,
+                false,
+            )?;
+            let before = journal_snapshot(&file)?.0;
+            let retained = RetainedFile {
+                directory: self.clone(),
+                name: name.to_owned(),
+                file,
+                before,
+                links: LinkPolicy::Single,
+                private: true,
+                writable: false,
+                read_only: false,
+                executable: false,
+                publishable: false,
+                ancestry: AncestryCheck::EachCall,
+            };
+            retained.revalidate()?;
+            Ok(retained)
+        })();
+        let final_check = self.revalidate();
+        result.and_then(|original| final_check.map(|()| original))
     }
     pub(crate) fn remove_custody_directory(
         &self,
@@ -206,6 +216,7 @@ impl Directory {
             return Err(changed());
         }
         let Link {
+            sealed: _,
             path,
             file,
             private,
@@ -249,7 +260,7 @@ impl RetainedFile {
         rename_handle(&self.file, &self.directory.path().join(to), mode)?;
         // Advance original spelling immediately after the native transition, even if a
         // later check fails. Collision cleanup can then never delete the published target.
-        self.name = to.to_owned();
+        to.clone_into(&mut self.name);
         self.publishable = false;
         self.revalidate()
             .map_err(|error| io::Error::other(format!("native rename completed: {error}")))
@@ -268,10 +279,30 @@ impl RetainedFile {
     }
 }
 
+impl RetainedFile {
+    pub(crate) fn require_durability_name(
+        &self,
+        parent: &Directory,
+        name: &OsStr,
+    ) -> io::Result<()> {
+        self.revalidate()?;
+        parent.revalidate()?;
+        let result = (|| {
+            if self.name.as_os_str() == name && self.directory.identity()? == parent.identity()? {
+                Ok(())
+            } else {
+                Err(changed())
+            }
+        })();
+        let original = self.revalidate();
+        let parent = parent.revalidate();
+        result.and(original).and(parent)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     fn root() -> (tempfile::TempDir, PrivateDirectory) {
         let temp = tempfile::tempdir().unwrap();
         let root = PrivateDirectory::open_or_create(temp.path().join("custody")).unwrap();
