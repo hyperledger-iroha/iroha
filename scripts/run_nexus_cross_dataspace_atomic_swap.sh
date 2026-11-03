@@ -155,9 +155,9 @@ for extra in ${EXTRA_ENV[@]+"${EXTRA_ENV[@]}"}; do
 done
 
 if [[ "$USE_CARGO_FAST" == true ]]; then
-  CMD=("${cargo_runner[@]}" -- test -p integration_tests)
+  CMD=("${cargo_runner[@]}" -- test --locked -p integration_tests)
 else
-  CMD=("${cargo_runner[@]}" test -p integration_tests)
+  CMD=("${cargo_runner[@]}" test --locked -p integration_tests)
 fi
 if [[ "$PROFILE" == "release" ]]; then
   CMD+=("--release")

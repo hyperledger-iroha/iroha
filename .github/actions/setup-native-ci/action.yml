@@ -1,0 +1,36 @@
+name: Set up native Rust validation
+description: Install native Linux dependencies and the repository Rust toolchain.
+inputs:
+  toolchain:
+    description: Optional explicit toolchain for nightly-only coverage.
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Install native build prerequisites
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install --no-install-recommends -y \
+          clang cmake libgit2-dev libssl-dev ninja-build pkg-config protobuf-compiler mold \
+          libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
+          libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev
+    - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: clippy,rustfmt,llvm-tools-preview
+        cache: "false"
+    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      with:
+        python-version: "3.12"
+    - name: Install repository Python build helpers
+      shell: bash
+      run: python -m pip install -r scripts/requirements.txt
+    - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
+      with:
+        distribution: temurin
+        java-version: "21"
+    - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+      with:
+        node-version: "22.23.4"
