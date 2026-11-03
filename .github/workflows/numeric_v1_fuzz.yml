@@ -3,6 +3,8 @@ name: Numeric V1 strict fuzz smoke
 on:
   pull_request:
     paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
       - ".github/workflows/numeric_v1_fuzz.yml"
       - ".github/actions/setup-native-ci/**"
       - "scripts/requirements.txt"
