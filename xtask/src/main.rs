@@ -3985,7 +3985,7 @@ where
         }
         "sorafs-gateway" => {
             let remaining: Vec<String> = args.collect();
-            let command = sorafs::parse_gateway_cli(remaining.into_iter())?;
+            let command = sorafs::parse_gateway_cli(remaining)?;
             Ok(CommandKind::SorafsGatewayCli {
                 command: Box::new(command),
             })

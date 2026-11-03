@@ -161,6 +161,9 @@ fn refuse_existing(path: &Path) -> Result<(), Box<dyn Error>> {
 
 type RetainedImage = (RetainedFile, FileSnapshot, String);
 
+/// Original source, bundle-relative path, and retained output of one metadata file.
+type StagedMetadataFile = (RetainedImage, PathBuf, RetainedImage);
+
 struct BundleCustody {
     inputs: Vec<RetainedImage>,
     build_inputs: Vec<(RetainedBuildInput, FileSnapshot, String)>,
@@ -475,7 +478,7 @@ fn load_network_profiles(
 // Linux and Windows packages carry no application metadata.
 fn stage_application_metadata(
     bundle_root: &Path,
-) -> Result<Vec<(RetainedImage, PathBuf, RetainedImage)>, Box<dyn Error>> {
+) -> Result<Vec<StagedMetadataFile>, Box<dyn Error>> {
     if NativeBundleLayout::current() != NativeBundleLayout::MacOs {
         return Ok(Vec::new());
     }
