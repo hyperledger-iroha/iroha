@@ -140,10 +140,6 @@ pub trait RequestExt: sealed::Sealed + Sized {
     ///     body::Body,
     ///     Json, RequestExt,
     /// };
-    /// use axum_extra::{
-    ///     TypedHeader,
-    ///     headers::{authorization::Bearer, Authorization},
-    /// };
     /// use std::collections::HashMap;
     ///
     /// struct MyExtractor<T> {

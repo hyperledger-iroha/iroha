@@ -810,6 +810,7 @@ dependencies = [
 name = "axum-core"
 version = "0.5.6"
 dependencies = [
+ "axum",
  "bytes",
  "futures-core",
  "http",

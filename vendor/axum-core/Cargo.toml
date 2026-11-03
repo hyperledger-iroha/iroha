@@ -103,6 +103,12 @@ version = "0.1.37"
 optional = true
 default-features = false
 
+# Published manifests omit upstream's path-only doctest consumer. Use the
+# canonical workspace package for the original Router and extractor examples.
+[dev-dependencies.axum]
+workspace = true
+features = ["form", "json", "query"]
+
 [dev-dependencies.hyper]
 version = "1.0.0"
 
