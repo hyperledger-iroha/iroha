@@ -2559,10 +2559,12 @@ def install_dist_info(wheel):
 
 
 def seal(path):
-    metadata = os.stat(path, follow_symlinks=False)
-    return verifier.FileSeal.from_stat(
-        hashlib.sha256(path.read_bytes()).hexdigest(), metadata
-    ).render()
+    # Match the production shell seal's descriptor metadata. Windows pathname
+    # stat and fstat expose different ctime values on supported Python versions.
+    with path.open("rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        digest = hashlib.sha256(stream.read()).hexdigest()
+    return verifier.FileSeal.from_stat(digest, metadata).render()
 
 
 def expect_failure(fragment, callback):
