@@ -355,16 +355,41 @@ fn original_child_records(
     child_records(journal.as_ref().map(Journal::native_inspection))
 }
 
-fn private_parent_fixture() -> tempfile::TempDir {
+struct PrivateParentFixture {
+    // Retain cleanup ownership until every test handle and journal has dropped.
+    _temporary: tempfile::TempDir,
+    path: std::path::PathBuf,
+}
+impl PrivateParentFixture {
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+}
+
+fn private_parent_fixture() -> PrivateParentFixture {
     let root = tempfile::tempdir().unwrap();
-    // A generic tempdir follows the caller's umask. These tests explicitly
-    // admit the parent itself, so establish the required private fixture mode.
+    // Preserve the Unix fixture's original ancestry and private mode.
     #[cfg(unix)]
-    {
+    let path = {
         use std::os::unix::fs::PermissionsExt as _;
         std::fs::set_permissions(root.path(), std::fs::Permissions::from_mode(0o700)).unwrap();
+        root.path().to_owned()
+    };
+    // A Windows tempdir inherits its DACL. Admit it only as an owner directory,
+    // then let the native owner create a fresh protected current-user child.
+    #[cfg(windows)]
+    let path = {
+        let owner = OwnerDirectory::open(root.path()).unwrap();
+        owner
+            .create_private_child("private")
+            .unwrap()
+            .path()
+            .to_owned()
+    };
+    PrivateParentFixture {
+        _temporary: root,
+        path,
     }
-    root
 }
 
 #[test]
