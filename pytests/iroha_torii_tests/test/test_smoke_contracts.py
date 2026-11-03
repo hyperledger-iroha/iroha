@@ -75,11 +75,14 @@ def _replies():
         (smoke.test_peer_health, [("/health", "text/plain")]),
         (
             smoke.test_peer_canonical_block_wire_version,
-            [("/v1/api/version", "text/plain")],
+            [("/v1/api/version", "text/plain, application/json")],
         ),
         (
             smoke.test_peer_status,
-            [("/v1/api/version", "text/plain"), ("/status", "application/json")],
+            [
+                ("/v1/api/version", "text/plain, application/json"),
+                ("/status", "application/json"),
+            ],
         ),
         (smoke.test_peer_schema, [("/v1/schema", "application/json")]),
     ],
@@ -105,6 +108,11 @@ def test_smoke_uses_the_current_routes(check, requests):
             smoke.test_peer_canonical_block_wire_version,
             "/v1/api/version",
             (503, "text/plain", "storage unavailable"),
+        ),
+        (
+            smoke.test_peer_canonical_block_wire_version,
+            "/v1/api/version",
+            (503, "application/json", '{"code":"another_failure"}'),
         ),
         (
             smoke.test_peer_canonical_block_wire_version,
@@ -143,16 +151,30 @@ def test_smoke_refuses_invalid_committed_or_schema_values(path, field, value, ch
             check(url)
 
 
-def test_only_explicit_genesis_startup_is_retried():
+def _unavailable_version():
+    """The existing full Rust router test specifies this canonical startup reply."""
+    return (
+        503,
+        "application/json; charset=utf-8",
+        json.dumps(
+            {
+                "code": "service_unavailable",
+                "message": "The service is temporarily unavailable.",
+            }
+        ),
+    )
+
+
+def test_only_canonical_version_unavailable_is_retried():
     replies = _replies()
-    replies["/v1/api/version"].insert(0, (503, "text/plain", "genesis not applied"))
+    replies["/v1/api/version"].insert(0, _unavailable_version())
     with _peer(replies) as (url, seen):
         smoke.test_peer_canonical_block_wire_version(url)
     assert [path for path, _accept in seen] == ["/v1/api/version"] * 2
 
 
 def test_startup_wait_does_not_reset_its_deadline(monkeypatch):
-    replies = {"/v1/api/version": [(503, "text/plain", "genesis not applied")]}
+    replies = {"/v1/api/version": [_unavailable_version()]}
     with _peer(replies) as (url, seen):
         ticks = iter((0, 0, 31, 31))
         with monkeypatch.context() as clock:
@@ -164,7 +186,7 @@ def test_startup_wait_does_not_reset_its_deadline(monkeypatch):
                 ),
             )
             with pytest.raises(
-                AssertionError, match="genesis was not applied within 30s"
+                AssertionError, match="version was not available within 30s"
             ):
                 smoke.test_peer_canonical_block_wire_version(url)
     assert len(seen) == 1

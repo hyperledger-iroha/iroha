@@ -39,6 +39,8 @@ The suite reads all four generated peers on ports 8080–8083. It checks `/healt
 `/v1/api/version` after genesis, `/status`, and `/v1/schema` using the current
 response contracts. Missing peers, invalid responses, and empty collection fail;
 there is no mock fallback. These are API smoke checks, not release qualification.
+Version reads accept both their plain-text success and canonical JSON errors;
+only the documented unavailable envelope is retried within a fixed startup deadline.
 The separate `test/test_smoke_contracts.py` exercises the assertions and bounded
 startup wait against controlled HTTP responses without starting a node.
 
