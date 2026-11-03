@@ -1722,6 +1722,7 @@ struct TunnelTrafficConfig {
     flow_label: VpnFlowLabelV1,
     padding_budget_ms: u16,
     packet_read_mtu: usize,
+    expiry_deadline: tokio::time::Instant,
 }
 #[cfg(any(target_os = "linux", test))]
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -1838,9 +1839,11 @@ struct NetworkIpcSocket {
 #[cfg(target_os = "linux")]
 impl NetworkIpcSocket {
     fn new(fd: OwnedFd) -> Result<Self, ControllerError> {
-        Ok(Self {
-            fd: AsyncFd::new(fd)?,
-        })
+        // SAFETY: `OwnedFd` retains this valid, stable descriptor until the
+        // private socket is deregistered/dropped; its I/O methods only borrow it.
+        // Converting a registration error drops the original descriptor owner.
+        let fd = unsafe { AsyncFd::register(fd) }.map_err(io::Error::from)?;
+        Ok(Self { fd })
     }
 
     async fn send(
@@ -2615,7 +2618,7 @@ fn write_child_stdin_until(
                 }
             }
         }
-        return Ok(());
+        Ok(())
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -3319,7 +3322,7 @@ fn ed25519_public_key_bytes(public_key: &PublicKey) -> Result<[u8; 32], Controll
         ));
     }
     let mut encoded = [0_u8; 32];
-    encoded.copy_from_slice(&bytes);
+    encoded.copy_from_slice(bytes);
     Ok(encoded)
 }
 #[cfg(target_os = "linux")]
@@ -4675,8 +4678,8 @@ async fn run_network_worker_session(
             flow_label,
             padding_budget_ms: payload.padding_budget_ms,
             packet_read_mtu: usize::from(expected_mtu),
+            expiry_deadline: ticket_expiry_deadline,
         },
-        ticket_expiry_deadline,
         voucher_signer,
         voucher_counters.clone(),
         control,
@@ -5690,7 +5693,6 @@ async fn tunnel_packet_loop<W, R, C>(
     send: &mut W,
     recv: &mut R,
     traffic: TunnelTrafficConfig,
-    expiry_deadline: tokio::time::Instant,
     voucher_signer: UsageVoucherSigner,
     voucher_counters: UsageVoucherCounters,
     control: C,
@@ -5700,7 +5702,7 @@ where
     R: AsyncRead + Unpin,
     C: Future<Output = Result<TunnelShutdown, ControllerError>>,
 {
-    let expiry = tokio::time::sleep_until(expiry_deadline);
+    let expiry = tokio::time::sleep_until(traffic.expiry_deadline);
     let upstream = tun_to_vpn_loop(
         Arc::clone(&device),
         send,
@@ -6165,7 +6167,13 @@ impl LinuxTunDevice {
             return Err(error);
         }
         let file = unsafe { fs::File::from_raw_fd(fd) };
-        let file = AsyncFd::new(file)?;
+        Self::from_owned_file(file, name).map_err(ControllerError::Io)
+    }
+    fn from_owned_file(file: fs::File, name: String) -> io::Result<Self> {
+        // SAFETY: `File` owns a valid, stable descriptor. This private device
+        // retains it in `AsyncFd` until deregistration/drop, and its I/O methods
+        // only borrow it. Registration failure conversion drops that file owner.
+        let file = unsafe { AsyncFd::register(file) }.map_err(io::Error::from)?;
         Ok(Self { file, name })
     }
     #[cfg(target_os = "linux")]
@@ -6229,17 +6237,13 @@ impl LinuxTunDevice {
                 "received interface {kernel_name} MTU {kernel_mtu} does not match signed MTU {expected_mtu}"
             )));
         }
-        let file: fs::File = fd.into();
-        Ok(Self {
-            file: AsyncFd::new(file)?,
-            name: kernel_name,
-        })
+        Self::from_owned_file(fd.into(), kernel_name).map_err(ControllerError::Io)
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     fn name(&self) -> &str {
         &self.name
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     async fn recv(&self, buf: &mut [u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.readable().await?;
@@ -6252,7 +6256,7 @@ impl LinuxTunDevice {
             }
         }
     }
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", test))]
     async fn send(&self, buf: &[u8]) -> io::Result<usize> {
         loop {
             let mut guard = self.file.writable().await?;
@@ -11224,6 +11228,177 @@ mod tests {
         string.push_str("sensitive credential");
         wipe_secret_string(&mut string);
         assert!(string.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tun_file_registration_retains_io_and_closes_on_drop() {
+        let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        socket.set_nonblocking(true).expect("nonblocking device");
+        peer.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bounded peer read");
+        let file = fs::File::from(std::os::fd::OwnedFd::from(socket));
+        let descriptor = file.as_raw_fd();
+        let device = LinuxTunDevice::from_owned_file(file, "fixture".to_owned())
+            .expect("register owned descriptor");
+        assert_eq!(device.name(), "fixture");
+        for payload in [b"first", b"again"] {
+            peer.write_all(payload).expect("write inbound bytes");
+            let mut received = [0; 5];
+            let mut count = 0;
+            while count < received.len() {
+                let read = timeout(Duration::from_secs(5), device.recv(&mut received[count..]))
+                    .await
+                    .expect("bounded device read")
+                    .expect("read inbound bytes");
+                assert_ne!(read, 0);
+                count += read;
+            }
+            assert_eq!(&received, payload);
+            assert_eq!(device.file.get_ref().as_raw_fd(), descriptor);
+        }
+        let mut count = 0;
+        while count < b"reply".len() {
+            let written = timeout(Duration::from_secs(5), device.send(&b"reply"[count..]))
+                .await
+                .expect("bounded device write")
+                .expect("write outbound bytes");
+            assert_ne!(written, 0);
+            count += written;
+        }
+        let mut received = [0; 5];
+        peer.read_exact(&mut received).expect("read outbound bytes");
+        assert_eq!(&received, b"reply");
+        drop(device);
+        assert_eq!(peer.read(&mut received).expect("peer observes close"), 0);
+    }
+    #[test]
+    fn tun_file_registration_preserves_failure_and_closes_original_owner() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("registration runtime");
+        let handle = runtime.handle().clone();
+        drop(runtime);
+        let _entered = handle.enter();
+        let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        socket.set_nonblocking(true).expect("nonblocking device");
+        peer.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bounded peer read");
+        let file = fs::File::from(std::os::fd::OwnedFd::from(socket));
+        let Err(error) = LinuxTunDevice::from_owned_file(file, "fixture".to_owned()) else {
+            panic!("a closed reactor must refuse registration");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains("being shutdown"));
+        assert_eq!(peer.read(&mut [0; 1]).expect("original owner closed"), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn network_ipc_registration_retains_descriptor_until_drop() {
+        let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        socket.set_nonblocking(true).expect("nonblocking IPC");
+        peer.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bounded peer read");
+        let descriptor = socket.as_raw_fd();
+        let ipc = NetworkIpcSocket::new(OwnedFd::from(socket)).expect("register IPC owner");
+        assert_eq!(ipc.fd.get_ref().as_raw_fd(), descriptor);
+        drop(ipc);
+        assert_eq!(peer.read(&mut [0; 1]).expect("original owner closed"), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn network_ipc_registration_failure_preserves_io_error_and_closes_owner() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("registration runtime");
+        let handle = runtime.handle().clone();
+        drop(runtime);
+        let _entered = handle.enter();
+        let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+        socket.set_nonblocking(true).expect("nonblocking IPC");
+        peer.set_read_timeout(Some(Duration::from_secs(5)))
+            .expect("bounded peer read");
+        let Err(ControllerError::Io(error)) = NetworkIpcSocket::new(OwnedFd::from(socket)) else {
+            panic!("a closed reactor must return the original I/O error");
+        };
+        assert_eq!(error.kind(), io::ErrorKind::Other);
+        assert!(error.to_string().contains("being shutdown"));
+        assert_eq!(peer.read(&mut [0; 1]).expect("original owner closed"), 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn tunnel_packet_loop_preserves_exact_expiry_and_control_shutdown() {
+        for control_ready in [false, true] {
+            let (socket, mut peer) = std::os::unix::net::UnixStream::pair().expect("socket pair");
+            socket.set_nonblocking(true).expect("nonblocking device");
+            peer.set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("bounded peer read");
+            let device = Arc::new(
+                LinuxTunDevice::from_owned_file(
+                    fs::File::from(OwnedFd::from(socket)),
+                    "fixture".to_owned(),
+                )
+                .expect("register device"),
+            );
+            let ticket = test_helper_ticket(TEST_SESSION_ID);
+            let raw_payload = test_connect_payload_json(TEST_SESSION_ID, &ticket, None);
+            let payload = parse_connect_payload(Some(&raw_payload)).expect("payload");
+            let traffic = TunnelTrafficConfig {
+                circuit_id: ticket.session_id,
+                flow_label: vpn_flow_label_from_session_id(ticket.session_id).expect("flow label"),
+                padding_budget_ms: payload.padding_budget_ms,
+                packet_read_mtu: usize::from(VPN_DEFAULT_TUNNEL_MTU_BYTES),
+                expiry_deadline: if control_ready {
+                    tokio::time::Instant::now() + Duration::from_secs(60)
+                } else {
+                    tokio::time::Instant::now() - Duration::from_secs(1)
+                },
+            };
+            let signer = UsageVoucherSigner::from_payload(&payload, ticket).expect("signer");
+            let counters = UsageVoucherCounters::default();
+            let mut send = tokio::io::sink();
+            let (mut recv, _keep_receive_open) = tokio::io::duplex(64);
+            let control = async move {
+                if control_ready {
+                    Ok(TunnelShutdown {
+                        repair_required: true,
+                        message: "exact controller shutdown".to_owned(),
+                    })
+                } else {
+                    std::future::pending().await
+                }
+            };
+            let result = timeout(
+                Duration::from_secs(5),
+                tunnel_packet_loop(
+                    device,
+                    &mut send,
+                    &mut recv,
+                    traffic,
+                    signer,
+                    counters.clone(),
+                    control,
+                ),
+            )
+            .await
+            .expect("the exact expired deadline or ready control must terminate the loop")
+            .expect("authenticated shutdown");
+            assert_eq!(result.repair_required, control_ready);
+            assert_eq!(
+                result.message,
+                if control_ready {
+                    "exact controller shutdown"
+                } else {
+                    "authenticated helper ticket expired"
+                }
+            );
+            assert_eq!(counters.snapshot(), (0, 0));
+            assert_eq!(peer.read(&mut [0; 1]).expect("both loop owners retired"), 0);
+        }
     }
 
     #[cfg(target_os = "linux")]
