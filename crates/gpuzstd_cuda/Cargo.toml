@@ -13,8 +13,8 @@ cuda-kernel = []
 
 [dependencies]
 # Shared deterministic frame encoder/decoder and sequence layout. The Metal
-# crate's `c-abi` exports stay disabled so the two helpers never export the same
-# C symbols from one artifact.
+# crate's `c-abi` exports are not needed here. CUDA uses owner-qualified C
+# symbols so feature unification can also enable Metal's exports safely.
 gpuzstd_metal = { path = "../gpuzstd_metal", default-features = false }
 zstd.workspace = true
 

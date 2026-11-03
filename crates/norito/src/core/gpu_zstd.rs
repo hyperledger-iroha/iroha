@@ -48,6 +48,16 @@ const LOAD_LIBRARY_SEARCH_DEFAULT_DIRS: u32 = 0x0000_1000;
 const LOAD_LIBRARY_SEARCH_SYSTEM32: u32 = 0x0000_0800;
 #[cfg(unix)]
 const RTLD_LAZY: c_int = 1;
+// CUDA links the shared Metal frame codec. Its owner-qualified exports remain
+// distinct even when another workspace consumer enables Metal's C ABI.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const COMPRESS_SYMBOL: &std::ffi::CStr = c"gpu_zstd_compress";
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const DECOMPRESS_SYMBOL: &std::ffi::CStr = c"gpu_zstd_decompress";
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+const COMPRESS_SYMBOL: &std::ffi::CStr = c"gpuzstd_cuda_compress";
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+const DECOMPRESS_SYMBOL: &std::ffi::CStr = c"gpuzstd_cuda_decompress";
 const RC_GPU_UNAVAILABLE: i32 = 3;
 type CompressFn = unsafe extern "C" fn(
     src: *const u8,
@@ -392,8 +402,10 @@ unsafe fn init_backend() -> Option<Backend> {
             if lib.is_null() {
                 continue;
             }
-            let compress = unsafe { GetProcAddress(lib, b"gpu_zstd_compress\0".as_ptr()) };
-            let decompress = unsafe { GetProcAddress(lib, b"gpu_zstd_decompress\0".as_ptr()) };
+            let compress =
+                unsafe { GetProcAddress(lib, COMPRESS_SYMBOL.to_bytes_with_nul().as_ptr()) };
+            let decompress =
+                unsafe { GetProcAddress(lib, DECOMPRESS_SYMBOL.to_bytes_with_nul().as_ptr()) };
             if compress.is_null() || decompress.is_null() {
                 let _ = unsafe { FreeLibrary(lib) };
                 continue;
@@ -460,8 +472,8 @@ unsafe fn load_gpu_symbols(lib_names: &[&str]) -> Option<(*mut c_void, CompressF
 unsafe fn resolve_gpu_symbols(
     library: *mut c_void,
 ) -> Option<(*mut c_void, CompressFn, DecompressFn)> {
-    let compress = unsafe { dlsym(library, c"gpu_zstd_compress".as_ptr()) };
-    let decompress = unsafe { dlsym(library, c"gpu_zstd_decompress".as_ptr()) };
+    let compress = unsafe { dlsym(library, COMPRESS_SYMBOL.as_ptr()) };
+    let decompress = unsafe { dlsym(library, DECOMPRESS_SYMBOL.as_ptr()) };
     if compress.is_null() || decompress.is_null() {
         let _ = unsafe { dlclose(library) };
         return None;
@@ -1042,6 +1054,94 @@ mod self_test {
             }),
             "candidate list should include parent sibling dylib used by cargo-run examples"
         );
+    }
+    #[cfg(unix)]
+    #[test]
+    fn helper_loader_refuses_the_other_backends_exports() {
+        use std::{
+            ffi::CString,
+            fs,
+            os::unix::{ffi::OsStrExt, fs::DirBuilderExt},
+            process::Command,
+        };
+
+        struct FixtureDirectory(PathBuf);
+        impl Drop for FixtureDirectory {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("norito-gpu-symbols-{}-{nonce}", std::process::id()));
+        fs::DirBuilder::new()
+            .mode(0o700)
+            .create(&directory)
+            .expect("private fixture directory");
+        let directory = FixtureDirectory(directory);
+        let other = if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+            ("gpuzstd_cuda_compress", "gpuzstd_cuda_decompress")
+        } else {
+            ("gpu_zstd_compress", "gpu_zstd_decompress")
+        };
+        let selected = (
+            COMPRESS_SYMBOL.to_str().expect("ASCII export"),
+            DECOMPRESS_SYMBOL.to_str().expect("ASCII export"),
+        );
+        for (ordinal, ((compress, decompress), accepted)) in
+            [(other, false), (selected, true)].into_iter().enumerate()
+        {
+            let source = directory.0.join(format!("helper-{ordinal}.c"));
+            let library = directory.0.join(format!("helper-{ordinal}.so"));
+            fs::write(&source, format!(
+                "#include <stddef.h>\n                 int {compress}(const unsigned char *src, size_t len, int level, unsigned char *dst, size_t *out_len) {{ return 3; }}\n                 int {decompress}(const unsigned char *src, size_t len, unsigned char *dst, size_t *out_len) {{ return 3; }}\n"
+            )).expect("helper source");
+            let compiler = Command::new("cc")
+                .args(["-shared", "-fPIC"])
+                .arg(&source)
+                .arg("-o")
+                .arg(&library)
+                .output()
+                .expect("native C compiler");
+            assert!(
+                compiler.status.success(),
+                "{}",
+                String::from_utf8_lossy(&compiler.stderr)
+            );
+            let name = CString::new(library.as_os_str().as_bytes()).expect("library path");
+            let handle = unsafe { dlopen(name.as_ptr(), RTLD_LAZY) };
+            assert!(!handle.is_null(), "load native helper fixture");
+            let resolved = unsafe { resolve_gpu_symbols(handle) };
+            assert_eq!(resolved.is_some(), accepted);
+            if let Some((handle, compress, decompress)) = resolved {
+                assert_eq!(
+                    unsafe { compress(ptr::null(), 0, 1, ptr::null_mut(), ptr::null_mut()) },
+                    RC_GPU_UNAVAILABLE
+                );
+                assert_eq!(
+                    unsafe { decompress(ptr::null(), 0, ptr::null_mut(), ptr::null_mut()) },
+                    RC_GPU_UNAVAILABLE
+                );
+                assert_eq!(unsafe { dlclose(handle) }, 0);
+            }
+        }
+    }
+    #[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+    #[test]
+    fn cuda_helper_abi_requires_owner_qualified_exports() {
+        // These are the exact C exports exercised by gpuzstd_cuda's ABI test.
+        // A unified Metal feature must never redirect the CUDA loader to Metal.
+        assert_eq!(COMPRESS_SYMBOL.to_bytes(), b"gpuzstd_cuda_compress");
+        assert_eq!(DECOMPRESS_SYMBOL.to_bytes(), b"gpuzstd_cuda_decompress");
+    }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn metal_helper_abi_retains_its_own_exports() {
+        assert_eq!(COMPRESS_SYMBOL.to_bytes(), b"gpu_zstd_compress");
+        assert_eq!(DECOMPRESS_SYMBOL.to_bytes(), b"gpu_zstd_decompress");
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     #[test]

@@ -1,11 +1,11 @@
 # GPU Zstd (CUDA) Pipeline
 
 This document describes the deterministic CUDA helper used by Norito for zstd
-compression on non-Apple GPU hosts. The helper exports the same C ABI as the
-Metal helper:
+compression on non-Apple GPU hosts. The helper uses the same C function
+signatures as the Metal helper with distinct, owner-qualified exports:
 
-- `gpu_zstd_compress(src_ptr, src_len, level, dst_ptr, dst_len)`
-- `gpu_zstd_decompress(src_ptr, src_len, dst_ptr, dst_len)`
+- `gpuzstd_cuda_compress(src_ptr, src_len, level, dst_ptr, dst_len)`
+- `gpuzstd_cuda_decompress(src_ptr, src_len, dst_ptr, dst_len)`
 
 ## Goals
 
@@ -30,9 +30,10 @@ Metal helper:
    wait.
 5. The shared zstd frame encoder assembles literals, Huffman/FSE data, block
    headers, and the frame header. `gpuzstd_cuda` links it from the
-   `gpuzstd_metal` library (`zstd_frame`, with `default-features = false` so
-   the Metal crate's `c-abi` exports are not linked) instead of compiling a
-   second copy.
+   `gpuzstd_metal` library (`zstd_frame`, with `default-features = false`)
+   instead of compiling a second copy. Distinct CUDA export names prevent
+   collisions if another workspace consumer enables the Metal `c-abi` feature.
+   Norito resolves only the CUDA-qualified names when loading this helper.
 
 The CUDA kernels do not use atomics or scheduling-dependent reductions for
 output bytes. Each chunk owns its hash table and sequence range, so launch order
