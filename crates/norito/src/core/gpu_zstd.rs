@@ -1099,7 +1099,13 @@ mod self_test {
             fs::write(&source, format!(
                 "#include <stddef.h>\n                 int {compress}(const unsigned char *src, size_t len, int level, unsigned char *dst, size_t *out_len) {{ return 3; }}\n                 int {decompress}(const unsigned char *src, size_t len, unsigned char *dst, size_t *out_len) {{ return 3; }}\n"
             )).expect("helper source");
-            let compiler = Command::new("cc")
+            let mut command = Command::new("cc");
+            // Bind the Mach-O fixture to this test executable, including Rosetta runs.
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+            command.args(["-arch", "arm64"]);
+            #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+            command.args(["-arch", "x86_64"]);
+            let compiler = command
                 .args(["-shared", "-fPIC"])
                 .arg(&source)
                 .arg("-o")
