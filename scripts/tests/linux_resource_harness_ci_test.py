@@ -336,6 +336,55 @@ def test_registry_children_preserve_retained_source_directories(tmp_path):
         assert not list(repository.rglob("__pycache__"))
 
 
+@pytest.mark.parametrize("caller", ["linux_observer_delivery", "run_release_pipeline"])
+@pytest.mark.parametrize("mutation", ["none", "changed-source", "stale-pin"])
+def test_both_registry_callers_admit_only_the_reviewed_source_owner(tmp_path, caller, mutation):
+    """Exercise each real static inventory before native publication is involved."""
+    scripts = tmp_path.resolve() / "source/scripts"
+    scripts.mkdir(parents=True)
+    for pattern in ("*.py", "*.json"):
+        for source in (ROOT / "scripts").glob(pattern):
+            shutil.copyfile(source, scripts / source.name)
+    if mutation == "changed-source":
+        with (scripts / "compute_workspace_source_manifest.py").open("ab") as output:
+            output.write(b"\n# changed after independent review\n")
+    child = (
+        "import importlib, sys\n"
+        "from pathlib import Path\n"
+        "from unittest.mock import patch\n"
+        f"sys.path.insert(0, {str(scripts)!r})\n"
+        f"caller = importlib.import_module({caller!r})\n"
+        "if caller.__name__ == 'linux_observer_delivery':\n"
+        "    registry_type = caller.pipeline_registry.ReviewedRegistry\n"
+        "    pins = dict(caller.REVIEWED_MODULES)\n"
+        "else:\n"
+        "    registry_type = caller.ReviewedRegistry\n"
+        "    pins = dict(caller._NATIVE_PREPARATION_MODULE_SHA256)\n"
+        f"mutation = {mutation!r}\n"
+        "if mutation == 'stale-pin':\n"
+        "    pins['compute_workspace_source_manifest.py'] = '0' * 64\n"
+        f"registry = registry_type(Path({str(scripts)!r}), pins)\n"
+        "with patch('subprocess.Popen', side_effect=AssertionError('child forbidden')), "
+        "patch('ctypes.CDLL', side_effect=AssertionError('native load forbidden')):\n"
+        "    if mutation == 'none':\n"
+        "        with registry:\n"
+        "            assert 'compute_workspace_source_manifest' in registry.modules\n"
+        "            registry.keeper.revalidate()\n"
+        "    else:\n"
+        "        with patch.object(registry, '_execute', side_effect=AssertionError('unreviewed execution')) as execute:\n"
+        "            try:\n"
+        "                with registry:\n"
+        "                    raise AssertionError('mismatched source admitted')\n"
+        "            except RuntimeError as error:\n"
+        "                assert str(error) == 'bootstrap bytes differ from the reviewed pipeline source'\n"
+        "            execute.assert_not_called()\n"
+    )
+    result = subprocess.run([sys.executable, "-I", "-B", "-c", child],
+                            cwd=scripts.parent, text=True, capture_output=True, timeout=30)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not list(scripts.rglob("__pycache__"))
+
+
 def test_ci_requires_normal_publication_and_all_tests_without_changing_memfd_policy():
     """The mandatory job owns both the native suite and its lightweight regressions."""
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
