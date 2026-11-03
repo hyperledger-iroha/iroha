@@ -35,7 +35,7 @@ def torii_url(request):
     return request.param
 
 
-def _get(torii_url, path, *, wait_for_genesis=False):
+def _get(torii_url, path, *, accept="application/json", wait_for_genesis=False):
     """Bound reads, retrying only the version route's explicit startup response."""
     deadline = time.monotonic() + 30
     while True:
@@ -43,7 +43,7 @@ def _get(torii_url, path, *, wait_for_genesis=False):
         assert remaining > 0, f"{torii_url}{path}: genesis was not applied within 30s"
         response = requests.get(
             torii_url + path,
-            headers={"Accept": "application/json"},
+            headers={"Accept": accept},
             timeout=(min(5, remaining), min(10, remaining)),
             allow_redirects=False,
         )
@@ -62,13 +62,16 @@ def _get(torii_url, path, *, wait_for_genesis=False):
 
 def test_peer_health(torii_url):
     """Each peer serves the current liveness response, without redirects."""
-    response = _get(torii_url, "/health")
+    response = _get(torii_url, "/health", accept="text/plain")
+    assert response.headers["Content-Type"].split(";")[0] == "text/plain"
     assert response.text == "Healthy"
 
 
 def test_peer_canonical_block_wire_version(torii_url):
     """The applied-genesis route advertises the sole canonical block-wire V1."""
-    response = _get(torii_url, "/v1/api/version", wait_for_genesis=True)
+    response = _get(
+        torii_url, "/v1/api/version", accept="text/plain", wait_for_genesis=True
+    )
     assert response.headers["Content-Type"].split(";")[0] == "text/plain"
     assert response.text == "1"
 

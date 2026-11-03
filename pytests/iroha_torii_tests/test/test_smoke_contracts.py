@@ -70,18 +70,24 @@ def _replies():
 
 
 @pytest.mark.parametrize(
-    "check,paths",
+    "check,requests",
     [
-        (smoke.test_peer_health, ["/health"]),
-        (smoke.test_peer_canonical_block_wire_version, ["/v1/api/version"]),
-        (smoke.test_peer_status, ["/v1/api/version", "/status"]),
-        (smoke.test_peer_schema, ["/v1/schema"]),
+        (smoke.test_peer_health, [("/health", "text/plain")]),
+        (
+            smoke.test_peer_canonical_block_wire_version,
+            [("/v1/api/version", "text/plain")],
+        ),
+        (
+            smoke.test_peer_status,
+            [("/v1/api/version", "text/plain"), ("/status", "application/json")],
+        ),
+        (smoke.test_peer_schema, [("/v1/schema", "application/json")]),
     ],
 )
-def test_smoke_uses_the_current_routes(check, paths):
+def test_smoke_uses_the_current_routes(check, requests):
     with _peer(_replies()) as (url, seen):
         check(url)
-    assert seen == [(path, "application/json") for path in paths]
+    assert seen == requests
 
 
 @pytest.mark.parametrize(
@@ -89,6 +95,7 @@ def test_smoke_uses_the_current_routes(check, paths):
     [
         (smoke.test_peer_health, "/health", (302, "text/plain", "Healthy")),
         (smoke.test_peer_health, "/health", (200, "text/plain", "not healthy")),
+        (smoke.test_peer_health, "/health", (200, "application/json", "Healthy")),
         (
             smoke.test_peer_canonical_block_wire_version,
             "/v1/api/version",
