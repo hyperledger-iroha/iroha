@@ -41,6 +41,34 @@ def test_native_build_names_are_real_workspace_targets():
     assert "--locked" in build
 
 
+@pytest.mark.parametrize(
+    "job",
+    [
+        name
+        for name, config in JOBS.items()
+        if any(
+            step.get("uses") == "./.github/actions/setup-native-ci"
+            for step in config["steps"]
+        )
+    ],
+)
+def test_native_builds_fetch_base_history_for_norito_bindings_guard(job):
+    """Keep the base ref and merge ancestry available to the build-time guard."""
+    steps = JOBS[job]["steps"]
+    checkout_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses", "").startswith("actions/checkout@")
+    )
+    setup_index = next(
+        index
+        for index, step in enumerate(steps)
+        if step.get("uses") == "./.github/actions/setup-native-ci"
+    )
+    assert checkout_index < setup_index
+    assert steps[checkout_index].get("with", {}).get("fetch-depth") == "0"
+
+
 def test_xtask_fixture_verification_does_not_require_an_absent_cargo_alias():
     command = commands(JOBS["norito_rpc_verify"])
     assert "cargo run --locked -p xtask --bin xtask -- norito-rpc-verify" in command
