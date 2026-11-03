@@ -161,6 +161,11 @@ are unchanged. The release-binary job has a 240-minute allowance for both
 feature-isolated cold builds and paging; its first build exceeded one hour on
 the hosted runner. This setup and its observations are not release qualification.
 
+The release-binary job stages its selected artifacts in a fresh child of
+`RUNNER_TEMP`, outside the restored Cargo target caches. Existing staging
+directories remain an error; a cached prior publication cannot be reused or
+overwritten. Cargo retains its separate warm shipping and test-feature targets.
+
 `result.compiler_measurements.compiled` contains one measurement for each
 compiled Cargo artifact. It includes the package, target name/kinds/crate
 types, package-relative source path, sorted features, complete Cargo profile,

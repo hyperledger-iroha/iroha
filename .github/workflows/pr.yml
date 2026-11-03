@@ -74,12 +74,12 @@ jobs:
         run: |
           python3 -I -S ci/observe_build_capacity.py -- python3 scripts/rust_ci.py build-binaries \
             --binaries "$REQUIRED_BINARIES" \
-            --output-dir target/release/pre_build
+            --output-dir "${RUNNER_TEMP:?}/iroha-prebuilt-binaries"
       - name: Upload binaries
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: bins
-          path: target/release/pre_build
+          path: ${{ runner.temp }}/iroha-prebuilt-binaries
           retention-days: 1
 
   consistency:

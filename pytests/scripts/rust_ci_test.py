@@ -121,7 +121,7 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
     assert original.splitlines() == [
         "python3 scripts/rust_ci.py build-binaries \\",
         '  --binaries "$REQUIRED_BINARIES" \\',
-        "  --output-dir target/release/pre_build",
+        '  --output-dir "${RUNNER_TEMP:?}/iroha-prebuilt-binaries"',
     ]
     (tmp_path / "ci").mkdir()
     (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
@@ -131,15 +131,81 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
     )
     result = subprocess.run(
         ["/bin/sh", "-c", command], cwd=tmp_path,
-        env={**os.environ, "REQUIRED_BINARIES": "iroha,iroha3d,kagami,koto"},
+        env={**os.environ, "REQUIRED_BINARIES": "iroha,iroha3d,kagami,koto",
+             "RUNNER_TEMP": str(tmp_path / "runner temp")},
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == code, result.stderr
     assert json.loads(result.stdout) == [
         "build-binaries", "--binaries", "iroha,iroha3d,kagami,koto",
-        "--output-dir", "target/release/pre_build",
+        "--output-dir", str(tmp_path / "runner temp/iroha-prebuilt-binaries"),
     ]
     assert "[build-capacity]" in result.stderr
+
+
+def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: Path) -> None:
+    """Run the workflow and real staging owner; substitute only the external Cargo producer."""
+    job = _workflow_job("pre_build")
+    body = job.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    command = textwrap.dedent(body)
+    assert "          path: ${{ runner.temp }}/iroha-prebuilt-binaries\n" in job
+    workspace = tmp_path / "workspace"
+    (workspace / "scripts").mkdir(parents=True)
+    (workspace / "ci").mkdir()
+    for name in ("rust_ci.py", "check_kotodama_docs.py"):
+        (workspace / "scripts" / name).write_bytes((ROOT / "scripts" / name).read_bytes())
+    (workspace / "ci/observe_build_capacity.py").write_bytes(CAPACITY_SCRIPT.read_bytes())
+    restored = workspace / "target/release/pre_build"
+    restored.mkdir(parents=True)
+    stale = restored / "iroha3d"
+    stale.write_bytes(b"previous candidate")
+    stale_inode = stale.stat().st_ino
+    runner_temp = tmp_path / "runner temp"
+    runner_temp.mkdir()
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    calls = tmp_path / "cargo-calls.jsonl"
+    cargo = tools / "cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\nfrom pathlib import Path\n"
+        "args = sys.argv[1:]\n"
+        "with open(os.environ['CARGO_CALLS'], 'a') as log: log.write(json.dumps(args) + '\\n')\n"
+        "target = Path(args[args.index('--target-dir') + 1])\n"
+        "(target / 'release').mkdir(parents=True, exist_ok=True)\n"
+        "for index, value in enumerate(args):\n"
+        "    if value == '--bin':\n"
+        "        (target / 'release' / args[index + 1]).write_text(target.name + ':' + args[index + 1])\n"
+    )
+    cargo.chmod(0o700)
+    environment = {
+        **os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+        "RUNNER_TEMP": str(runner_temp), "CARGO_CALLS": str(calls),
+        "REQUIRED_BINARIES": "iroha,iroha3d,iroha3d_private_settlement_routes,kagami,koto",
+    }
+    result = subprocess.run(["/bin/sh", "-c", command], cwd=workspace, env=environment,
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    output = runner_temp / "iroha-prebuilt-binaries"
+    assert sorted(path.name for path in output.iterdir()) == sorted(environment["REQUIRED_BINARIES"].split(","))
+    assert (output / "iroha3d").read_bytes() == b"shipping:iroha3d"
+    assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"private-settlement-route-control:iroha3d"
+    assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
+    invocations = calls.read_bytes()
+    assert len(invocations.splitlines()) == 2
+    # Repeated publication and the old restored-cache destination both refuse
+    # before Cargo; neither can overwrite the original binaries or reuse them.
+    for refused_command in (
+        command,
+        command.replace('"${RUNNER_TEMP:?}/iroha-prebuilt-binaries"', "target/release/pre_build"),
+    ):
+        refused = subprocess.run(["/bin/sh", "-c", refused_command], cwd=workspace,
+                                 env=environment, capture_output=True, text=True, check=False)
+        assert refused.returncode == 2
+        assert "binary staging directory already exists" in refused.stderr
+        assert calls.read_bytes() == invocations
+        assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
+        assert (output / "iroha3d").read_bytes() == b"shipping:iroha3d"
 
 
 @pytest.mark.parametrize("code", [0, 23])
