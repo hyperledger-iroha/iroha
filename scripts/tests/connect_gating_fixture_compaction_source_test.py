@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/tests/connect_gating.rs"
+GROUP_SOURCE_PATH = ROOT / "crates/iroha_torii/tests/grouped/protocols.rs"
 EXPECTED_TESTS = (('connect_config_fixture_uses_checked_key_generation', ('#[test]',)),
  ('connect_endpoints_report_typed_unavailability_when_disabled', ('#[tokio::test]',)),
  ('connect_status_present_when_enabled', ('#[tokio::test]',)),
@@ -46,7 +47,7 @@ EXPECTED_TESTS = (('connect_config_fixture_uses_checked_key_generation', ('#[tes
   ('#[cfg(feature = "ws_integration_tests")]', '#[tokio::test]')))
 EXPECTED_SEEDS = ('0x24', '0x34', '0x44', '0x52', '0x62', '0x92', '0xA3', '0xB4', '0xC5', '0xD6', '0xE7')
 EXPECTED_PINGS = ('1', '41', '42', '7', '8', '9', '10')
-ASSERTION_SURFACE_SHA256 = '610b9b12881a006c24370618432db725221fac22bf4b27f9c54440e3a9417076'
+ASSERTION_SURFACE_SHA256 = '10e8692fffe350e6341c7e7402d7a0f231d7b274b41db5ee04dc1138db470f0f'
 CONNECT_URI_SURFACE_SHA256 = '8ae0493017455d5c7d6480e491828760e68aa4ed9bfe3fb2d0d7da7de68ee1f0'
 EXPECTED_HELPERS = (
     "request_with_loopback_connect_info",
@@ -77,7 +78,6 @@ CONFIG_ANCHORS = (
     "cfg.common.soranet_transport_key_pair = checked_connect_transport_key_fixture();",
     "cfg.common.trusted_peers = WithOrigin::inline(A::TrustedPeers {",
     "cfg.network.lane_profile = A::LaneProfile::Core;",
-    'b"Connect gating test genesis trust anchor"',
     "cfg.torii.connect = A::Connect {",
     "enabled: connect_enabled,",
     "cfg.torii.sorafs_gateway = A::SorafsGateway::default();",
@@ -120,9 +120,9 @@ DIRECT_FUNCTION = re.compile(
     re.MULTILINE,
 )
 SESSION_SEED = re.compile(
-    r"connect_session_request_body\(\s*(?P<direct>0x[0-9A-Fa-f]+)\s*\)|"
+    r"connect_session_request_body\(\s*&cfg,\s*(?P<direct>0x[0-9A-Fa-f]+)\s*\)|"
     r"create_connect_(?:session_payload|app_session)\("
-    r"[^,]+,\s*(?P<typed>0x[0-9A-Fa-f]+)\s*\)"
+    r"[^,]+,\s*&cfg,\s*(?P<typed>0x[0-9A-Fa-f]+)\s*\)"
 )
 
 
@@ -261,13 +261,17 @@ def _uri_surface(source: str) -> tuple[str, ...]:
     return tuple(re.findall(r'"(/v1/connect[^"]*)"', source))
 
 
-def _validate(source: str) -> None:
+def _validate(source: str, group_source: str | None = None) -> None:
     if FORBIDDEN.search(source):
         raise GuardError("forbidden callback, body DSL, source relocation, or macro found")
-    if tuple(re.findall(r'#\[path\s*=\s*"([^\"]+)"\]', source)) != (
-        "../src/build_identity_test_fixture.rs",
-    ):
+    if re.search(r'#\[path\s*=', source) or source.count("use crate::build_identity_test_fixture;") != 1:
         raise GuardError("shared build-identity fixture ownership changed")
+    if group_source is None:
+        group_source = GROUP_SOURCE_PATH.read_text(encoding="utf-8")
+    for path, module in (("../../src/build_identity_test_fixture.rs", "build_identity_test_fixture"),
+                         ("../connect_gating.rs", "connect_gating")):
+        if group_source.count(f'#[path = "{path}"]\nmod {module};') != 1:
+            raise GuardError("grouped Connect fixture ownership changed")
     if tuple(re.findall(r'include!\("([^"]+)"\);', source)) != (
         "connect_gating_disabled_ws_test.rs",
     ):
@@ -285,6 +289,14 @@ def _validate(source: str) -> None:
     for anchor in CONFIG_ANCHORS:
         if config.count(anchor) != 1:
             raise GuardError(f"configuration override changed: {anchor}")
+    build = _function(source, "build_torii")
+    for anchor in ("fixtures::commit_signed_genesis(cfg, World::default(), Vec::new())",
+                   "native_chain.network_id()", "native_chain.kura().clone()",
+                   "native_chain.state().clone()"):
+        if build.count(anchor) != 1:
+            raise GuardError(f"signed genesis fixture changed: {anchor}")
+    if "NetworkId::from_genesis_hash(cfg.genesis.expected_hash)" not in _function(source, "connect_network_id"):
+        raise GuardError("Connect requests must bind the applied genesis network")
     diagnostics = _diagnostic_surface(source)
     if any(diagnostic not in diagnostics for diagnostic in REQUIRED_JSON_DIAGNOSTICS):
         raise GuardError("required JSON diagnostic changed")
@@ -321,6 +333,20 @@ class ConnectGatingFixtureCompactionSourceTest(unittest.TestCase):
 
     def test_seed_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(self.source.replace("0xB4", "0xB5", 1))
+
+    def test_seed_without_applied_configuration_is_rejected(self) -> None:
+        self.assert_mutation_rejected(self.source.replace("&app2, &cfg, 0xB4", "&app2, 0xB4", 1))
+
+    def test_grouped_fixture_relocation_is_rejected(self) -> None:
+        group_source = GROUP_SOURCE_PATH.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(GuardError, "grouped Connect fixture ownership"):
+            _validate(self.source, group_source.replace("../../src/build_identity_test_fixture.rs", "other.rs"))
+
+    def test_signed_genesis_state_substitution_is_rejected(self) -> None:
+        self.assert_mutation_rejected(self.source.replace("native_chain.state().clone()", "unbound_state"))
+
+    def test_unbound_network_is_rejected(self) -> None:
+        self.assert_mutation_rejected(self.source.replace("NetworkId::from_genesis_hash(cfg.genesis.expected_hash)", "NetworkId::default()"))
 
     def test_assertion_axis_mutation_is_rejected(self) -> None:
         self.assert_mutation_rejected(self.source.replace("Some(false)", "Some(true)", 1))
