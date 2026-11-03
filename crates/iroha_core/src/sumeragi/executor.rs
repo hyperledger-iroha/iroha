@@ -1726,7 +1726,8 @@ impl<'s> Worker<'s> {
     /// reservations. A refusal that waits on that pool keeps them with its job, and the
     /// job's next attempt starts from them, so its own rollback cannot satisfy the
     /// refusal's release wait; only another owner's release can. Other outcomes return
-    /// them to the pool.
+    /// them to the pool. Superseded jobs retire before this scope so their
+    /// external releases cannot become the replacement job's private credits.
     #[expect(
         clippy::result_large_err,
         reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
@@ -1738,10 +1739,28 @@ impl<'s> Worker<'s> {
         certified: bool,
         finish: impl FnOnce(&mut Self) -> Result<Option<Hash32>, PublicationError>,
     ) -> Result<Option<Hash32>, PublicationError> {
+        self.retire_completed_payload(block.header().height);
+        if self.publication_pending() {
+            return Err(PublicationError::Retryable(
+                "the original prepared publication is still retained".into(),
+            ));
+        }
         let pool = self.state.ivm_execution_budget();
+        // Superseded jobs are external owners of this job's pool. Return their
+        // bytes before opening the replacement's rollback-credit scope.
+        #[cfg(all(test, sumeragi_core_mutation = "HC984"))]
+        let replacement_credits = pool
+            .with_attempt_credits(None, || self.retire_superseded_execution(block_hash))
+            .1;
+        #[cfg(not(all(test, sumeragi_core_mutation = "HC984")))]
+        self.retire_superseded_execution(block_hash);
         let retained = self
             .job_decode(block_hash)
             .and_then(|attempt| attempt.rollback_credits.take());
+        // SPEC: §13.4 HC984 captures the superseded owner's retirement credits
+        // in the replacement job, so the original release observation never wakes.
+        #[cfg(all(test, sumeragi_core_mutation = "HC984"))]
+        let retained = retained.or(replacement_credits);
         let (outcome, credits) = pool.with_attempt_credits(retained, || {
             self.run_attempt_with_finisher(block, block_hash, certified, finish)
         });
@@ -1758,6 +1777,35 @@ impl<'s> Worker<'s> {
         }
         // Other outcomes return the attempt's credits to the pool here.
         outcome
+    }
+
+    /// Retire only superseded execution owners before a new job can capture refunds.
+    fn retire_superseded_execution(&mut self, block_hash: Hash32) {
+        // An exact finishing retry must first revalidate its original source in
+        // run_attempt_with_finisher; no private owner can retire on that path.
+        if self
+            .finishing
+            .as_ref()
+            .is_some_and(|original| original.block_hash == block_hash)
+        {
+            return;
+        }
+        // An explicitly superseded candidate releases its original private execution.
+        self.finishing = None;
+        // The state admits one overlay: drop the previous one first.
+        if let Some(previous) = self.live.take() {
+            // Its overlay is gone; a later `prepare` executes again.
+            self.results.remove(&previous.block_hash);
+        }
+        if self
+            .signature_decode
+            .as_ref()
+            .is_some_and(|attempt| attempt.block_hash != block_hash)
+        {
+            // A different authenticated candidate explicitly retires the old original owners.
+            self.signature_decode = None;
+            self.cancel_incoming_lane_reads();
+        }
     }
 
     /// Original decode custody of the job executing `block_hash`, before or after validation.
@@ -1785,12 +1833,6 @@ impl<'s> Worker<'s> {
         certified: bool,
         finish: impl FnOnce(&mut Self) -> Result<Option<Hash32>, PublicationError>,
     ) -> Result<Option<Hash32>, PublicationError> {
-        self.retire_completed_payload(block.header().height);
-        if self.publication_pending() {
-            return Err(PublicationError::Retryable(
-                "the original prepared publication is still retained".into(),
-            ));
-        }
         if let Some(original) = &self.finishing
             && original.block_hash == block_hash
         {
@@ -1808,24 +1850,8 @@ impl<'s> Worker<'s> {
             }
             return finish(self);
         }
-        // An explicitly superseded candidate releases its original private execution.
-        self.finishing = None;
-        // The state admits one overlay: drop the previous one first.
-        if let Some(previous) = self.live.take() {
-            // Its overlay is gone; a later `prepare` executes again.
-            self.results.remove(&previous.block_hash);
-        }
         let height = block.header().height;
         let budget = self.state.ivm_execution_budget();
-        if self
-            .signature_decode
-            .as_ref()
-            .is_some_and(|attempt| attempt.block_hash != block_hash)
-        {
-            // A different authenticated candidate explicitly retires the old original owners.
-            self.signature_decode = None;
-            self.cancel_incoming_lane_reads();
-        }
         if self.signature_decode.is_none() {
             // Recovery already paid for this exact graph. Transfer its custody, then
             // recheck ordinary execution authority below; signing admission is retained.

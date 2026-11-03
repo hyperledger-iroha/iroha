@@ -1009,6 +1009,42 @@ def test_native_execution_rollback_credit_mutation_requires_worker_owned_repeat_
     assert not gate.has_switch("HC983")
 
 
+def test_native_execution_replacement_credit_mutation_preserves_owner_and_guard_order():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC984"]
+    name = ("sumeragi::executor::parent_service_custody_tests::"
+            "parent_service_worker_replacement_retires_only_the_superseded_original_attempt")
+    cause = "explicit replacement retires the superseded receipt owner"
+    source = "crates/iroha_core/src/sumeragi/executor_parent_service_custody_tests.rs"
+    join_source = "crates/iroha_core/src/sumeragi/executor_publication_tests.rs"
+    assert rule.tests == (name,)
+    assert rule.causes == (gate.ExpectedFailure(
+        cause, source, worker_thread="sumeragi-publication-test",
+        join_source=join_source, join_message="publication worker fixture: Any { .. }"),)
+    body = named_rust_function((ROOT / source).read_text(), name.rsplit("::", 1)[-1])
+    assert f'"{cause}"' in body
+    assert "new candidate keeps its own receipt graph" in body
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    entry = named_rust_function(executor, "run_execution_with_finisher")
+    assert entry.index("self.retire_completed_payload(") < entry.index("self.publication_pending()")
+    assert entry.index("self.publication_pending()") < entry.index("self.retire_superseded_execution(")
+    assert entry.index("self.retire_superseded_execution(") < entry.index("pool.with_attempt_credits(retained,")
+    assert 'cfg(not(all(test, sumeragi_core_mutation = "HC984")))' in entry
+    assert 'cfg(all(test, sumeragi_core_mutation = "HC984"))' in entry
+    assert "let retained = retained.or(replacement_credits);" in entry
+    retirement = named_rust_function(executor, "retire_superseded_execution")
+    operations = ["original.block_hash == block_hash", "return;", "self.finishing = None",
+                  "self.live.take()", "self.results.remove(", "attempt.block_hash != block_hash",
+                  "self.signature_decode = None", "self.cancel_incoming_lane_reads()"]
+    positions = [retirement.index(operation) for operation in operations]
+    assert positions == sorted(positions)
+    attempt = named_rust_function(executor, "run_attempt_with_finisher")
+    assert "original.header != *block.header()" in attempt
+    assert "original.availability != *block.availability()" in attempt
+    assert "original.source != *block.source()" in attempt
+    assert gate.has_switch("HC984", core=True)
+    assert not gate.has_switch("HC984")
+
+
 def test_core_decode_refusal_classifier_gate_retains_global_and_inner_format_rejections():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC33"]
     assert rule.tests == (

@@ -497,6 +497,62 @@ fn parent_service_errors_keep_original_waiter_and_permanent_source_classificatio
 }
 
 #[test]
+fn prepared_publication_keeps_its_original_owner_and_credits_on_execution_refusal() {
+    let _state_retirement = crossbeam_epoch::pin();
+    publication_tests::with_worker(|chain, worker, _blocks, events| {
+        let (body, qc) = publication_tests::executed(chain, worker);
+        worker.prepare(&body, &qc).unwrap();
+        assert!(worker.publication_pending());
+        let replacement =
+            publication_tests::proposal_with_transaction(chain, worker, |chain, time| {
+                chain.tick(time + 1)
+            });
+        let replacement_hash = replacement.hash(&**worker.context.crypto.as_ref().unwrap());
+        assert_ne!(replacement_hash, qc.block_hash);
+        let budget = worker.state.ivm_execution_budget();
+        // Retain a concrete original-pool refund with the already authenticated
+        // publication owner; a refused execution cannot spend or release it.
+        let ((), credits) = budget.with_attempt_credits(None, || {
+            drop(budget.try_reserve_bytes(64).unwrap());
+        });
+        let original = worker.live.as_mut().unwrap();
+        assert!(original.signature_decode.rollback_credits.is_none());
+        original.signature_decode.rollback_credits = credits;
+        let decoder = std::ptr::from_ref(&original.signature_decode);
+        let overlay = std::ptr::from_ref(original.overlay.as_ref().unwrap());
+        let reserved = budget.reserved_bytes();
+        let height = worker.state.view().height();
+        for (candidate, hash) in [(&body, qc.block_hash), (&replacement, replacement_hash)] {
+            let error = worker.run_execution(candidate, hash, false).unwrap_err();
+            assert!(matches!(error, PublicationError::Retryable(ref reason)
+                if reason == "the original prepared publication is still retained"));
+            let retained = worker.live.as_ref().unwrap();
+            assert_eq!(std::ptr::from_ref(&retained.signature_decode), decoder);
+            assert_eq!(
+                std::ptr::from_ref(retained.overlay.as_ref().unwrap()),
+                overlay
+            );
+            assert!(matches!(retained.phase, PublicationPhase::Prepared { .. }));
+            assert_eq!(
+                retained
+                    .signature_decode
+                    .rollback_credits
+                    .as_ref()
+                    .unwrap()
+                    .retained_bytes(),
+                64,
+                "pending publication keeps its original rollback credits"
+            );
+            assert_eq!(budget.reserved_bytes(), reserved);
+            assert_eq!(worker.state.view().height(), height);
+            assert!(worker.finishing.is_none() && worker.signature_decode.is_none());
+            assert!(worker.recovery.is_none());
+            assert!(events.try_recv().is_err());
+        }
+    });
+}
+
+#[test]
 fn parent_service_worker_replacement_retires_only_the_superseded_original_attempt() {
     // Keep constructor-retired State generations outside this operation's
     // original-pool refusal and synchronous refund observations.
