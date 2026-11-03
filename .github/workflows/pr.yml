@@ -738,9 +738,12 @@ jobs:
           command: |
             cd pytests/iroha_cli_tests
             poetry run pytest
-          on_retry_command: |
+          new_command_on_retry: |
+            set -e
             ./scripts/test_env.py cleanup
             ./scripts/test_env.py setup
+            (cd pytests/iroha_torii_tests && poetry run pytest)
+            (cd pytests/iroha_cli_tests && poetry run pytest)
       - name: Terminate test network
         run: ./scripts/test_env.py cleanup
 
