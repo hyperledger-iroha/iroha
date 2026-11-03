@@ -1060,7 +1060,7 @@ pub enum ParliamentBeaconSignerMode {
     Valid,
     /// Do not install a global-beacon partial signer for this validator.
     Absent,
-    /// Broadcast a deliberately proof-invalid share without admitting it locally.
+    /// Return a proof-invalid provider share that native own-share admission must reject.
     Invalid,
 }
 

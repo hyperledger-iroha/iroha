@@ -1230,6 +1230,39 @@ def validate_beacon_rotation_fixture(source: str) -> None:
         "assert_eq!(dkg.share_acceptances.len(), 16);",
     ):
         require(compact(marker) in compact(source), f"rotatable beacon test fixture lost `{marker}`")
+    validate_fixture_owned_custody(source)
+
+
+FIXTURE_CUSTODY_MARKERS = (
+    "owners: Mutex<[Option<InMemoryGlobalThresholdBeaconPartialSignerV1>; 2]>",
+    "owners: Mutex::new([None, None])",
+    "let mut owners = self.owners.lock().map_err(|_| Unavailable)?;",
+    "let slot = &mut owners[usize::from(use_successor)];",
+    "if slot.is_none() { *slot = Some(self.import_owned_signer(session, use_successor)?); }",
+    "if owner.session.record() != session.record() { return Err(NotOwned); }",
+    "AdaptiveThresholdBlsSecretShare::from_dealer_shares(fixture.session.transcript(), &private_contributions,)",
+    "Ok(InMemoryGlobalThresholdBeaconPartialSignerV1 { session: fixture.session, share, })",
+    "if expected_signer_index != self.local_signer_index { return Err(super::GlobalThresholdBeaconCapabilityErrorV1::NotOwned); }",
+    "self.with_retained_signer(session, |owner| { owner.attest_partial_signing_capability(session, expected_signer_index) })?",
+    ".with_retained_signer(session, |owner| owner.sign_partial(session, payload))",
+    "if self.emit_invalid_share { partial.signature_share[0] ^= 1; }",
+)
+
+
+def validate_fixture_owned_custody(source: str) -> None:
+    """The disposable provider must own verified private shares before non-signing lookup."""
+    source = re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S)
+    implementation = source.split("#[cfg(test)]", 1)[0]
+    for marker in FIXTURE_CUSTODY_MARKERS:
+        require(compact(marker) in compact(implementation), f"fixture custody lost `{marker}`")
+    provisioning = implementation.split("fn with_retained_signer", 1)[1].split(
+        "impl GlobalThresholdBeaconPartialSignerV1", 1
+    )[0]
+    attestation = implementation.split("fn attest_partial_signing_capability", 1)[1].split(
+        "fn sign_partial", 1
+    )[0]
+    for forbidden in ("sign_partial(", "sign_payload(", "from_validated_share(", "for_validated_session("):
+        require(forbidden not in provisioning + attestation, "fixture capability lookup must not sign or invent public-only custody")
 
 
 def validate_beacon_mode_profiles(source: str) -> None:
@@ -1405,7 +1438,7 @@ def validate_native_beacon_admission_and_fixture_isolation(
         'long = "test-network-parliament-beacon-signer-mode"',
         "hide = true",
         "TestNetworkParliamentBeaconSignerMode::Absent => None",
-        "with_deliberately_invalid_outbound()",
+        "with_deliberately_invalid_share()",
     ):
         require(marker in daemon, f"feature-only daemon signer wiring lost `{marker}`")
     require(
@@ -1434,6 +1467,10 @@ def validate_native_beacon_admission_and_fixture_isolation(
         "test_network_emit_invalid_outbound_partial_v1" not in lifecycle
         and "signature_share[0] ^= 1" not in lifecycle,
         "protocol code must not inject test faults",
+    )
+    require(
+        "test_network_emit_invalid_outbound_partial_v1" not in beacon,
+        "the retired outbound-fault trait hook must not return",
     )
     for marker in (
         "fn wrong_source_sender_and_proof_never_change_the_owned_round()",
@@ -1908,6 +1945,17 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_beacon_rotation_fixture(source.replace(marker, "", 1))
+
+    def test_fixture_custody_cannot_be_public_only_unbounded_or_sign_during_lookup(self) -> None:
+        source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
+        validate_fixture_owned_custody(source)
+        for marker in FIXTURE_CUSTODY_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_fixture_owned_custody(mutate_marker(source, marker))
+        for forbidden in ("sign_partial(", "sign_payload(", "from_validated_share(", "for_validated_session("):
+            changed = source.replace("let mut owners =", f"{forbidden}session); let mut owners =", 1)
+            with self.subTest(forbidden=forbidden), self.assertRaises(ContractError):
+                validate_fixture_owned_custody(changed)
 
     def test_mandatory_npos_boundary_rejects_adversarial_mutations(self) -> None:
         corridor = read_corridor_source()
