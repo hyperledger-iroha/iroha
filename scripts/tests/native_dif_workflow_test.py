@@ -1,4 +1,4 @@
-"""Exercise native DIF selection and strict receipts without native qualification claims."""
+"""Exercise native component routing and strict receipts without qualification claims."""
 
 from __future__ import annotations
 
@@ -34,6 +34,47 @@ NATIVE_NAMES = [KERNEL] + [
         "registered_common22_outputs_fit_original_funding",
     )
 ]
+
+
+def test_native_component_python_tools_preserve_hashed_test_delivery() -> None:
+    """Component controls retain all tests and use the existing pure-Python pins."""
+
+    workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
+    step = workflow.split("      - name: Exercise retained Python source delivery\n", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    assert "        if:" not in step
+    assert step.count(
+        "python -m pip install --require-hashes --only-binary=:all: "
+        "-r ci/requirements-native-components.lock"
+    ) == 1
+    assert '      - "ci/requirements-native-components.*"' in workflow
+    pytest_command = step.split("python -m pytest -q", 1)[1]
+    assert re.findall(r"(?:scripts/tests|pytests/scripts)/[a-z_]+\.py", pytest_command) == [
+        "scripts/tests/python_native_source_delivery_test.py",
+        "scripts/tests/python_native_delivery_gate_contract_test.py",
+        "scripts/tests/python_wheel_byte_owner_test.py",
+        "scripts/tests/python_source_owner_admission_test.py",
+        "scripts/tests/sorafs_python_native_platform_test.py",
+        "pytests/scripts/workspace_source_manifest_test.py",
+        "pytests/scripts/workspace_source_keeper_test.py",
+    ]
+    component = (ROOT / "ci/requirements-native-components.lock").read_text()
+    sdk = (ROOT / "python/iroha_python/requirements-ci.lock").read_text()
+    names = ["colorama", "iniconfig", "packaging", "pluggy", "pygments", "pytest"]
+    assert re.findall(r"(?m)^([a-z][a-z0-9-]*)==", component) == names
+    assert not re.search(r"(?m)^--", component)
+    for name in names:
+        entries = []
+        for owner in (component, sdk):
+            match = re.search(
+                rf"(?m)^{name}==([^ ;\\\n]+)[^\n]*\n((?:[ \t]+[^\n]*(?:\n|$))*)",
+                owner,
+            )
+            assert match is not None
+            hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", match[2])
+            assert hashes
+            entries.append((match[1], sorted(hashes)))
+        assert entries[0] == entries[1], name
 
 
 def test_only_intel_native_job_has_the_two_build_timeout_allowance() -> None:

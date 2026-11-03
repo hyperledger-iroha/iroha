@@ -30,6 +30,7 @@ on:
       - "ci/verify_privacy_python_wheel.py"
       - "ci/privacy_sdk_cargo_lockfile_test.sh"
       - "ci/check_sorafs_python_native_sdk.sh"
+      - "ci/requirements-native-components.*"
       - "scripts/tests/python_native_source_delivery_test.py"
       - "scripts/tests/python_native_delivery_gate_contract_test.py"
       - "scripts/tests/python_wheel_byte_owner_test.py"
@@ -305,7 +306,7 @@ jobs:
           cargo test --locked -p iroha_native_source_delivery --features dev-tools 2>&1 | tee target/platform-native/source-delivery-rust.log
           cargo clippy --locked -p iroha_native_source_delivery --features dev-tools --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
           cargo build --locked -p iroha_native_source_delivery --features dev-tools
-          python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
+          python -m pip install --require-hashes --only-binary=:all: -r ci/requirements-native-components.lock
           export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q \
             scripts/tests/python_native_source_delivery_test.py \
