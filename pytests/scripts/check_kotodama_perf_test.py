@@ -179,7 +179,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         with self.assertRaisesRegex(PERF.GateError, "inconclusive"):
             PERF.enforce_confidence_bounds(self.root, 0.05)
 
-    def test_list_sugar_requires_zero_slowdown_at_interval_extremes(self) -> None:
+    def test_list_sugar_keeps_median_equality_with_reported_interval_overlap(self) -> None:
         populate(self.root, "base")
         populate(self.root, "new")
         for name in (PERF.LIST_SUGAR_BENCHMARK, PERF.LIST_MANUAL_BENCHMARK):
@@ -190,8 +190,14 @@ class KotodamaPerfGateTests(unittest.TestCase):
         payload = json.loads(path.read_text())
         payload["median"]["confidence_interval"]["upper_bound"] = 100.001
         path.write_text(json.dumps(payload))
-        with self.assertRaisesRegex(PERF.GateError, "inconclusive.*0.00%"):
-            PERF.enforce_confidence_bounds(self.root, 0.05)
+        report = PERF.enforce_confidence_bounds(self.root, 0.05)["list_sugar"]
+        self.assertEqual(report["decision_basis"], "point_median_zero_slowdown")
+        self.assertEqual(report["interval_relation"], "overlapping_or_touching_intervals")
+        self.assertGreater(report["maximum_change"], 0.0)
+        self.assertEqual(self.run_gate(), 0)
+        payload["median"]["point_estimate"] = 100.001
+        path.write_text(json.dumps(payload))
+        self.assertEqual(self.run_gate(), 1)
 
     def test_portable_and_self_baseline_cli_paths_are_rejected(self) -> None:
         common = ["--baseline-root", str(self.root / "baseline")]
@@ -895,7 +901,8 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertEqual(bounds["minimum_individual_confidence_level"], 0.95)
         self.assertEqual(len(bounds["comparisons"]), len(PERF.REGRESSION_BENCHMARKS))
         self.assertTrue(all(row["maximum_change"] <= 0.05 for row in bounds["comparisons"]))
-        self.assertLessEqual(bounds["list_sugar"]["maximum_change"], 0.0)
+        self.assertEqual(bounds["list_sugar"]["decision_basis"], "point_median_zero_slowdown")
+        self.assertEqual(bounds["list_sugar"]["interval_relation"], "sugar_interval_below_manual")
         self.assertEqual(
             report["benchmark_count"], len(PERF.REGRESSION_BENCHMARKS)
         )

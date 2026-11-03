@@ -9,14 +9,18 @@ slots are cleared before the candidate runs. Source, inventory, original lock,
 timed-body, and complete artifact checks remain mandatory.
 
 `scripts/check_kotodama_perf.py` retains the 5% regression ceiling and the
-independent zero-slowdown List-sugar ceiling. Qualification also requires the
-candidate median confidence upper bound divided by the baseline lower bound
-(minus one) to fit the same ceiling; List sugar uses its upper bound and the
-manual-loop lower bound. Each Criterion median must have a finite, positive,
+independent zero-slowdown List-sugar median ceiling. Paired revision
+qualification also requires the candidate median confidence upper bound divided
+by the baseline lower bound (minus one) to fit the 5% ceiling. The List policy
+still compares point medians: equality is allowed, and overlapping or touching
+intervals are reported explicitly without demanding that sugar be statistically
+faster. The report records both List medians, all interval bounds and their
+relation. Each Criterion median must have a finite, positive,
 enclosing confidence interval at a reported confidence level of at least 95%.
 This conservative rule uses individual intervals, not a claimed joint
-confidence level for their ratio. Missing, malformed, or inconclusive evidence
-fails without producing a qualification receipt. Accepted receipts bind these
+confidence level for their ratio. Missing or malformed intervals and
+inconclusive paired-regression evidence fail without producing a qualification
+receipt. Accepted receipts bind these
 bounds and all consumed estimates along with source and lock identities.
 
 This is a component regression comparison on one VM. It does not replace the

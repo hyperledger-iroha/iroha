@@ -117,7 +117,8 @@ jobs:
   representative-regression:
     # Both immutable revisions are measured serially on this same hosted VM.
     # Conservative median confidence bounds must establish the unchanged 5%
-    # ceiling and zero List slowdown; noisy/inconclusive runs cannot qualify.
+    # ceiling; noisy/inconclusive paired runs cannot qualify. List retains its
+    # zero-slowdown median policy and reports interval overlap separately.
     # This component comparison is not named-hardware release calibration.
     runs-on: ubuntu-24.04
     timeout-minutes: 90

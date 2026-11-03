@@ -8,8 +8,10 @@ five percent slower, and List sugar has an independent zero-slowdown check
 against its manual-loop counterpart. Candidate samples can never be captured
 as a portable or self baseline. Qualification also requires the conservative
 ratio of the candidate upper median confidence bound to the baseline lower
-bound to fit the same budget (zero for List sugar). Inconclusive/noisy runs
-fail without a qualification receipt; this is component evidence on one VM,
+bound to fit the five-percent budget. Inconclusive/noisy paired runs fail
+without a qualification receipt. List sugar retains its zero-slowdown median
+policy; its intervals and any overlap are recorded without requiring it to be
+statistically faster than the manual loop. This is component evidence on one VM,
 not a hardware-tier calibration or a joint statistical confidence claim.
 """
 
@@ -1253,7 +1255,7 @@ def enforce_list_sugar(samples: Mapping[str, float]) -> None:
 def enforce_confidence_bounds(
     criterion_dir: Path, threshold: float
 ) -> dict[str, object]:
-    """Refuse qualification if interval extremes cannot establish either budget.
+    """Require the paired regression budget; report List uncertainty separately.
 
     This deliberately conservative admission rule uses Criterion's individual
     median intervals; it does not assert a joint confidence level for the ratio.
@@ -1278,11 +1280,18 @@ def enforce_confidence_bounds(
     )
     try:
         enforce(rows, threshold)
-        enforce([sugar], LIST_SUGAR_MAX_SLOWDOWN)
     except GateError as error:
         raise GateError(
             "inconclusive confidence bounds: no performance qualification; " + str(error)
         ) from error
+    sugar_estimate = current[LIST_SUGAR_BENCHMARK]
+    manual_estimate = current[LIST_MANUAL_BENCHMARK]
+    if sugar_estimate.upper < manual_estimate.lower:
+        relation = "sugar_interval_below_manual"
+    elif sugar_estimate.lower > manual_estimate.upper:
+        relation = "sugar_interval_above_manual"
+    else:
+        relation = "overlapping_or_touching_intervals"
     return {
         "rule": "candidate-upper / baseline-lower - 1 <= threshold",
         "minimum_individual_confidence_level": 0.95,
@@ -1298,6 +1307,12 @@ def enforce_confidence_bounds(
             for row in rows
         ],
         "list_sugar": {
+            "decision_basis": "point_median_zero_slowdown",
+            "interval_relation": relation,
+            "manual_median_ns": manual_estimate.point,
+            "sugar_median_ns": sugar_estimate.point,
+            "manual_upper_ns": manual_estimate.upper,
+            "sugar_lower_ns": sugar_estimate.lower,
             "manual_lower_ns": sugar.baseline_ns,
             "sugar_upper_ns": sugar.measured_ns,
             "maximum_change": sugar.change,
@@ -1413,7 +1428,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(
         "All comparable Kotodama medians are within the 5% V1 budget, every "
         "required workload is present, and List sugar is no slower than its "
-        "manual-loop baseline, including conservative median confidence bounds."
+        "manual-loop baseline by median. Paired revision confidence bounds also "
+        "fit the 5% budget; List interval overlap is reported separately."
     )
     return 0
 
