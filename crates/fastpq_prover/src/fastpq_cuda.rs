@@ -423,9 +423,9 @@ mod native {
         // before this synchronous call returns.
         let code = unsafe {
             fastpq_digest384_hash_frames_v1_cuda(
-                staged.words.as_ptr(),
-                staged.words.len(),
-                staged.descriptors.as_ptr(),
+                staged._words.as_ptr(),
+                staged._words.len(),
+                staged._descriptors.as_ptr(),
                 staged.frame_count,
                 parameters.as_ptr(),
                 parameters.len(),

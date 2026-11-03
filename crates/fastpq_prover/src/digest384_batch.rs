@@ -33,7 +33,7 @@ pub const STAGING_PAGE_BYTES: usize = crate::gpu_memory::METAL_PAGE_BYTES;
 /// and fixed readiness payload. Count the full pool even on CPU for stable admission.
 /// Caller-owned job descriptors and source bytes are charged by their caller.
 /// The same bound applies to CPU policy; it does not include driver/allocator overhead.
-#[cfg(any(test, feature = "fastpq-gpu"))]
+#[cfg(any(test, all(feature = "fastpq-gpu", target_os = "macos")))]
 pub fn last_fields_payload_charge(
     job_count: usize,
     total_final_field_bytes: usize,

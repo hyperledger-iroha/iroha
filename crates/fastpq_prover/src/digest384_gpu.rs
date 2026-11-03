@@ -1,6 +1,9 @@
 //! Explicit bounded hardware execution of the canonical six-lane digest frame.
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
+#[cfg(any(test, target_os = "macos", not(fastpq_cuda_unavailable)))]
+use std::sync::OnceLock;
 
+#[cfg(any(test, target_os = "macos", not(fastpq_cuda_unavailable)))]
 use fastpq_isi::poseidon_digest384::{
     GOLDILOCKS_DIGEST384_ROUNDS_V1, goldilocks_digest384_lane_initial_state_v1,
     goldilocks_digest384_lane_round_constants_v1,
@@ -230,8 +233,10 @@ fn validate_frame_batch_geometry(
 // GPU descriptor layout is three u64 words: offset, padded length, lane-word
 // index. All values are bounded by u32, with no raw payload Debug implementation.
 pub struct StagedDigest384V1 {
-    pub words: Zeroizing<Vec<u64>>,
-    pub descriptors: Zeroizing<Vec<u64>>,
+    // Retain both allocations until dispatch returns, including unavailable-device
+    // refusals. Native backends read them; every path wipes them through Zeroizing.
+    pub(super) _words: Zeroizing<Vec<u64>>,
+    pub(super) _descriptors: Zeroizing<Vec<u64>>,
     pub frame_count: usize,
 }
 
@@ -265,15 +270,17 @@ impl StagedDigest384V1 {
             offset = end;
         }
         Ok(Self {
-            words,
-            descriptors,
+            _words: words,
+            _descriptors: descriptors,
             frame_count: frames.len(),
         })
     }
 }
 
+#[cfg(any(test, target_os = "macos", not(fastpq_cuda_unavailable)))]
 pub const DIGEST384_GPU_PARAMETER_WORDS_V1: usize = 6 * 3 + 6 * 65 * 3 + 9;
 
+#[cfg(any(test, target_os = "macos", not(fastpq_cuda_unavailable)))]
 pub fn digest384_gpu_parameters_v1() -> &'static [u64; DIGEST384_GPU_PARAMETER_WORDS_V1] {
     static PARAMETERS: OnceLock<[u64; DIGEST384_GPU_PARAMETER_WORDS_V1]> = OnceLock::new();
     PARAMETERS.get_or_init(|| {
@@ -322,7 +329,7 @@ mod tests {
         let staged = StagedDigest384V1::new(&[frame, frame]).unwrap();
         assert_eq!(staged.frame_count, 2);
         assert_eq!(
-            &staged.descriptors[..],
+            &staged._descriptors[..],
             &[
                 0,
                 frame.word_count() as u64,
@@ -334,8 +341,8 @@ mod tests {
         );
         let mut expected = vec![0; frame.word_count()];
         assert!(frame.write_lane_words(0, &mut expected));
-        assert_eq!(&staged.words[..expected.len()], expected);
-        assert_eq!(&staged.words[expected.len()..], expected);
+        assert_eq!(&staged._words[..expected.len()], expected);
+        assert_eq!(&staged._words[expected.len()..], expected);
         for lane in 0..6 {
             let mut actual = expected.clone();
             actual[frame.lane_word_index()] = lane as u64;
