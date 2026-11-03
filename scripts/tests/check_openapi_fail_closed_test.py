@@ -1200,6 +1200,44 @@ def canonical_workflow_command(name: str) -> str:
     return textwrap.dedent(step.split("        run: |\n", 1)[1])
 
 
+@pytest.mark.parametrize("exit_code", [0, 23])
+def test_canonical_workflow_runs_android_parser_and_replay_controls(
+    tmp_path: Path, exit_code: int,
+) -> None:
+    canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
+    name = "Exercise replay provisioning and failure contracts"
+    step = canonical.split(f"      - name: {name}\n", 1)[1].split("      - name:", 1)[0]
+    assert "if:" not in step
+    assert "continue-on-error:" not in step
+    command = " ".join(line.strip() for line in step.split("        run: >-\n", 1)[1].splitlines())
+    assert canonical.index(name) < canonical.index("bash ci/check_android_codegen.sh")
+    expected = [
+        "-m", "pytest", "-q",
+        "scripts/tests/check_openapi_fail_closed_test.py",
+        "scripts/tests/check_android_codegen_release_gate_test.py",
+        "scripts/tests/check_android_codegen_parity_test.py",
+        "scripts/tests/android_codegen_replay_sorafs_fixture_test.py",
+        "scripts/tests/ci_image_preflight_test.py",
+    ]
+    assert shlex.split(command) == ["python3", *expected]
+    executable = tmp_path / "python3"
+    executable.write_text(
+        '#!/bin/sh\nprintf "%s\\n" "$@" > "$CAPTURE_ARGV"\nexit "$CAPTURE_EXIT"\n'
+    )
+    executable.chmod(0o700)
+    capture = tmp_path / "captured arguments"
+    result = subprocess.run(
+        ["bash", "-c", command],
+        env={**os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+             "CAPTURE_ARGV": str(capture), "CAPTURE_EXIT": str(exit_code)},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == exit_code
+    assert capture.read_text().splitlines() == expected
+
+
 @pytest.mark.parametrize("tool", ["cargo", "rustc"])
 @pytest.mark.parametrize(
     "cargo_kind",

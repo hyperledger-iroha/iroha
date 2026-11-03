@@ -185,6 +185,8 @@ jobs:
           python3 -m pytest -q
           scripts/tests/check_openapi_fail_closed_test.py
           scripts/tests/check_android_codegen_release_gate_test.py
+          scripts/tests/check_android_codegen_parity_test.py
+          scripts/tests/android_codegen_replay_sorafs_fixture_test.py
           scripts/tests/ci_image_preflight_test.py
       - name: Select installed Cargo and Rustc executables for sealed replay
         shell: bash
