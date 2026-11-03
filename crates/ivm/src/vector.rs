@@ -10,7 +10,7 @@
 //! from that width.  When no SIMD support is available, a 32-bit scalar fallback
 //! is used.  Additional cryptographic primitives such as AESENC or BLAKE2s
 //! should also be implemented here with optional hardware acceleration.
-#[cfg(any(test, all(target_os = "macos", feature = "metal")))]
+#[cfg(all(target_os = "macos", feature = "metal"))]
 use crate::sha256_ref::sha256_compress_scalar_ref;
 #[cfg(all(target_os = "macos", feature = "metal"))]
 mod metal_buffers;
@@ -2756,6 +2756,7 @@ mod tests {
         let digest = [0u8; 32];
         assert!(metal_sha256_leaves(&[block]).is_none());
         assert_eq!(metal_sha256_pairs_reduce(&[digest]), None);
+        assert_eq!(metal_merkle_root(&[digest]), None);
     }
     #[cfg(all(target_os = "macos", feature = "metal"))]
     #[test]
