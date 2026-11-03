@@ -268,7 +268,11 @@ fn completed_output_scan_cost_preserves_real_extents_without_private_staging() {
     use std::{hint::black_box, time::Instant};
 
     const ROUNDS: usize = 12;
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    // Preserve the optimized-only runtime refusal in ordinary debug test harnesses.
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     assert!(
         rayon::current_thread_index().is_none(),
         "use the external caller"
@@ -334,7 +338,8 @@ fn completed_output_scan_cost_preserves_real_extents_without_private_staging() {
                 allocation
             );
             for (index, mode) in ScanMode::ALL.into_iter().enumerate() {
-                let mean = samples[index].iter().sum::<f64>() / ROUNDS as f64;
+                let mean = samples[index].iter().sum::<f64>()
+                    / f64::from(u32::try_from(ROUNDS).expect("diagnostic rounds fit u32"));
                 samples[index].sort_by(f64::total_cmp);
                 let median = (samples[index][ROUNDS / 2 - 1] + samples[index][ROUNDS / 2]) / 2.0;
                 eprintln!(
@@ -354,7 +359,10 @@ fn input_column_scan_cost_preserves_real_extents_without_private_staging() {
     use std::{hint::black_box, time::Instant};
 
     const ROUNDS: usize = 12;
-    assert!(!cfg!(debug_assertions), "use an optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use an optimized build"
+    );
     assert!(
         rayon::current_thread_index().is_none(),
         "use the external caller"
@@ -422,7 +430,8 @@ fn input_column_scan_cost_preserves_real_extents_without_private_staging() {
                 allocations
             );
             for (index, mode) in ScanMode::ALL.into_iter().enumerate() {
-                let mean = samples[index].iter().sum::<f64>() / ROUNDS as f64;
+                let mean = samples[index].iter().sum::<f64>()
+                    / f64::from(u32::try_from(ROUNDS).expect("diagnostic rounds fit u32"));
                 samples[index].sort_by(f64::total_cmp);
                 let median = (samples[index][ROUNDS / 2 - 1] + samples[index][ROUNDS / 2]) / 2.0;
                 eprintln!(
@@ -448,7 +457,10 @@ fn required_metal_common22_four_column_full_wrapper_cost_preserves_outputs() {
     const ROUNDS: usize = 12;
     const ROWS: usize = 1 << 22;
     const WIDTH: usize = 4;
-    assert!(!cfg!(debug_assertions), "use optimized build");
+    assert!(
+        !std::hint::black_box(cfg!(debug_assertions)),
+        "use optimized build"
+    );
     assert!(
         rayon::current_thread_index().is_none(),
         "use external caller"

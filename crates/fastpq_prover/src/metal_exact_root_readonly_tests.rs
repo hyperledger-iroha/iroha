@@ -389,7 +389,8 @@ fn arm(
 #[test]
 #[ignore = "real common22 immutable output complete component cost, optimized build, run alone"]
 fn required_metal_common22_readonly_prefix_complete_cost() {
-    assert!(!cfg!(debug_assertions));
+    // Preserve the optimized-only runtime refusal in ordinary debug test harnesses.
+    assert!(!std::hint::black_box(cfg!(debug_assertions)));
     select_metal_device().expect("actual Metal required");
     let rows = 1 << 22;
     let root = goldilocks_pow(7, (FIELD_MODULUS - 1) >> 22);
