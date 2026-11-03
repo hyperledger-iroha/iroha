@@ -162,6 +162,30 @@ def test_native_provisioning_uses_pinned_actions_and_declared_rust_toolchain() -
         assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
 
 
+def test_native_provisioning_installs_fontconfig_development_metadata(tmp_path: Path) -> None:
+    """Execute the apt step without privilege and retain the GUI pkg-config prerequisite."""
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    step = source.split("    - name: Install native build prerequisites\n", 1)[1].split("    - uses:", 1)[0]
+    command = textwrap.dedent(step.split("      run: |\n", 1)[1])
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    sudo = binaries / "sudo"
+    sudo.write_text('#!/bin/bash\nset -eu\nprintf "%s\\n" "$*" >> "$PROVISION_LOG"\n')
+    sudo.chmod(0o700)
+    log = tmp_path / "provision.log"
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", command],
+        env={**os.environ, "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}", "PROVISION_LOG": str(log)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    calls = [shlex.split(line) for line in log.read_text().splitlines()]
+    assert len(calls) == 2 and calls[0] == ["apt-get", "update"]
+    assert calls[1][:4] == ["apt-get", "install", "--no-install-recommends", "-y"]
+    assert calls[1].count("libfontconfig-dev") == 1
+    assert calls[1].count("pkg-config") == 1
+
+
 def test_native_setup_installs_helpers_from_the_selected_checkout() -> None:
     source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
     inputs = source.split("inputs:\n", 1)[1].split("runs:\n", 1)[0]

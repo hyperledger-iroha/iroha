@@ -29,10 +29,11 @@ runs:
       shell: bash
       run: |
         sudo apt-get update
+        # Mochi GUI bindings discover Fontconfig through the development package's fontconfig.pc.
         sudo apt-get install --no-install-recommends -y \
           clang cmake libgit2-dev libssl-dev ninja-build pkg-config protobuf-compiler mold \
           libx11-dev libxi-dev libxcursor-dev libxrandr-dev libxinerama-dev \
-          libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev
+          libxkbcommon-dev libwayland-dev libgl1-mesa-dev libudev-dev libfontconfig-dev
     - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
       with:
         toolchain: ${{ inputs.toolchain }}
