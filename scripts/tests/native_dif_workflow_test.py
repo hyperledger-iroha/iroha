@@ -77,14 +77,15 @@ def test_native_component_python_tools_preserve_hashed_test_delivery() -> None:
         assert entries[0] == entries[1], name
 
 
-def test_only_intel_native_job_has_the_two_build_timeout_allowance() -> None:
-    """The longer native/feature-off build allowance applies only to Intel macOS."""
+def test_intel_and_windows_native_jobs_have_the_two_build_timeout_allowance() -> None:
+    """Intel and Windows receive two hours; Linux retains its original hour."""
 
     workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
     job = workflow.split("  native:\n", 1)[1].split("    defaults:\n", 1)[0]
     assert job.count("timeout-minutes:") == 1
     assert (
-        "    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 120 || 60 }}\n"
+        "    timeout-minutes: ${{ (matrix.target == 'x86_64-apple-darwin' || "
+        "matrix.target == 'x86_64-pc-windows-msvc') && 120 || 60 }}\n"
         in job
     )
     assert re.findall(r"- runner: (\S+)\n\s+target: (\S+)", job) == [
