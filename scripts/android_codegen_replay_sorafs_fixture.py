@@ -47,12 +47,13 @@ from sorafs_runner_preflight import plan_rendered_path_is_safe
 REPO_ROOT = SCRIPT_DIR.parent
 DEFAULT_FIXTURE_DIR = REPO_ROOT / "fixtures/sorafs_orchestrator/multi_peer_parity_v1"
 DEFAULT_CHUNKER_FIXTURE = REPO_ROOT / "fixtures/sorafs_chunker/sf1_profile_v1.json"
+REGISTER_PIN_EXAMPLE_FILENAME = "iroha.instruction.v1::sorafs::RegisterPinManifest.json"
 DEFAULT_REGISTER_PIN_EXAMPLE = (
     REPO_ROOT
     / "target-codex"
     / "android_codegen"
     / "instruction_examples"
-    / "iroha_data_model::isi::sorafs::RegisterPinManifest.json"
+    / REGISTER_PIN_EXAMPLE_FILENAME
 )
 DEFAULT_REPORT_DIR = (
     REPO_ROOT / "target-codex" / "android_codegen" / "sorafs_manifest"
@@ -147,7 +148,17 @@ def validate_codegen_path(path: Path, label: str) -> None:
 
     if not isinstance(path, Path):
         raise ValueError(f"{label} `{path_diagnostic_label(path)}` must be a path")
-    if not plan_rendered_path_is_safe(path):
+    # The exporter names this one public example with its canonical V1 wire ID.
+    # Its `::` separator resembles a URI scheme to the generic plan preflight.
+    # Admit only this exact basename under instruction_examples; every parent
+    # keeps the generic policy. Filesystem checks below inspect the original path.
+    preflight_path = (
+        path.with_name("RegisterPinManifest.json")
+        if path.name == REGISTER_PIN_EXAMPLE_FILENAME
+        and path.parent.name == "instruction_examples"
+        else path
+    )
+    if not plan_rendered_path_is_safe(preflight_path):
         raise ValueError(CODEGEN_PATH_DIAGNOSTIC)
     try:
         if path.is_symlink():

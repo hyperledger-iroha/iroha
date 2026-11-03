@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -1001,3 +1002,114 @@ def test_require_codegen_file_rejects_symlink_before_subprocess(
         assert "must not be a symlink" in str(error)
     else:
         raise AssertionError("symlinked payload path was accepted")
+
+
+def test_android_replay_selects_the_exported_wire_id_example(tmp_path: Path) -> None:
+    """Execute CI argument routing against the producer's canonical example identity."""
+    wire_id = "iroha.instruction.v1::sorafs::RegisterPinManifest"
+    exporter = (MODULE.REPO_ROOT / "tools/norito_codegen_exporter/src/main.rs").read_text()
+    assert 'dir.join(format!("{}.json", spec.discriminant))' in exporter
+    catalog = (MODULE.REPO_ROOT / "specs/sdk/android/generated/instructions.md").read_text()
+    assert f"## `{wire_id}`" in catalog
+    gate = (MODULE.REPO_ROOT / "ci/check_android_codegen.sh").read_text()
+    start = gate.index('  CARGO_TARGET_DIR="${target_root}"', gate.index("run_replay() {"))
+    stop = gate.index("\n\n  write_hash_tree", start)
+    invocation = gate[start:stop]
+    stage = (tmp_path / "external stage").resolve()
+    codegen = stage / "codegen"
+    examples = codegen / "instruction_examples"
+    examples.mkdir(parents=True)
+    canonical = examples / f"{wire_id}.json"
+    canonical.write_text('{"existing":true}\n')
+    captured = stage / "arguments"
+    shell = r'''
+set -euo pipefail
+source_root="$SOURCE_ROOT"
+target_root="$TARGET_ROOT"
+codegen_root="$CODEGEN_ROOT"
+generated_root="$GENERATED_ROOT"
+python3() { printf '%s\0' "$@" > "$ARGUMENT_LOG"; }
+'''
+    result = subprocess.run(
+        ["bash", "-c", shell + invocation],
+        env={**os.environ, "SOURCE_ROOT": str(MODULE.REPO_ROOT),
+             "TARGET_ROOT": str(stage / "target"), "CODEGEN_ROOT": str(codegen),
+             "GENERATED_ROOT": str(stage / "generated"), "ARGUMENT_LOG": str(captured)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    arguments = [os.fsdecode(value) for value in captured.read_bytes().split(b"\0")[:-1]]
+    assert arguments[0] == str(MODULE_PATH.resolve())
+    selected = Path(arguments[arguments.index("--register-pin-example") + 1])
+    # This actual output update fails against the old Rust-type filename even
+    # though the canonical exporter artifact is present in the replay stage.
+    MODULE.update_register_pin_example(selected, {"route": "canonical"})
+    assert selected == canonical
+    assert MODULE.DEFAULT_REGISTER_PIN_EXAMPLE.name == canonical.name
+    assert json.loads(canonical.read_bytes()) == {
+        "existing": True, "fixture_example": {"route": "canonical"},
+    }
+    canonical.unlink()
+    retired = examples / "iroha_data_model::isi::sorafs::RegisterPinManifest.json"
+    retired.write_text('{"retired":true}\n')
+    try:
+        MODULE.update_register_pin_example(selected, {"route": "must refuse"})
+    except ValueError as error:
+        assert "must exist and be a file" in str(error)
+    else:
+        raise AssertionError("a retired Rust-type example was accepted as the canonical output")
+    assert json.loads(retired.read_bytes()) == {"retired": True}
+    assert not canonical.exists()
+
+
+def test_canonical_example_name_preserves_parent_and_near_match_refusals(tmp_path: Path) -> None:
+    """Only the exact public wire basename is exempt from URI-shaped name refusal."""
+    name = "iroha.instruction.v1::sorafs::RegisterPinManifest.json"
+    MODULE.validate_codegen_path(tmp_path / "instruction_examples" / name, "public example")
+    refused = (
+        tmp_path / name,
+        tmp_path / "private_key" / "instruction_examples" / name,
+        tmp_path / "https:remote" / "instruction_examples" / name,
+        tmp_path / "%2e%2e" / "instruction_examples" / name,
+        tmp_path / name / "instruction_examples" / name,
+        tmp_path / "instruction_examples" / name.replace("v1::", "v2::"),
+        tmp_path / "instruction_examples" / name.replace("::", "%3a%3a"),
+        tmp_path / "instruction_examples" / (name + ".bak"),
+        tmp_path / "instruction_examples" / (name + "\n"),
+    )
+    for path in refused:
+        try:
+            MODULE.validate_codegen_path(path, "public example")
+        except ValueError as error:
+            assert str(error) == MODULE.CODEGEN_PATH_DIAGNOSTIC
+        else:
+            raise AssertionError("noncanonical example path was admitted")
+
+
+def test_canonical_example_name_still_refuses_symlink_ownership(tmp_path: Path) -> None:
+    """The wire-name exception never bypasses checks of original filesystem objects."""
+    actual = tmp_path / "actual.json"
+    actual.write_text('{"retained":true}\n')
+    examples = tmp_path / "instruction_examples"
+    examples.mkdir()
+    linked = examples / MODULE.REGISTER_PIN_EXAMPLE_FILENAME
+    linked.symlink_to(actual)
+    try:
+        MODULE.update_register_pin_example(linked, {"forbidden": True})
+    except ValueError as error:
+        assert "must not be a symlink" in str(error)
+    else:
+        raise AssertionError("canonical-named symlink was accepted")
+    assert json.loads(actual.read_bytes()) == {"retained": True}
+    linked.unlink()
+    real_parent = tmp_path / "real"
+    real_parent.mkdir()
+    linked_parent = tmp_path / "alternate" / "instruction_examples"
+    linked_parent.parent.mkdir()
+    linked_parent.symlink_to(real_parent, target_is_directory=True)
+    try:
+        MODULE.validate_codegen_path(linked_parent / MODULE.REGISTER_PIN_EXAMPLE_FILENAME, "example")
+    except ValueError as error:
+        assert "must not be a symlink" in str(error)
+    else:
+        raise AssertionError("canonical example under linked parent was accepted")

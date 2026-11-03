@@ -357,7 +357,7 @@ run_replay() {
       --fixture-dir "${source_root}/fixtures/sorafs_orchestrator/multi_peer_parity_v1" \
       --chunker-fixture "${source_root}/fixtures/sorafs_chunker/sf1_profile_v1.json" \
       --register-pin-example \
-        "${codegen_root}/instruction_examples/iroha_data_model::isi::sorafs::RegisterPinManifest.json" \
+        "${codegen_root}/instruction_examples/iroha.instruction.v1::sorafs::RegisterPinManifest.json" \
       --report-dir "${codegen_root}/sorafs_manifest" \
       --tracked-fixture-out \
         "${generated_root}/fixtures/sorafs_register_pin_manifest_multi_peer_parity_v1.json" \
