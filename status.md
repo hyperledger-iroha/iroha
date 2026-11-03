@@ -211,9 +211,10 @@ tests fail. The repository owner approved `optimizations` at
 `06912ee4f8f9423b458d72039dbd0a1c8fde7b43` plus the reviewed CI repairs as
 the release-source baseline. The source seal and generated-artifact ownership
 have been reconciled; this approval does not establish release or network
-qualification. `scripts/check_state_commitment_candidates.py` remains red
-because its measurements predate the current State table schema. Replacement
-G.2 measurements are in progress under the existing observation contract.
+qualification. Current-schema G.2 records now reproduce exactly from eight
+accepted native harness runs under the existing observation contract: 95 native
+and 210 in-circuit rows. The inventory guard passes; no State-commitment
+construction is selected or qualified.
 
 ## Deployment state
 
