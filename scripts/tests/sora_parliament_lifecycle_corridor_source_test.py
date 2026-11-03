@@ -395,7 +395,8 @@ SORANET_POW_REQUIRED_OVERRIDE = (
     '["network","soranet_handshake","pow","required"]'
 )
 PARLIAMENT_CRYPTO_WORKFLOW_MARKERS = (
-    "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-",
+    "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: ${{ github.workspace }}/"
+    "target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}",
     "pytest==9.0.3",
     "scripts/tests/check_sora_parliament_crypto_bench_test.py",
     "IROHA_PARLIAMENT_CRYPTO_ALLOCATION_EVIDENCE_V1",
@@ -450,7 +451,7 @@ def validate_runner(source: str) -> None:
 
 
 def validate_workflow(source: str) -> None:
-    """Validate that PR CI schedules the isolated runner on four-peer capacity."""
+    """Validate the isolated corridor's exact hosted runner and native setup."""
 
     job = re.search(
         r"(?ms)^  sora_parliament_lifecycle:\n(?P<body>.*?)(?=^  [a-zA-Z0-9_-]+:\n|\Z)",
@@ -458,14 +459,32 @@ def validate_workflow(source: str) -> None:
     )
     require(job is not None, "PR workflow does not schedule the Parliament corridor")
     body = job.group("body")
+    require(
+        re.findall(r"(?m)^    runs-on: (.+)$", body) == ["ubuntu-24.04"],
+        "Parliament PR job must use the exact ubuntu-24.04 runner",
+    )
+    setup = "uses: ./.github/actions/setup-native-ci"
+    setup_steps = [
+        step for step in re.split(r"(?m)^      - ", body)[1:]
+        if step.partition("\n")[0] == setup
+    ]
+    require(
+        len(setup_steps) == 1
+        and [line.strip() for line in setup_steps[0].splitlines()
+             if line.strip() and not line.lstrip().startswith("#")] == [setup],
+        "Parliament PR job needs one exact unconditional native setup step",
+    )
     for marker in (
-        "runs-on: [self-hosted, Linux, iroha2]",
         "CARGO_TARGET_DIR: target/sora-parliament-lifecycle",
         "python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py",
         "bash ci/check_sora_parliament_lifecycle.sh",
         *PARLIAMENT_CRYPTO_WORKFLOW_MARKERS,
     ):
         require(marker in body, f"Parliament PR job lost `{marker}`")
+    require(
+        body.index(setup) < body.index("cargo bench --locked -p iroha_crypto"),
+        "Parliament native setup must precede compilation",
+    )
     require(
         body.count("cargo bench --locked -p iroha_crypto --bench parliament_crypto") == 2,
         "Parliament crypto evidence needs one allocation and one Criterion invocation",
@@ -1340,6 +1359,35 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     def test_runner_and_workflow_are_exact_and_no_skip(self) -> None:
         validate_runner(RUNNER.read_text(encoding="utf-8"))
         validate_workflow(WORKFLOW.read_text(encoding="utf-8"))
+
+    def test_workflow_rejects_hosted_runner_setup_and_evidence_drift(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        validate_workflow(source)
+        prefix, body = source.split("  sora_parliament_lifecycle:\n", 1)
+        runner = "    runs-on: ubuntu-24.04\n"
+        setup = "      - uses: ./.github/actions/setup-native-ci\n"
+        evidence = PARLIAMENT_CRYPTO_WORKFLOW_MARKERS[0]
+        for old, new, message in (
+            (runner, "", "exact ubuntu-24.04 runner"),
+            (runner, "    runs-on: ubuntu-latest\n", "exact ubuntu-24.04 runner"),
+            (runner, "    runs-on: ubuntu-24.04-arm\n", "exact ubuntu-24.04 runner"),
+            (runner, "    runs-on: [self-hosted, Linux, iroha2]\n", "exact ubuntu-24.04 runner"),
+            (runner, runner + runner, "exact ubuntu-24.04 runner"),
+            (setup, "", "unconditional native setup"),
+            (setup, setup + setup, "unconditional native setup"),
+            (setup, setup + "        if: false\n", "unconditional native setup"),
+            (setup, setup + "        with:\n          working-directory: other\n", "unconditional native setup"),
+            (evidence, evidence.replace("${{ github.workspace }}/", ""), "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"),
+            (evidence, evidence.replace("${{ github.run_id }}", "fixed"), "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"),
+            (evidence, evidence.replace("${{ github.run_attempt }}", "fixed"), "SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR"),
+        ):
+            with self.subTest(new=new), self.assertRaisesRegex(ContractError, message):
+                validate_workflow(
+                    prefix + "  sora_parliament_lifecycle:\n" + body.replace(old, new, 1)
+                )
+        without_setup = body.replace(setup, "", 1)
+        with self.assertRaisesRegex(ContractError, "setup must precede compilation"):
+            validate_workflow(prefix + "  sora_parliament_lifecycle:\n" + without_setup + setup)
 
     def test_runner_contract_rejects_each_removed_security_marker(self) -> None:
         source = RUNNER.read_text(encoding="utf-8")
