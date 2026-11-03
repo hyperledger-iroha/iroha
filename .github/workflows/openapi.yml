@@ -87,11 +87,6 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  ci_image:
-    uses: ./.github/workflows/ci_image_preflight.yml
-    permissions:
-      contents: read
-
   binding-parity:
     name: Complete Norito binding parity
     runs-on: ubuntu-latest
@@ -156,10 +151,8 @@ jobs:
 
   canonical-spec:
     name: Canonical Torii static-authority parity
-    needs: [metadata, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [metadata]
+    runs-on: ubuntu-24.04
     env:
       CARGO_TERM_COLOR: always
       NORITO_SKIP_BINDINGS_SYNC: "1"
@@ -168,6 +161,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
         with:
           node-version: "24"

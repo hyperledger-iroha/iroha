@@ -10,16 +10,11 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  IROHA_CLI_DIR: "/__w/${{ github.event.repository.name }}/${{ github.event.repository.name }}/test"
+  IROHA_CLI_DIR: "${{ github.workspace }}/test"
   TEST_NETWORK_TMP_DIR: /tmp
   NEXTEST_PROFILE: ci
 
 jobs:
-  ci_image:
-    uses: ./.github/workflows/ci_image_preflight.yml
-    permissions:
-      contents: read
-
   ivm_only:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -57,13 +52,12 @@ jobs:
 
   pre_build:
     if: needs.rust_changes.outputs.has_binaries == 'true'
-    needs: [rust_changes, ci_image]
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes]
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
@@ -90,12 +84,11 @@ jobs:
 
   consistency:
     if: needs.rust_changes.outputs.run_consistency == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
-    needs: [rust_changes, pre_build, ci_image]
+    runs-on: ubuntu-24.04
+    needs: [rust_changes, pre_build]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - name: Download binaries
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
@@ -111,13 +104,12 @@ jobs:
 
   kotodama_docs:
     if: needs.rust_changes.outputs.run_kotodama_docs == 'true'
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
-    needs: [rust_changes, pre_build, ci_image]
+    runs-on: ubuntu-24.04
+    needs: [rust_changes, pre_build]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: "3.11"
@@ -154,14 +146,12 @@ jobs:
         run: cargo fmt --all -- --check
 
   sumeragi:
-    needs: ci_image
     name: Sumeragi core, simulator and node lanes
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -178,14 +168,12 @@ jobs:
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
   # the foundation lane (`ci/rust_lanes.toml`).
   zk_phase_tree_measurement:
-    needs: ci_image
     name: ZK phase-tree measurement on a FASTPQ workload
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
@@ -206,14 +194,12 @@ jobs:
   # coherence, maximum gossip and Sumeragi frames, admission and proposer bounds, and the
   # genesis and daemon startup frame checks) are default tests; the steps below name them.
   x2_maximum_proof_transport:
-    needs: ci_image
     name: Maximum-proof transport bounds (X.2)
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -248,12 +234,10 @@ jobs:
             privacy::tests::privacy_block_counts_and_actual_aggregate_bytes_are_independent
 
   norito_rpc_verify:
-    needs: ci_image
-    runs-on: ubuntu-latest
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
@@ -458,10 +442,8 @@ jobs:
   rust_affected:
     name: Rust ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_free_rust == 'true'
-    needs: [rust_changes, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes]
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -470,6 +452,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -507,10 +490,8 @@ jobs:
   rust_network:
     name: Rust network ${{ matrix.lane }} (${{ matrix.package_count }} packages)
     if: needs.rust_changes.outputs.has_binary_rust == 'true'
-    needs: [rust_changes, pre_build, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes, pre_build]
+    runs-on: ubuntu-24.04
     timeout-minutes: 240
     strategy:
       fail-fast: false
@@ -524,6 +505,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:
           cache: "false"
@@ -974,10 +956,8 @@ jobs:
 
   sora_parliament_lifecycle:
     if: needs.rust_changes.outputs.run_sora_parliament_lifecycle == 'true'
-    needs: [rust_changes, ci_image]
-    runs-on: [self-hosted, Linux, iroha2]
-    container:
-      image: ${{ needs.ci_image.outputs.image }}
+    needs: [rust_changes]
+    runs-on: ubuntu-24.04
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
@@ -985,6 +965,7 @@ jobs:
       SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: ./.github/actions/setup-native-ci
       - name: Install pinned Parliament benchmark checker dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
       - name: Create fresh private Parliament crypto evidence layout

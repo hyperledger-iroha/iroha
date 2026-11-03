@@ -15,13 +15,19 @@ IMAGE = "image: ${{ needs.ci_image.outputs.image }}"
 COUNTS = {
     "nightly_sumeragi.yml": 10,
     "nightly_sumeragi_soak.yml": 2,
-    "openapi.yml": 1,
-    "pr.yml": 10,
-    "pr_python_static.yml": 1,
     "publish.yml": 1,
     "publish_custom.yml": 1,
     "publish_dev.yml": 1,
     "workspace_release.yml": 6,
+}
+HOSTED_NATIVE_JOBS = {
+    "pr.yml": (
+        "pre_build", "consistency", "kotodama_docs", "sumeragi",
+        "zk_phase_tree_measurement", "x2_maximum_proof_transport",
+        "norito_rpc_verify", "rust_affected", "rust_network",
+        "sora_parliament_lifecycle",
+    ),
+    "openapi.yml": ("canonical-spec",),
 }
 
 
@@ -60,6 +66,66 @@ def test_all_ci_consumers_are_gated(name: str, count: int) -> None:
         if IMAGE in block:
             changed = re.sub(r"^    needs: .+\n", "", block, flags=re.M)
             assert f"{job} is not gated by preflight" in violations(source.replace(block, changed))
+
+
+def hosted_violations(source: str, names: tuple[str, ...]) -> list[str]:
+    """Development validation must provision every formerly image-owned job."""
+    errors = []
+    blocks = jobs(source)
+    if "ci_image" in blocks:
+        errors.append("development checks still require a configured image")
+    for name in names:
+        block = blocks.get(name, "")
+        if "runs-on: ubuntu-24.04" not in block:
+            errors.append(f"{name} has no hosted Linux runner")
+        if "container:" in block or "self-hosted" in block:
+            errors.append(f"{name} retains external infrastructure")
+        if "uses: ./.github/actions/setup-native-ci" not in block:
+            errors.append(f"{name} has no native tool provisioning")
+    return errors
+
+
+@pytest.mark.parametrize("name,names", HOSTED_NATIVE_JOBS.items())
+def test_development_jobs_run_without_image_or_private_runner_configuration(
+    name: str, names: tuple[str, ...],
+) -> None:
+    source = (WORKFLOWS / name).read_text()
+    assert hosted_violations(source, names) == []
+    assert "needs.ci_image" not in source
+    assert "vars.IROHA_CI_IMAGE" not in source
+    for job, block in jobs(source).items():
+        if job in names:
+            changed = block.replace("      - uses: ./.github/actions/setup-native-ci\n", "")
+            assert f"{job} has no native tool provisioning" in hosted_violations(
+                source.replace(block, changed), names,
+            )
+
+
+def test_python_static_analysis_uses_committed_locks_on_a_hosted_runner() -> None:
+    source = (WORKFLOWS / "pr_python_static.yml").read_text()
+    block = jobs(source)["check"]
+    assert "runs-on: ubuntu-24.04" in block
+    assert "ci_image" not in source
+    assert "container:" not in block
+    assert "actions/setup-python@" in block
+    assert 'poetry-version: "2.5.1"' in block
+    assert "poetry check --lock" in block
+    assert "poetry install --no-root" in block
+    assert "poetry lock\n" not in block
+    for command in ("poetry run black --check", "poetry run mypy", "poetry run flake8"):
+        assert command in block
+
+
+def test_native_provisioning_uses_pinned_actions_and_declared_rust_toolchain() -> None:
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    assert "sudo apt-get install" in source
+    for package in ("clang", "cmake", "libssl-dev", "pkg-config", "protobuf-compiler", "mold"):
+        assert package in source
+    assert "toolchain: ${{ inputs.toolchain }}" in source
+    assert 'default: ""' in source
+    assert "clippy,rustfmt,llvm-tools-preview" in source
+    for action in re.findall(r"uses: ([^\s]+)", source):
+        assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
 
 
 def test_no_workflow_starts_from_an_unchecked_ci_variable_or_old_tag() -> None:

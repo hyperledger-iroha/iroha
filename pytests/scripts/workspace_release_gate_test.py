@@ -848,7 +848,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         affected_requirements = (
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_free_matrix) }}",
             "if: needs.rust_changes.outputs.has_binary_free_rust == 'true'",
-            "needs: [rust_changes, ci_image]",
+            "needs: [rust_changes]",
             "uses: actions-rust-lang/setup-rust-toolchain@"
             f"{SETUP_RUST_TOOLCHAIN_COMMIT}",
             'cache: "false"',
@@ -873,13 +873,13 @@ def _validate_pr_parity(workflow: str) -> list[str]:
 
     for job_name, requirements in {
         "pre_build": (
-            "needs: [rust_changes, ci_image]",
+            "needs: [rust_changes]",
             "if: needs.rust_changes.outputs.has_binaries == 'true'",
             "REQUIRED_BINARIES: ${{ needs.rust_changes.outputs.binaries }}",
             'python3 scripts/rust_ci.py build-binaries \\ --binaries "$REQUIRED_BINARIES"',
         ),
         "rust_network": (
-            "needs: [rust_changes, pre_build, ci_image]",
+            "needs: [rust_changes, pre_build]",
             "if: needs.rust_changes.outputs.has_binary_rust == 'true'",
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
             "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
@@ -891,7 +891,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         **{
             name: (
                 ("needs: [rust_changes, pre_build]" if name == "pytests"
-                 else "needs: [rust_changes, pre_build, ci_image]"),
+                 else "needs: [rust_changes, pre_build]"),
                 f"if: needs.rust_changes.outputs.run_{name} == 'true'",
             ) for name in ("consistency", "kotodama_docs", "pytests")
         },
@@ -905,7 +905,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         job = _job_block(workflow, name)
         normalized_job = _normalized(job)
         for requirement in (
-            "needs: [rust_changes, ci_image]",
+            "needs: [rust_changes]",
             f"if: needs.rust_changes.outputs.run_{name} == 'true'",
             f"run: bash ci/check_{name}.sh",
             f"run_{name}: ${{{{ steps.classify.outputs.run_{name} }}}}",
