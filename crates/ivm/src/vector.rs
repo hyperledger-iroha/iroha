@@ -1466,7 +1466,7 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
         })?
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
 fn metal_vadd64(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
     None
 }
@@ -1498,7 +1498,7 @@ fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
         })?
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
 fn metal_vadd32(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
     None
 }
@@ -2736,9 +2736,18 @@ mod tests {
         let a = [u32::MAX, 2, 3, 4];
         let b = [1, 3, 5, 7];
         assert_eq!(vadd32(a, b), [0, 5, 8, 11]);
+        assert_eq!(vadd64(a, b), [0, 6, 8, 11]);
         assert_eq!(vand(a, b), [1, 2, 1, 4]);
         assert_eq!(vxor(a, b), [u32::MAX - 1, 1, 6, 3]);
         assert_eq!(vor(a, b), [u32::MAX, 3, 7, 7]);
+    }
+    #[cfg(all(target_os = "macos", not(feature = "metal")))]
+    #[test]
+    fn disabled_metal_addition_refuses_acceleration() {
+        let a = [u32::MAX, 2, 3, 4];
+        let b = [1, 3, 5, 7];
+        assert_eq!(metal_vadd32(a, b), None);
+        assert_eq!(metal_vadd64(a, b), None);
     }
     #[cfg(not(all(target_os = "macos", feature = "metal")))]
     #[test]
