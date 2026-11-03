@@ -1371,7 +1371,9 @@ class NativeRunTests(unittest.TestCase):
             self.assertEqual(line["reasons"], ["process_observation_failed:executable_image_differs"])
             _, report = self.report(line)
             self.assertEqual(report["process"]["sampled"],
-                             {"state": "failed", "reason": "executable_image_differs"})
+                             {"state": "failed", "reason": "executable_image_differs",
+                              "observation_exceptions": [
+                                  harness._observer_exception_fact("baseline", differs)]})
             # Another observer failure while the process stays alive is reported
             # under its own fixed reason, not as an early exit.
             other = harness.observer.ProcessObservationError("native process accounting unavailable")
@@ -2486,6 +2488,14 @@ class StaticSafetyTests(unittest.TestCase):
 
 class ObservationExceptionRetentionTests(unittest.TestCase):
     """Keep original failure facts across cleanup and reap without accepting lost image continuity."""
+
+    def setUp(self):
+        # These unit tests own a synthetic PID and inject sampling/reap failures.
+        # Real Darwin monitor registration belongs to the native-child tests;
+        # registering this synthetic PID would preempt the intended first error.
+        patcher = mock.patch.object(harness, "_owned_child_monitor", return_value=None)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_failure(self, error, after_baseline=True, close_error=None):
         usage = SimpleNamespace(ru_utime=1.0, ru_stime=1.0, ru_maxrss=1024)
