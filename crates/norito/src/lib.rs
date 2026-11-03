@@ -5738,7 +5738,11 @@ pub mod json {
     pub struct StructIndex {
         pub offsets: Vec<u32>,
     }
-    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    #[cfg(any(
+        all(feature = "metal-stage1", target_os = "macos", target_arch = "aarch64"),
+        feature = "cuda-stage1",
+        test
+    ))]
     type Stage1HelperFn = unsafe extern "C" fn(
         in_ptr: *const u8,
         len: usize,
@@ -5746,7 +5750,11 @@ pub mod json {
         out_capacity: usize,
         out_len: *mut usize,
     ) -> i32;
-    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    #[cfg(any(
+        all(feature = "metal-stage1", target_os = "macos", target_arch = "aarch64"),
+        feature = "cuda-stage1",
+        test
+    ))]
     fn try_build_struct_index_with_helper(
         input: &str,
         func: Stage1HelperFn,
@@ -5793,7 +5801,11 @@ pub mod json {
         }
         true
     }
-    #[cfg(any(feature = "metal-stage1", feature = "cuda-stage1", test))]
+    #[cfg(any(
+        all(feature = "metal-stage1", target_os = "macos", target_arch = "aarch64"),
+        feature = "cuda-stage1",
+        test
+    ))]
     fn stage1_helper_self_test<F>(mut build: F) -> bool
     where
         F: FnMut(&str) -> Option<StructIndex>,
@@ -6796,22 +6808,25 @@ pub mod json {
     #[cfg(feature = "metal-stage1")]
     mod metal {
         use super::StructIndex;
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         use std::{
             ffi::{c_char, c_int, c_void},
             sync::{Mutex, OnceLock},
         };
-        #[cfg(unix)]
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         unsafe extern "C" {
             fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
             fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
             fn dlclose(handle: *mut c_void) -> c_int;
         }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         const RTLD_LAZY: c_int = 1;
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         #[link(name = "Metal", kind = "framework")]
         unsafe extern "C" {
             fn MTLCreateSystemDefaultDevice() -> *mut c_void;
         }
+        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         #[link(name = "objc")]
         unsafe extern "C" {
             fn objc_autoreleasePoolPush() -> *mut c_void;
@@ -6828,8 +6843,9 @@ pub mod json {
         unsafe impl Sync for MetalLib {}
         #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         static METAL_LIB: OnceLock<Mutex<Option<MetalLib>>> = OnceLock::new();
-        #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
         pub(super) fn reset_cached_library() {
+            // Unsupported targets have no Metal library cache to reset.
+            #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
             if let Some(cache) = METAL_LIB.get() {
                 *cache.lock().expect("metal cache poisoned") = None;
             }
@@ -6902,6 +6918,14 @@ pub mod json {
                 let _ = input;
                 None
             }
+        }
+
+        #[cfg(all(test, not(all(target_os = "macos", target_arch = "aarch64"))))]
+        #[test]
+        fn unsupported_metal_target_has_no_library_to_reset() {
+            reset_cached_library();
+            assert!(build_struct_index_metal(r#"{"values":[1,"a\\\"b",null]}"#).is_none());
+            reset_cached_library();
         }
     }
     #[cfg(feature = "cuda-stage1")]
@@ -10559,6 +10583,16 @@ mod json_stage1_reset_tests {
     #[test]
     fn reset_stage1_backends_is_callable() {
         crate::json::reset_stage1_backends();
+    }
+
+    #[test]
+    fn reset_stage1_backends_preserves_structural_offsets() {
+        let entry = r#"{"values":[1,"a\\\"b",null],"nested":{"ok":true}}"#;
+        let input = format!("[{}]", vec![entry; 8_192].join(","));
+        let expected = crate::json::build_struct_index_scalar_test(&input).offsets;
+        assert_eq!(crate::json::build_struct_index(&input).offsets, expected);
+        crate::json::reset_stage1_backends();
+        assert_eq!(crate::json::build_struct_index(&input).offsets, expected);
     }
 }
 /// Canonical JSON literal helpers used by higher-level codecs.
