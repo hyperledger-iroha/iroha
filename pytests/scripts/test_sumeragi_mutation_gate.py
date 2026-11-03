@@ -4134,7 +4134,7 @@ def test_retained_refusal_hooks_compile_cleanly_and_preserve_error_propagation(
         + f"assert_eq!(owner.{field}.retained, if fault {{ 0 }} else {{ 7 }});\n"
         "}\n}\n"
     )
-    executable = tmp_path / "propagation"
+    executable = tmp_path / ("propagation.exe" if os.name == "nt" else "propagation")
     command = ["clippy-driver", "--edition=2024", "--crate-name", "propagation",
                "--check-cfg", "cfg(test)", "--check-cfg",
                'cfg(sumeragi_core_mutation, values("HC175", "HC232"))',
