@@ -4081,6 +4081,10 @@ def test_retained_predecessor_mutations_bind_original_descriptor_kernel_and_exac
         cause = "HC175 later work refusal must retain completed predecessor descriptors"
         assert rule.causes == (gate.ExpectedFailure(cause, "crates/iroha_core/src/state/publication/retained_rows/predecessor_tests.rs"),)
         assert cause in named_rust_function(controls, name)
+        assert implementation.count("let result = admit(work, required, limit);") == 1
+        fault = implementation.split('sumeragi_core_mutation = "HC175"', 1)[1].split("result?;", 1)[0]
+        assert "if result.is_err()" in fault
+        assert "self.predecessor = PredecessorIndex::default();" in fault
     assert "fn " + name + "(" in controls
     assert '#[path = "predecessor_tests.rs"]' in implementation
     assert "allocations_during" in controls
@@ -4091,6 +4095,58 @@ def test_retained_predecessor_mutations_bind_original_descriptor_kernel_and_exac
     assert row is not None and name in row.group()
     assert "admit(work, required, limit)" in implementation
     assert "exact_resolve(amount, head.resolve)" in implementation
+
+
+@pytest.mark.parametrize("mid,owner,field,retained_type", [
+    ("HC175", "state/publication/retained_rows/predecessor.rs", "predecessor", "PredecessorIndex"),
+    ("HC232", "sumeragi/certified_chain/terminal_selection.rs", "frame", "AdmittedFrameRead"),
+])
+@pytest.mark.parametrize("configuration", ["production", "baseline", "mutant"])
+def test_retained_refusal_hooks_compile_cleanly_and_preserve_error_propagation(
+    tmp_path, mid, owner, field, retained_type, configuration,
+):
+    """Compile the actual fault/propagation block; this is not native custody qualification."""
+    source = (ROOT / "crates/iroha_core/src" / owner).read_text()
+    start = source.index("// SPEC: §13.4 " + mid)
+    end = source.index("result?;", start) + len("result?;")
+    actual_block = source[start:end]
+    active = configuration == "mutant"
+    fixture = tmp_path / "propagation.rs"
+    fixture.write_text(
+        "//! Exact production/test-cfg propagation fragment with accounting-only owners.\n"
+        "#[derive(Clone, Copy, Debug, PartialEq, Eq)]\n"
+        "pub enum ExecutionAttemptError { Deferred(u64), Rejected(u64) }\n"
+        "#[derive(Default)]\n"
+        f"pub struct {retained_type} {{ pub retained: usize }}\n"
+        f"pub struct Owner {{ pub {field}: {retained_type} }}\n"
+        "impl Owner {\n"
+        "pub fn propagate(&mut self, result: Result<(), ExecutionAttemptError>) "
+        "-> Result<(), ExecutionAttemptError> {\n"
+        + actual_block + "\nOk(())\n}\n}\n"
+        "fn main() {\n"
+        "for result in [Ok(()), Err(ExecutionAttemptError::Deferred(27)), "
+        "Err(ExecutionAttemptError::Rejected(39))] {\n"
+        f"let mut owner = Owner {{ {field}: {retained_type} {{ retained: 7 }} }};\n"
+        "assert_eq!(owner.propagate(result), result, \"return the original outcome\");\n"
+        f"let active = {str(active).lower()};\n"
+        + ("let fault = active && result.is_err();\n" if mid == "HC175" else
+           "let fault = active && matches!(result, Err(ExecutionAttemptError::Deferred(_)));\n")
+        + f"assert_eq!(owner.{field}.retained, if fault {{ 0 }} else {{ 7 }});\n"
+        "}\n}\n"
+    )
+    executable = tmp_path / "propagation"
+    command = ["clippy-driver", "--edition=2024", "--crate-name", "propagation",
+               "--check-cfg", "cfg(test)", "--check-cfg",
+               'cfg(sumeragi_core_mutation, values("HC175", "HC232"))',
+               "-D", "warnings", str(fixture), "-o", str(executable)]
+    if configuration != "production":
+        command.extend(["--cfg", "test"])
+    if active:
+        command.extend(["--cfg", f'sumeragi_core_mutation="{mid}"'])
+    compiled = subprocess.run(command, capture_output=True, text=True, check=False)
+    assert compiled.returncode == 0, compiled.stderr
+    ran = subprocess.run([str(executable)], capture_output=True, text=True, check=False)
+    assert ran.returncode == 0, ran.stderr
 
 
 def test_retained_predecessor_closed_keys_and_actual_group_consumer_keep_fallible_work():
@@ -6811,8 +6867,10 @@ def test_terminal_verification_slot_mutation_has_exact_owner_and_both_native_con
     assert "frame: AdmittedFrameRead" in source
     assert "self.frame.initialize(" in source
     assert "self.frame.take_committed()" in source
-    mutation = source.split(needle, 1)[1].split("return Err(cause)", 1)[0]
-    assert "ExecutionAttemptError::Deferred(_)" in mutation
+    decode = named_rust_function(source, "decode")
+    assert decode.count("let result = self.frame.initialize(") == 1
+    mutation = decode.split(needle, 1)[1].split("result?;", 1)[0]
+    assert "matches!(&result, Err(ExecutionAttemptError::Deferred(_)))" in mutation
     assert "self.frame = AdmittedFrameRead::default();" in mutation
     assert "AllocationBudget::new" not in source
     tests = (core / "sumeragi/certified_chain/terminal_selection/tests.rs").read_text()

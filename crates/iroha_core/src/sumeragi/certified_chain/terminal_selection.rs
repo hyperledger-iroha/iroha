@@ -68,7 +68,7 @@ impl<'kura> OriginalReceipt<'kura> {
             // Borrow the same original body through a retained verification stage. A late
             // result-slot refusal must not refund the earlier receipt slot and satisfy this
             // operation's own release wait. Nested decoding keeps its original limits.
-            if let Err(cause) = self.frame.initialize(
+            let result = self.frame.initialize(
                 self.body
                     .as_ref()
                     .expect("original acquired carrier")
@@ -77,14 +77,13 @@ impl<'kura> OriginalReceipt<'kura> {
                 prefix.tip.root_scope(),
                 &mut prefix.validation,
                 budget,
-            ) {
-                // SPEC: §13.4 HC232 drops the completed slot on a later local refusal.
-                #[cfg(all(test, sumeragi_core_mutation = "HC232"))]
-                if matches!(&cause, ExecutionAttemptError::Deferred(_)) {
-                    self.frame = AdmittedFrameRead::default();
-                }
-                return Err(cause);
+            );
+            // SPEC: §13.4 HC232 drops the completed slot on a later local refusal.
+            #[cfg(all(test, sumeragi_core_mutation = "HC232"))]
+            if matches!(&result, Err(ExecutionAttemptError::Deferred(_))) {
+                self.frame = AdmittedFrameRead::default();
             }
+            result?;
             self.committed = Some(self.frame.take_committed());
             self.body = None;
         }
