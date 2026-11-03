@@ -39,7 +39,7 @@ BASELINE_CARGO_LOCK_SHA256 = (
     "1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55"
 )
 CANDIDATE_CARGO_LOCK_SHA256 = (
-    "a8a82fcc2d8cc46431e403ee9d4e7f8a70fab7d34639c9ff296fe2d38ebe866b"
+    "c06a6792aef94807a22e339ad52eb8cd11db1441df83fa579d9af1ea3ff725d7"
 )
 EVIDENCE_SCHEMA = "iroha.kotodama.performance.v1"
 LIST_SUGAR_BENCHMARK = "kotodama_list_comprehension_runtime_64"
