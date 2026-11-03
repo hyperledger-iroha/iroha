@@ -1,5 +1,6 @@
 iroha.openapi.generator-inputs.v1
 .cargo/config.toml
+.github/actions
 .github/workflows/openapi.yml
 Cargo.lock
 Cargo.toml

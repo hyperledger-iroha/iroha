@@ -118,6 +118,7 @@ test('generator input inventory is exact and binds every release surface', async
   );
   for (const required of [
     '.cargo/config.toml',
+    '.github/actions',
     'crates',
     'vendor',
     'tools',
@@ -354,7 +355,7 @@ test('generator input-tree V3 digest matches the fixed cross-language vector', a
       treeBytes: Buffer.from('tree-fixture-v1\0'),
       trackedInputBytes: Buffer.from('lock-fixture-v1\n'),
     }),
-    '5034e34e44a804546302178b2f13468096663997b2074ef0a2fe6916f654e080',
+    '93198cb581bc57981e950c5f5ea4f21c666d131e73ad0b1656e6ee3ebbadde32',
   );
 });
 

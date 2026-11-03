@@ -9652,6 +9652,7 @@ const OPENAPI_CARGO_LOCK_PIN_SCHEMA: &str = "iroha.openapi.cargo-lock.v1";
 const OPENAPI_CARGO_LOCK_PIN_MAX_BYTES: u64 = 1_024;
 const OPENAPI_GENERATOR_INPUT_PATHS: &[&str] = &[
     ".cargo/config.toml",
+    ".github/actions",
     ".github/workflows/openapi.yml",
     "Cargo.lock",
     "Cargo.toml",
@@ -12026,7 +12027,7 @@ mod openapi_tests {
     fn openapi_generator_input_closure_matches_the_cross_language_fixture() {
         assert_eq!(
             openapi_generator_input_closure_sha256(b"tree-fixture-v1\0", b"lock-fixture-v1\n"),
-            "5034e34e44a804546302178b2f13468096663997b2074ef0a2fe6916f654e080"
+            "93198cb581bc57981e950c5f5ea4f21c666d131e73ad0b1656e6ee3ebbadde32"
         );
     }
     #[test]
