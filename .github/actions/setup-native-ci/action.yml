@@ -8,6 +8,19 @@ inputs:
 runs:
   using: composite
   steps:
+    - name: Prepare sealed replay temporary root
+      shell: bash
+      run: |
+        # Release replay contracts require real /private/tmp paths on every host.
+        # Each caller creates its own owner-private 0700 run directory below it.
+        for path in /private /private/tmp; do
+          if [[ -L "$path" || ( -e "$path" && ! -d "$path" ) ]]; then
+            printf 'Native replay temporary root is not a real directory: %s\n' "$path" >&2
+            exit 1
+          fi
+        done
+        sudo install -d -o root -g root -m 0755 /private
+        sudo install -d -o root -g root -m 1777 /private/tmp
     - name: Install native build prerequisites
       shell: bash
       run: |

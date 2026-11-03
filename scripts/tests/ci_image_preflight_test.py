@@ -3,7 +3,10 @@
 from pathlib import Path
 import os
 import re
+import shlex
+import stat
 import subprocess
+import textwrap
 import tomllib
 
 import pytest
@@ -157,6 +160,63 @@ def test_native_provisioning_uses_pinned_actions_and_declared_rust_toolchain() -
     assert "clippy,rustfmt,llvm-tools-preview" in source
     for action in re.findall(r"uses: ([^\s]+)", source):
         assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
+
+
+@pytest.mark.parametrize("existing", ["absent", "private-file", "private-link", "tmp-file", "tmp-link"])
+def test_native_setup_provisions_real_private_replay_roots(tmp_path: Path, existing: str) -> None:
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    setup = source.split("    - name: Prepare sealed replay temporary root\n", 1)[1].split("    - name:", 1)[0]
+    assert "      shell: bash\n" in setup
+    command = textwrap.dedent(setup.split("      run: |\n", 1)[1])
+    assert "sudo install -d -o root -g root -m 0755 /private\n" in command
+    assert "sudo install -d -o root -g root -m 1777 /private/tmp\n" in command
+    private = tmp_path / "private"
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    if existing.startswith("tmp-"):
+        private.mkdir(mode=0o755)
+    selected = private / "tmp" if existing.startswith("tmp-") else private
+    if existing.endswith("file"):
+        selected.write_text("keep")
+    elif existing.endswith("link"):
+        selected.symlink_to(outside, target_is_directory=True)
+
+    # Exercise the actual shell body without host privilege or changing /private.
+    # The fake sudo verifies root ownership is requested; install still creates
+    # real directories with the production modes under the test's private root.
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    sudo = binaries / "sudo"
+    sudo.write_text(
+        '#!/bin/bash\nset -eu\n'
+        '[[ "$*" == "install -d -o root -g root -m "* ]]\n'
+        'printf "%s\\n" "$*" >> "$PROVISION_LOG"\n'
+        'exec install -d -m "$8" "$9"\n'
+    )
+    sudo.chmod(0o700)
+    log = tmp_path / "provision.log"
+    result = subprocess.run(
+        ["bash", "-eo", "pipefail", "-c", command.replace("/private", shlex.quote(str(private)))],
+        env={**os.environ, "PATH": f"{binaries}{os.pathsep}{os.environ['PATH']}", "PROVISION_LOG": str(log)},
+        capture_output=True, text=True, check=False,
+    )
+    if existing != "absent":
+        assert result.returncode != 0
+        assert "not a real directory" in result.stderr
+        assert not log.exists()
+        assert stat.S_IMODE(outside.stat().st_mode) == 0o700
+        if existing.endswith("file"):
+            assert selected.read_text() == "keep"
+        return
+
+    assert result.returncode == 0, result.stderr
+    assert stat.S_IMODE(private.stat().st_mode) == 0o755
+    assert stat.S_IMODE((private / "tmp").stat().st_mode) == 0o1777
+    run = subprocess.run(
+        ["mktemp", "-d", str(private / "tmp" / "replay.XXXXXX")],
+        capture_output=True, text=True, check=True,
+    )
+    assert stat.S_IMODE(Path(run.stdout.strip()).stat().st_mode) == 0o700
 
 
 def test_no_workflow_starts_from_an_unchecked_ci_variable_or_old_tag() -> None:
