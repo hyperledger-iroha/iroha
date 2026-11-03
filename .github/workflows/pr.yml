@@ -571,6 +571,9 @@ jobs:
         with:
           cache-on-failure: "true"
           shared-key: rust-lane-1.99.1-${{ matrix.lane }}
+      - name: Provision bounded hosted build swap for Core library tests
+        if: contains(format(',{0},', matrix.packages), ',iroha_core,')
+        run: python3 -I -S ci/provision_hosted_build_swap.py
       - name: Enforce data-model compile-unit budget
         if: matrix.lane == 'execution'
         run: >-

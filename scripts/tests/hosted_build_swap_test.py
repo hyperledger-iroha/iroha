@@ -159,17 +159,29 @@ def test_short_write_never_formats_or_activates(hosted, monkeypatch):
     assert len(calls) == 1 and calls[0][0] == "dd"
 
 
-def test_only_observed_heavy_jobs_provision_before_their_work():
+def test_only_observed_build_owners_provision_before_their_work():
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
     command = "python3 -I -S ci/provision_hosted_build_swap.py"
     blocks = re.split(r"(?m)^  ([a-z_0-9]+):\n", workflow.split("jobs:\n", 1)[1])
     jobs = dict(zip(blocks[1::2], blocks[2::2]))
     selected = {name for name, body in jobs.items() if command in body}
-    assert selected == {"pre_build", "sumeragi", "zk_phase_tree_measurement", "x2_maximum_proof_transport"}
-    assert workflow.count(command) == 4
-    for name in selected:
+    observed = {"pre_build", "sumeragi", "zk_phase_tree_measurement", "x2_maximum_proof_transport"}
+    assert selected == observed | {"rust_affected"}
+    assert workflow.count(command) == 5
+    for name in observed:
         body = jobs[name]
         assert "runs-on: ubuntu-24.04" in body
         assert body.index(command) < body.index("run: cargo test" if name == "x2_maximum_proof_transport"
                                               else "ci/observe_build_capacity.py")
+    generic = jobs["rust_affected"]
+    assert "runs-on: ubuntu-24.04" in generic
+    step = generic.split("      - name: Provision bounded hosted build swap for Core library tests\n", 1)[1]
+    step = step.split("\n      - ", 1)[0]
+    # Comma boundaries select the exact router package, including first/last positions;
+    # similarly named packages such as iroha_core_privacy cannot match this condition.
+    assert step == (
+        "        if: contains(format(',{0},', matrix.packages), ',iroha_core,')\n"
+        f"        run: {command}"
+    )
+    assert generic.index(command) < generic.index("      - name: Run locked affected checks")
     assert "scripts/tests/hosted_build_swap_test.py" in jobs["rust_changes"]
