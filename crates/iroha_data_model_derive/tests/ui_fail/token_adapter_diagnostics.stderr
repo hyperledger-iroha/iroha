@@ -1,0 +1,35 @@
+error: expected `mod`
+ --> tests/ui_fail/token_adapter_diagnostics.rs:3:1
+  |
+3 | struct NotAModule;
+  | ^^^^^^
+
+error: unexpected end of input, expected one of: `fn`, `extern`, `use`, `static`, `const`, `unsafe`, `mod`, `type`, `struct`, `enum`, `union`, `impl`, `trait`, `auto`, `default`, `macro`, identifier, `self`, `super`, `crate`, `::`
+ --> tests/ui_fail/token_adapter_diagnostics.rs:5:1
+  |
+5 | iroha_data_model_derive::model_single! {}
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the macro `iroha_data_model_derive::model_single` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: Unsupported shape `enum`. Expected struct with named fields, unnamed fields, or no fields.
+ --> tests/ui_fail/token_adapter_diagnostics.rs:7:10
+  |
+7 | #[derive(iroha_data_model_derive::IdEqOrdHash)]
+  |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the derive macro `iroha_data_model_derive::IdEqOrdHash` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: Expected enum
+  --> tests/ui_fail/token_adapter_diagnostics.rs:10:10
+   |
+10 | #[derive(iroha_data_model_derive::HasOrigin)]
+   |          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this error originates in the derive macro `iroha_data_model_derive::HasOrigin` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error: EventSet requires #[event_set(schema_name = "captured child identity")]
+  --> tests/ui_fail/token_adapter_diagnostics.rs:14:8
+   |
+14 | struct NotAnEventEnum;
+   |        ^^^^^^^^^^^^^^

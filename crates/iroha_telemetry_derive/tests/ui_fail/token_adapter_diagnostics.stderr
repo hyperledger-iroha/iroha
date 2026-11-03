@@ -1,0 +1,5 @@
+error: Function must have at least one argument of type `StateTransaction` or `StateReadOnly`.
+ --> tests/ui_fail/token_adapter_diagnostics.rs:3:1
+  |
+3 | fn execute() {}
+  | ^^^^^^^^^^^^
