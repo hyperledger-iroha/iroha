@@ -441,7 +441,10 @@ pub fn ordered_validator_signers<'a>(
 
 #[test]
 fn validator_signer_lookup_preserves_certified_order_and_refuses_absent_peers() {
-    let network = NetworkBuilder::new().with_peers(VALIDATOR_COUNT).build();
+    let network = NetworkBuilder::new()
+        .with_base_seed("parliament-validator-signer-order")
+        .with_peers(VALIDATOR_COUNT)
+        .build();
     let mut roster = network
         .peers()
         .iter()

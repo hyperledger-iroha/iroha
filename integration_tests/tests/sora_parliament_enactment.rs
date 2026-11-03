@@ -146,7 +146,7 @@ fn citizen_fee_entries<'a>(
 
 #[test]
 fn citizen_fee_entries_preserve_every_recipient_amount_and_source_in_bounded_entries() {
-    use iroha::data_model::prelude::{Asset, Quantity, Transfer};
+    use iroha::data_model::prelude::{Quantity, TransferBox};
     let citizens = citizen_accounts(&citizen_keys());
     let source = AssetId::of(
         SumeragiNposParameters::default().xor_asset_definition_id,
@@ -164,10 +164,10 @@ fn citizen_fee_entries_preserve_every_recipient_amount_and_source_in_bounded_ent
             .unwrap()
     );
     for (entry, citizen) in entries.iter().zip(&citizens) {
-        let transfer = entry[0]
-            .as_any()
-            .downcast_ref::<Transfer<Asset, Quantity, Account>>()
-            .expect("one ordinary signed funding transfer per entry");
+        let Some(TransferBox::Asset(transfer)) = entry[0].as_any().downcast_ref::<TransferBox>()
+        else {
+            panic!("one ordinary signed funding transfer per entry");
+        };
         assert_eq!(&transfer.source, &source);
         assert_eq!(&transfer.destination, citizen);
         assert_eq!(transfer.object, Quantity::from(10_000_u32));
