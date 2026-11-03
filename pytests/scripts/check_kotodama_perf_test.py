@@ -1139,6 +1139,39 @@ class KotodamaPerfGateTests(unittest.TestCase):
                         for name, value in retained.items():
                             self.assertEqual(call["environment"][name], value)
 
+    def test_hosted_budget_and_partial_diagnostics_preserve_qualification(self) -> None:
+        """Cold builds may finish or fail without reusing or qualifying cached samples."""
+        workflow = (ROOT / ".github/workflows/kotodama_perf.yml").read_text()
+        job = workflow.split("  representative-regression:\n", 1)[1]
+        self.assertIn("    timeout-minutes: 360\n", job)
+        self.assertIn('      CARGO_BUILD_JOBS: "1"\n', job)
+        cache = job.split("      - name: Restore Rust build cache\n", 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn('          cache-on-failure: "true"\n', cache)
+        self.assertIn('          cache-workspace-crates: "true"\n', cache)
+        self.assertIn("candidate -> ../target-kotodama-perf", cache)
+        self.assertIn("baseline -> ../target-kotodama-perf", cache)
+        self.assertLess(job.index("Clear cached benchmark evidence"), job.index("Measure base revision"))
+        self.assertIn('run: rm -rf "$CARGO_TARGET_DIR/criterion"', job)
+        self.assertLess(job.index("Clear base current samples"), job.index("Measure candidate revision"))
+
+        for name in ("Seal complete performance evidence", "Upload complete performance evidence"):
+            complete = job.split(f"      - name: {name}\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertNotIn("        if:", complete, "qualified evidence requires prior success")
+            self.assertNotIn("continue-on-error:", complete)
+        diagnostic = job.split("      - name: Upload nonqualifying performance diagnostics\n", 1)[1]
+        self.assertIn("        if: ${{ !success() }}\n", diagnostic)
+        self.assertIn("        timeout-minutes: 5\n", diagnostic)
+        self.assertIn("uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9", diagnostic)
+        self.assertIn("name: kotodama-performance-nonqualifying-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}", diagnostic)
+        self.assertIn("            target-kotodama-perf/criterion\n", diagnostic)
+        self.assertIn("            target-kotodama-perf/kotodama-perf-evidence\n", diagnostic)
+        self.assertIn("          if-no-files-found: warn\n", diagnostic)
+        self.assertIn("          retention-days: 14\n", diagnostic)
+        self.assertNotIn("run:", diagnostic)
+        self.assertNotIn("continue-on-error:", job)
+
     def test_release_workflow_runs_the_complete_artifact_gate(self) -> None:
         workflow = (
             ROOT / ".github" / "workflows" / "kotodama_perf.yml"

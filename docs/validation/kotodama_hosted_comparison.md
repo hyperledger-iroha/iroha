@@ -12,6 +12,17 @@ Cached Criterion measurements are cleared before sampling; baseline `new`
 slots are cleared before the candidate runs. Source, inventory, original lock,
 timed-body, and complete artifact checks remain mandatory.
 
+The job has a bounded 360-minute budget for the six serial benchmark commands
+and subsequent release-tool checks. This accommodates cold compilation without
+changing benchmark sampling or concurrency. The pinned cache action retains
+compiled workspace crates and attempts its post-job save after failure or
+cancellation; a hosted termination can still prevent that save. Cached samples
+never substitute for fresh measurements because the cleanup above remains
+mandatory. Failed or cancelled runs attempt a separate, explicitly nonqualifying
+diagnostic upload of any partial Criterion data and checker output, retained for
+14 days. A five-minute upload bound and host shutdown may prevent delivery.
+Only successful comparison runs proceed to the complete-evidence seal and upload.
+
 The approved performance baseline is the `optimizations` commit
 `06912ee4f8f9423b458d72039dbd0a1c8fde7b43`, with its original `Cargo.lock`
 SHA-256 `1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55`.

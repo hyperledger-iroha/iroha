@@ -121,7 +121,10 @@ jobs:
     # zero-slowdown median policy and reports interval overlap separately.
     # This component comparison is not named-hardware release calibration.
     runs-on: ubuntu-24.04
-    timeout-minutes: 90
+    # A cold serial IVM build took 31 minutes; the job reached its former
+    # 90-minute limit during the first Core build. Allow both revisions' feature
+    # graphs to complete without changing any benchmark's sampling policy.
+    timeout-minutes: 360
     env:
       CARGO_BUILD_JOBS: "1"
       CARGO_INCREMENTAL: "0"
@@ -159,6 +162,8 @@ jobs:
       - name: Restore Rust build cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
+          cache-on-failure: "true"
+          cache-workspace-crates: "true"
           workspaces: |
             candidate -> ../target-kotodama-perf
             baseline -> ../target-kotodama-perf
@@ -366,3 +371,19 @@ jobs:
           --check
           --koto ../target-kotodama-perf/debug/koto
           --admission-tool ../target-kotodama-perf/debug/ivm_artifact_admit
+
+      # Partial samples and failed checker output are diagnostic only. They do
+      # not enter the success-only complete-evidence seal or qualify this run.
+      # An early failure may have no samples; hosted termination may prevent
+      # this best-effort upload or the cache action's post-job save entirely.
+      - name: Upload nonqualifying performance diagnostics
+        if: ${{ !success() }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: kotodama-performance-nonqualifying-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target-kotodama-perf/criterion
+            target-kotodama-perf/kotodama-perf-evidence
+          if-no-files-found: warn
+          retention-days: 14
