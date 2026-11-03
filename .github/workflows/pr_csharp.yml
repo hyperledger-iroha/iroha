@@ -602,6 +602,9 @@ jobs:
 
   native-package-smoke:
     needs: build-test-pack
+    # Optional ARM retries can be skipped after successful authenticated delivery.
+    # Require the completed package, without inheriting those ancestor skips.
+    if: ${{ !cancelled() && needs.build-test-pack.result == 'success' }}
     strategy:
       fail-fast: false
       matrix:
