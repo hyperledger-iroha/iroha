@@ -264,7 +264,7 @@ jobs:
         run: cargo test --locked -p irohad_lib --lib -- block_sync_topic_must_carry_the_local_sync_budget control_topic_must_carry_the_largest_control_frame check_config_and_runtime_enforce_frame_cap_boundary
       - name: Node admission, gossip, proposer, restore and serving bounds
         run: |
-          cargo test --locked -p iroha_core --lib -- \
+          python3 -I -S ci/observe_build_capacity.py -- cargo test --locked -p iroha_core --lib -- \
             resource_coherence:: \
             state::deserialize::state_snapshot_decode_error_tests::resource_restore_ \
             gossiper::tests::shipped_gossip_frames_carry_the_maximum_admitted_signed_transaction \

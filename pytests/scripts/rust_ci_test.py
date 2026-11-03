@@ -64,7 +64,7 @@ def test_core_host_capacity_policy_preserves_every_test_command() -> None:
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
     assert workflow.count('CARGO_BUILD_JOBS: "2"') == 2
     observer = "python3 -I -S ci/observe_build_capacity.py -- "
-    assert workflow.count(observer) == 3
+    assert workflow.count(observer) == 4
     seeds = "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS "
     expected = {
         "sumeragi": [
@@ -126,6 +126,63 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
         "build-binaries", "--binaries", "iroha,iroha3d,kagami,koto",
         "--output-dir", "target/release/pre_build",
     ]
+    assert "[build-capacity]" in result.stderr
+
+
+@pytest.mark.parametrize("code", [0, 23])
+def test_x2_capacity_observer_preserves_core_test_routing(
+    tmp_path: Path, code: int,
+) -> None:
+    """Execute the actual X.2 shell command and retain every filter and status."""
+    job = _workflow_job("x2_maximum_proof_transport")
+    observer = "python3 -I -S ci/observe_build_capacity.py -- "
+    assert job.count(observer) == 1
+    assert "    timeout-minutes: 120\n" in job
+    assert "CARGO_BUILD_JOBS" not in job
+    assert "continue-on-error" not in job
+    step = "      - name: Node admission, gossip, proposer, restore and serving bounds\n"
+    body = job.split(step, 1)[1].split("        run: |\n", 1)[1]
+    command = textwrap.dedent(body).strip()
+    assert command.startswith(observer + "cargo test --locked -p iroha_core --lib -- ")
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    cargo = tools / "cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\n"
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'env': os.environ['X2_TEST_SENTINEL']}))\n"
+        "print('X2_CHILD_STDERR', file=sys.stderr)\n"
+        f"sys.exit({code})\n"
+    )
+    cargo.chmod(0o700)
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={**os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
+             "X2_TEST_SENTINEL": "unchanged"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == {
+        "env": "unchanged",
+        "argv": [
+            "test", "--locked", "-p", "iroha_core", "--lib", "--",
+            "resource_coherence::",
+            "state::deserialize::state_snapshot_decode_error_tests::resource_restore_",
+            "gossiper::tests::shipped_gossip_frames_carry_the_maximum_admitted_signed_transaction",
+            "gossiper::tests::ordinary_gossip_exact_frame_boundary_preserves_original_body_on_requeue",
+            "queue::tests::default_limits_admit_and_select_the_largest_includable_transaction",
+            "queue::tests::transaction_cap_is_exact_at_admission_and_block_validation",
+            "queue::tests::queue_admission_and_proposer_selection_share_the_includable_bound",
+            "sumeragi::payload::resource_contract_tests::",
+            "sumeragi::executor::publication_tests::global_build_carries_a_transaction_of_the_payload_limit_less_the_reserve",
+            "sumeragi::driver::serve::tests::admitted_maximum_frames_fit_frame_overhead_and_the_block_sync_frame",
+            "sumeragi::driver::serve::tests::generic_maximum_control_frames_fit_the_control_topic",
+            "privacy::tests::privacy_block_counts_and_actual_aggregate_bytes_are_independent",
+        ],
+    }
+    assert "X2_CHILD_STDERR" in result.stderr
     assert "[build-capacity]" in result.stderr
 
 

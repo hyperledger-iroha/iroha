@@ -131,7 +131,7 @@ cumulative child high-water mark. The separate Cargo-process peak includes its
 child accounting and must not be interpreted as simultaneous process-tree
 memory or as an individual compiler unit's memory.
 
-The two heavy Core library-test commands and selected release-binary build in
+The three heavy Core library-test commands and selected release-binary build in
 PR CI also run through `ci/observe_build_capacity.py`. This observer flushes a
 capacity snapshot to stderr every five seconds, capped at 1,080 periodic snapshots plus
 a final snapshot. It records host memory, swap and pressure, root and actual
