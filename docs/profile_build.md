@@ -144,6 +144,11 @@ establish a failure cause, compiler peak, or qualified compile-memory baseline.
 The child keeps its command, environment, working directory, streams and exit
 status; the observer does not signal, retry or limit it.
 
+The affected-package test route explicitly enables each selected owner's
+executable test prerequisites. For `xtask`, it selects `xtask/dev-tools` so
+Cargo builds the binary invoked by its integration tests. Ordinary build
+commands keep their default feature selection.
+
 The four dedicated build jobs also provision one additional 16 GiB swap file on
 their GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup
 for the execution lane or when their selected package list contains `iroha_core`:

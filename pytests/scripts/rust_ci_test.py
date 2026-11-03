@@ -1768,6 +1768,8 @@ def test_missing_mutated_or_duplicate_feature_inventory_is_refused(inventory) ->
     ("iroha_release_bundle",),
     ("iroha_native_source_delivery",),
     ("iroha_release_bundle", "iroha_native_source_delivery"),
+    ("xtask",),
+    ("iroha_native_source_delivery", "xtask"),
 ))
 def test_native_helper_tests_select_only_their_owned_development_features(
     workspace: bool, helpers: tuple[str, ...],
@@ -1781,6 +1783,35 @@ def test_native_helper_tests_select_only_their_owned_development_features(
         "iroha_torii/test-fixtures", *(f"{package}/dev-tools" for package in helpers),
     ]
     assert ("--workspace" in test) is workspace
+
+
+@pytest.mark.parametrize("workspace", (False, True))
+def test_xtask_test_route_builds_the_manifest_required_binary(monkeypatch, workspace: bool) -> None:
+    """The actual routed Cargo command supplies the executable's declared features."""
+    manifest = rust_ci.tomllib.loads((ROOT / "xtask/Cargo.toml").read_text())
+    binary, = (target for target in manifest["bin"] if target["name"] == "xtask")
+    assert binary["required-features"] == ["dev-tools"]
+    assert manifest["features"]["default"] == []
+    required = {f"xtask/{feature}" for feature in binary["required-features"]}
+    calls = []
+    monkeypatch.setattr(rust_ci, "_run", lambda command, **kwargs: calls.append((command, kwargs)))
+    rust_ci.run_checks(("xtask",), ("build", "test"), root=ROOT, workspace=workspace)
+    (build, build_options), (test, test_options) = calls
+    assert "--features" not in build
+    assert test[:4] == ["cargo", "test", "--locked", "--no-fail-fast"]
+    assert required <= set(test[test.index("--features") + 1].split(","))
+    assert ("--workspace" in test) is workspace
+    if not workspace:
+        assert test == ["cargo", "test", "--locked", "--no-fail-fast",
+                        "--features", "xtask/dev-tools", "-p", "xtask"]
+    assert build_options == test_options == {"cwd": ROOT, "capture_output": False}
+
+
+@pytest.mark.parametrize("package", ("xtask-fixture", "xtask_tools", "iroha_schema_gen"))
+def test_xtask_test_feature_does_not_leak_to_other_package_owners(package: str) -> None:
+    """Only the exact selected executable owner can enable its development graph."""
+    command, = rust_ci.commands_for_checks((package,), ("test",))
+    assert command == ["cargo", "test", "--locked", "--no-fail-fast", "-p", package]
 
 
 def test_workspace_and_package_cli_selections_are_exclusive() -> None:
