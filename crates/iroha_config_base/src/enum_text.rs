@@ -86,7 +86,7 @@ macro_rules! config_enum {
             type Err = $crate::enum_text::ParseError;
 
             #[deny(unreachable_patterns)]
-            fn from_str(value: &str) -> ::core::result::Result<Self, Self::Err> {
+            fn from_str(value: &str) -> ::core::result::Result<Self, <Self as ::core::str::FromStr>::Err> {
                 match value {
                     $($spelling => ::core::result::Result::Ok(Self::$variant)),+,
                     _ => ::core::result::Result::Err(
@@ -99,7 +99,7 @@ macro_rules! config_enum {
         impl ::core::convert::TryFrom<&str> for $name {
             type Error = $crate::enum_text::ParseError;
 
-            fn try_from(value: &str) -> ::core::result::Result<Self, Self::Error> {
+            fn try_from(value: &str) -> ::core::result::Result<Self, <Self as ::core::convert::TryFrom<&str>>::Error> {
                 <Self as ::core::str::FromStr>::from_str(value)
             }
         }
@@ -119,13 +119,22 @@ mod tests {
             First => "one",
             /// Preserve an explicitly uppercase spelling.
             Second => "TWO",
+            /// A variant may share the `FromStr` error associated type's name.
+            Err => "err",
+            /// A variant may share the `TryFrom` error associated type's name.
+            Error => "error",
         }
     }
 
     #[test]
     fn exact_spelling_drives_parsing_display_and_default() {
         assert_eq!(Mode::default(), Mode::First);
-        for (mode, spelling) in [(Mode::First, "one"), (Mode::Second, "TWO")] {
+        for (mode, spelling) in [
+            (Mode::First, "one"),
+            (Mode::Second, "TWO"),
+            (Mode::Err, "err"),
+            (Mode::Error, "error"),
+        ] {
             assert_eq!(mode.as_str(), spelling);
             assert_eq!(spelling.parse::<Mode>().unwrap(), mode);
             assert_eq!(Mode::try_from(spelling).unwrap(), mode);
