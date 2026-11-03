@@ -92,7 +92,6 @@ jobs:
   binding-parity:
     name: Complete Norito binding parity
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
     env:
       IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
     steps:
@@ -100,10 +99,6 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/setup-native-ci
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
-        with:
-          cache-on-failure: "true"
-          shared-key: norito-binding-parity
       # The build script also invokes binding checks. Bootstrap their mandatory
       # JNI address validator first, then run every strict parity lane below.
       - name: Build same-source native address validator
