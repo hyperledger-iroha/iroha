@@ -4048,7 +4048,9 @@ def test_retained_cell_revision_mutations_bind_actual_core_pair_and_exact_contro
         assert "revision.retained_read_matches_source(source)" in implementation
         assert "revision: Option<mv::cell::FrozenDetachedRead<MusubiResolverIndexRevisionV1>>" in implementation
     else:
-        cell = implementation.split("impl<V: Value", 1)[1]
+        cell = implementation.split(
+            "impl<V: mv::CellValue, C: Send + Sync + 'static> CellField<'_, V, C> {", 1
+        )[1]
         assert "original.matches_read(source)" in cell
         assert "original.try_into_detached()" in cell
         assert "self.phase = Some(Phase::Reading(original))" in cell
