@@ -221,7 +221,8 @@ jobs:
           set -euo pipefail
           cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
             2>&1 | tee target/platform-native/dif-default.log
-          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib full_native_ -- --nocapture --test-threads=1 \
+          # Select the receipt's exact owner; unrelated proof qualifications also use full_native_.
+          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib privacy_engines::zk_x509::stark::main_aggregate::main_transform::full_dispatch_tests::full_native_ -- --nocapture --test-threads=1 \
             2>&1 | tee target/platform-native/dif-feature-off.log
           set +e
           cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \

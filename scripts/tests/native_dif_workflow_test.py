@@ -1,0 +1,136 @@
+"""Exercise native DIF selection and strict receipts without native qualification claims."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import textwrap
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parents[2]
+OWNER = "privacy_engines::zk_x509::stark::main_aggregate::main_transform::"
+SCALAR_OWNER = OWNER + "full_dispatch_tests::full_native_"
+SCALAR_NAMES = [SCALAR_OWNER + suffix for suffix in (
+    "admission_is_feature_and_architecture_bound",
+    "feature_off_measured_batch_executes_scalar_and_clears",
+    "gate_requires_every_complete_registered_masked_length",
+)]
+KERNEL = (
+    "privacy_engines::transparent_stark::avx2_test_kernel::dif::"
+    "required_avx2_dif_windows_match_independent_modular_arithmetic"
+)
+NATIVE_NAMES = [KERNEL] + [
+    OWNER + "selected_coset::full_tests::avx2_dif::required_avx2_dif_" + suffix
+    for suffix in (
+        "actual_full_batch_dispatch_keeps_original_outputs",
+        "keeps_allocation_erasure_and_original_fallback",
+        "owner_matches_scalar_dense_and_refusal_boundaries",
+        "registered_common22_outputs_fit_original_funding",
+    )
+]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["none", "broad-selector", "missing-control", "unexpected-control", "wrong-refusal", "wrong-exit"],
+)
+def test_native_dif_workflow_selects_its_owner_and_requires_exact_receipts(
+    tmp_path: Path, mutation: str,
+) -> None:
+    """Execute the workflow script with libtest-shaped outputs, including name collisions."""
+
+    workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
+    step = workflow.split("      - name: Require production DIF execution and feature-off refusal\n", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    if mutation == "broad-selector":
+        command = command.replace("--lib " + SCALAR_OWNER + " --", "--lib full_native_ --")
+
+    ordinary = SCALAR_NAMES.copy()
+    if mutation == "missing-control":
+        ordinary.pop()
+    elif mutation == "unexpected-control":
+        ordinary.append(SCALAR_OWNER + "unexpected")
+    # Real tests outside this owner share the short filter. The generic proof
+    # qualification remains ignored here and cannot be counted as a scalar control.
+    collisions = [
+        ["execution_proofs::proof::tests::execution_queries_match_full_native_race_fixed_lde", False],
+        ["execution_proofs::proof::tests::late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected", True],
+    ]
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(json.dumps({
+        "native": NATIVE_NAMES,
+        "scalar": [[name, False] for name in ordinary] + collisions,
+        "mutation": mutation,
+    }))
+    binary_root = tmp_path / "bin"
+    binary_root.mkdir()
+    cargo = binary_root / "cargo"
+    cargo.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""\
+        import json, os, sys
+        from pathlib import Path
+
+        args = sys.argv[1:]
+        with open(os.environ["FIXTURE_CALLS"], "a") as stream:
+            stream.write(json.dumps(args) + "\\n")
+        fixture = json.loads(Path(os.environ["FIXTURE_INPUT"]).read_text())
+        selector = args[args.index("--lib") + 1]
+        feature_off = "--no-default-features" in args
+        refusal = feature_off and "--ignored" in args
+        pool = fixture["scalar"] if feature_off and not refusal else [
+            [name, False] for name in fixture["native"]
+        ]
+        selected = [(name, ignored) for name, ignored in pool if selector in name]
+        ignored = sum(skip for _, skip in selected)
+        for name, skip in selected:
+            print(f"test {name} ... ", end="")
+            if refusal:
+                message = "simd and actual AVX2 are mandatory" if name == fixture["native"][0] else "simd and actual AVX2 required"
+                if fixture["mutation"] == "wrong-refusal":
+                    message = "unrelated failure"
+                print("\\n" + message + "\\nFAILED")
+            else:
+                print("ignored, expensive independent qualification" if skip else "ok")
+        passed = 0 if refusal else len(selected) - ignored
+        failed = len(selected) if refusal else 0
+        result = "FAILED" if refusal else "ok"
+        print(f"test result: {result}. {passed} passed; {failed} failed; {ignored} ignored;")
+        sys.exit((1 if fixture["mutation"] == "wrong-exit" else 101) if refusal else 0)
+        """))
+    cargo.chmod(0o700)
+    (binary_root / "python").symlink_to(sys.executable)
+    logs = tmp_path / "target/platform-native"
+    logs.mkdir(parents=True)
+    calls = tmp_path / "calls.jsonl"
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", command],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": str(binary_root) + os.pathsep + os.environ["PATH"],
+            "FIXTURE_INPUT": str(fixture),
+            "FIXTURE_CALLS": str(calls),
+        },
+        text=True, capture_output=True, check=False,
+    )
+    receipt = json.loads((logs / "dif-result.json").read_text())
+    assert (result.returncode == 0) == (mutation == "none"), result.stderr
+    assert receipt["status"] == ("PASS" if mutation == "none" else "REFUSED")
+    assert receipt["expected_native_refusal_admitted"] == (mutation == "none")
+    invocations = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert len(invocations) == 3
+    assert all("--locked" in args for args in invocations)
+    assert "--no-default-features" not in invocations[0]
+    assert "--no-default-features" in invocations[1]
+    assert "--ignored" not in invocations[1]
+    assert "--no-default-features" in invocations[2] and "--ignored" in invocations[2]
+    if mutation == "none":
+        assert receipt["default_native_passed"] == 5
+        assert receipt["feature_off_scalar_passed"] == 3
+        assert receipt["feature_off_native_failed"] == 5
+        assert receipt["feature_off_native_exit_status"] == 101
