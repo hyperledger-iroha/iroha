@@ -8,8 +8,10 @@ import json
 import os
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import sys
+import textwrap
 
 import pytest
 
@@ -270,13 +272,53 @@ def test_unrelated_private_values_are_not_forwarded_or_added_to_provenance(tmp_p
 
 
 @pytest.mark.parametrize('name', ['RUSTC_WRAPPER', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
-    'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER', 'LD_PRELOAD'])
+    'CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER', 'LD_PRELOAD', 'PKG_CONFIG_PATH', 'LD_LIBRARY_PATH',
+    'RUST_BACKTRACE', 'CARGO_PROFILE_DEV_DEBUG', 'CARGO_UNSTABLE_SPARSE_REGISTRY',
+    'CARGO_REGISTRIES_CRATES_IO_PROTOCOL'])
 def test_unsupported_override_refuses_before_entry_or_output_allocation(tmp_path, native_entry, monkeypatch, name):
     fixture = Fixture(tmp_path, native_entry)
     monkeypatch.setenv(name, 'unapproved')
     with pytest.raises(RuntimeError, match='unsupported inherited'):
         fixture.run()
     fixture.assert_no_entry()
+
+
+def test_native_workflow_establishes_valid_fixture_environment_without_weakening_refusals():
+    """Execute the actual CI setup prefix with all observed action overrides present."""
+    workflow = (BASE.parent / '.github/workflows/platform_native.yml').read_text()
+    step = workflow.split('      - name: Exercise producer admission and synchronous original-session supervision\n', 1)[1]
+    setup = textwrap.dedent(step.split('        run: |\n', 1)[1]
+                           .split('          export IROHA_TEST_PROCESS_BRIDGE_LIBRARY=', 1)[0])
+    names = ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'RUSTUP_TOOLCHAIN', 'PKG_CONFIG_PATH',
+             'LD_LIBRARY_PATH', 'RUST_BACKTRACE', 'CARGO_PROFILE_DEV_DEBUG',
+             'CARGO_UNSTABLE_SPARSE_REGISTRY', 'CARGO_REGISTRIES_CRATES_IO_PROTOCOL']
+    environment = {name: os.environ[name] for name in ('PATH', 'HOME', 'TMPDIR', 'SYSTEMROOT',
+                                                     'WINDIR', 'COMSPEC', 'PATHEXT') if name in os.environ}
+    environment.update({name: 'unapproved-fixture-value' for name in names})
+    probe = f'''import os, sys
+sys.path.insert(0, {str(BASE)!r})
+import release_entry_owner as owner
+policy = {ENVIRONMENT_POLICY!r}
+assert not set({names!r}).intersection(os.environ)
+assert os.environ.get('PATH')
+owner._environment(policy, os.environ)
+for name in {names!r}:
+    try:
+        owner._environment(policy, {{name: 'unapproved-fixture-value'}})
+    except RuntimeError as error:
+        assert 'unsupported inherited' in str(error) and name in str(error)
+    else:
+        raise AssertionError('production accepted ' + name)
+print('valid fixture caller; every explicit override still refused')
+'''
+    bash = (Path('C:/Program Files/Git/bin/bash.exe') if os.name == 'nt'
+            else Path(shutil.which('bash') or '/bin/bash'))
+    assert bash.is_file(), 'native Git Bash fixture host is required'
+    command = setup + shlex.quote(Path(sys.executable).as_posix()) + ' -I -S -c ' + shlex.quote(probe)
+    result = subprocess.run([str(bash), '--noprofile', '--norc', '-c', command], env=environment,
+                            text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'valid fixture caller; every explicit override still refused'
 
 
 @pytest.fixture(scope='module')
