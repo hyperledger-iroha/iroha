@@ -596,7 +596,7 @@ jobs:
           if-no-files-found: error
       - name: Run locked affected checks
         run: >
-          python3 scripts/rust_ci.py run
+          python3 -I -S ci/observe_build_capacity.py -- python3 scripts/rust_ci.py run
           --packages "${{ matrix.packages }}"
           --checks clippy,build,test,doc
 

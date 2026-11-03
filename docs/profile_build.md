@@ -131,8 +131,9 @@ cumulative child high-water mark. The separate Cargo-process peak includes its
 child accounting and must not be interpreted as simultaneous process-tree
 memory or as an individual compiler unit's memory.
 
-The three heavy Core library-test commands and selected release-binary build in
-PR CI also run through `ci/observe_build_capacity.py`. This observer flushes a
+The three dedicated Core library-test commands, selected release-binary build,
+and generic affected-crate checks in PR CI run through
+`ci/observe_build_capacity.py`. This observer flushes a
 capacity snapshot to stderr every five seconds, capped at 1,080 periodic snapshots plus
 a final snapshot. It records host memory, swap and pressure, root and actual
 cgroup counters, workspace/temp disk capacity, and the five largest resident
@@ -143,8 +144,8 @@ establish a failure cause, compiler peak, or qualified compile-memory baseline.
 The child keeps its command, environment, working directory, streams and exit
 status; the observer does not signal, retry or limit it.
 
-These four jobs also provision one additional 16 GiB swap file on their
-GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup only
+The four dedicated build jobs also provision one additional 16 GiB swap file on
+their GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup only
 when their selected package list contains `iroha_core`: their `cargo test`
 command compiles the same Core library-test target. A captured Core build
 exhausted the runner's RAM and existing 3 GiB swap immediately before shutdown.

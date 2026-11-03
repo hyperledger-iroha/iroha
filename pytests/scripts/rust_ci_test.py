@@ -64,7 +64,7 @@ def test_core_host_capacity_policy_preserves_every_test_command() -> None:
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
     assert workflow.count('CARGO_BUILD_JOBS: "2"') == 2
     observer = "python3 -I -S ci/observe_build_capacity.py -- "
-    assert workflow.count(observer) == 4
+    assert workflow.count(observer) == 5
     seeds = "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS "
     expected = {
         "sumeragi": [
@@ -126,6 +126,52 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
         "build-binaries", "--binaries", "iroha,iroha3d,kagami,koto",
         "--output-dir", "target/release/pre_build",
     ]
+    assert "[build-capacity]" in result.stderr
+
+
+@pytest.mark.parametrize("code", [0, 23])
+@pytest.mark.parametrize("packages", ["ivm,iroha_core_privacy", "iroha_core"])
+def test_affected_capacity_observer_preserves_locked_check_routing(
+    tmp_path: Path, code: int, packages: str,
+) -> None:
+    """Execute the actual folded check step with its selected packages and inherited state."""
+    observer = "python3 -I -S ci/observe_build_capacity.py -- "
+    job = _workflow_job("rust_affected")
+    assert job.count(observer) == 1
+    assert "    timeout-minutes: 240\n" in job
+    assert "      fail-fast: false\n" in job
+    assert "CARGO_BUILD_JOBS" not in job
+    assert "continue-on-error" not in job
+    assert observer not in _workflow_job("rust_network")
+    body = job.split("      - name: Run locked affected checks\n", 1)[1]
+    body = body.split("        run: >\n", 1)[1]
+    command = " ".join(line.strip() for line in body.splitlines() if line.strip())
+    assert command == (
+        observer + 'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
+        "--checks clippy,build,test,doc"
+    )
+    command = command.replace("${{ matrix.packages }}", packages)
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/rust_ci.py").write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+        "'jobs': os.environ['CARGO_BUILD_JOBS'], 'seeds': os.environ['SUMERAGI_SIM_SEEDS']}))\n"
+        "print('AFFECTED_CHILD_STDERR', file=sys.stderr)\n"
+        f"sys.exit({code})\n"
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={**os.environ, "CARGO_BUILD_JOBS": "6", "SUMERAGI_SIM_SEEDS": "sentinel"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == {
+        "argv": ["run", "--packages", packages, "--checks", "clippy,build,test,doc"],
+        "cwd": str(tmp_path.resolve()), "jobs": "6", "seeds": "sentinel",
+    }
+    assert "AFFECTED_CHILD_STDERR" in result.stderr
     assert "[build-capacity]" in result.stderr
 
 
