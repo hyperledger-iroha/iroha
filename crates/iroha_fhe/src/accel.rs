@@ -657,10 +657,6 @@ mod tests {
     /// Qualification must execute the actual x86-64 kernels, never the lane model or fallback.
     #[test]
     #[ignore = "requires an x86-64 AVX2 runner; run explicitly for hardware qualification"]
-    #[expect(
-        clippy::assertions_on_constants,
-        reason = "This ignored qualification test must refuse runtime invocation on a non-x86-64 host without breaking ordinary cross-platform compilation."
-    )]
     fn required_avx2_execution() {
         assert!(
             std::hint::black_box(cfg!(target_arch = "x86_64")),
