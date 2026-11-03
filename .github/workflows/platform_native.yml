@@ -300,13 +300,17 @@ jobs:
         run: |
           set -euo pipefail
           cargo test --locked -p iroha_plonk --test source_identity 2>&1 | tee target/platform-native/source-identity.log
-      - name: Exercise retained Python source delivery
+      - name: Prepare retained Python source delivery fixtures
+        id: source_delivery_ready
         run: |
           set -euo pipefail
           cargo test --locked -p iroha_native_source_delivery --features dev-tools 2>&1 | tee target/platform-native/source-delivery-rust.log
           cargo clippy --locked -p iroha_native_source_delivery --features dev-tools --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
           cargo build --locked -p iroha_native_source_delivery --features dev-tools
           python -m pip install --require-hashes --only-binary=:all: -r ci/requirements-native-components.lock
+      - name: Exercise retained Python source delivery
+        run: |
+          set -euo pipefail
           export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q \
             scripts/tests/python_native_source_delivery_test.py \
@@ -318,8 +322,9 @@ jobs:
             pytests/scripts/workspace_source_keeper_test.py \
             2>&1 | tee target/platform-native/source-delivery-python.log
       - name: Exercise producer admission and synchronous original-session supervision
-        if: runner.os != 'macOS'
-        # The preceding Python delivery step installs the hashed pytest dependencies.
+        if: ${{ !cancelled() && runner.os != 'macOS' && steps.source_delivery_ready.outcome == 'success' }}
+        # Successful preparation requires every preceding setup/build gate. This
+        # independent suite still runs after delivery pytest fails; the job stays failed.
         run: |
           set -euo pipefail
           # Give fixture callers a valid explicit compiler environment; refusal tests inject overrides.

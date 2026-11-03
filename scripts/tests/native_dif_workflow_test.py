@@ -40,13 +40,27 @@ def test_native_component_python_tools_preserve_hashed_test_delivery() -> None:
     """Component controls retain all tests and use the existing pure-Python pins."""
 
     workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
+    preparation = workflow.split("      - name: Prepare retained Python source delivery fixtures\n", 1)[1]
+    preparation = preparation.split("      - name:", 1)[0]
+    assert "        id: source_delivery_ready\n" in preparation
+    assert "        if:" not in preparation
+    assert textwrap.dedent(preparation.split("        run: |\n", 1)[1]).splitlines() == [
+        "set -euo pipefail",
+        "cargo test --locked -p iroha_native_source_delivery --features dev-tools 2>&1 | tee target/platform-native/source-delivery-rust.log",
+        "cargo clippy --locked -p iroha_native_source_delivery --features dev-tools --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log",
+        "cargo build --locked -p iroha_native_source_delivery --features dev-tools",
+        "python -m pip install --require-hashes --only-binary=:all: -r ci/requirements-native-components.lock",
+    ]
     step = workflow.split("      - name: Exercise retained Python source delivery\n", 1)[1]
     step = step.split("      - name:", 1)[0]
     assert "        if:" not in step
-    assert step.count(
+    assert preparation.count(
         "python -m pip install --require-hashes --only-binary=:all: "
         "-r ci/requirements-native-components.lock"
     ) == 1
+    assert "          set -euo pipefail\n" in step
+    assert "export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER=" in step
+    assert "2>&1 | tee target/platform-native/source-delivery-python.log" in step
     assert '      - "ci/requirements-native-components.*"' in workflow
     pytest_command = step.split("python -m pytest -q", 1)[1]
     assert re.findall(r"(?:scripts/tests|pytests/scripts)/[a-z_]+\.py", pytest_command) == [
@@ -75,6 +89,95 @@ def test_native_component_python_tools_preserve_hashed_test_delivery() -> None:
             assert hashes
             entries.append((match[1], sorted(hashes)))
         assert entries[0] == entries[1], name
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+@pytest.mark.parametrize("runner_os", ["Linux", "Windows", "macOS"])
+@pytest.mark.parametrize("preparation_outcome", ["success", "failure", "skipped", "cancelled", ""])
+@pytest.mark.parametrize("delivery_failed", [False, True])
+def test_producer_routing_requires_preparation_and_preserves_cancellation(
+    cancelled: bool, runner_os: str, preparation_outcome: str, delivery_failed: bool,
+) -> None:
+    """Evaluate the maintained condition with actual Actions status-function rules."""
+    workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
+    native = workflow.split("  native:\n", 1)[1].split("  workflow-storage:\n", 1)[0]
+    assert "continue-on-error:" not in native
+    step = native.split("      - name: Exercise producer admission and synchronous original-session supervision\n", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    condition = re.search(r"(?m)^        if: \$\{\{ (.+) \}\}$", step)[1]
+    expression = condition.replace("runner.os", repr(runner_os)).replace(
+        "steps.source_delivery_ready.outcome", repr(preparation_outcome),
+    )
+    status_functions = {
+        "cancelled()": cancelled,
+        "success()": not cancelled and not delivery_failed,
+        "failure()": delivery_failed,
+        "always()": True,
+    }
+    has_status_function = any(name in expression for name in status_functions)
+    for name, value in status_functions.items():
+        expression = expression.replace(name, repr(value))
+    expression = re.sub(r"!(?!=)", "not ", expression).replace("&&", "and").replace("||", "or")
+    selected = eval(expression, {"__builtins__": {}}, {})
+    if not has_status_function:
+        selected = selected and status_functions["success()"]
+    assert selected == (not cancelled and runner_os != "macOS" and preparation_outcome == "success")
+    upload = native.split("      - name: Retain actual native results\n", 1)[1]
+    assert "        if: always()\n" in upload
+    assert "          path: target/platform-native\n" in upload
+    assert "          if-no-files-found: error\n" in upload
+
+
+@pytest.mark.parametrize("pytest_status,case,expected_status", [
+    (0, "pass", 0), (17, "pass", 17), (0, "skipped", 1),
+    (0, "error", 1), (0, "failure", 1), (0, "empty", 1),
+])
+def test_producer_script_retains_failure_and_nonempty_no_skip_gate(
+    tmp_path: Path, pytest_status: int, case: str, expected_status: int,
+) -> None:
+    """Run the actual shell/JUnit gate while replacing only the costly pytest process."""
+    workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
+    step = workflow.split("      - name: Exercise producer admission and synchronous original-session supervision\n", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+    binary_root = tmp_path / "bin"
+    binary_root.mkdir()
+    python = binary_root / "python"
+    python.write_text(f"#!{sys.executable}\n" + textwrap.dedent("""\
+        import json, os, sys
+        from pathlib import Path
+
+        if sys.argv[1:3] == ["-m", "pytest"]:
+            Path(os.environ["PYTEST_CALL"]).write_text(json.dumps(sys.argv[1:]))
+            case = os.environ["JUNIT_CASE"]
+            child = "" if case == "pass" else f"<{case}/>"
+            body = "" if case == "empty" else f"<testcase name='actual-fixture'>{child}</testcase>"
+            Path("target/platform-native/release-process-python.xml").write_text(f"<testsuite>{body}</testsuite>")
+            print("retained producer pytest output", flush=True)
+            sys.exit(int(os.environ["PYTEST_STATUS"]))
+        os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+        """))
+    python.chmod(0o700)
+    logs = tmp_path / "target/platform-native"
+    logs.mkdir(parents=True)
+    call = tmp_path / "pytest-call.json"
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", command], cwd=tmp_path,
+        env={**os.environ, "PATH": str(binary_root) + os.pathsep + os.environ["PATH"],
+             "PYTEST_CALL": str(call), "JUNIT_CASE": case, "PYTEST_STATUS": str(pytest_status)},
+        text=True, capture_output=True, check=False,
+    )
+    assert result.returncode == expected_status, result.stdout + result.stderr
+    assert json.loads(call.read_text()) == [
+        "-m", "pytest", "-q", "--junitxml=target/platform-native/release-process-python.xml",
+        *["pytests/scripts/" + name for name in (
+            "test_release_entry_owner.py", "test_release_bridge_admission.py",
+            "test_release_process_bridge.py", "test_native_supervision.py",
+            "test_pipeline_preparation.py", "test_shell_preparation.py",
+            "test_bridge_cli_supervision.py",
+        )],
+    ]
+    assert (logs / "release-process-python.log").read_text() == "retained producer pytest output\n"
 
 
 def test_intel_and_windows_native_jobs_have_the_two_build_timeout_allowance() -> None:
