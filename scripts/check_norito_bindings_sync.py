@@ -559,7 +559,7 @@ def main() -> int:
         if "python" in message_lower:
             print(
                 "Python Norito parity checks failed. Run "
-                "'python3 -m unittest discover -s python/norito_py/tests' to investigate.",
+                "'python3 -m pytest -q python/norito_py/tests' to investigate.",
                 file=sys.stderr,
             )
         else:
@@ -581,7 +581,7 @@ def main() -> int:
         else:
             print(
                 "Python Norito parity checks failed. Run "
-                "'python3 -m unittest discover -s python/norito_py/tests' to investigate.",
+                "'python3 -m pytest -q python/norito_py/tests' to investigate.",
                 file=sys.stderr,
             )
         return 1

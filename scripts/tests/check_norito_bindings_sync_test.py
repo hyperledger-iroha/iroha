@@ -154,6 +154,22 @@ def test_python_lane_runs_reference_regressions_and_propagates_failure(
         MODULE.run_python_parity_checks()
 
 
+def test_python_failure_reports_the_complete_reference_test_command(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("NORITO_BINDINGS_CHECK_ALL", "1")
+    monkeypatch.setattr(MODULE, "determine_base_ref", lambda: "origin/optimizations")
+    monkeypatch.setattr(MODULE, "compute_merge_base", lambda _: "base")
+    monkeypatch.setattr(MODULE, "gather_flags", lambda _: MODULE.PathFlags())
+
+    def failed_suite():
+        raise MODULE.CheckError("Python reference regression failed")
+
+    monkeypatch.setattr(MODULE, "run_python_parity_checks", failed_suite)
+    assert MODULE.main() == 1
+    assert "python3 -m pytest -q python/norito_py/tests" in capsys.readouterr().err
+
+
 def test_java_source_changes_select_canonical_jvm_lane(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     flags = MODULE.PathFlags()
@@ -198,3 +214,13 @@ def test_ci_binding_gate_builds_same_source_jni_before_strict_parity() -> None:
     assert parity not in bootstrap[0]
     assert "NORITO_JVM_SKIP_TESTS" not in block
     assert "continue-on-error" not in block
+
+
+def test_ci_binding_gate_provisions_compressed_python_reference_tests() -> None:
+    root = MODULE.REPO_ROOT
+    requirements = (root / "scripts/requirements.txt").read_text().splitlines()
+    setup = (root / ".github/actions/setup-native-ci/action.yml").read_text()
+    workflow = (root / ".github/workflows/openapi.yml").read_text()
+    assert "zstandard==0.25.0" in requirements
+    assert "python -m pip install -r scripts/requirements.txt" in setup
+    assert workflow.count('      - "python/norito_py/**"') == 2
