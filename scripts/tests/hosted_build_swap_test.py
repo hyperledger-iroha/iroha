@@ -175,13 +175,44 @@ def test_only_observed_build_owners_provision_before_their_work():
                                               else "ci/observe_build_capacity.py")
     generic = jobs["rust_affected"]
     assert "runs-on: ubuntu-24.04" in generic
-    step = generic.split("      - name: Provision bounded hosted build swap for Core library tests\n", 1)[1]
+    step = generic.split("      - name: Provision bounded hosted build swap for Core and execution checks\n", 1)[1]
     step = step.split("\n      - ", 1)[0]
     # Comma boundaries select the exact router package, including first/last positions;
-    # similarly named packages such as iroha_core_privacy cannot match this condition.
+    # similarly named packages such as iroha_core_privacy cannot match the Core arm.
     assert step == (
-        "        if: contains(format(',{0},', matrix.packages), ',iroha_core,')\n"
+        "        if: matrix.lane == 'execution' || contains(format(',{0},', matrix.packages), ',iroha_core,')\n"
         f"        run: {command}"
     )
     assert generic.index(command) < generic.index("      - name: Run locked affected checks")
     assert "scripts/tests/hosted_build_swap_test.py" in jobs["rust_changes"]
+
+
+@pytest.mark.parametrize("lane,packages,expected", [
+    ("execution", "ivm,iroha_core_privacy", True),
+    ("execution", "iroha_plonk_recursion", True),
+    ("node", "iroha_core", True),
+    ("node", "iroha_core,iroha", True),
+    ("node", "iroha,iroha_core,irohad", True),
+    ("node", "iroha,iroha_core", True),
+    ("node", "iroha_core_privacy,iroha_core_zk", False),
+    ("hardware", "gpuzstd_cuda", False),
+    ("tooling", "xtask", False),
+    ("execution_extra", "ivm", False),
+])
+def test_affected_swap_condition_selects_exact_observed_owners(lane, packages, expected):
+    """Evaluate the actual workflow predicate, including package and lane boundaries."""
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    step = workflow.split(
+        "      - name: Provision bounded hosted build swap for Core and execution checks\n", 1,
+    )[1].split("\n      - ", 1)[0]
+    condition = step.split("        if: ", 1)[1].splitlines()[0]
+    # Translate only this predicate's GitHub expression operators and matrix fields.
+    # The exact condition is separately fixed by the owner-routing contract above.
+    expression = (condition.replace(" || ", " or ")
+                  .replace("matrix.lane", "lane").replace("matrix.packages", "packages"))
+    selected = eval(expression, {"__builtins__": {}}, {
+        "lane": lane, "packages": packages,
+        "contains": lambda value, needle: needle in value,
+        "format": lambda template, value: template.format(value),
+    })
+    assert selected is expected

@@ -145,10 +145,12 @@ The child keeps its command, environment, working directory, streams and exit
 status; the observer does not signal, retry or limit it.
 
 The four dedicated build jobs also provision one additional 16 GiB swap file on
-their GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup only
-when their selected package list contains `iroha_core`: their `cargo test`
-command compiles the same Core library-test target. A captured Core build
-exhausted the runner's RAM and existing 3 GiB swap immediately before shutdown.
+their GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup
+for the execution lane or when their selected package list contains `iroha_core`:
+the latter's `cargo test` command compiles the same Core library-test target.
+Captured Core and execution builds exhausted the runner's RAM and existing
+3 GiB swap immediately before shutdown. The execution capture recorded 77,488 KiB
+available RAM and no free swap, without an increment in the observed OOM counters.
 The provisioning helper requires at least 24 GiB disk headroom after allocation,
 refuses existing output, and retains existing swap. It writes and synchronizes
 the complete private file before formatting and activation; it does not use
