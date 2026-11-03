@@ -13,7 +13,9 @@ fn required_avx2_dif_windows_match_independent_modular_arithmetic() {
         1,
         (1 << 32) - 1,
         1 << 32,
+        (1 << 63) - 1,
         1 << 63,
+        (1 << 63) + 1,
         GOLDILOCKS_MODULUS_V1 - 2,
         GOLDILOCKS_MODULUS_V1 - 1,
     ];
