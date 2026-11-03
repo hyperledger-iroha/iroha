@@ -47,18 +47,30 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_rejects_helper_argument_reordering(self) -> None:
         mutated = SOURCE.replace(
-            "java_native_public_key_from_private(&mut env, algorithm_code, private_key)",
-            "java_native_public_key_from_private(&mut env, private_key, algorithm_code)",
+            "java_native_public_key_from_private(env, algorithm_code, private_key)",
+            "java_native_public_key_from_private(env, private_key, algorithm_code)",
             1,
         )
         self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
         with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
             GUARD.audit_source(mutated)
 
+    def test_rejects_environment_boundary_and_helper_redirection(self) -> None:
+        for old, new in (
+            ("crate::platform_jni::with_java_env(env,", "crate::platform_jni::unchecked_env(env,"),
+            ("with_java_env(env, java_native_privacy_compiled_profile_catalog)",
+             "with_java_env(env, java_native_privacy_exact12_fixture_bundle)"),
+        ):
+            with self.subTest(replacement=new):
+                mutated = SOURCE.replace(old, new, 1)
+                self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
+                with self.assertRaisesRegex(GUARD.AuditError, "signature/body contract changed"):
+                    GUARD.audit_source(mutated)
+
     def test_multisig_pairs_keep_network_fee_and_signature_binding(self) -> None:
         for method, old, new in (
-            ("payload", "&mut env,\n            network_id,\n            authority,\n            reporting_account,\n            change,\n            creation_time_ms,",
-             "&mut env,\n            authority,\n            network_id,\n            reporting_account,\n            change,\n            creation_time_ms,"),
+            ("payload", "env,\n            network_id,\n            authority,\n            reporting_account,\n            change,\n            creation_time_ms,",
+             "env,\n            authority,\n            network_id,\n            reporting_account,\n            change,\n            creation_time_ms,"),
             ("finalize", "fee_payment_json,\n            signature,", "signature,\n            fee_payment_json,"),
         ):
             with self.subTest(method=method):
