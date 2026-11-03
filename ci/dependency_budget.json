@@ -860,7 +860,7 @@
     "schema_version": 1
   },
   "baseline": {
-    "manifest_fingerprint": "sha256:b6b181babd717939ae45446592b027e1e7c10c216c67323c8a9b1dba887ca2d4",
+    "manifest_fingerprint": "sha256:4fe987848e0b78526689ec0728f659acb0d6016cc33478156fb8e9ffc1ff7168",
     "refresh_command": "python3 scripts/check_dependency_budget.py --config ci/dependency_budget.json --write-baseline"
   },
   "denied_required_packages": [
@@ -987,7 +987,7 @@
     "workspace-all-targets": {
       "include_root_dev_dependencies": true,
       "limits": {
-        "declared_dependency_edges": 2175,
+        "declared_dependency_edges": 2176,
         "declared_external_dependency_edges": 1137,
         "declared_external_packages": 197,
         "declared_local_packages": 136,

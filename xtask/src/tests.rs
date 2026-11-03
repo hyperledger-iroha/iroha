@@ -3,6 +3,17 @@ use super::*;
 use norito::json::Value;
 
 #[test]
+fn gate_date_format_accepts_calendar_dates_and_rejects_invalid_days() {
+    assert_eq!(
+        parse_gate_date("2024-02-29").unwrap(),
+        Date::from_calendar_date(2024, time::Month::February, 29).unwrap()
+    );
+    for invalid in ["2023-02-29", "2024-13-01", "2024-02-29T00:00:00Z"] {
+        assert!(parse_gate_date(invalid).is_err(), "{invalid}");
+    }
+}
+
+#[test]
 fn kagami_bundle_selects_native_cli_profile_and_one_explicit_authority() {
     assert!(matches!(
         parse_command(["xtask", "kagami-bundle"].into_iter().map(String::from)).unwrap(),

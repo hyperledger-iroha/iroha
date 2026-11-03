@@ -14505,7 +14505,7 @@ fn openapi_path_identity(path: &Path) -> PathBuf {
     normalized
 }
 fn parse_gate_date(value: &str) -> Result<Date, Box<dyn Error>> {
-    let spec = format_description::parse("[year]-[month]-[day]")
+    let spec = format_description::parse_borrowed::<1>("[year]-[month]-[day]")
         .map_err(|err| -> Box<dyn Error> { format!("invalid gate date spec: {err}").into() })?;
     Date::parse(value, &spec)
         .map_err(|err| -> Box<dyn Error> { format!("invalid date `{value}`: {err}").into() })
