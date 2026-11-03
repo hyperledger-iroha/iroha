@@ -133,21 +133,27 @@ def _split_js_top_level(source: str, separator: str) -> List[str]:
     return parts
 
 
-def _js_string_expression(source: str, name: str, resolving: Optional[set[str]] = None) -> str:
+def _js_string_expression(
+    source: str,
+    name: str,
+    resolving: Optional[set[str]] = None,
+    imported: Optional[Dict[str, str]] = None,
+) -> str:
     """Resolve only literals, templates, identifiers, and string concatenation."""
 
     resolving = set() if resolving is None else resolving
+    imported = {} if imported is None else imported
     expression = name.strip()
     if expression.startswith("(") and expression.endswith(")"):
         try:
             enclosed = _split_js_top_level(expression[1:-1], ",")
-            if len(enclosed) == 1:
-                return _js_string_expression(source, enclosed[0], resolving)
         except ValueError:
-            pass
+            enclosed = []
+        if len(enclosed) == 1:
+            return _js_string_expression(source, enclosed[0], resolving, imported)
     pieces = _split_js_top_level(expression, "+")
     if len(pieces) > 1:
-        return "".join(_js_string_expression(source, piece, resolving) for piece in pieces)
+        return "".join(_js_string_expression(source, piece, resolving, imported) for piece in pieces)
     if expression.startswith('"') and expression.endswith('"'):
         value = json.loads(expression)
         if isinstance(value, str):
@@ -156,7 +162,7 @@ def _js_string_expression(source: str, name: str, resolving: Optional[set[str]] 
         template = expression[1:-1]
         result = re.sub(
             r"\$\{([A-Z][A-Z0-9_]*)\}",
-            lambda match: _js_string_expression(source, match.group(1), resolving),
+            lambda match: _js_string_expression(source, match.group(1), resolving, imported),
             template,
         )
         if "${" not in result and "`" not in result:
@@ -168,10 +174,58 @@ def _js_string_expression(source: str, name: str, resolving: Optional[set[str]] 
             rf"(?m)^const {re.escape(expression)}\s*=\s*([^;]+);",
             source,
         )
-        if len(declaration) != 1:
+        if len(declaration) + (expression in imported) != 1:
             raise ValueError(f"missing or repeated JS instruction constant {expression}")
-        return _js_string_expression(source, declaration[0], resolving | {expression})
+        if expression in imported:
+            return imported[expression]
+        return _js_string_expression(source, declaration[0], resolving | {expression}, imported)
     raise ValueError(f"unsupported JS instruction binding expression for {name}: {expression}")
+
+
+def _js_instruction_constant_imports(path: Path, source: str) -> Dict[str, str]:
+    """Resolve the one shared binding prefix from its explicit local JS owner.
+
+    This is declarative source inspection, never JavaScript execution or general
+    module loading. Other imported expressions remain unsupported.
+    """
+
+    symbol = "TEXT_IROHA_DATA_MODEL"
+    imports = [
+        (names, module)
+        for names, _, module in re.findall(
+            r"(?m)^import\s*\{([^{}]*)\}\s*from\s*([\"'])([^\"'\n]+)\2\s*;",
+            source,
+        )
+        if re.search(rf"\b{symbol}\b", names)
+    ]
+    if not imports:
+        return {}
+    if len(imports) != 1:
+        raise ValueError(f"repeated JS instruction constant import {symbol}")
+    names, module = imports[0]
+    entries = [entry.strip() for entry in names.split(",")]
+    if entries[-1] == "":
+        entries.pop()
+    if (
+        module != "./noritoValueCodecs.js"
+        or entries.count(symbol) != 1
+        or any(re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", entry) is None for entry in entries)
+    ):
+        raise ValueError(f"unsupported JS instruction constant import {symbol}")
+    owner = path.with_name("noritoValueCodecs.js")
+    try:
+        owner_source = owner.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ValueError(f"cannot read JS instruction constant owner {owner}") from exc
+    exports = [
+        entry.strip()
+        for names in re.findall(r"(?m)^export\s*\{([^{}]*)\}\s*;", owner_source)
+        for entry in names.split(",")
+        if re.search(rf"\b{symbol}\b", entry)
+    ]
+    if exports != [symbol]:
+        raise ValueError(f"missing or repeated JS instruction constant export {symbol}")
+    return {symbol: _js_string_expression(owner_source, symbol)}
 
 
 def _instruction_names_from_module(path: Path, family: str, namespace: str) -> List[str]:
@@ -206,6 +260,7 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
     """Resolve every declared JS outer wire ID to its exact Rust inner type."""
 
     source = path.read_text(encoding="utf-8")
+    imported = _js_instruction_constant_imports(path, source)
     if re.search(r"\bconst INNER_SCHEMA_HASH_BY_WIRE_ID\b", source):
         raise ValueError(f"{path} retains a separate instruction schema-hash map")
     marker = "const INNER_TYPE_NAME_BY_WIRE_ID = Object.freeze({"
@@ -290,10 +345,10 @@ def _extract_js_instruction_type_map(path: Path) -> Dict[str, str]:
             raise ValueError(f"{path} has a malformed JS instruction binding: {row}")
         key, value = parts
         if key.startswith("[") and key.endswith("]"):
-            wire_id = _js_string_expression(source, key[1:-1])
+            wire_id = _js_string_expression(source, key[1:-1], imported=imported)
         else:
-            wire_id = _js_string_expression(source, key)
-        type_name = _js_string_expression(source, value)
+            wire_id = _js_string_expression(source, key, imported=imported)
+        type_name = _js_string_expression(source, value, imported=imported)
         if not wire_id or not type_name.startswith("iroha_data_model::isi::"):
             raise ValueError(f"{path} has a noncanonical JS instruction binding")
         if wire_id.startswith("iroha.instruction.v1::") and wire_id != (

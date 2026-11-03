@@ -223,6 +223,10 @@ artifacts are not generic transaction builders.
    manifest and builder index. The helper `scripts/check_android_codegen_parity.py`
    ingests those values and emits a parity summary (see `make android-codegen-verify`),
    failing the build when regenerated manifests drift from the recorded hashes.
+   JavaScript binding extraction reads the shared type prefix through its explicit
+   named import and export in `noritoValueCodecs.js`; foreign module paths,
+   ambiguous declarations, and executable expressions are rejected. It does not
+   execute JavaScript, and summaries retain logical paths across the two replays.
 
 ## 5. Next Steps & Owners
 
