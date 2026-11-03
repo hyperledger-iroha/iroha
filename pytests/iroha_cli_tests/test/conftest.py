@@ -3,6 +3,7 @@
 """
 This module contains pytest fixtures for testing.
 """
+
 import allure  # type: ignore
 import pytest
 

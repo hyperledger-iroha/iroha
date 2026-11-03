@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths:
       - "**.py"
+      - "pytests/**/pyproject.toml"
+      - "pytests/**/poetry.lock"
+      - ".github/workflows/pr_python_static.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -12,18 +15,22 @@ concurrency:
 
 jobs:
   check:
-    runs-on: ubuntu-latest
-    container:
-      image: hyperledger/iroha2-ci:nightly-2025-05-08
+    runs-on: ubuntu-24.04
     strategy:
       matrix:
         suite: [iroha_cli_tests, iroha_torii_tests]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.12"
+      - uses: abatilo/actions-poetry@3765cf608f2d4a72178a9fc5b918668e542b89b1
+        with:
+          poetry-version: "2.5.1"
       - name: Install dependencies using Poetry for pytests/${{ matrix.suite }}
         working-directory: pytests/${{ matrix.suite }}
         run: |
-          poetry lock
+          poetry check --lock
           poetry install --no-root
       - name: Check code formatting with Black in pytests/${{ matrix.suite }}
         working-directory: pytests/${{ matrix.suite }}
