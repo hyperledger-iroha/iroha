@@ -178,36 +178,46 @@ jobs:
           node tools/openapi/scripts/provision-openapi-cargo-lock.mjs pin \
             --source="${repo_root}/Cargo.lock" \
             --check="${repo_root}/release/openapi-cargo-lock-v1.txt"
-      - name: Select the installed Cargo executable for sealed replay
+      - name: Exercise replay provisioning and failure contracts
+        run: >-
+          python3 -m pytest -q
+          scripts/tests/check_openapi_fail_closed_test.py
+          scripts/tests/check_android_codegen_release_gate_test.py
+          scripts/tests/ci_image_preflight_test.py
+      - name: Select installed Cargo and Rustc executables for sealed replay
         shell: bash
         run: |
           set -euo pipefail
           release_cargo="$(rustup which cargo)"
-          python3 -I -S - "$release_cargo" "$GITHUB_ENV" <<'PY'
+          # A registry dependency can carry a different rust-toolchain.toml.
+          # Keep Cargo's compiler independent of each dependency's working directory.
+          release_rustc="$(rustup which rustc)"
+          python3 -I -S - "$release_cargo" "$release_rustc" "$GITHUB_ENV" <<'PY'
           import os
           import stat
           import sys
 
-          path, environment_file = sys.argv[1:]
-          metadata = os.lstat(path)
-          if (
-              not os.path.isabs(path)
-              or os.path.abspath(path) != path
-              or os.path.realpath(path) != path
-              or any(character in path for character in "\r\n")
-              or not stat.S_ISREG(metadata.st_mode)
-              or stat.S_ISLNK(metadata.st_mode)
-              or not os.access(path, os.X_OK)
-          ):
-              raise SystemExit("Replay Cargo must be a canonical executable regular file")
+          cargo, rustc, environment_file = sys.argv[1:]
+          for path in (cargo, rustc):
+              metadata = os.lstat(path)
+              if (
+                  not os.path.isabs(path)
+                  or os.path.abspath(path) != path
+                  or os.path.realpath(path) != path
+                  or any(character in path for character in "\r\n")
+                  or not stat.S_ISREG(metadata.st_mode)
+                  or stat.S_ISLNK(metadata.st_mode)
+                  or not os.access(path, os.X_OK)
+              ):
+                  raise SystemExit("Replay tools must be canonical executable regular files")
           with open(environment_file, "a", encoding="utf-8") as stream:
-              stream.write(f"IROHA_RELEASE_CARGO_BIN={path}\n")
+              stream.write(f"IROHA_RELEASE_CARGO_BIN={cargo}\nRUSTC={rustc}\n")
           PY
       - name: Prefetch committed native dependencies before offline replay
         shell: bash
         run: |
           set -euo pipefail
-          native_target="$(rustc -vV | sed -n 's/^host: //p')"
+          native_target="$("$RUSTC" -vV | sed -n 's/^host: //p')"
           test -n "$native_target"
           "$IROHA_RELEASE_CARGO_BIN" fetch --locked --target "$native_target"
       - name: Verify Cargo lock validation and prefetch keep the checkout clean

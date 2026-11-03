@@ -1100,21 +1100,24 @@ def canonical_workflow_command(name: str) -> str:
     return textwrap.dedent(step.split("        run: |\n", 1)[1])
 
 
+@pytest.mark.parametrize("tool", ["cargo", "rustc"])
 @pytest.mark.parametrize(
     "cargo_kind",
     ["regular", "missing", "relative", "symlink", "directory", "nonexecutable", "unnormalized", "newline"],
 )
-def test_canonical_workflow_selects_only_a_real_installed_cargo(
-    tmp_path: Path, cargo_kind: str,
+def test_canonical_workflow_selects_only_real_installed_tools(
+    tmp_path: Path, tool: str, cargo_kind: str,
 ) -> None:
     """The rustup shim is never replay authority, and unsafe output is not exported."""
 
     root = tmp_path.resolve()
     binary_root = root / "bin"
     binary_root.mkdir()
-    cargo = root / "installed cargo"
-    cargo.write_text("#!/bin/sh\nexit 0\n")
-    cargo.chmod(0o700)
+    paths = {name: root / ("installed " + name) for name in ("cargo", "rustc")}
+    for path in paths.values():
+        path.write_text("#!/bin/sh\nexit 0\n")
+        path.chmod(0o700)
+    cargo = paths[tool]
     selected = str(cargo)
     if cargo_kind == "missing":
         selected = str(root / "missing")
@@ -1136,26 +1139,32 @@ def test_canonical_workflow_selects_only_a_real_installed_cargo(
         selected = str(injected)
     rustup = binary_root / "rustup"
     rustup.write_text(
-        '#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = which ] && [ "$2" = cargo ] || exit 3\n'
-        'printf "%s\\n" "$FIXTURE_CARGO"\n'
+        '#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = which ] || exit 3\n'
+        'case "$2" in\n'
+        'cargo) printf "%s\\n" "$FIXTURE_CARGO" ;;\n'
+        'rustc) printf "%s\\n" "$FIXTURE_RUSTC" ;;\n'
+        '*) exit 3 ;;\nesac\n'
     )
     rustup.chmod(0o700)
     environment_file = root / "github-env"
     environment = {
         **os.environ,
         "PATH": str(binary_root) + os.pathsep + os.environ["PATH"],
-        "FIXTURE_CARGO": selected,
+        "FIXTURE_CARGO": selected if tool == "cargo" else str(paths["cargo"]),
+        "FIXTURE_RUSTC": selected if tool == "rustc" else str(paths["rustc"]),
         "GITHUB_ENV": str(environment_file),
     }
     result = subprocess.run(
         ["bash", "-c", canonical_workflow_command(
-            "Select the installed Cargo executable for sealed replay",
+            "Select installed Cargo and Rustc executables for sealed replay",
         )],
         cwd=root, env=environment, text=True, capture_output=True, check=False,
     )
     if cargo_kind == "regular":
         assert result.returncode == 0, result.stderr
-        assert environment_file.read_text() == f"IROHA_RELEASE_CARGO_BIN={cargo}\n"
+        assert environment_file.read_text() == (
+            f"IROHA_RELEASE_CARGO_BIN={paths['cargo']}\nRUSTC={paths['rustc']}\n"
+        )
     else:
         assert result.returncode != 0
         assert not environment_file.exists()
@@ -1175,12 +1184,15 @@ def test_canonical_workflow_prefetches_locked_native_inputs(
         "    json.dump(sys.argv[1:], stream)\n"
     )
     cargo.chmod(0o700)
-    rustc = root / "rustc"
+    rustc = root / "installed rustc"
     rustc.write_text(
         '#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = -vV ] || exit 3\n'
         "printf '%s\\n' " + shlex.quote("rustc 1.99.1\nhost: " + native_host) + "\n"
     )
     rustc.chmod(0o700)
+    shim = root / "rustc"
+    shim.write_text("#!/bin/sh\nexit 88\n")
+    shim.chmod(0o700)
     call = root / "cargo-call.json"
     result = subprocess.run(
         ["bash", "-c", canonical_workflow_command(
@@ -1191,6 +1203,7 @@ def test_canonical_workflow_prefetches_locked_native_inputs(
             **os.environ,
             "PATH": str(root) + os.pathsep + os.environ["PATH"],
             "IROHA_RELEASE_CARGO_BIN": str(cargo),
+            "RUSTC": str(rustc),
             "FIXTURE_CALL": str(call),
         },
         text=True, capture_output=True, check=False,
@@ -1205,7 +1218,7 @@ def test_canonical_workflow_prefetches_locked_native_inputs(
     canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
     ordered = [
         "provision-openapi-cargo-lock.mjs pin",
-        "Select the installed Cargo executable for sealed replay",
+        "Select installed Cargo and Rustc executables for sealed replay",
         "Prefetch committed native dependencies before offline replay",
         "git status --porcelain=v1 --untracked-files=all",
         "bash ci/check_openapi_spec.sh",
