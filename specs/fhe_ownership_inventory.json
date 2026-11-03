@@ -12493,6 +12493,10 @@
     {"path": "crates/iroha_sccp/tests/reference_support/bls_support.rs", "purpose": "Independent SCCP BLS KeyGen reference using HKDF-SHA-256."},
     {"path": "scripts/sccp_reference/bls_sig.py", "purpose": "Independent SCCP BLS KeyGen reference using HKDF-SHA-256."},
     {"path": "Cargo.lock", "purpose": "Lock entry of the hkdf crate."},
+    {
+     "path": "crates/ivm/fuzz/Cargo.lock",
+     "purpose": "Isolated Numeric fuzz dependency lock carrying the canonical iroha_crypto HKDF dependency; it defines no derivation or RAM-LFE backend."
+    },
     {"path": "IrohaSwift/Sources/IrohaSwift/Confidential.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/ConfidentialNote.swift", "purpose": "Confidential key hierarchy and note or memo key derivation."},
     {"path": "IrohaSwift/Sources/IrohaSwift/IrohaPeerNearbyV1.swift", "purpose": "Peer-nearby session transcript keys."},
@@ -16385,14 +16389,15 @@
    "component": "workspace",
    "role": "build_manifest",
    "tasks": ["C.2"],
-   "summary": "Workspace manifest and lockfile entries (the bfv-accel cfg registration, the hkdf crate, the iroha_fhe package), the manifests that declare the dependency on iroha_fhe, and the CI lane manifest that assigns iroha_fhe to the foundation lane.",
+   "summary": "Workspace and isolated Numeric fuzz manifest and lockfile entries (the bfv-accel cfg registration, the hkdf crate, the iroha_fhe package), the manifests that declare the dependency on iroha_fhe, and the CI lane manifest that assigns iroha_fhe to the foundation lane.",
    "files": [
     {"path": "Cargo.lock", "patterns": ["fhe", "hkdf"]},
     {"path": "Cargo.toml", "patterns": ["bfv", "bgv", "fhe"]},
     {"path": "ci/rust_lanes.toml", "patterns": ["fhe"]},
     {"path": "crates/iroha_core_privacy/Cargo.toml", "patterns": ["fhe"]},
     {"path": "crates/iroha_fhe/Cargo.toml", "patterns": ["bfv", "bgv", "fhe", "ntt", "rns"]},
-    {"path": "crates/iroha_zkp_halo2/Cargo.toml", "patterns": ["fhe"]}
+    {"path": "crates/iroha_zkp_halo2/Cargo.toml", "patterns": ["fhe"]},
+    {"path": "crates/ivm/fuzz/Cargo.lock", "patterns": ["fhe", "hkdf"]}
    ]
   },
   {
