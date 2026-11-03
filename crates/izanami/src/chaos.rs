@@ -10814,14 +10814,29 @@ mod tests {
             return Ok(());
         };
         let mut params = Parameters::default();
-        for tx in network.genesis_isi() {
-            for isi in tx {
+        let mut staking_assignments = 0;
+        let genesis = network.genesis();
+        for tx in genesis.0.external_transactions() {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for isi in instructions {
                 let Some(set_param) = isi.as_any().downcast_ref::<SetParameter>() else {
                     continue;
                 };
+                if let Parameter::Custom(custom) = set_param.inner()
+                    && custom.id()
+                        == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
+                {
+                    staking_assignments += 1;
+                }
                 params.set_parameter(set_param.inner().clone());
             }
         }
+        assert_eq!(
+            staking_assignments, 1,
+            "the final signed genesis contains one authored staking policy"
+        );
         assert_eq!(
             network.block_cadence(),
             default_nexus_pipeline_time(),

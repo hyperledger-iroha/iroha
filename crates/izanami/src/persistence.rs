@@ -287,14 +287,19 @@ fn same_file_identity(left: &Metadata, right: &Metadata) -> bool {
 #[cfg(test)]
 #[test]
 fn native_config_identity_preserves_aliases_and_bounded_reads() {
-    let directory = std::env::temp_dir().join(format!(
-        "izanami-native-identity-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos()
-    ));
+    // macOS's temporary-directory spelling can contain /var -> /private/var. Use
+    // its original direct path so the production no-follow reader remains strict.
+    let directory = std::env::temp_dir()
+        .canonicalize()
+        .expect("canonical native temporary directory")
+        .join(format!(
+            "izanami-native-identity-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
     fs::create_dir(&directory).unwrap();
     let first = directory.join("first");
     let second = directory.join("second");
