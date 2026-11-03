@@ -207,14 +207,13 @@ five `address_parsing::explorer` tests of `torii_core_routes` and 15 of 54
 `agent_alias` tests of `torii_protocols` fail; `irohad_lib` aborts on a stack
 overflow in `beacon_bootstrap::seat_attempt::aggregate_tests` after five
 `durable::tests` failures, and two `musubi_publication_service::finality`
-tests fail. Three guards are red on the merged tree: the trusted
-release-surface digest (stale across the upstream merges), the
-generated-artifact guard (325 tracked capture and build files under seven
-`docs/validation/parliament_ballot_*` folders, and eight generated
-`crates/iroha_zkp_vole` FAEST tables without a `generated-files.toml` owner), and
-`scripts/check_state_commitment_candidates.py`, because the merge
-removed State tables and the candidates were measured over the previous table
-schema (to be measured again by G.2 or G.3).
+tests fail. The repository owner approved `optimizations` at
+`06912ee4f8f9423b458d72039dbd0a1c8fde7b43` plus the reviewed CI repairs as
+the release-source baseline. The source seal and generated-artifact ownership
+have been reconciled; this approval does not establish release or network
+qualification. `scripts/check_state_commitment_candidates.py` remains red
+because its measurements predate the current State table schema. Replacement
+G.2 measurements are in progress under the existing observation contract.
 
 ## Deployment state
 
@@ -425,10 +424,10 @@ with every cost limit exact.
 Recorded dependency boundaries, legacy-codec and checker controls retain their
 input cuts. Native private-settlement preparation now depends on the SDK and
 CorePrivacy from its own crate; the reverse SDK execution edge is removed. All
-22 current ownership selections, including native preparation, pass. The exact
-numeric dependency-budget and manifest-fingerprint baseline remains unapproved;
-its outstanding deltas must be
-reviewed separately. Shipping Oracle denials and the aggregate-model test
+22 current ownership selections, including native preparation, pass. The current numeric dependency budget and manifest fingerprints have been
+reviewed against the resolved graph, including xtask's explicit existing FASTPQ
+report dependency. This source review does not qualify compiler-memory or
+performance measurements. Shipping Oracle denials and the aggregate-model test
 exception remain intact. Core retains consensus ownership
 after the unused direct daemon Sumeragi edge was removed.
 
