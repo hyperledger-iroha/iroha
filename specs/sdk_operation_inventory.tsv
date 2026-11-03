@@ -411,6 +411,8 @@ game.capabilities	GET	/v1/games/capabilities	public	torii_default	public	read	ht
 game.sessions.get	GET	/v1/games/sessions/{session_id}	public	torii_default	public	read	http	always	true	true	false	false
 game.sessions.list	GET	/v1/games/sessions	public	torii_default	public	read	http	always	true	true	false	false
 game.verifications.get	GET	/v1/games/verifications/{verification_id}	public	torii_default	public	read	http	always	false	false	false	false
+game_partition.export_proof.read	GET	/v1/game-partitions/{world}/exports/{receipt}/proof	public	torii_default	public	read	http	always	true	false	false	false
+game_partition.state.read	GET	/v1/game-partitions/{world}/state	public	torii_default	public	read	http	always	true	false	false	false
 governance.ballot.plain	POST	/v1/gov/ballots/plain	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1	POST	/v1/gov/ballots/zk-v1	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
 governance.ballot.zk_v1_proof	POST	/v1/gov/ballots/zk-v1/ballot-proof	public	canonical_account_signature	authenticated_account	read	http	feature(app_api)	true	true	false	true
