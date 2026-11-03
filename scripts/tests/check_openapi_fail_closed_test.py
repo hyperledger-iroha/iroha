@@ -906,6 +906,106 @@ def test_release_gate_is_clean_pinned_and_replays_complete_bundles_independently
     assert "VERSION_VERIFY_POLICY_ARGS" not in gate
 
 
+def test_replay_bundle_copy_is_mutable_without_unsealing_inputs(tmp_path: Path) -> None:
+    """Exercise actual sealed file modes and assembly, without a Cargo build."""
+
+    source = tmp_path / "source"
+    (source / "scripts").mkdir(parents=True)
+    sealer = source / "scripts" / "seal_workspace_source.py"
+    sealer.write_bytes((REPO_ROOT / "scripts" / sealer.name).read_bytes())
+    authority = source / "artifacts" / "openapi"
+    originals = {
+        "torii.json": b'{"authority":"original"}\n',
+        "manifest.json": b'{"manifest":"original"}\n',
+        "versions/current/torii.json": b'{"authority":"original"}\n',
+        "versions/current/manifest.json": b'{"manifest":"original"}\n',
+        "versions.json": b'{"current":"original"}\n',
+        "versions/retained/torii.json": b'{"retained":"unchanged"}\n',
+        "allowed_signers.json": b"{}\n",
+    }
+    for name, payload in originals.items():
+        path = authority / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
+    subprocess.run(
+        [
+            sys.executable, "-I", "-S", str(sealer), "--seal", "--root",
+            str(source), "--no-writable-paths",
+        ],
+        check=True,
+    )
+    baseline = tmp_path / "baseline"
+    baseline.mkdir(mode=0o700)
+    subprocess.run(["cp", "-R", str(authority) + "/.", str(baseline) + "/"], check=True)
+
+    def snapshots(root: Path) -> dict:
+        return {
+            path.relative_to(root).as_posix(): (
+                path.stat().st_mode,
+                path.stat().st_ino,
+                path.stat().st_nlink,
+                path.read_bytes() if path.is_file() else None,
+            )
+            for path in [root, *root.rglob("*")]
+        }
+
+    original_source = snapshots(source)
+    original_baseline = snapshots(baseline)
+    assert all(not (entry[0] & 0o222) for entry in original_source.values())
+    assert all(not ((baseline / name).stat().st_mode & 0o222) for name in originals)
+    gate = OPENAPI_GATE.read_text(encoding="utf-8")
+    function = "build_unsigned_replay_bundle() {" + gate.split(
+        "build_unsigned_replay_bundle() {", 1
+    )[1].split("\nREPLAY_SOURCE_FIRST=", 1)[0]
+    # Generation and Git provenance have their own gates; retain the real source
+    # seal verifier, baseline copy, generated-file checks and assembly commands.
+    harness = r'''
+set -euo pipefail
+umask 077
+resolve_allowed_signers_path() { printf '%s/artifacts/openapi/allowed_signers.json\n' "$1"; }
+verify_replay_source_identity() { :; }
+run_xtask_in_repo() {
+  [[ "$3" == openapi && "$4" == --output-root && "$6" == --unsigned-manifest ]]
+  printf '{"authority":"generated"}\n' > "$5/torii.json"
+  printf '{"manifest":"generated"}\n' > "$5/manifest.json"
+}
+sync_unsigned_replay_bundle() {
+  # The real sync rewrites these existing mutable aliases and version map.
+  cp "$2/torii.json" "$2/versions/current/torii.json"
+  cp "$2/manifest.json" "$2/versions/current/manifest.json"
+  printf '{"current":"generated"}\n' > "$2/versions.json"
+}
+'''
+    result = subprocess.run(
+        [
+            "bash", "-c",
+            harness + function + '\nbuild_unsigned_replay_bundle "$1" "$2" "$3" "$4"',
+            "replay-bundle-permissions", str(source), str(tmp_path / "target"),
+            str(tmp_path / "generated"), str(tmp_path / "output"),
+        ],
+        env={**os.environ, "REPLAY_BASELINE": str(baseline)},
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    assert snapshots(source) == original_source
+    assert snapshots(baseline) == original_baseline
+    output = tmp_path / "output"
+    for name in originals:
+        copied = output / name
+        assert copied.stat().st_ino != (baseline / name).stat().st_ino
+        assert copied.stat().st_nlink == 1
+        assert copied.stat().st_mode & 0o777 == 0o600
+    for directory in [output, output / "versions", output / "versions" / "current"]:
+        assert directory.stat().st_mode & 0o777 == 0o700
+    assert (output / "torii.json").read_bytes() == b'{"authority":"generated"}\n'
+    for name in ("torii.json", "manifest.json"):
+        assert (output / "versions/current" / name).read_bytes() == (output / name).read_bytes()
+    assert (output / "versions.json").read_bytes() == b'{"current":"generated"}\n'
+    for name in ("versions/retained/torii.json", "allowed_signers.json"):
+        assert (output / name).read_bytes() == originals[name]
+
+
 def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     gate = OPENAPI_GATE.read_text(encoding="utf-8")
     wrapper = OPENAPI_GENERATOR_WRAPPER.read_text(encoding="utf-8")
