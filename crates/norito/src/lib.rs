@@ -12,7 +12,7 @@
 //!   (`COMPACT_LEN` varints when enabled; u64 otherwise).
 //!
 //! Checksum: payloads carry a CRC64-XZ checksum (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected
-//! with init/xor all ones) computed by [`core::simd_crc64`](crate::core::simd_crc64).
+//! with init/xor all ones) computed by [`core::simd_crc64`].
 //! [`hardware_crc64`] enables the SIMD-accelerated path when available, while
 //! [`crc64_fallback`] forces the portable table implementation.
 //!

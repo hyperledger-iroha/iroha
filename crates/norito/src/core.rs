@@ -357,7 +357,7 @@ where
     structural_schema_hash_from_bytes(out.as_bytes())
 }
 #[cfg(feature = "schema-structural")]
-/// Compute a structural schema hash from a pre-built Norito JSON [`Value`].
+/// Compute a structural schema hash from a pre-built Norito JSON [`json::Value`].
 ///
 /// The `Value` is serialized using Norito's canonical writer to guarantee the
 /// same byte representation as other language bindings (Python, Java).

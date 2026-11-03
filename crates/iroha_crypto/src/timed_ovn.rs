@@ -20,7 +20,8 @@
 //! `blst_fp12` representation.  Its result is deterministic across hardware.
 //! Runtime protocol validation does not depend on a mutable audit flag.  The
 //! separate official binary-publication corridor must call
-//! [`validate_timed_ovn_official_release_audit_manifest_bytes_v1`] and supply
+//! [`validate_timed_ovn_official_release_audit_manifest_bytes_v1`](crate::timed_ovn::validate_timed_ovn_official_release_audit_manifest_bytes_v1)
+//! and supply
 //! the exact independently reviewed source archive, release-artifact manifest,
 //! target inventory, report, and evidence archive.  No such external audit
 //! artifact is asserted or embedded by this module.

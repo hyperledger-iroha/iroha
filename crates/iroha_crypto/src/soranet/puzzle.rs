@@ -360,7 +360,7 @@ fn reject_reused_solution_nonce(
 /// Verify a puzzle ticket using the supplied policy.
 ///
 /// # Errors
-/// Returns [`Error`] if the ticket metadata violates the policy or if the Argon2 digest
+/// Returns [`enum@Error`] if the ticket metadata violates the policy or if the Argon2 digest
 /// fails the work predicate.
 pub fn verify(
     ticket: &Ticket,
@@ -372,7 +372,7 @@ pub fn verify(
 /// Verify a ticket at a fixed timestamp (exposed for testing).
 ///
 /// # Errors
-/// Returns [`Error`] when the ticket metadata violates policy bounds or the derived digest
+/// Returns [`enum@Error`] when the ticket metadata violates policy bounds or the derived digest
 /// fails the work predicate.
 pub fn verify_at(
     ticket: &Ticket,
