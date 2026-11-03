@@ -269,6 +269,9 @@ jobs:
           cargo run --locked -p ivm --example entrypoint_argument_record_v1_fixture -- --check fixtures/kotodama/entrypoint_argument_record_v1.json
           cargo test --locked -p ivm --test ivm_group_05 kotodama_argument_record::
           cargo test --locked -p iroha_primitives randomized_decimal_arithmetic_matches_independent_rational_reference
+      - name: Verify the Windows suspend-inclusive native clock
+        if: runner.os == 'Windows'
+        run: cargo test --locked -p iroha_primitives --lib 'time::continuous::tests::'
 
   android_fixture_compat:
     runs-on: ubuntu-latest
