@@ -1783,7 +1783,6 @@ fn write_control_and_require_exact(path: &Path, value: &str, label: &str) -> eyr
 #[cfg(test)]
 mod tests {
     use std::ffi::OsString;
-    use std::io::{Read as _, Write as _};
     use std::num::{NonZeroU16, NonZeroU32, NonZeroU64};
 
     use super::*;
