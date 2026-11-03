@@ -371,3 +371,7 @@ mod tests {
         assert!(ivm::verify_contract_artifact(&minimal_contract_artifact()).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "parliament_submission_tests.rs"]
+mod completion_tests;
