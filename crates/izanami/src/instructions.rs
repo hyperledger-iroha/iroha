@@ -464,9 +464,10 @@ pub fn prepare_state(
         ))));
         nexus_genesis.push(InstructionBox::from(Register::account(gas_account)));
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(
+            AssetDefinition::new(
                 stake_asset.clone(),
-                "Nexus Stake".to_owned(),
+                "XOR".to_owned(),
+                iroha_primitives::numeric::NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
                 None,
             ),
@@ -4045,6 +4046,35 @@ mod tests {
         assert_eq!(
             fee_registration_count, 1,
             "prepare_state should register the fee asset definition before minting it"
+        );
+    }
+    #[test]
+    fn nexus_genesis_uses_global_scale_nine_network_xor() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let expected_xor = SumeragiNposParameters::default().xor_asset_definition_id;
+        assert_eq!(profile.staking_policy.stake_asset_id, expected_xor);
+        let PreparedChaos { genesis, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let definitions: Vec<_> = genesis
+            .iter()
+            .flatten()
+            .filter_map(
+                |instruction| match instruction.as_any().downcast_ref::<RegisterBox>()? {
+                    RegisterBox::AssetDefinition(definition)
+                        if definition.object.id == expected_xor =>
+                    {
+                        Some(&definition.object)
+                    }
+                    _ => None,
+                },
+            )
+            .collect();
+        assert_eq!(definitions.len(), 1, "network XOR has one genesis author");
+        assert_eq!(definitions[0].spec.scale(), Some(9));
+        assert_eq!(
+            definitions[0].balance_scope_policy,
+            iroha_data_model::asset::AssetBalancePolicy::Global
         );
     }
     #[test]
