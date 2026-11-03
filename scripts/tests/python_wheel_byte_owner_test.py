@@ -423,6 +423,52 @@ def test_harness_extraction_requires_its_exact_unique_source_owner() -> None:
             raise AssertionError("invalid original harness owner was accepted")
 
 
+def test_malformed_archive_names_survive_both_zipfile_separator_policies(tmp_path: Path) -> None:
+    """Run the real harness/parser with Unix and Windows ZIP name normalization."""
+    probe = r'''
+import io
+import json
+import os
+from pathlib import Path
+import runpy
+import sys
+import types
+import zipfile
+
+controls, root, separator = sys.argv[1:]
+# Change only zipfile's platform view, leaving filesystem and verifier owners
+# untouched. This exercises the stdlib's real ZipInfo constructor and reader.
+zipfile.os = types.SimpleNamespace(**{
+    **vars(os), "sep": separator, "altsep": "/" if separator == "\\" else None,
+})
+unsafe_name = r"iroha_native\escape.py"
+assert zipfile.ZipInfo(unsafe_name).filename == (
+    unsafe_name.replace("\\", "/") if separator == "\\" else unsafe_name
+)
+namespace = runpy.run_path(controls)
+report = namespace["run_isolated"](Path(root))
+raw = (Path(root) / "backslash.whl").read_bytes()
+# Both local and central headers must contain the adversarial spelling. A
+# different, valid member with a missing RECORD row is not this path control.
+assert raw.count(unsafe_name.encode("ascii")) == 2
+with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+    assert archive.infolist()[-1].orig_filename == unsafe_name
+print("ZIP_SEPARATOR_CONTROL=" + json.dumps({
+    "separator": separator, "byte_path_pairs": report["byte_path_pairs"],
+}))
+'''
+    for label, separator in (("unix", "/"), ("windows", "\\")):
+        result = subprocess.run(
+            [sys.executable, "-I", "-S", "-B", "-", str(Path(__file__).resolve()),
+             str(tmp_path / label), separator],
+            input=probe, capture_output=True, text=True, timeout=120, check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        rows = [json.loads(line.removeprefix("ZIP_SEPARATOR_CONTROL="))
+                for line in result.stdout.splitlines() if line.startswith("ZIP_SEPARATOR_CONTROL=")]
+        assert rows == [{"separator": separator, "byte_path_pairs": 80}]
+
+
 def test_shell_owned_inert_child_excludes_installed_distributions(tmp_path: Path) -> None:
     """The exact shell invocation isolates fixtures from a real venv's installed owners."""
     # This test-only import is intentionally outside the isolated byte-owner CLI.

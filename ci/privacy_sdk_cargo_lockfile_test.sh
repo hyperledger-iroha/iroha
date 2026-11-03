@@ -2459,6 +2459,9 @@ dependencies = verifier.authenticate_dependency_roots(
 
 def member(name, payload=b"fixture\n", mode=stat.S_IFREG | 0o644):
     info = zipfile.ZipInfo(name)
+    # Malformed-name controls need their exact bytes in both ZIP headers.
+    # ZipInfo otherwise rewrites backslashes to slashes on Windows before write.
+    info.filename = name
     info.create_system = 3
     info.external_attr = mode << 16
     info.compress_type = zipfile.ZIP_STORED
@@ -3205,10 +3208,19 @@ layout = verifier.derive_installed_layout(
     wheel=wheel,
 )
 
+backslash_name = r"iroha_native\escape.py"
+# On readers which normalize this spelling, the existing original-vs-normalized
+# alias guard refuses before the separate POSIX-path guard. Keep both exact
+# refusal controls; neither may pass because the fixture omitted a RECORD row.
+backslash_refusal = (
+    "NUL alias"
+    if zipfile.ZipInfo(backslash_name).filename != backslash_name
+    else "POSIX path"
+)
 path_cases = (
     ("traversal", "../escape.py", "dot or empty path alias"),
     ("absolute", "/absolute.py", "relative POSIX path"),
-    ("backslash", r"iroha_native\escape.py", "POSIX path"),
+    ("backslash", backslash_name, backslash_refusal),
     ("dot", "iroha_native/./escape.py", "dot or empty path alias"),
     ("empty", "iroha_native//escape.py", "dot or empty path alias"),
     ("drive", "C:/escape.py", "drive path"),
