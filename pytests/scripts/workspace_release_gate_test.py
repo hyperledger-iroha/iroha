@@ -449,7 +449,7 @@ def _aggregate_results(environment: dict[str, str]) -> subprocess.CompletedProce
 def test_required_aggregate_accepts_only_explicit_success_or_skip(selected: bool) -> None:
     """A fully selected run and an explicitly empty run both aggregate correctly."""
 
-    environment = {"CLASSIFIER_RESULT": "success"}
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for name in RESULT_CONSUMERS:
         environment[f"{name}_SELECTED"] = str(selected).lower()
         environment[f"{name}_RESULT"] = "success" if selected else "skipped"
@@ -461,7 +461,7 @@ def test_required_aggregate_accepts_only_explicit_success_or_skip(selected: bool
 def test_required_aggregate_rejects_every_selected_consumer_failure(name: str, result: str) -> None:
     """A missing, cancelled, or failed selected consumer cannot produce green CI."""
 
-    environment = {"CLASSIFIER_RESULT": "success"}
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for consumer in RESULT_CONSUMERS:
         environment[f"{consumer}_SELECTED"] = "false"
         environment[f"{consumer}_RESULT"] = "skipped"
@@ -473,8 +473,8 @@ def test_required_aggregate_rejects_every_selected_consumer_failure(name: str, r
 def test_required_aggregate_rejects_classifier_failure_and_absent_decisions() -> None:
     """Empty classifier outputs cannot masquerade as an intentional skipped run."""
 
-    assert _aggregate_results({"CLASSIFIER_RESULT": "failure"}).returncode != 0
-    environment = {"CLASSIFIER_RESULT": "success"}
+    assert _aggregate_results({"CLASSIFIER_RESULT": "failure", "SOURCE_GUARDS_RESULT": "success"}).returncode != 0
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for name in RESULT_CONSUMERS:
         environment[f"{name}_SELECTED"] = ""
         environment[f"{name}_RESULT"] = "skipped"
@@ -486,11 +486,21 @@ def test_required_aggregate_rejects_classifier_failure_and_absent_decisions() ->
 def test_required_aggregate_rejects_unselected_jobs_that_ran(name: str, result: str) -> None:
     """A routed-off job must be skipped; execution is a classification mismatch."""
 
-    environment = {"CLASSIFIER_RESULT": "success"}
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
     for consumer in RESULT_CONSUMERS:
         environment[f"{consumer}_SELECTED"] = "false"
         environment[f"{consumer}_RESULT"] = "skipped"
     environment[f"{name}_RESULT"] = result
+    assert _aggregate_results(environment).returncode != 0
+
+
+@pytest.mark.parametrize("result", ("failure", "cancelled", "skipped", ""))
+def test_required_aggregate_rejects_source_guard_failure(result: str) -> None:
+    """Independent source validation is mandatory even when no compiler lane is selected."""
+    environment = {"CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": result}
+    for name in RESULT_CONSUMERS:
+        environment[f"{name}_SELECTED"] = "false"
+        environment[f"{name}_RESULT"] = "skipped"
     assert _aggregate_results(environment).returncode != 0
 
 
@@ -793,18 +803,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "fetch-depth: 0",
             "python3 scripts/rust_ci.py validate",
             "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
-            "pytests/scripts/check_cargo_feature_hygiene_test.py",
-            "pytests/scripts/check_workspace_target_inventory_test.py",
-            BUILD_EFFICIENCY_PROVENANCE_TEST,
-            "scripts/tests/sdk_operation_inventory_test.py",
-            "scripts/tests/check_compile_unit_budget_test.py",
-            "scripts/tests/check_generated_artifacts_test.py",
-            "python3 scripts/check_cargo_feature_hygiene.py",
-            "python3 scripts/check_workspace_target_inventory.py",
             BUILD_EFFICIENCY_PROVENANCE_COMMAND,
-            "python3 scripts/check_dependency_budget.py --check-boundaries",
-            "python3 scripts/sdk_operation_inventory.py",
-            "python3 scripts/check_generated_artifacts.py",
             'FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, '
             "'ci/full') }}",
             'scope_args=(--base "$BASE_SHA")',
@@ -824,11 +823,6 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         provenance_followers = (
             "python3 scripts/rust_ci.py validate",
             "python3 -m pytest -q pytests/scripts/rust_ci_test.py",
-            "python3 scripts/check_cargo_feature_hygiene.py",
-            "python3 scripts/check_workspace_target_inventory.py",
-            "python3 scripts/check_compile_time_table_assets.py",
-            "python3 scripts/check_dependency_budget.py",
-            "python3 scripts/check_dependency_budget.py --check-boundaries",
         )
         if provenance_position >= 0 and any(
             normalized_classifier.find(command) < provenance_position
@@ -839,6 +833,32 @@ def _validate_pr_parity(workflow: str) -> list[str]:
                 "PR build-efficiency provenance guard must run before dependency "
                 "and Cargo-facing checks"
             )
+
+    source_job = _job_block(workflow, "rust_source_guards")
+    if not source_job:
+        errors.append("PR workflow is missing independent Rust source guards")
+    else:
+        normalized_source = _normalized(source_job)
+        source_requirements = (
+            "pytests/scripts/check_cargo_feature_hygiene_test.py",
+            "pytests/scripts/check_workspace_target_inventory_test.py",
+            BUILD_EFFICIENCY_PROVENANCE_TEST,
+            "scripts/tests/sdk_operation_inventory_test.py",
+            "scripts/tests/check_compile_unit_budget_test.py",
+            "scripts/tests/check_generated_artifacts_test.py",
+            "python3 scripts/check_cargo_feature_hygiene.py",
+            "python3 scripts/check_workspace_target_inventory.py",
+            "python3 scripts/check_compile_time_table_assets.py",
+            "python3 scripts/check_dependency_budget.py",
+            "python3 scripts/check_dependency_budget.py --check-boundaries",
+            "python3 scripts/sdk_operation_inventory.py",
+            "python3 scripts/check_generated_artifacts.py",
+        )
+        for requirement in source_requirements:
+            if requirement not in normalized_source:
+                errors.append(f"PR Rust source guards are missing required behavior: {requirement}")
+        if re.search(r"(?m)^    (?:needs|if):", source_job) or "continue-on-error:" in source_job:
+            errors.append("PR Rust source guards must run independently and fail closed")
 
     affected_job = _job_block(workflow, "rust_affected")
     if not affected_job:
@@ -854,7 +874,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             'cache: "false"',
             f"toolchain: {PINNED_RUST}",
             f"shared-key: rust-lane-{PINNED_RUST}-${{{{ matrix.lane }}}}",
-            "if: matrix.lane == 'execution'",
+            "name: Enforce data-model compile-unit budget if: matrix.lane == 'execution'",
             COMPILE_UNIT_GUARD_COMMAND,
             "if: always() && matrix.lane == 'execution'",
             "name: compile-units-${{ matrix.lane }}",
@@ -923,8 +943,10 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         normalized_required = _normalized(required_job)
         for requirement in (
             "if: always()",
-            "needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]",
+            "needs: [rust_changes, rust_source_guards, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]",
             'test "$CLASSIFIER_RESULT" = success',
+            "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}",
+            'test "$SOURCE_GUARDS_RESULT" = success',
             "true:success|false:skipped) return 0",
             *(
                 f'check_result "${name}_SELECTED" "${name}_RESULT"'
@@ -1630,29 +1652,29 @@ def test_release_workflow_guard_rejects_weakening(
         (
             lambda workflow: _replace_once_in_job(
                 workflow,
-                "rust_changes",
+                "rust_source_guards",
                 "python3 scripts/check_cargo_feature_hygiene.py",
                 "true # Cargo feature guard removed",
             ),
-            "PR Rust classifier is missing required behavior",
+            "PR Rust source guards are missing required behavior",
         ),
         (
             lambda workflow: _replace_once_in_job(
                 workflow,
-                "rust_changes",
+                "rust_source_guards",
                 "python3 scripts/check_workspace_target_inventory.py",
                 "true # Cargo target guard removed",
             ),
-            "PR Rust classifier is missing required behavior",
+            "PR Rust source guards are missing required behavior",
         ),
         (
             lambda workflow: _replace_once_in_job(
                 workflow,
-                "rust_changes",
+                "rust_source_guards",
                 BUILD_EFFICIENCY_PROVENANCE_TEST,
                 "scripts/tests/check_compile_unit_budget_test.py",
             ),
-            "PR Rust classifier is missing required behavior",
+            "PR Rust source guards are missing required behavior",
         ),
         (
             lambda workflow: _replace_once_in_job(
@@ -1705,8 +1727,8 @@ def test_release_workflow_guard_rejects_weakening(
             lambda workflow: _replace_once_in_job(
                 workflow,
                 "rust_affected",
-                "if: matrix.lane == 'execution'",
-                "if: false",
+                "if: matrix.lane == 'execution'\n        run: >-",
+                "if: false\n        run: >-",
             ),
             "PR affected Rust job is missing required behavior",
         ),
@@ -1766,6 +1788,29 @@ def test_pr_workflow_guard_rejects_parity_weakening(
     assert any(
         expected_error in error for error in _validate_pr_parity(mutation(workflow))
     )
+
+
+@pytest.mark.parametrize("mutation", ("missing", "conditional", "dependency", "ignored", "result", "aggregate"))
+def test_pr_independent_source_guards_cannot_be_bypassed(mutation: str) -> None:
+    """The moved owner remains unconditional and part of the required result."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    if mutation == "missing":
+        job = _job_block(workflow, "rust_source_guards")
+        workflow = workflow.replace(job, "", 1)
+    elif mutation in ("conditional", "dependency", "ignored"):
+        line = {
+            "conditional": "    if: false\n",
+            "dependency": "    needs: [rust_changes]\n",
+            "ignored": "    continue-on-error: true\n",
+        }[mutation]
+        workflow = _replace_once(workflow, "  rust_source_guards:\n", "  rust_source_guards:\n" + line)
+    elif mutation == "result":
+        workflow = _replace_once_in_job(workflow, "rust_required",
+                                       'test "$SOURCE_GUARDS_RESULT" = success', "true")
+    else:
+        workflow = _replace_once_in_job(workflow, "rust_required",
+                                       "rust_changes, rust_source_guards,", "rust_changes,")
+    assert _validate_pr_parity(workflow)
 
 
 @pytest.mark.parametrize("change", ("stale", "missing", "component", "late", "rewrite"))
