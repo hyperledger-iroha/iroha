@@ -31,7 +31,7 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin",
 
 def _actual_bootstrap():
     source = RUST_PATH.read_text()
-    match = re.search(r'const BOOTSTRAP: &str = r#"(.*?)"#;', source, re.DOTALL)
+    match = re.search(r'const BOOTSTRAP: &str = r"(.*?)";', source, re.DOTALL)
     assert match is not None
     sources = source.split("const SOURCES:", 1)[1].split("const BOOTSTRAP:", 1)[0]
     paths = [RUST_PATH.parent / path for path in re.findall(r'include_bytes!\("([^\"]+)"\)', sources)]
