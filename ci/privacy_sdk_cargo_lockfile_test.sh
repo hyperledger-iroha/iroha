@@ -2400,7 +2400,25 @@ package_root = site_root / "iroha_native"
 package_root.mkdir(parents=True)
 package_path = package_root / "__init__.py"
 package_sibling_path = package_root / "sibling.py"
-native_path = package_root / "_crypto.abi3.so"
+def fixture_native_names(extension_suffixes):
+    """Select current and adversarial names without changing the trusted finder."""
+    suffix = ".pyd" if ".pyd" in extension_suffixes else ".abi3.so"
+    foreign_suffix = ".abi3.so" if suffix == ".pyd" else ".pyd"
+    shadows = [item for item in extension_suffixes if item != suffix]
+    if suffix not in extension_suffixes or foreign_suffix in extension_suffixes or not shadows:
+        raise AssertionError("fixture requires current native and distinct shadow suffixes")
+    filename = "_crypto" + suffix
+    return {
+        "suffix": suffix,
+        "filename": filename,
+        "member": "iroha_native/" + filename,
+        "shadow_filename": "_crypto" + shadows[0],
+        "foreign_suffix": foreign_suffix,
+    }
+
+
+native_names = fixture_native_names(importlib.machinery.EXTENSION_SUFFIXES)
+native_path = package_root / native_names["filename"]
 dist_info_root = site_root / "iroha_native-0.0.0.dist-info"
 owner_loader_bytes = (
     b"def load_crypto_extension():\n"
@@ -2497,7 +2515,7 @@ def valid_entries(
     return with_record([
         member("iroha_native/__init__.py", package_payload),
         member("iroha_native/sibling.py", sibling_payload),
-        member("iroha_native/_crypto.abi3.so", native_bytes),
+        member(native_names["member"], native_bytes),
         member(
             "iroha_native-0.0.0.dist-info/METADATA",
             b"Metadata-Version: 2.3\nName: iroha-native\nVersion: 0.0.0\n",
@@ -2645,7 +2663,7 @@ def preflight(path):
     return verifier.preflight_wheel(
         path,
         seal(path),
-        extension_suffixes=(".abi3.so",),
+        extension_suffixes=(native_names["suffix"],),
     )
 
 
@@ -2654,7 +2672,7 @@ wheel = preflight(wheel_path)
 install_dist_info(wheel)
 if wheel.package_member != "iroha_native/__init__.py":
     raise AssertionError("wheel preflight selected the wrong package initializer")
-if wheel.native_member != "iroha_native/_crypto.abi3.so":
+if wheel.native_member != native_names["member"]:
     raise AssertionError("wheel preflight selected the wrong native extension")
 streamed_wheel_path = write_streamed_wheel(
     fixture_root / "streamed-data-descriptors.whl",
@@ -2751,7 +2769,7 @@ try:
                 f"{native_path}:\n"
                 "\t@rpath/Python3.framework/Versions/3.9/Python3\n"
             ),
-            extension_suffixes=(".abi3.so",),
+            extension_suffixes=(native_names["suffix"],),
         ),
     )
 finally:
@@ -2793,10 +2811,10 @@ def fixture_native_module():
 # A more specific native suffix or another extension must never broaden the
 # inspected package authority. Source siblings still use SourceFileLoader.
 finder = verifier._AuthenticatedNativePackageFinder(package_root, inert_native_spec)
-shadow_native = package_root / ("_crypto" + importlib.machinery.EXTENSION_SUFFIXES[0])
+shadow_native = package_root / native_names["shadow_filename"]
 unknown_native = package_root / ("uninspected" + importlib.machinery.EXTENSION_SUFFIXES[0])
 if shadow_native == native_path:
-    shadow_native = package_root / "_crypto.pyd"
+    raise AssertionError("shadow control must not replace the authenticated original")
 try:
     shadow_native.write_bytes(b"uninspected shadow extension")
     unknown_native.write_bytes(b"uninspected sibling extension")
@@ -3132,7 +3150,7 @@ expect_failure(
     lambda: verifier.preflight_wheel(
         wheel_path,
         "0" * 64 + wheel.seal.render()[64:],
-        extension_suffixes=(".abi3.so",),
+        extension_suffixes=(native_names["suffix"],),
     ),
 )
 sealed_before_mutation = wheel.seal
@@ -3152,7 +3170,7 @@ expect_failure(
     lambda: verifier.preflight_wheel(
         wheel_path,
         seal(wheel_path),
-        extension_suffixes=(".abi3.so",),
+        extension_suffixes=(native_names["suffix"],),
     ),
 )
 wheel_path = write_wheel(wheel_path, valid_entries())
@@ -3240,7 +3258,7 @@ wrong_platform = write_wheel(
     [
         (
             member("iroha_native/_crypto.cpython-39-darwin.so", native_bytes)
-            if entry[0].filename == "iroha_native/_crypto.abi3.so"
+            if entry[0].filename == native_names["member"]
             else entry
         )
         for entry in valid_entries()
@@ -3248,8 +3266,8 @@ wrong_platform = write_wheel(
 )
 expect_failure("current-platform native module", lambda: preflight(wrong_platform))
 for label, extra_name in (
-    ("loose", "_crypto.abi3.so"),
-    ("nested", "iroha_native/sub/_crypto.abi3.so"),
+    ("loose", native_names["filename"]),
+    ("nested", "iroha_native/sub/" + native_names["filename"]),
     ("stale", "iroha_native/_crypto.cpython-39-darwin.so"),
     ("foreign", "iroha_native/helper.so"),
     ("foreign-case", "iroha_native/helper.SO"),
