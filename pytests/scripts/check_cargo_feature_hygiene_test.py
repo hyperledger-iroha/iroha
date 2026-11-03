@@ -32,6 +32,17 @@ def test_repository_feature_hygiene() -> None:
     assert FEATURE_HYGIENE.check_repository(ROOT) == []
 
 
+def test_privacy_simd_keeps_the_runtime_admitted_fastpq_owner() -> None:
+    """The privacy SIMD feature cannot silently lose the FASTPQ implementation."""
+
+    document = _guarded_document("iroha_core_privacy")
+    assert _guarded_errors("iroha_core_privacy", document) == []
+    assert document["features"]["simd"] == ["fastpq_prover/simd"]
+    document["features"]["simd"] = []
+    assert any("feature `simd` must be" in error
+               for error in _guarded_errors("iroha_core_privacy", document))
+
+
 def _manifest_path(package: str) -> Path:
     split_packages = {
         "iroha_cli_lib": "iroha_cli", "iroha_cli": "iroha_cli/bins",
