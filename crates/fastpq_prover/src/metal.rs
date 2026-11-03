@@ -2661,7 +2661,7 @@ pub fn digest384_indexed_coordinates_v1(
         });
     }
     for len in [
-        staged.words.len(),
+        staged._words.len(),
         digest384_gpu_parameters_v1().len(),
         output.len(),
     ] {
@@ -2669,7 +2669,7 @@ pub fn digest384_indexed_coordinates_v1(
     }
     let mut buffers = Vec::with_capacity(3);
     for mut pool in [
-        PooledBuffer::sensitive_from_slice(&staged.words)?,
+        PooledBuffer::sensitive_from_slice(&staged._words)?,
         PooledBuffer::from_slice(digest384_gpu_parameters_v1())?,
         PooledBuffer::sensitive_zeroed(output.len())?,
     ] {

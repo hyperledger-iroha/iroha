@@ -8,7 +8,9 @@ use fastpq_isi::{GoldilocksDigest384FrameV1, GoldilocksDigestDomainV1};
 use zeroize::Zeroizing;
 
 pub struct StagedDigest384IndexedV1 {
-    pub words: Zeroizing<Vec<u64>>,
+    // Retain canonical staging through dispatch, including refusal, and wipe it
+    // on drop. Only the supported Metal backend reads this private buffer.
+    pub(super) _words: Zeroizing<Vec<u64>>,
     pub start: u64,
     pub count: usize,
 }
@@ -54,7 +56,7 @@ impl StagedDigest384IndexedV1 {
             ));
         }
         Ok(Self {
-            words,
+            _words: words,
             start,
             count,
         })
@@ -75,12 +77,12 @@ pub fn try_indexed_coordinates_v1(
     readiness.indexed.execute_indexed_v1(
         backend,
         || StagedDigest384IndexedV1::new(predicate, start, count),
-        &mut |staged, output| {
+        &mut |_staged, _output| {
             let result = match backend {
                 Digest384GpuBackendV1::Metal => {
                     #[cfg(target_os = "macos")]
                     {
-                        crate::metal::digest384_indexed_coordinates_v1(staged, output)
+                        crate::metal::digest384_indexed_coordinates_v1(_staged, _output)
                             .map_err(|error| error.to_string())
                     }
                     #[cfg(not(target_os = "macos"))]
@@ -295,6 +297,27 @@ mod tests {
             assert!(StagedDigest384IndexedV1::new(&predicate, start, count).is_err());
         }
         assert!(StagedDigest384IndexedV1::new(&predicate, u64::MAX, 1).is_ok());
+    }
+    #[test]
+    fn indexed_staging_keeps_canonical_suffix_and_exact_nonce_geometry() {
+        let fields: &[&[u8]] = &[b"retained indexed input", b"", &[255; 9]];
+        let frame = GoldilocksDigest384FrameV1::new(kat_domain_v1(0), fields).unwrap();
+        let predicate = frame.indexed_predicate_v1();
+        let mut complete = vec![0; frame.word_count()];
+        assert!(frame.write_lane_words(0, &mut complete));
+        for (start, count) in [(0, 3), ((1_u64 << 56) - 1, 3), (u64::MAX, 1)] {
+            let staged = StagedDigest384IndexedV1::new(&predicate, start, count).unwrap();
+            assert_eq!((staged.start, staged.count), (start, count));
+            let suffix_len = usize::try_from(staged._words[4]).unwrap();
+            let prefix_len = complete.len().checked_sub(suffix_len).unwrap();
+            assert_eq!(staged._words.len(), 5 + suffix_len);
+            assert_eq!(&staged._words[5..], &complete[prefix_len..]);
+            assert_eq!(
+                usize::try_from(staged._words[3]).unwrap() + prefix_len,
+                frame.lane_word_index() - 8,
+                "the staged index offset must retain the canonical eight-byte framing"
+            );
+        }
     }
     #[test]
     fn indexed_failure_closes_both_backend_capabilities() {
