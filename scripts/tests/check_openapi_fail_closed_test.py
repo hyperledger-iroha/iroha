@@ -3,7 +3,12 @@
 import base64
 import copy
 import json
+import os
 import re
+import shlex
+import subprocess
+import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -1083,6 +1088,131 @@ def test_openapi_cargo_and_owner_surfaces_obey_release_process_policy() -> None:
     assert "cargo run" not in readme
     assert "--lockfile-path" not in readme
     assert "unstable-options" not in readme
+
+
+def canonical_workflow_command(name: str) -> str:
+    """Extract the actual canonical job setup script for executable regressions."""
+
+    canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
+    step = canonical.split(f"      - name: {name}\n", 1)[1]
+    step = step.split("      - name:", 1)[0]
+    assert "        shell: bash\n" in step
+    return textwrap.dedent(step.split("        run: |\n", 1)[1])
+
+
+@pytest.mark.parametrize(
+    "cargo_kind",
+    ["regular", "missing", "relative", "symlink", "directory", "nonexecutable", "unnormalized", "newline"],
+)
+def test_canonical_workflow_selects_only_a_real_installed_cargo(
+    tmp_path: Path, cargo_kind: str,
+) -> None:
+    """The rustup shim is never replay authority, and unsafe output is not exported."""
+
+    root = tmp_path.resolve()
+    binary_root = root / "bin"
+    binary_root.mkdir()
+    cargo = root / "installed cargo"
+    cargo.write_text("#!/bin/sh\nexit 0\n")
+    cargo.chmod(0o700)
+    selected = str(cargo)
+    if cargo_kind == "missing":
+        selected = str(root / "missing")
+    elif cargo_kind == "relative":
+        selected = cargo.name
+    elif cargo_kind == "symlink":
+        link = root / "cargo-link"
+        link.symlink_to(cargo)
+        selected = str(link)
+    elif cargo_kind == "directory":
+        selected = str(binary_root)
+    elif cargo_kind == "nonexecutable":
+        cargo.chmod(0o600)
+    elif cargo_kind == "unnormalized":
+        selected = str(root) + "/./" + cargo.name
+    elif cargo_kind == "newline":
+        injected = root / "cargo\nUNEXPECTED_ENV=value"
+        cargo.rename(injected)
+        selected = str(injected)
+    rustup = binary_root / "rustup"
+    rustup.write_text(
+        '#!/bin/sh\n[ "$#" = 2 ] && [ "$1" = which ] && [ "$2" = cargo ] || exit 3\n'
+        'printf "%s\\n" "$FIXTURE_CARGO"\n'
+    )
+    rustup.chmod(0o700)
+    environment_file = root / "github-env"
+    environment = {
+        **os.environ,
+        "PATH": str(binary_root) + os.pathsep + os.environ["PATH"],
+        "FIXTURE_CARGO": selected,
+        "GITHUB_ENV": str(environment_file),
+    }
+    result = subprocess.run(
+        ["bash", "-c", canonical_workflow_command(
+            "Select the installed Cargo executable for sealed replay",
+        )],
+        cwd=root, env=environment, text=True, capture_output=True, check=False,
+    )
+    if cargo_kind == "regular":
+        assert result.returncode == 0, result.stderr
+        assert environment_file.read_text() == f"IROHA_RELEASE_CARGO_BIN={cargo}\n"
+    else:
+        assert result.returncode != 0
+        assert not environment_file.exists()
+
+
+@pytest.mark.parametrize("native_host", ["x86_64-unknown-linux-gnu", ""])
+def test_canonical_workflow_prefetches_locked_native_inputs(
+    tmp_path: Path, native_host: str,
+) -> None:
+    """Both offline replays share a prepared registry, never a replay target/cache."""
+
+    root = tmp_path.resolve()
+    cargo = root / "installed cargo"
+    cargo.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "with open(os.environ['FIXTURE_CALL'], 'w') as stream:\n"
+        "    json.dump(sys.argv[1:], stream)\n"
+    )
+    cargo.chmod(0o700)
+    rustc = root / "rustc"
+    rustc.write_text(
+        '#!/bin/sh\n[ "$#" = 1 ] && [ "$1" = -vV ] || exit 3\n'
+        "printf '%s\\n' " + shlex.quote("rustc 1.99.1\nhost: " + native_host) + "\n"
+    )
+    rustc.chmod(0o700)
+    call = root / "cargo-call.json"
+    result = subprocess.run(
+        ["bash", "-c", canonical_workflow_command(
+            "Prefetch committed native dependencies before offline replay",
+        )],
+        cwd=root,
+        env={
+            **os.environ,
+            "PATH": str(root) + os.pathsep + os.environ["PATH"],
+            "IROHA_RELEASE_CARGO_BIN": str(cargo),
+            "FIXTURE_CALL": str(call),
+        },
+        text=True, capture_output=True, check=False,
+    )
+    if native_host:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(call.read_text()) == ["fetch", "--locked", "--target", native_host]
+    else:
+        assert result.returncode != 0
+        assert not call.exists()
+
+    canonical = OPENAPI_WORKFLOW.read_text().split("  canonical-spec:\n", 1)[1]
+    ordered = [
+        "provision-openapi-cargo-lock.mjs pin",
+        "Select the installed Cargo executable for sealed replay",
+        "Prefetch committed native dependencies before offline replay",
+        "git status --porcelain=v1 --untracked-files=all",
+        "bash ci/check_openapi_spec.sh",
+        "bash ci/check_android_codegen.sh",
+    ]
+    positions = [canonical.index(marker) for marker in ordered]
+    assert positions == sorted(positions)
 
 
 def test_sealed_openapi_builds_do_not_stage_integration_fixtures_into_source() -> None:
