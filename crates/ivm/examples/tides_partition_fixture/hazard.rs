@@ -17,6 +17,7 @@ const KIND: usize = 3;
 const MATERIAL_NUM: usize = 4;
 const MATERIAL_DEN: usize = 5;
 const EPISODE_DAMAGE: usize = 6;
+#[cfg(test)]
 const XOR: usize = 7;
 const OWNER: usize = 8;
 const CARGO: usize = 9;

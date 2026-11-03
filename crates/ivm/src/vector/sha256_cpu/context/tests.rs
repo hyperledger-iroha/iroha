@@ -21,6 +21,11 @@ fn caller_scalar_context_survives_worker_override_and_nested_pool() {
     let previous = super::super::super::set_thread_forced_simd(Some(SimdChoice::Scalar));
     let context = Sha256Context::production();
     super::super::super::set_thread_forced_simd(previous);
+    let baseline = Sha256Baseline::capture(context).expect("original global scalar CPU owner");
+    assert!(baseline.is_current(context));
+    assert!(baseline.accepts(Sha256Observed::default(), false));
+    assert!(!baseline.accepts(Sha256Observed::default(), true));
+    assert!(!baseline.accepts(Sha256Observed::completed(Sha256Backend::Native), false));
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
         .build()
@@ -35,11 +40,15 @@ fn caller_scalar_context_survives_worker_override_and_nested_pool() {
         let mut expected = actual;
         let block = [0x63; 64];
         crate::sha256_ref::sha256_compress_scalar_ref(&mut expected, &block);
-        assert_eq!(context.compress(&mut actual, &block), Sha256Backend::Scalar);
+        let backend = context.compress(&mut actual, &block);
+        assert_eq!(backend, Sha256Backend::Scalar);
         assert_eq!(actual, expected);
+        assert!(baseline.accepts(Sha256Observed::completed(backend), true));
+        assert!(!baseline.is_current(context));
         assert!(Sha256Baseline::capture(context).is_none());
         super::super::super::set_thread_forced_simd(previous);
     });
+    assert!(baseline.is_current(context));
     assert!(!context.is_synthetic());
     assert!(context.synthetic().is_synthetic());
 }
