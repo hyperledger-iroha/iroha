@@ -91,19 +91,27 @@ concurrency:
 jobs:
   binding-parity:
     name: Complete Norito binding parity
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      IROHA_NATIVE_LIBRARY_PATH: ${{ github.workspace }}/target/debug
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      - uses: ./.github/actions/setup-native-ci
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
-          python-version: "3.12"
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
-        with:
-          distribution: temurin
-          java-version: "21"
-          cache: gradle
+          cache-on-failure: "true"
+          shared-key: norito-binding-parity
+      # The build script also invokes binding checks. Bootstrap their mandatory
+      # JNI address validator first, then run every strict parity lane below.
+      - name: Build same-source native address validator
+        env:
+          NORITO_SKIP_BINDINGS_SYNC: "1"
+        run: cargo build --locked -p connect_norito_bridge --lib
+      - name: Require the built JNI library
+        run: test -s "$IROHA_NATIVE_LIBRARY_PATH/libconnect_norito_bridge.so"
       - name: Run Python, Java, and Kotlin parity with no capability skips
         run: bash ci/check_norito_bindings_sync.sh
 
