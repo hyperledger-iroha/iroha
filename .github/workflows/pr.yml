@@ -292,8 +292,7 @@ jobs:
   rust_changes:
     name: Classify affected Rust lanes
     runs-on: ubuntu-latest
-    # The complete source-guard suite scans the full workspace and exceeds 15 minutes.
-    timeout-minutes: 90
+    timeout-minutes: 15
     outputs:
       has_rust: ${{ steps.classify.outputs.has_rust }}
       full: ${{ steps.classify.outputs.full }}
@@ -328,6 +327,53 @@ jobs:
           python3 -I -S scripts/check_build_efficiency_provenance.py
           python3 scripts/rust_ci.py validate
           python3 -m pytest -q pytests/scripts/rust_ci_test.py
+      - name: Classify the PR reverse-dependency closure
+        id: classify
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
+        run: |
+          mkdir -p target/ci
+          scope_args=(--base "$BASE_SHA")
+          if test "$FULL_REQUESTED" = true; then
+            scope_args=(--all)
+          fi
+          python3 scripts/rust_ci.py classify \
+            "${scope_args[@]}" \
+            --json-out target/ci/rust-classification.json \
+            --github-output "$GITHUB_OUTPUT" \
+            > target/ci/rust-classification.log
+      - name: Upload Rust classification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: rust-classification
+          path: |
+            target/ci/rust-classification.json
+            target/ci/rust-classification.log
+          if-no-files-found: error
+
+  rust_source_guards:
+    name: Validate repository source guards
+    runs-on: ubuntu-24.04
+    # The full guard suite exceeded 100 minutes locally; it runs alongside compilation.
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
+        with:
+          cache: "false"
+          toolchain: 1.99.1
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: "3.11"
+      - name: Install pinned router-test dependency
+        run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Verify repository source contracts and inventories
+        run: |
           python3 -m pytest -q \
             pytests/scripts/check_cargo_feature_hygiene_test.py \
             scripts/tests/panic_recovery_boundaries_test.py \
@@ -412,31 +458,6 @@ jobs:
           python3 -I -S scripts/check_fhe_ownership_map.py
           python3 -I -S scripts/fhe_bgv_cost_model.py
           python3 -I -S crates/iroha_fhe/tests/vectors/bgv_reference.py --check
-      - name: Classify the PR reverse-dependency closure
-        id: classify
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          FULL_REQUESTED: ${{ contains(github.event.pull_request.labels.*.name, 'ci/full') }}
-        run: |
-          mkdir -p target/ci
-          scope_args=(--base "$BASE_SHA")
-          if test "$FULL_REQUESTED" = true; then
-            scope_args=(--all)
-          fi
-          python3 scripts/rust_ci.py classify \
-            "${scope_args[@]}" \
-            --json-out target/ci/rust-classification.json \
-            --github-output "$GITHUB_OUTPUT" \
-            > target/ci/rust-classification.log
-      - name: Upload Rust classification evidence
-        if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: rust-classification
-          path: |
-            target/ci/rust-classification.json
-            target/ci/rust-classification.log
-          if-no-files-found: error
 
   rust_affected:
     name: Rust ${{ matrix.lane }} (${{ matrix.package_count }} packages)
@@ -537,12 +558,13 @@ jobs:
   rust_required:
     name: Required affected Rust validation
     if: always()
-    needs: [rust_changes, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
+    needs: [rust_changes, rust_source_guards, rust_affected, rust_network, pre_build, consistency, kotodama_docs, pytests, sora_parliament_lifecycle]
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate dynamic Rust lane results
         env:
           CLASSIFIER_RESULT: ${{ needs.rust_changes.result }}
+          SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}
           BINARY_FREE_RESULT: ${{ needs.rust_affected.result }}
           BINARY_FREE_SELECTED: ${{ needs.rust_changes.outputs.has_binary_free_rust }}
           NETWORK_RESULT: ${{ needs.rust_network.result }}
@@ -560,6 +582,7 @@ jobs:
         run: |
           set -euo pipefail
           test "$CLASSIFIER_RESULT" = success
+          test "$SOURCE_GUARDS_RESULT" = success
           check_result() {
             case "$1:$2" in
               true:success|false:skipped) return 0 ;;

@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import re
 import subprocess
 import sys
+import textwrap
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -20,6 +23,56 @@ assert SPEC is not None and SPEC.loader is not None
 rust_ci = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = rust_ci
 SPEC.loader.exec_module(rust_ci)
+
+
+def _workflow_job(name: str) -> str:
+    """Read one actual PR job without depending on YAML tag resolution."""
+
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    body = workflow.split(f"  {name}:\n", 1)[1]
+    return re.split(r"^  [a-z_]+:\n", body, maxsplit=1, flags=re.MULTILINE)[0]
+
+
+def test_source_guards_run_independently_and_remain_required() -> None:
+    """Compilation can start after routing, but cannot waive source validation."""
+
+    classifier = _workflow_job("rust_changes")
+    guards = _workflow_job("rust_source_guards")
+    required = _workflow_job("rust_required")
+    assert "python3 scripts/rust_ci.py validate" in classifier
+    assert "python3 scripts/rust_ci.py classify" in classifier
+    assert "scripts/tests/check_dependency_budget_test.py" not in classifier
+    assert "scripts/tests/check_dependency_budget_test.py" in guards
+    assert "python3 -I -S scripts/check_release_feature_graph.py" in guards
+    assert "python3 -I -S scripts/check_state_commitment_candidates.py" in guards
+    assert "    needs:" not in guards and "    if:" not in guards
+    assert "    if: always()" in required
+    assert "needs: [rust_changes, rust_source_guards," in required
+    assert "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}" in required
+    for name in ("rust_affected", "rust_network", "pre_build"):
+        assert "rust_source_guards" not in _workflow_job(name)
+
+
+@pytest.mark.parametrize("gate", ["CLASSIFIER_RESULT", "SOURCE_GUARDS_RESULT"])
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped", "", None])
+def test_required_rust_aggregate_rejects_unfinished_or_failed_guards(
+    gate: str, result: str | None,
+) -> None:
+    """Execute the real aggregator with every downstream lane passing."""
+
+    command = textwrap.dedent(_workflow_job("rust_required").split("        run: |\n", 1)[1])
+    environment = {**os.environ, "CLASSIFIER_RESULT": "success", "SOURCE_GUARDS_RESULT": "success"}
+    for lane in ("BINARY_FREE", "NETWORK", "BUILD", "CONSISTENCY", "KOTODAMA", "PYTESTS", "PARLIAMENT"):
+        environment[f"{lane}_RESULT"] = "success"
+        environment[f"{lane}_SELECTED"] = "true"
+    if result is None:
+        environment.pop(gate)
+    else:
+        environment[gate] = result
+    completed = subprocess.run(
+        ["bash", "-c", command], env=environment, capture_output=True, text=True, check=False,
+    )
+    assert (completed.returncode == 0) == (result == "success"), completed.stderr
 
 
 def _metadata(root: Path) -> dict[str, Any]:
