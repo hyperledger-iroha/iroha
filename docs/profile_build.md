@@ -143,6 +143,17 @@ establish a failure cause, compiler peak, or qualified compile-memory baseline.
 The child keeps its command, environment, working directory, streams and exit
 status; the observer does not signal, retry or limit it.
 
+These four jobs also provision one additional 16 GiB swap file on their
+GitHub-hosted Linux runner. A captured Core build exhausted the runner's RAM
+and existing 3 GiB swap immediately before shutdown. The provisioning helper
+requires at least 24 GiB disk headroom after allocation, refuses existing output,
+and retains existing swap. It writes and synchronizes the complete private file
+before formatting and activation; it does not use sparse allocation (see the
+[Linux swap-file requirements](https://man7.org/linux/man-pages/man8/swapon.8.html)).
+The disposable runner reclaims it. Compiler settings and test resource limits
+are unchanged. The release-binary job has a 60-minute allowance for the cold
+build and paging; this setup and its observations are not release qualification.
+
 `result.compiler_measurements.compiled` contains one measurement for each
 compiled Cargo artifact. It includes the package, target name/kinds/crate
 types, package-relative source path, sorted features, complete Cargo profile,
