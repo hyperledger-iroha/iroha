@@ -429,6 +429,8 @@ the host's supported runtime identifier (`linux-x64`, `linux-arm64`, `osx-x64`,
 consumer through `PackageReference`, verifies its staged native artifact, and
 runs the managed and native smoke checks. It rejects `ProjectReference` so a
 source build cannot substitute for the package being released.
+On Windows, run the gate in Git Bash; its generated NuGet configuration uses
+the native Windows spelling of the verified local package directory.
 
 Repository layout:
 

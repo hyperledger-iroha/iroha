@@ -276,6 +276,30 @@ package_install_log_matches_local_source() {
   return 1
 }
 
+write_consumer_nuget_config() {
+  local config_path="$1"
+  local package_dir="$2"
+  # NuGet reads this path from XML, where Git Bash cannot translate /d/... for
+  # the native Windows process as it does for command-line arguments.
+  if command -v cygpath >/dev/null 2>&1; then
+    package_dir="$(cygpath -m "${package_dir}")" || return 1
+  fi
+  "${PYTHON_BIN}" -I - "${config_path}" "${package_dir}" <<'PY'
+from pathlib import Path
+import sys
+from xml.sax.saxutils import quoteattr
+
+Path(sys.argv[1]).write_text(
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<configuration>\n  <packageSources>\n    <clear />\n'
+    f'    <add key="iroha-local" value={quoteattr(sys.argv[2])} />\n'
+    '    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />\n'
+    '  </packageSources>\n</configuration>\n',
+    encoding="utf-8",
+)
+PY
+}
+
 run_consumer_smoke() {
   local package_dir="$1"
   local expected_query="$2"
@@ -305,16 +329,7 @@ run_consumer_smoke() {
   </PropertyGroup>
 </Project>
 EOF
-  cat > "${app_dir}/NuGet.Config" <<EOF
-<?xml version="1.0" encoding="utf-8"?>
-<configuration>
-  <packageSources>
-    <clear />
-    <add key="iroha-local" value="${package_dir}" />
-    <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-  </packageSources>
-</configuration>
-EOF
+  write_consumer_nuget_config "${app_dir}/NuGet.Config" "${package_dir}" || return 1
   run_dotnet "${app_dir}" add package Hyperledger.Iroha.Sdk --version "${PACKAGE_VERSION}" \
     | tee "${WORK_DIR}/dotnet-add-package.log" || return 1
   if ! package_install_log_matches_local_source "${WORK_DIR}/dotnet-add-package.log" "${package_dir}"; then
