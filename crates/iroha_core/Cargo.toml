@@ -70,10 +70,8 @@ zk-stark = []
 zk-halo2-ipa = ["zk-ipa-native"]
 # Native IPA polynomial-opening verifier (no external halo2 libs). Default-on.
 zk-ipa-native = []
-# Note: feature gating for Poseidon path is no longer used; runtime backend
-# selection is supported via backend tags. Kept as a no-op to avoid breaking
-# dependent tooling.
-zk-halo2-ipa-poseidon = ["zk-halo2-ipa", "dep:halo2_gadgets"]
+# Enable chip-backed Poseidon circuits and their proof backend.
+zk-halo2-ipa-poseidon = ["zk-halo2-ipa", "dep:halo2_gadgets", "dep:halo2_proofs_zcash"]
 # Temporary helper to match halo2's default circuit-params toggle.
 circuit-params = ["halo2_proofs/circuit-params"]
 # Enable stateless pre-verify + dedup wiring (mock via metadata)
@@ -147,7 +145,11 @@ rust_decimal = { workspace = true }
 regex = "1.11.0"
 http = "1.3.1"
 halo2_proofs = { version = "0.5.1", package = "halo2-axiom", features = ["batch", "multicore"] }
-halo2_gadgets = { version = "0.3.1", optional = true }
+# 0.5 is the fixed, unyanked release that retains the ff 0.13/Pasta 0.5 API.
+halo2_gadgets = { version = "0.5.0", optional = true }
+# Axiom also enables maybe-rayon/threads; keep the gadget's Zcash proof backend
+# on its matching parallel iterator/reduction implementation.
+halo2_proofs_zcash = { package = "halo2_proofs", version = "0.3.5", default-features = false, features = ["multicore"], optional = true }
 ff = "0.13.1"
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
 kaigi_zk = { path = "../kaigi_zk", optional = true }
