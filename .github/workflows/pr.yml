@@ -1076,6 +1076,7 @@ jobs:
     timeout-minutes: 120
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
+      IROHA_TEST_NETWORK_KEEP_DIRS: "1"
       SORA_PARLIAMENT_ALERT_EVIDENCE_DIR: target/sora-parliament-alert-evidence
       # Cargo runs benchmarks from the package directory; all producers share this absolute root.
       SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: ${{ github.workspace }}/target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1359,3 +1360,13 @@ jobs:
         run: python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py
       - name: Run exact four-validator Parliament lifecycle corridor
         run: bash ci/check_sora_parliament_lifecycle.sh
+      - name: Retain failed Parliament node diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: sora-parliament-node-logs
+          path: |
+            ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*/**/run-*-stdout.log
+            ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*/**/run-*-stderr.log
+          if-no-files-found: ignore
+          retention-days: 3
