@@ -16,6 +16,8 @@ on:
       - "crates/iroha_operation_journal/**"
       - "crates/iroha_fhe/**"
       - "crates/iroha_core_privacy/**"
+      - "crates/iroha_core/**"
+      - "crates/iroha_primitives/**"
       - "crates/ivm/**"
       - "crates/iroha_measurement/**"
       - "crates/iroha_plonk/build.rs"
