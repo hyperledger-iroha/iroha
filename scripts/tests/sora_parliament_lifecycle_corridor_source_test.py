@@ -1086,17 +1086,34 @@ def validate_beacon_rotation_fixture(source: str) -> None:
     )
     for marker in (
         "deterministic_parliament_beacon_successor_key_record_v1",
-        "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
-        "let initial_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, false, &self.budget)",
-        "let successor_fixture =",
-        "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
-        "if successor_fixture.session.record() != session.record()",
+        "deterministic_fixture_v1(network_id, ordered_roster, signing_keys, true, budget)",
+        "signing_keys.len() != roster.len()",
+        "key.public_key() != peer.public_key()",
+        "sign_global_threshold_beacon_dkg_recipient_key_v1(",
+        "sign_global_threshold_beacon_dkg_dealer_commitment_v1(",
+        "seal_global_threshold_beacon_dkg_private_edge_v1(",
+        "accept_global_threshold_beacon_dkg_private_edge_v1(",
+        "deterministic_session_v1(self.network_id, &self.ordered_roster, false)",
+        "deterministic_session_v1(self.network_id, &self.ordered_roster, true)",
+        "if session.adaptive_dkg.session == initial",
+        "else if session.adaptive_dkg.session == successor",
+        "if fixture.session.record() != session.record()",
+        "if record.adaptive_dkg.session != dkg_session",
+        "actual.coefficient_commitments != expected.coefficient_commitments",
+        "actual.constant_term_proof != expected.constant_term_proof",
+        "for key in &record.adaptive_dkg.recipient_keys",
+        "for commitment in &record.adaptive_dkg.dealer_commitments",
+        "for edge in &record.adaptive_dkg.encrypted_shares",
+        "for acceptance in &record.adaptive_dkg.share_acceptances",
+        "if state.finalize(dkg_session.acceptances_end_height, &crypto)? != record",
         "exact_seat_signer_supports_one_domain_separated_successor_session",
         "assert_ne!(initial.session.session_id, successor.session.session_id);",
         "verify_partial_signature(payload, &partial)",
+        "authenticated_fixture_requires_exact_keys_and_every_signed_private_edge",
+        "assert_eq!(dkg.encrypted_shares.len(), 16);",
+        "assert_eq!(dkg.share_acceptances.len(), 16);",
     ):
-        require(marker in source, f"rotatable beacon test fixture lost `{marker}`")
+        require(compact(marker) in compact(source), f"rotatable beacon test fixture lost `{marker}`")
 
 
 def validate_beacon_mode_profiles(source: str) -> None:
@@ -1762,8 +1779,14 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         source = BEACON_TEST_SIGNER.read_text(encoding="utf-8")
         for marker in (
             "TEST_SUCCESSOR_SESSION_ID_DOMAIN_V1",
-            "deterministic_fixture_v1(network_id, ordered_roster, true, budget)",
-            "deterministic_fixture_v1(self.network_id, &self.ordered_roster, true, &self.budget)",
+            "signing_keys.len() != roster.len()",
+            "actual.coefficient_commitments != expected.coefficient_commitments",
+            "actual.constant_term_proof != expected.constant_term_proof",
+            "for key in &record.adaptive_dkg.recipient_keys",
+            "for commitment in &record.adaptive_dkg.dealer_commitments",
+            "for edge in &record.adaptive_dkg.encrypted_shares",
+            "for acceptance in &record.adaptive_dkg.share_acceptances",
+            "if state.finalize(dkg_session.acceptances_end_height, &crypto)? != record",
             "exact_seat_signer_supports_one_domain_separated_successor_session",
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):

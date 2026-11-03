@@ -340,6 +340,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
     let beacon_record = deterministic_parliament_beacon_key_record_v1(
         network.network_id(),
         &ordered_roster,
+        &ordered_validator_signers(&network, &ordered_roster)?,
         &beacon_budget,
     )
     .wrap_err("derive mandatory NPoS beacon fixture")?;
@@ -771,6 +772,7 @@ async fn four_validator_mandatory_npos_beacon_fails_closed_below_threshold_impl(
     let beacon_record = deterministic_parliament_beacon_key_record_v1(
         network.network_id(),
         &ordered_roster,
+        &ordered_validator_signers(&network, &ordered_roster)?,
         &beacon_budget,
     )
     .wrap_err("derive fail-closed NPoS beacon fixture")?;
@@ -1113,10 +1115,8 @@ async fn four_validator_pending_parliament_request_never_blocks_unrelated_work_o
     // No beacon key session is installed, and the signer profile stays below the exact
     // threshold of two for any session: no validator set can produce a threshold pulse
     // at any height of this corridor.
-    // TODO: also run this corridor with an installed, below-threshold key session (as the
-    // fail-closed corridor installs it) once the test-network beacon fixture
-    // `deterministic_parliament_beacon_key_record_v1` is rebuilt on the all-edge DKG; it is
-    // currently rejected with "test Parliament beacon cryptographic fixture is invalid".
+    // The separate fail-closed corridor installs an authenticated key with fewer
+    // than two valid signers; this corridor covers the distinct absent-key case.
     for peer in network.peers() {
         let (_, horizon) = require_beacon_horizon(
             &peer.client(),

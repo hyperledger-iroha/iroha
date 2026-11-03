@@ -420,6 +420,48 @@ pub async fn ordered_validator_roster(
     Ok(roster)
 }
 
+/// Borrow the harness-owned BLS keys in the independently certified roster order.
+pub fn ordered_validator_signers<'a>(
+    network: &'a iroha_test_network::Network,
+    ordered_roster: &[PeerId],
+) -> Result<Vec<&'a KeyPair>> {
+    ordered_roster
+        .iter()
+        .map(|peer_id| {
+            network
+                .peers()
+                .iter()
+                .find(|peer| peer.id() == *peer_id)
+                .ok_or_else(|| eyre!("signed roster peer is absent from the network"))?
+                .bls_key_pair()
+                .ok_or_else(|| eyre!("validator lacks its normal BLS keypair"))
+        })
+        .collect()
+}
+
+#[test]
+fn validator_signer_lookup_preserves_certified_order_and_refuses_absent_peers() {
+    let network = NetworkBuilder::new().with_peers(VALIDATOR_COUNT).build();
+    let mut roster = network
+        .peers()
+        .iter()
+        .rev()
+        .map(|peer| peer.id())
+        .collect::<Vec<_>>();
+    let signers = ordered_validator_signers(&network, &roster).unwrap();
+    assert_eq!(signers.len(), VALIDATOR_COUNT);
+    for (signer, peer) in signers.iter().zip(&roster) {
+        assert_eq!(signer.public_key(), peer.public_key());
+    }
+    let foreign = KeyPair::try_from_seed(
+        b"absent Parliament validator".to_vec(),
+        Algorithm::BlsNormal,
+    )
+    .expect("derive absent validator");
+    roster[0] = PeerId::new(foreign.public_key().clone());
+    assert!(ordered_validator_signers(&network, &roster).is_err());
+}
+
 pub fn lifecycle_certificate(
     network: &iroha_test_network::Network,
     ordered_roster: &[PeerId],
