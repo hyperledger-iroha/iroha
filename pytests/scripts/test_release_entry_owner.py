@@ -314,9 +314,10 @@ print('valid fixture caller; every explicit override still refused')
     bash = (Path('C:/Program Files/Git/bin/bash.exe') if os.name == 'nt'
             else Path(shutil.which('bash') or '/bin/bash'))
     assert bash.is_file(), 'native Git Bash fixture host is required'
-    command = setup + shlex.quote(Path(sys.executable).as_posix()) + ' -I -S -c ' + shlex.quote(probe)
+    # Keep Python literals out of Git Bash's native Windows argument conversion.
+    command = setup + shlex.quote(Path(sys.executable).as_posix()) + ' -I -S -'
     result = subprocess.run([str(bash), '--noprofile', '--norc', '-c', command], env=environment,
-                            text=True, capture_output=True)
+                            input=probe, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'valid fixture caller; every explicit override still refused'
 
