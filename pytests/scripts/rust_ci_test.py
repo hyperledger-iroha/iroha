@@ -30,7 +30,7 @@ def _workflow_job(name: str) -> str:
 
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
     body = workflow.split(f"  {name}:\n", 1)[1]
-    return re.split(r"^  [a-z_]+:\n", body, maxsplit=1, flags=re.MULTILINE)[0]
+    return re.split(r"^  [a-z_][a-z_0-9-]*:\n", body, maxsplit=1, flags=re.MULTILINE)[0]
 
 
 def test_source_guards_run_independently_and_remain_required() -> None:
@@ -51,6 +51,69 @@ def test_source_guards_run_independently_and_remain_required() -> None:
     assert "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}" in required
     for name in ("rust_affected", "rust_network", "pre_build"):
         assert "rust_source_guards" not in _workflow_job(name)
+
+
+def test_core_host_capacity_policy_preserves_every_test_command() -> None:
+    """Only the two heavy Core jobs bound build concurrency; every suite stays selected."""
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    assert workflow.count('CARGO_BUILD_JOBS: "2"') == 2
+    seeds = "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS "
+    expected = {
+        "sumeragi": [
+            seeds + "cargo test --locked -p iroha_sumeragi --features sim",
+            seeds + "cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor",
+        ],
+        "zk_phase_tree_measurement": [
+            "cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement",
+            "cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests",
+            "cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement",
+        ],
+    }
+    for name, commands in expected.items():
+        job = _workflow_job(name)
+        assert '      CARGO_BUILD_JOBS: "2"' in job
+        actual = re.findall(r"(?m)^        run: (.*cargo test.*)$", job)
+        assert all(command.count("/usr/bin/time -v ") == 1 for command in actual)
+        assert [command.replace("/usr/bin/time -v ", "") for command in actual] == commands
+        assert "continue-on-error" not in job
+        assert ("      - name: Record hosted build capacity after testing\n"
+                "        if: always()\n        run: *linux_build_capacity") in job
+        assert job.index("Record hosted build capacity before testing") < job.index(actual[0])
+    assert workflow.count("run: *linux_build_capacity") == 3
+
+
+@pytest.mark.parametrize("membership", ["normal", "missing", "traversal"])
+def test_host_capacity_diagnostics_read_bounded_root_and_actual_cgroup(
+    tmp_path: Path, membership: str,
+) -> None:
+    """Execute the workflow's diagnostic reader against controlled kernel-shaped files."""
+    job = _workflow_job("sumeragi")
+    body = job.split("        run: &linux_build_capacity |\n", 1)[1].split("      - name:", 1)[0]
+    assert 'df -B1 -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP"' in body
+    assert "          nproc\n          free -b\n" in body
+    script = textwrap.dedent(body.split("          python3 -I -S - <<'PY'\n", 1)[1]
+                            .rsplit("          PY\n", 1)[0])
+    root = tmp_path / "cgroup"
+    root.mkdir()
+    (root / "memory.max").write_text("16000000000\n")
+    (root / "memory.events").write_text("X" * 5000)
+    selected = root / "job"
+    selected.mkdir()
+    (selected / "memory.events").write_text("oom 3\noom_kill 2\n")
+    (tmp_path / "memory.events").write_text("OUTSIDE_SENTINEL")
+    selected_membership = tmp_path / "membership"
+    if membership != "missing":
+        selected_membership.write_text("0::/job\n" if membership == "normal" else "0::/../\n")
+    script = script.replace('Path("/sys/fs/cgroup")', f"Path({str(root)!r})")
+    script = script.replace('Path("/proc/self/cgroup")', f"Path({str(selected_membership)!r})")
+    result = subprocess.run([sys.executable, "-I", "-S", "-c", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert "16000000000" in result.stdout
+    assert "X" * 1024 + " [truncated]" in result.stdout
+    assert "X" * 1025 not in result.stdout
+    assert "unavailable (FileNotFoundError)" in result.stdout
+    assert ("oom_kill 2" in result.stdout) == (membership == "normal")
+    assert "OUTSIDE_SENTINEL" not in result.stdout
 
 
 @pytest.mark.parametrize("gate", ["CLASSIFIER_RESULT", "SOURCE_GUARDS_RESULT"])

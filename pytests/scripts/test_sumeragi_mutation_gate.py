@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -2824,6 +2825,18 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
     command = run.group(1)
     if command.startswith('"'):
         command = json.loads(command)
+    if "/usr/bin/time -v " in command:
+        # GNU time is a hosted diagnostic, while this shell/seed control also
+        # runs on Darwin. Forward the exact child through a fixture timer.
+        timer = tmp_path / "gnu-time"
+        timer.write_text(
+            "#!" + sys.executable + "\n"
+            "import os, sys\n"
+            "assert sys.argv[1] == '-v'\n"
+            "os.execvp(sys.argv[2], sys.argv[2:])\n"
+        )
+        timer.chmod(0o700)
+        command = command.replace("/usr/bin/time -v ", shlex.quote(str(timer)) + " -v ")
     declared = re.search(r'(?m)^          SUMERAGI_SIM_SEEDS: "([0-9]+)"$', step.group(1))
     assert (declared.group(1) if declared else None) == explicit_count
     recorder = tmp_path / "cargo"

@@ -143,6 +143,9 @@ jobs:
     name: Sumeragi core, simulator and node lanes
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Match the existing nightly Core mutation build policy on finite hosted memory.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ./.github/actions/setup-native-ci
@@ -153,10 +156,50 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
+      - name: Record hosted build capacity before testing
+        run: &linux_build_capacity |
+          set -euo pipefail
+          nproc
+          free -b
+          df -B1 -- "$GITHUB_WORKSPACE" "$RUNNER_TEMP"
+          /usr/bin/time --version
+          python3 -I -S - <<'PY'
+          from pathlib import Path
+
+          root = Path("/sys/fs/cgroup")
+          membership = Path("/proc/self/cgroup")
+          scopes = [root]
+          try:
+              with membership.open("rb") as stream:
+                  groups = stream.read(4096).decode("utf-8", errors="replace")
+              print(f"cgroup membership: {groups}")
+              for line in groups.splitlines():
+                  parts = line.split(":", 2)
+                  if len(parts) == 3 and parts[:2] == ["0", ""]:
+                      relative = Path(parts[2])
+                      if relative.is_absolute() and ".." not in relative.parts:
+                          scopes.append(root.joinpath(*relative.parts[1:]))
+          except OSError as error:
+              print(f"cgroup membership unavailable: {type(error).__name__}")
+          for scope in dict.fromkeys(scopes):
+              for name in ("memory.max", "memory.current", "memory.peak", "memory.events",
+                           "memory.swap.max", "memory.swap.current"):
+                  path = scope / name
+                  try:
+                      with path.open("rb") as stream:
+                          value = stream.read(1025)
+                      text = value[:1024].decode("utf-8", errors="replace")
+                      print(f"{path}: {text}" + (" [truncated]" if len(value) > 1024 else ""))
+                  except OSError as error:
+                      print(f"{path}: unavailable ({type(error).__name__})")
+          PY
       - name: Core, simulator, specification traceability and quorums (default seeds)
-        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_sumeragi --features sim
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS /usr/bin/time -v cargo test --locked -p iroha_sumeragi --features sim
       - name: Node driver, lanes and four-validator node tests
-        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS /usr/bin/time -v cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+      - name: Record hosted build capacity after testing
+        if: always()
+        run: *linux_build_capacity
 
   # The Rust lanes test default features only; this target needs the opt-in
   # `fastpq-replay-measurement` feature. `iroha_measurement` itself is tested by
@@ -165,21 +208,29 @@ jobs:
     name: ZK phase-tree measurement on a FASTPQ workload
     runs-on: ubuntu-24.04
     timeout-minutes: 90
+    env:
+      # Bound concurrent compiler processes without changing test features or coverage.
+      CARGO_BUILD_JOBS: "2"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           cache-on-failure: "true"
+      - name: Record hosted build capacity before testing
+        run: *linux_build_capacity
       - name: FASTPQ prove and verify under the shared phase and resource recorder
-        run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement
+        run: /usr/bin/time -v cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test fastpq_phase_tree_measurement
       # The State commitment candidates of task G.2 are development-only: their
       # conformance adapters and their measurement target compile only under
       # opt-in features that no default lane sets.
       - name: State commitment candidates satisfy the keyed State contract
-        run: cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
+        run: /usr/bin/time -v cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
       - name: State commitment candidate measurement target (smoke run)
-        run: cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
+        run: /usr/bin/time -v cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
+      - name: Record hosted build capacity after testing
+        if: always()
+        run: *linux_build_capacity
 
   # The Rust lanes test default features only. The maximum-proof transport matrix of task
   # X.2 (twelve Exact12 envelopes at the 9,437,184-byte proof ceiling, every supported
