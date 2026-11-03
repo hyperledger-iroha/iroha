@@ -11440,7 +11440,11 @@ def test_incoming_execution_uses_one_scoped_merge_algorithm_and_explicit_native_
     fields = re.findall(r"pub\(super\) (\w+): ([^,]+),", coordinates)
     assert fields == [("instance", "Hash32"), ("height", "u64"), ("view", "u64"),
                       ("block_hash", "Hash32"), ("scope", "lanes::ProposalReadScope")]
-    execution = named_rust_function((ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text(), "run_execution_with_finisher")
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    wrapper = named_rust_function(executor, "run_execution_with_finisher")
+    assert wrapper.count("self.run_attempt_with_finisher(") == 1
+    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
+    execution = named_rust_function(executor, "run_attempt_with_finisher")
     assert execution.index("if attempt.source != *block") < execution.index("self.retain_incoming_lane_reads(")
     assert execution.index("block.source().config() != &configured") < execution.index("self.retain_incoming_lane_reads(")
     assert execution.index("proposal_matches_header(") < execution.index("self.retain_incoming_lane_reads(")
@@ -12159,7 +12163,11 @@ def test_semantic_parent_qc_custody_controls_have_unique_sources_and_exact_cause
     for name in ("verify_parent_service_at", "authenticate"):
         body = named_rust_function(source, name)
         assert "decode_canonical" not in body
-    worker = named_rust_function((ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text(), "run_execution_with_finisher")
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    wrapper = named_rust_function(executor, "run_execution_with_finisher")
+    assert wrapper.count("self.run_attempt_with_finisher(") == 1
+    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
+    worker = named_rust_function(executor, "run_attempt_with_finisher")
     assert worker.index("prepare_proposal_qc") < worker.index("validate_sumeragi_block")
 
 
@@ -12219,7 +12227,11 @@ def test_parent_service_signer_rules_bind_original_custody_and_exact_native_caus
         body = named_rust_function(relation, name)
         assert "verify_parent_service_relation" in body
         assert "decode_canonical" not in body
-    worker = named_rust_function((ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text(), "run_execution_with_finisher")
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    wrapper = named_rust_function(executor, "run_execution_with_finisher")
+    assert wrapper.count("self.run_attempt_with_finisher(") == 1
+    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
+    worker = named_rust_function(executor, "run_attempt_with_finisher")
     assert worker.index("prepare_proposal_qc") < worker.index("validate_sumeragi_block")
 
 
