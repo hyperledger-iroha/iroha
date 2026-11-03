@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
+import subprocess
+
+import pytest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -96,6 +100,7 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
     assert 'run_cargo "$@"' in proxy
     assert "cargo run --locked -p norito_codegen_exporter" not in makefile
     assert "sumeragi_release_cargo_proxy.sh run --locked --offline" in makefile
+    assert "-p norito_codegen_exporter --bin norito_codegen_exporter --features dev-tools" in makefile
     assert '"--locked",\n        "--offline",' in replay
     assert "CARGO_BIN" not in replay
     assert "require_policy_cargo_proxy" in replay
@@ -110,6 +115,58 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
         "tools/openapi/scripts/provision-openapi-cargo-lock.mjs",
     ):
         assert not has_forbidden_process_control(read(relative)), relative
+
+
+@pytest.mark.parametrize("status", [0, 37])
+def test_android_replay_selects_exporter_and_preserves_cargo_failure(
+    tmp_path: Path, status: int,
+) -> None:
+    """Execute the actual replay prefix without building or fabricating artifacts."""
+    gate = read("ci/check_android_codegen.sh")
+    start = gate.index("run_replay() {\n")
+    replay = gate[start:gate.index("\n}\n", start) + 3]
+    source, target, stage = (tmp_path / name for name in ("source root", "target", "stage"))
+    for directory in (source, target, stage):
+        directory.mkdir()
+    arguments = tmp_path / "arguments"
+    context = tmp_path / "context"
+    boundaries = tmp_path / "boundaries"
+    script = r'''
+set -euo pipefail
+require_external_cargo_target_dir() { test "$1" = "$SOURCE_ROOT"; }
+release_gate_boundary() { printf '%s\n' "$1" >> "$BOUNDARY_LOG"; }
+run_cargo() {
+  printf '%s\0' "$@" > "$ARGUMENT_LOG"
+  printf '%s\n' "$PWD" "$CARGO_TARGET_DIR" "$TMPDIR" > "$CONTEXT_LOG"
+  printf 'exporter stdout\n'
+  printf 'exporter stderr\n' >&2
+  return "$GENERATOR_STATUS"
+}
+# Stop at the first output-validation boundary: this is command routing, not
+# a substitute publisher or a claim that generated artifacts were validated.
+validate_regular_tree() { exit 0; }
+'''
+    result = subprocess.run(
+        ["bash", "-c", script + replay + '\nrun_replay "$SOURCE_ROOT" "$TARGET_ROOT" "$STAGE_ROOT"\n'],
+        env={**os.environ, "SOURCE_ROOT": str(source), "TARGET_ROOT": str(target),
+             "STAGE_ROOT": str(stage), "ARGUMENT_LOG": str(arguments),
+             "CONTEXT_LOG": str(context), "BOUNDARY_LOG": str(boundaries),
+             "GENERATOR_STATUS": str(status)},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == status, result.stderr
+    assert result.stdout == "exporter stdout\n"
+    assert result.stderr == "exporter stderr\n"
+    assert arguments.read_bytes().split(b"\0") == [
+        b"run", b"--locked", b"--offline", b"-p", b"norito_codegen_exporter",
+        b"--bin", b"norito_codegen_exporter", b"--features", b"dev-tools",
+        b"--", b"--out", os.fsencode(stage / "codegen"), b"",
+    ]
+    assert context.read_text().splitlines() == [str(source), str(target), str(stage / "tmp")]
+    expected = ["android-codegen:before-export"]
+    if status == 0:
+        expected.append("android-codegen:after-export")
+    assert boundaries.read_text().splitlines() == expected
 
 
 def test_android_codegen_gate_owns_authenticated_release_channels() -> None:

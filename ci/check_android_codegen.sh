@@ -336,6 +336,7 @@ run_replay() {
       --locked \
       --offline \
       -p norito_codegen_exporter \
+      --bin norito_codegen_exporter \
       --features dev-tools \
       -- \
       --out "${codegen_root}"
