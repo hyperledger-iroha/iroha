@@ -762,6 +762,20 @@ class ReachTest(TreeCase):
         self.assertNotIn("crates/low/src/blind.rs", callers)
         self.assertFalse(exhaustive)
 
+    def test_chained_method_receiver_does_not_claim_exhaustive_callers(self) -> None:
+        """Return types of chained receivers are beyond the structural scanner."""
+        user = "crates/low/src/user.rs"
+        self.write("crates/low/src/lib.rs", "//! Low layer.\npub mod ring;\npub mod user;\n")
+        self.write(user, (
+            "fn typed(chain: &crate::ring::RnsChain) -> u64 { chain.product() }\n"
+            "fn chained(value: &Factory) -> u64 { value.chain().product() }\n"
+        ))
+        tree = CHECKER.Tree(self.root)
+        self.assertEqual(
+            CHECKER.find_callers(tree, RING, "RnsChain::product", [RING, user], []),
+            ({user: ["typed"]}, False),
+        )
+
     def test_path_qualified_call_in_a_file_with_a_function_of_the_same_name(self) -> None:
         self.append(BACKEND, (
             "fn ntt_forward(values: &mut [u64]) {\n    low::ring::ntt_forward(values);\n}\n"
@@ -1909,9 +1923,16 @@ class RepositoryTest(unittest.TestCase):
             ("rns.rs", "decompose"): ("crates/iroha_crypto/src/fhe_bfv.rs", "BfvRnsModulusChain::decompose_polynomial"),
             ("rns.rs", "modulus_product_bit_len"): ("crates/iroha_zkp_halo2/src/vega/zk_ams/mkhe.rs", "modulus_product_bit_len"),
         }
+        # BGV consumers obtain these receivers through `.fixed()` calls.
+        # The structural scanner records the known typed callers but cannot
+        # infer those return types; retain that explicit incompleteness.
+        untyped_receivers = {
+            ("constant_time.rs", "FixedModulus::multiply"),
+            ("constant_time.rs", "FixedModulus::canonicalize_i64"),
+        }
         for key, (path, function) in expected.items():
             record = callers[key]
-            self.assertTrue(record["callers_exhaustive"], key)
+            self.assertEqual(record["callers_exhaustive"], key not in untyped_receivers, key)
             self.assertIn(function, record["callers"].get(path, []), key)
         references = {entry["id"]: entry for entry in self.document["test_only_references"]}
         self.assertNotIn("bootle_lantern.test_gated_adapters", references)
