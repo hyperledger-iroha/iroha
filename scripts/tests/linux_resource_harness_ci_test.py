@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -293,6 +294,46 @@ def test_native_runner_is_importable_with_isolated_python():
                              "--help"], text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     assert "--all-tests" in result.stdout
+
+
+def test_registry_children_preserve_retained_source_directories(tmp_path):
+    """Run the actual isolated registry cases under the production source keeper."""
+    repository = tmp_path.resolve() / "source"
+    scripts = repository / "scripts"
+    tests = scripts / "tests"
+    tests.mkdir(parents=True)
+    # Copy the real Python owners and fixture data, without any warm bytecode
+    # cache that could hide writes by a fresh isolated interpreter. No native
+    # artifact is loaded or publication authority manufactured by these cases.
+    for pattern in ("*.py", "*.json"):
+        for source in (ROOT / "scripts").glob(pattern):
+            shutil.copyfile(source, scripts / source.name)
+    shutil.copytree(ROOT / "scripts/nexus", scripts / "nexus",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    for name in ("zk_resource_harness_test.py", "zk_resource_harness_native_fixture.py"):
+        shutil.copyfile(ROOT / "scripts/tests" / name, tests / name)
+    shutil.copytree(ROOT / "crates/iroha_measurement/fixtures",
+                    repository / "crates/iroha_measurement/fixtures")
+    spec = importlib.util.spec_from_file_location("ci_test_source_keeper",
+                                                ROOT / "scripts/workspace_source_keeper.py")
+    custody = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(custody)
+    child = (
+        "import sys, unittest\n"
+        f"sys.path.insert(0, {str(tests)!r})\n"
+        "import zk_resource_harness_test as cases\n"
+        "suite = unittest.defaultTestLoader.loadTestsFromTestCase(cases.GitEnvironmentRegistryTests)\n"
+        "assert suite.countTestCases() == 3\n"
+        "result = unittest.TextTestRunner(verbosity=2).run(suite)\n"
+        "raise SystemExit(0 if result.wasSuccessful() and result.testsRun == 3 and not result.skipped else 1)\n"
+    )
+    with custody.SourceKeeper(repository) as owner:
+        owner.capture(["scripts", "scripts/tests", "scripts/nexus"])
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", child],
+                                cwd=repository, text=True, capture_output=True, timeout=120)
+        assert result.returncode == 0, result.stdout + result.stderr
+        owner.revalidate()
+        assert not list(repository.rglob("__pycache__"))
 
 
 def test_ci_requires_normal_publication_and_all_tests_without_changing_memfd_policy():

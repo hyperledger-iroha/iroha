@@ -575,7 +575,9 @@ class GitEnvironmentRegistryTests(unittest.TestCase):
             "result = unittest.TextTestRunner(verbosity=2).run(unittest.TestSuite([case]))\n"
             "raise SystemExit(0 if result.wasSuccessful() else 1)\n"
         )
-        result = subprocess.run([sys.executable, "-I", "-c", script],
+        # -B is not inherited from the parent, and -I ignores Python environment
+        # flags. Keep these child imports read-only while CI retains the source.
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", script],
                                 capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return True
