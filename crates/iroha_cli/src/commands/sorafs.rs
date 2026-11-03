@@ -9781,6 +9781,8 @@ fn write_text_artifact(path: &Path, value: &str, label: &str) -> Result<()> {
     fs::write(path, value).wrap_err_with(|| format!("failed to write {label} `{}`", path.display()))
 }
 fn set_executable_if_supported(path: &Path) -> Result<()> {
+    #[cfg(not(unix))]
+    let _ = path;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;

@@ -39,9 +39,11 @@ use iroha_torii_shared::{
 use iroha_version::codec::DecodeVersioned as _;
 use norito::json::{self, JsonDeserialize, JsonSerialize};
 use sha2::{Digest, Sha256};
+#[cfg(any(unix, test))]
+use std::fs;
 use std::{
     collections::BTreeMap,
-    fs::{self, File},
+    fs::File,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -62,6 +64,7 @@ pub use authority::{
     dataspace_authority_original_inventory, verify_dataspace_authority_originals,
 };
 
+#[cfg(unix)]
 pub use finality::authenticated_height::{
     AuthenticatedHeightObserverV1, HeightObservationV1, VerifiedCommittedHeightV1,
 };

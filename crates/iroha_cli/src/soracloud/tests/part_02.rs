@@ -303,6 +303,24 @@ fn generated_kotodama_contract_fixtures_compile_with_canonical_v1_surface() {
     }
 }
 #[test]
+fn soracloud_temp_dir_creates_and_cleans_its_owned_directory() {
+    let tempdir = SoracloudTempDir::new("iroha-soracloud-temp").unwrap();
+    let path = tempdir.path().to_path_buf();
+    assert!(path.is_dir());
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+    }
+    fs::write(path.join("owned-child"), b"owned temporary bytes").unwrap();
+    drop(tempdir);
+    assert!(!path.exists());
+}
+
+#[test]
 fn soracloud_temp_dir_reports_suffix_rng_failure() {
     let mut rng = FailingSoracloudSignatureNonceRng;
     let error = match SoracloudTempDir::new_with_rng("iroha-soracloud-temp", &mut rng) {
