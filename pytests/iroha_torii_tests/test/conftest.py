@@ -1,15 +1,4 @@
-try:
-    import allure  # type: ignore
-except ImportError:  # pragma: no cover - fallback for environments without allure
-    import contextlib
-
-    class _AllureStub:
-        @staticmethod
-        @contextlib.contextmanager
-        def step(_name):
-            yield
-
-    allure = _AllureStub()
+import allure
 import pytest
 
 from python.iroha_torii_client.mock import ToriiMockServer

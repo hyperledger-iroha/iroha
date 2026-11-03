@@ -687,10 +687,10 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
             "name: workspace-release-compile-units",
             f"path: {COMPILE_UNIT_REPORT}",
             "if-no-files-found: error",
-            "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+            "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools",
         ),
         "coverage": (
-            "mold --run cargo llvm-cov nextest --workspace --locked --features iroha_torii/test-fixtures --branch --no-report",
+            "mold --run cargo llvm-cov nextest --workspace --locked --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools --branch --no-report",
             "mold --run cargo llvm-cov --doc --branch --no-report",
             "cargo llvm-cov report --doctests --ignore-filename-regex "
             "'iroha_cli|iroha_torii' --lcov --output-path lcov.info",
@@ -1550,10 +1550,10 @@ ReleaseMutation = Callable[[str], str]
         (
             lambda workflow: _replace_once(
                 workflow,
-                "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
-                "cargo test --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+                "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools",
+                "cargo test --workspace --no-fail-fast --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools",
             ),
-            "test is missing required command: cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+            "test is missing required command: cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools",
         ),
         (
             lambda workflow: _replace_once_in_job(
@@ -1873,14 +1873,17 @@ def test_supported_feature_reader_command_cannot_be_removed(job: str) -> None:
 
 
 @pytest.mark.parametrize("job", ("test", "coverage"))
-def test_full_workspace_routes_cannot_omit_torii_integration_fixture_owner(job: str) -> None:
-    """Raw full-test and coverage commands must admit all required Torii targets."""
+@pytest.mark.parametrize("feature", (
+    "iroha_torii/test-fixtures",
+    "iroha_release_bundle/dev-tools",
+    "iroha_native_source_delivery/dev-tools",
+))
+def test_full_workspace_routes_cannot_omit_required_target_owners(job: str, feature: str) -> None:
+    """Full-test and coverage routes must retain every opt-in executable test owner."""
     workflow = RELEASE_WORKFLOW.read_text()
-    changed = _replace_once_in_job(
-        workflow, job, "--features iroha_torii/test-fixtures", "",
-    )
+    changed = _replace_once_in_job(workflow, job, feature, "")
     assert any(
         error.startswith(f"{job} is missing required command:")
-        and "iroha_torii/test-fixtures" in error
+        and feature in error
         for error in _validate_release_workflow(changed)
     )

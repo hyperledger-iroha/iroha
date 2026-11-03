@@ -2,9 +2,12 @@ name: Pull Request CI (Python Static Analysis)
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, optimizations]
     paths:
       - "**.py"
+      - "pytests/**/pyproject.toml"
+      - "pytests/**/poetry.lock"
+      - ".github/workflows/pr_python_static.yml"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
