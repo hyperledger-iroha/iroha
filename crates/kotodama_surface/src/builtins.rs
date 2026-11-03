@@ -2,11 +2,36 @@
 //!
 //! The parser still sees raw identifiers, but semantic analysis, lowering, and effect checks should
 //! agree on the canonical builtin set through this enum instead of open-coded string matching.
+// Declare each variant once: the same tokens define the enum and its ordered inventory.
+// A tuple variant supplies the value used by `iter`; `Builtin::all` expands pointer payloads.
+macro_rules! iterable_enum {
+    (
+        $(#[$enum_meta:meta])*
+        pub enum $name:ident {
+            $($(#[$variant_meta:meta])* $variant:ident $(($payload:ty = $default:expr))?),* $(,)?
+        }
+    ) => {
+        $(#[$enum_meta])*
+        pub enum $name {
+            $($(#[$variant_meta])* $variant $(($payload))?),*
+        }
+
+        impl $name {
+            /// Iterate in declaration order, using the declared default for a payload variant.
+            pub fn iter() -> std::iter::Copied<std::slice::Iter<'static, Self>> {
+                const VALUES: &[$name] = &[$($name::$variant $(($default))?),*];
+                VALUES.iter().copied()
+            }
+        }
+    };
+}
+
+iterable_enum! {
 /// Typed pointer ABI constructors recognized by compiler lowering.
 ///
 /// Only constructors whose enclosing [`Builtin`] has a source-visible surface
 /// are part of Kotodama V1; the remaining variants are host/compiler plumbing.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, strum::EnumIter)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum PointerConstructor {
     /// Parse an account identity into an `AccountId` pointer.
     #[default]
@@ -41,6 +66,7 @@ pub enum PointerConstructor {
     SoracloudRequest,
     /// Internal constructor for a typed Soracloud host response.
     SoracloudResponse,
+}
 }
 impl PointerConstructor {
     /// Resolve a pointer constructor by its compiler-internal spelling.
@@ -320,12 +346,13 @@ pub struct BuiltinSpec {
     /// Source argument policy.
     pub call_policy: BuiltinCallPolicy,
 }
+iterable_enum! {
 /// Canonical Kotodama helper/builtin calls that are part of the current source
 /// surface and are worth classifying centrally.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, strum::EnumIter)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Builtin {
     /// Construct the selected typed pointer-ABI value from a string.
-    PointerConstructor(PointerConstructor),
+    PointerConstructor(PointerConstructor = PointerConstructor::AccountId),
     /// Check whether a durable state map contains a key.
     Contains,
     /// Return a durable state map value, first writing the supplied default when the key is absent.
@@ -831,14 +858,14 @@ pub enum Builtin {
     /// Compile-time `SignatureScheme` value selecting ML-DSA.
     SignatureSchemeMlDsa,
 }
+}
 impl Builtin {
     /// Iterate over every canonical builtin variant.
     ///
-    /// Both enums derive their iterators from their declarations, so adding a variant automatically
-    /// expands this fail-closed registry. The payload placeholder emitted for `PointerConstructor`
-    /// by `EnumIter` is replaced with every pointer-constructor variant.
+    /// Both enums and their iterators come from one declaration, so adding a variant automatically
+    /// expands this fail-closed registry. The declared `PointerConstructor` placeholder is replaced
+    /// with every pointer-constructor variant.
     pub fn all() -> impl Iterator<Item = Self> {
-        use strum::IntoEnumIterator as _;
         PointerConstructor::iter()
             .map(Self::PointerConstructor)
             .chain(Self::iter().filter(|builtin| !matches!(builtin, Self::PointerConstructor(_))))
@@ -3160,6 +3187,74 @@ mod tests {
         BuiltinLowering, BuiltinMode, BuiltinSurface, PointerConstructor,
     };
     use std::collections::HashSet;
+
+    #[test]
+    fn pointer_iteration_preserves_order_and_discriminants() {
+        let expected = [
+            "account_id",
+            "asset_definition",
+            "asset_id",
+            "nft_id",
+            "name",
+            "json",
+            "domain",
+            "domain_id",
+            "blob",
+            "norito_bytes",
+            "dataspace_id",
+            "axt_descriptor",
+            "axt_anchored_spend_v1",
+            "proof_blob",
+            "soracloud_request",
+            "soracloud_response",
+        ];
+        let constructors: Vec<_> = PointerConstructor::iter().collect();
+        assert_eq!(constructors.len(), expected.len());
+        for (index, (constructor, name)) in constructors.into_iter().zip(expected).enumerate() {
+            assert_eq!(constructor as usize, index);
+            assert_eq!(constructor.name(), name);
+            assert_eq!(PointerConstructor::from_name(name), Some(constructor));
+        }
+    }
+
+    #[test]
+    fn builtin_iteration_keeps_payload_placeholder_and_native_iterator_contract() {
+        let mut variants = Builtin::iter();
+        assert_eq!(variants.len(), 252);
+        assert_eq!(
+            variants.next(),
+            Some(Builtin::PointerConstructor(PointerConstructor::default()))
+        );
+        assert_eq!(variants.next_back(), Some(Builtin::SignatureSchemeMlDsa));
+        assert_eq!(variants.len(), 250);
+        assert_eq!(variants.next(), Some(Builtin::Contains));
+        assert_eq!(variants.next(), Some(Builtin::GetOrInsert));
+        assert_eq!(variants.clone().count(), variants.len());
+        let remaining = variants.len();
+        assert_eq!(variants.nth(remaining), None);
+        assert_eq!(variants.next_back(), None);
+        assert_eq!(variants.next(), None);
+        assert_eq!(variants.len(), 0);
+    }
+
+    #[test]
+    fn all_builtins_expand_every_pointer_before_the_remaining_variants() {
+        let pointers: Vec<_> = PointerConstructor::iter()
+            .map(Builtin::PointerConstructor)
+            .collect();
+        let expanded: Vec<_> = Builtin::all().collect();
+        assert_eq!(expanded.len(), 267);
+        assert_eq!(&expanded[..pointers.len()], pointers);
+        assert_eq!(
+            &expanded[pointers.len()..],
+            Builtin::iter().skip(1).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            expanded.iter().collect::<HashSet<_>>().len(),
+            expanded.len()
+        );
+    }
+
     #[test]
     fn x509_presentation_is_a_typed_queued_instruction_with_an_opaque_result() {
         let builtin = Builtin::from_source_name("ledger::credentials::present_x509").unwrap();

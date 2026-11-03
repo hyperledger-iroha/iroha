@@ -270,7 +270,7 @@ fn zz_tmp_debug_sns_decode_demand() {
     let Executable::Instructions(instructions) = tx.instructions() else {
         panic!("native instructions");
     };
-    let instruction: InstructionBox = instructions[0].clone();
+    let instruction: InstructionBox = instructions.as_ref()[0].clone();
     let isi_bytes = norito::encode_canonical(&instruction).unwrap();
     measure("instruction", isi_bytes.len(), &|| {
         drop(norito::decode_canonical::<InstructionBox>(&isi_bytes).unwrap());

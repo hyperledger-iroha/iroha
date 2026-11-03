@@ -306,7 +306,9 @@ fn observer_binding_refusal_retries_original_pool_signed_payload_and_deadline_on
 fn observer_binding_capacity_expiry_is_local_unavailability_without_resigning() {
     let f = Fixture::new();
     let observer = f.observer_transactions();
-    let prepared = f.prepare_receipt_check(None, Duration::from_secs(1));
+    // The lifetime must cover payload preparation and the one signature on a loaded
+    // machine; the refused binding's wait below still crosses exactly this deadline.
+    let prepared = f.prepare_receipt_check(None, Duration::from_secs(10));
     let deadline = prepared.deadline();
     let payload = f.observer_payload(prepared.instruction().clone().into());
     let pool = f.native.state().ivm_execution_budget();

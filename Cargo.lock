@@ -4382,7 +4382,6 @@ dependencies = [
  "norito",
  "sorafs_manifest",
  "soranet_pq",
- "strum",
  "thiserror 2.0.21",
  "toml",
  "tracing",
@@ -4403,7 +4402,6 @@ dependencies = [
  "iroha_fs",
  "log",
  "norito",
- "strum",
  "thiserror 2.0.21",
  "toml",
  "zeroize",
@@ -4811,7 +4809,6 @@ dependencies = [
  "manyhow",
  "proc-macro2",
  "quote",
- "strum",
  "syn 3.0.9",
 ]
 
@@ -6356,7 +6353,6 @@ name = "kotodama_surface"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "ivm_abi",
- "strum",
 ]
 
 [[package]]

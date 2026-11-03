@@ -990,6 +990,24 @@ def test_sccp_preflight_mutations_require_exact_owned_causes(identifier, control
     assert not gate.has_switch(identifier)
 
 
+def test_native_execution_rollback_credit_mutation_requires_worker_owned_repeat_dispatch_cause():
+    rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC983"]
+    name = ("sumeragi::executor::uid_binding_retry_tests::"
+            "native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_release")
+    cause = "whole execution rollback repeatedly wakes the same native job without external credit return"
+    source = "crates/iroha_core/src/sumeragi/executor_uid_binding_retry_tests.rs"
+    join_source = "crates/iroha_core/src/sumeragi/executor_publication_tests.rs"
+    assert rule.tests == (name,)
+    assert rule.causes == (gate.ExpectedFailure(
+        cause, source, worker_thread="sumeragi-publication-test",
+        join_source=join_source, join_message="publication worker fixture: Any { .. }"),)
+    body = named_rust_function((ROOT / source).read_text(), name.rsplit("::", 1)[-1])
+    assert f'"{cause}"' in body
+    assert "publication worker fixture" in (ROOT / join_source).read_text()
+    assert gate.has_switch("HC983", core=True)
+    assert not gate.has_switch("HC983")
+
+
 def test_core_decode_refusal_classifier_gate_retains_global_and_inner_format_rejections():
     rule = gate.index_mutations(gate.CORE_MUTATIONS)["HC33"]
     assert rule.tests == (

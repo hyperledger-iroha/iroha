@@ -1580,26 +1580,27 @@ impl Root {
         Some(actual::DataDir::new(root))
     }
 }
-/// Telemetry capability bundles selectable by configuration.
-/// User-level enumeration translating `TelemetryProfile` settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum TelemetryProfile {
-    /// Disable telemetry entirely.
-    Disabled,
-    /// Enable lightweight operator metrics and status endpoints.
-    #[default]
-    Operator,
-    /// Enable operator metrics plus costly runtime probes and timings.
-    Extended,
-    /// Enable operator metrics plus developer-only JSON/file outputs.
-    Developer,
-    /// Enable all telemetry features supported by the build.
-    Full,
+iroha_config_base::config_enum! {
+    /// Telemetry capability bundles selectable by configuration.
+    /// User-level enumeration translating `TelemetryProfile` settings.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum TelemetryProfile {
+        /// Disable telemetry entirely.
+        Disabled => "disabled",
+        /// Enable lightweight operator metrics and status endpoints.
+        #[default]
+        Operator => "operator",
+        /// Enable operator metrics plus costly runtime probes and timings.
+        Extended => "extended",
+        /// Enable operator metrics plus developer-only JSON/file outputs.
+        Developer => "developer",
+        /// Enable all telemetry features supported by the build.
+        Full => "full",
+    }
 }
 impl json::JsonSerialize for TelemetryProfile {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl json::JsonDeserialize for TelemetryProfile {
@@ -3347,14 +3348,15 @@ impl Concurrency {
         }
     }
 }
-/// Network Time Service enforcement modes (user view).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum NtsEnforcementMode {
-    /// Log unhealthy NTS status but accept time-sensitive transactions.
-    Warn,
-    /// Reject time-sensitive transactions when NTS is unhealthy.
-    Reject,
+iroha_config_base::config_enum! {
+    /// Network Time Service enforcement modes (user view).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NtsEnforcementMode {
+        /// Log unhealthy NTS status but accept time-sensitive transactions.
+        Warn => "warn",
+        /// Reject time-sensitive transactions when NTS is unhealthy.
+        Reject => "reject",
+    }
 }
 impl NtsEnforcementMode {
     fn into_actual(self) -> actual::NtsEnforcementMode {
@@ -3366,7 +3368,7 @@ impl NtsEnforcementMode {
 }
 impl json::JsonSerialize for NtsEnforcementMode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl json::JsonDeserialize for NtsEnforcementMode {
@@ -4486,15 +4488,16 @@ impl Pipeline {
         }
     }
 }
-/// Cursor handling mode for server-facing iterable queries (user view).
-/// User-level enumeration translating `QueryCursorMode` settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum QueryCursorMode {
-    /// Keep cursor state only in memory; abandon it when the client disconnects.
-    Ephemeral,
-    /// Persist cursor state so it survives node restarts and client reconnects.
-    Stored,
+iroha_config_base::config_enum! {
+    /// Cursor handling mode for server-facing iterable queries (user view).
+    /// User-level enumeration translating `QueryCursorMode` settings.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum QueryCursorMode {
+        /// Keep cursor state only in memory; abandon it when the client disconnects.
+        Ephemeral => "ephemeral",
+        /// Persist cursor state so it survives node restarts and client reconnects.
+        Stored => "stored",
+    }
 }
 impl QueryCursorMode {
     fn into_actual(self) -> actual::QueryCursorMode {
@@ -4506,7 +4509,7 @@ impl QueryCursorMode {
 }
 impl json::JsonSerialize for QueryCursorMode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl json::JsonDeserialize for QueryCursorMode {
@@ -4885,14 +4888,15 @@ mod zk_node_schema_tests {
         }
     }
 }
-/// Execution mode override for the FASTPQ prover.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum FastpqExecutionMode {
-    /// Force CPU execution regardless of detected accelerators.
-    Cpu,
-    /// Force GPU execution; startup fails if kernels or preflight are unavailable.
-    Gpu,
+iroha_config_base::config_enum! {
+    /// Execution mode override for the FASTPQ prover.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FastpqExecutionMode {
+        /// Force CPU execution regardless of detected accelerators.
+        Cpu => "cpu",
+        /// Force GPU execution; startup fails if kernels or preflight are unavailable.
+        Gpu => "gpu",
+    }
 }
 impl FastpqExecutionMode {
     fn into_actual(self) -> actual::FastpqExecutionMode {
@@ -4902,14 +4906,15 @@ impl FastpqExecutionMode {
         }
     }
 }
-/// Poseidon pipeline override for the FASTPQ prover (user view).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum FastpqPoseidonMode {
-    /// Force CPU hashing even when FFT/LDE run on the GPU.
-    Cpu,
-    /// Force GPU hashing; startup fails if kernels or preflight are unavailable.
-    Gpu,
+iroha_config_base::config_enum! {
+    /// Poseidon pipeline override for the FASTPQ prover (user view).
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum FastpqPoseidonMode {
+        /// Force CPU hashing even when FFT/LDE run on the GPU.
+        Cpu => "cpu",
+        /// Force GPU hashing; startup fails if kernels or preflight are unavailable.
+        Gpu => "gpu",
+    }
 }
 impl FastpqPoseidonMode {
     fn into_actual(self) -> actual::FastpqPoseidonMode {
@@ -4921,7 +4926,7 @@ impl FastpqPoseidonMode {
 }
 impl json::JsonSerialize for FastpqExecutionMode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl json::JsonDeserialize for FastpqExecutionMode {
@@ -4937,7 +4942,7 @@ impl json::JsonDeserialize for FastpqExecutionMode {
 }
 impl json::JsonSerialize for FastpqPoseidonMode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl json::JsonDeserialize for FastpqPoseidonMode {
@@ -5885,19 +5890,20 @@ pub struct Sumeragi {
     #[config(default)]
     pub retired_keys: Vec<PublicKey>,
 }
-/// Node role in consensus participation (user view).
-/// User-level enumeration translating `NodeRole` settings.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum NodeRole {
-    /// Full validator participating in block production and voting.
-    Validator,
-    /// Observer node receiving blocks without voting rights.
-    Observer,
+iroha_config_base::config_enum! {
+    /// Node role in consensus participation (user view).
+    /// User-level enumeration translating `NodeRole` settings.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum NodeRole {
+        /// Full validator participating in block production and voting.
+        Validator => "validator",
+        /// Observer node receiving blocks without voting rights.
+        Observer => "observer",
+    }
 }
 impl json::JsonSerialize for NodeRole {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl json::JsonDeserialize for NodeRole {

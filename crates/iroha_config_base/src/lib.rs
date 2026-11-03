@@ -1,6 +1,7 @@
 #![doc = include_str!("lib_docs/overview.md")]
 #![deny(missing_docs)]
 pub mod attach;
+pub mod enum_text;
 pub mod env;
 pub mod file_source;
 pub mod read;

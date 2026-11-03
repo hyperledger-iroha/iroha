@@ -13,4 +13,3 @@ workspace = true
 
 [dependencies]
 ivm_abi = { path = "../ivm_abi" }
-strum = { workspace = true, features = ["derive"] }

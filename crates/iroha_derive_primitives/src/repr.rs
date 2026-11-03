@@ -1,41 +1,88 @@
 //! Parsing utilities for `#[repr(...)]` attributes shared across derive crates.
 use darling::{FromAttributes, error::Accumulator};
 use proc_macro2::{Delimiter, Span};
-use strum::{Display, EnumString};
 use syn::{
     Attribute, Meta, Token,
     parse::{Parse, ParseStream},
     punctuated::Punctuated,
     spanned::Spanned as _,
 };
-/// Primitive types accepted by `#[repr(..)]`.
-#[derive(Debug, Copy, Clone, Eq, PartialEq, Display, EnumString)]
-#[strum(serialize_all = "lowercase")]
-pub enum ReprPrimitive {
+// One spelling table defines the enum, formatter and both string conversion traits.
+macro_rules! repr_primitives {
+    ($($(#[$meta:meta])* $variant:ident => $spelling:literal),* $(,)?) => {
+        /// Primitive types accepted by `#[repr(..)]`.
+        #[derive(Debug, Copy, Clone, Eq, PartialEq)]
+        pub enum ReprPrimitive {
+            $($(#[$meta])* $variant),*
+        }
+
+        impl std::fmt::Display for ReprPrimitive {
+            fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                let spelling = match self {
+                    $(Self::$variant => $spelling),*
+                };
+                std::fmt::Display::fmt(spelling, formatter)
+            }
+        }
+
+        impl std::str::FromStr for ReprPrimitive {
+            type Err = ParseReprPrimitiveError;
+
+            fn from_str(value: &str) -> Result<Self, Self::Err> {
+                match value {
+                    $($spelling => Ok(Self::$variant)),*,
+                    _ => Err(ParseReprPrimitiveError),
+                }
+            }
+        }
+
+        impl TryFrom<&str> for ReprPrimitive {
+            type Error = ParseReprPrimitiveError;
+
+            fn try_from(value: &str) -> Result<Self, Self::Error> {
+                value.parse()
+            }
+        }
+    };
+}
+
+/// The input is not an exact lowercase primitive spelling accepted by `#[repr(..)]`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct ParseReprPrimitiveError;
+
+impl std::fmt::Display for ParseReprPrimitiveError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Matching variant not found")
+    }
+}
+
+impl std::error::Error for ParseReprPrimitiveError {}
+
+repr_primitives! {
     /// `u8`
-    U8,
+    U8 => "u8",
     /// `u16`
-    U16,
+    U16 => "u16",
     /// `u32`
-    U32,
+    U32 => "u32",
     /// `u64`
-    U64,
+    U64 => "u64",
     /// `u128`
-    U128,
+    U128 => "u128",
     /// `usize`
-    Usize,
+    Usize => "usize",
     /// `i8`
-    I8,
+    I8 => "i8",
     /// `i16`
-    I16,
+    I16 => "i16",
     /// `i32`
-    I32,
+    I32 => "i32",
     /// `i64`
-    I64,
+    I64 => "i64",
     /// `i128`
-    I128,
+    I128 => "i128",
     /// `isize`
-    Isize,
+    Isize => "isize",
 }
 /// Kinds accepted by `#[repr(..)]`.
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
@@ -184,11 +231,62 @@ impl FromAttributes for Repr {
 }
 #[cfg(test)]
 mod tests {
-    use super::{Repr, ReprAlignment, ReprKind, ReprPrimitive};
+    use super::{ParseReprPrimitiveError, Repr, ReprAlignment, ReprKind, ReprPrimitive};
     use darling::FromAttributes as _;
     use proc_macro2::TokenStream;
     use quote::quote;
     use syn::parse::Parser;
+
+    #[test]
+    fn primitive_spellings_round_trip_and_preserve_discriminants() {
+        for (index, (primitive, spelling)) in [
+            (ReprPrimitive::U8, "u8"),
+            (ReprPrimitive::U16, "u16"),
+            (ReprPrimitive::U32, "u32"),
+            (ReprPrimitive::U64, "u64"),
+            (ReprPrimitive::U128, "u128"),
+            (ReprPrimitive::Usize, "usize"),
+            (ReprPrimitive::I8, "i8"),
+            (ReprPrimitive::I16, "i16"),
+            (ReprPrimitive::I32, "i32"),
+            (ReprPrimitive::I64, "i64"),
+            (ReprPrimitive::I128, "i128"),
+            (ReprPrimitive::Isize, "isize"),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(primitive as usize, index);
+            assert_eq!(primitive.to_string(), spelling);
+            assert_eq!(spelling.parse::<ReprPrimitive>(), Ok(primitive));
+            assert_eq!(ReprPrimitive::try_from(spelling), Ok(primitive));
+            assert_eq!(format!("{primitive:>6.2}"), format!("{spelling:>6.2}"));
+            assert_eq!(format!("{primitive:*^8}"), format!("{spelling:*^8}"));
+        }
+    }
+
+    #[test]
+    fn primitive_parser_rejects_noncanonical_and_unknown_spellings() {
+        for value in [
+            "", "U8", "Usize", "u8 ", " u8", "u08", "u256", "i256", "f32", "C", "Ｕ８", "u8\0",
+        ] {
+            assert_eq!(
+                value.parse::<ReprPrimitive>(),
+                Err(ParseReprPrimitiveError),
+                "{value:?}"
+            );
+            assert_eq!(
+                ReprPrimitive::try_from(value),
+                Err(ParseReprPrimitiveError),
+                "{value:?}"
+            );
+        }
+        assert_eq!(
+            ParseReprPrimitiveError.to_string(),
+            "Matching variant not found"
+        );
+        assert!(std::error::Error::source(&ParseReprPrimitiveError).is_none());
+    }
     #[derive(Debug)]
     struct ExpectedRepr {
         kind: Option<ReprKind>,

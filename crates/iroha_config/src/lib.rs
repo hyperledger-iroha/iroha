@@ -84,3 +84,6 @@ mod tests {
 
 #[cfg(test)]
 mod scalar_payload_tests;
+
+#[cfg(test)]
+mod enum_text_tests;

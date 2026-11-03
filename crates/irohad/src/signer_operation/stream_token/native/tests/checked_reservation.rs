@@ -206,12 +206,14 @@ fn reservation_returns_only_after_its_distinct_finalized_before_provider_check()
 #[test]
 fn checked_context_rejects_a_genuine_capability_after_its_original_deadline() {
     let mut fixture = Fixture::new_at(now_ms() - 5_000);
-    let source = source_with_timeout(&fixture, queue(), Duration::from_secs(5));
+    // The capability must outlive its own genuine signing and finalization on a loaded
+    // machine; its expiry below is bounded by this original deadline, not by setup time.
+    let source = source_with_timeout(&fixture, queue(), Duration::from_secs(20));
     let reviewed = reviewed(&source);
-    let started = std::time::Instant::now();
     let prepared = source
         .prepare_check(&reviewed, Phase::Current(reviewed.intent.previous_audit))
         .unwrap();
+    let deadline = prepared.deadline();
     let signed = source
         .transactions
         .sign(prepared.instruction(), true, prepared.deadline())
@@ -228,8 +230,16 @@ fn checked_context_rejects_a_genuine_capability_after_its_original_deadline() {
     source.checked_context(&checked).unwrap();
     // Wait out this genuine capability's original interval. No refreshed challenge,
     // clock injection, private capability constructor or deadline mutation is used.
-    while checked.ensure_live().is_ok() {
-        assert!(started.elapsed() < Duration::from_secs(6));
+    // Each sample precedes its liveness probe, so a delayed thread cannot fail the bound.
+    loop {
+        let sampled = std::time::Instant::now();
+        if checked.ensure_live().is_err() {
+            break;
+        }
+        assert!(
+            sampled < deadline + Duration::from_secs(1),
+            "a genuine capability outlived its original deadline"
+        );
         std::thread::sleep(Duration::from_millis(5));
     }
     assert!(matches!(

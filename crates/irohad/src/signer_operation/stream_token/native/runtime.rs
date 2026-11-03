@@ -27,6 +27,16 @@ pub fn build_native_stream_token_runtime_v1(
     state: Arc<State>,
     queue: Arc<Queue>,
 ) -> Result<Option<NativeStreamTokenRuntimeV1>, SignerStreamTokenErrorV1> {
+    build_native_stream_token_runtime_with_clock_v1(storage, state, queue, TimeSource::new_system())
+}
+
+/// [`build_native_stream_token_runtime_v1`] reading every custody interval from `clock`.
+pub(super) fn build_native_stream_token_runtime_with_clock_v1(
+    storage: &SorafsStorage,
+    state: Arc<State>,
+    queue: Arc<Queue>,
+    clock: TimeSource,
+) -> Result<Option<NativeStreamTokenRuntimeV1>, SignerStreamTokenErrorV1> {
     let Some(config) = storage
         .stream_tokens
         .signer
@@ -95,6 +105,7 @@ pub fn build_native_stream_token_runtime_v1(
             .as_ref()
             .ok_or_else(invalid)?
             .clock_uncertainty_ms,
+        clock,
     });
     let current = source.capture([0; 32])?;
     if current.operator != config.operator {

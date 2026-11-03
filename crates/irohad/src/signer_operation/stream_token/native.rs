@@ -23,7 +23,8 @@ use iroha_data_model::{
         },
     },
 };
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use iroha_primitives::time::TimeSource;
+use std::time::{Duration, UNIX_EPOCH};
 
 mod observer;
 mod preparation;
@@ -42,6 +43,9 @@ pub struct NativeStreamTokenSourceV1 {
     transactions: NativeTransactionsV1,
     timeout: Duration,
     uncertainty_ms: u64,
+    /// UTC clock behind every custody interval: the system clock in the daemon. Tests may
+    /// pin one instant so that only configuration decides a time-relative refusal.
+    clock: TimeSource,
 }
 impl NativeStreamTokenSourceV1 {
     fn capture(
@@ -57,7 +61,8 @@ impl NativeStreamTokenSourceV1 {
     }
     fn time(&self) -> Result<StreamTokenEligibilityTimeIntervalV1, SignerOperationErrorV1> {
         let now = u64::try_from(
-            SystemTime::now()
+            self.clock
+                .get_system_time()
                 .duration_since(UNIX_EPOCH)
                 .map_err(|_| SignerOperationErrorV1::StateUnavailable)?
                 .as_millis(),

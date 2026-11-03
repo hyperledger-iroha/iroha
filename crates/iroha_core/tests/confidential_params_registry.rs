@@ -4,7 +4,7 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{State, StateTransaction, World, WorldReadOnly},
 };
 use iroha_data_model::{
     Registrable, ValidationFail,
@@ -36,6 +36,21 @@ fn fresh_state() -> State {
     // Global root scope, so the executor runs at height two or later.
     root_scope_fixture::commit_global_root_scope(&state);
     state
+}
+/// Run one instruction through its native Core handler and its own authority checks.
+///
+/// The first-release Initial executor does not admit the confidential-parameter
+/// instructions on its ordinary or genesis surface (see
+/// `initial_executor_leaves_confidential_parameter_registry_unadmitted`), so these
+/// registry rules are exercised below its admission classification.
+fn execute_native(
+    stx: &mut StateTransaction<'_, '_>,
+    instruction: &InstructionBox,
+) -> Result<(), ValidationFail> {
+    instruction
+        .clone()
+        .execute(&ALICE_ID, stx)
+        .map_err(ValidationFail::InstructionFailed)
 }
 fn grant_manage_confidential_params(state: &mut State) {
     let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
@@ -81,16 +96,13 @@ fn publish_pedersen_params_inserts_record() {
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let executor = stx.world.executor().clone();
     let params = sample_pedersen_params(7);
     let id = params.params_id;
     let publish: InstructionBox = confidential::PublishPedersenParams {
         params: params.clone(),
     }
     .into();
-    executor
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), &publish)
-        .expect("publish pedersen params");
+    execute_native(&mut stx, &publish).expect("publish pedersen params");
     stx.apply();
     block
         .commit_world_overlay_for_testing()
@@ -109,12 +121,9 @@ fn publish_pedersen_params_requires_permission() {
     let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let executor = stx.world.executor().clone();
     let params = sample_pedersen_params(3);
     let publish: InstructionBox = confidential::PublishPedersenParams { params }.into();
-    let err = executor
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), &publish)
-        .expect_err("missing permission must fail");
+    let err = execute_native(&mut stx, &publish).expect_err("missing permission must fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {
             assert!(
@@ -135,20 +144,16 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
     grant_manage_confidential_params(&mut state);
     let header = BlockHeader::new(nonzero!(3_u64), None, None, 0, 0);
     let mut block = state.block(header);
-    let executor = {
+    {
         let mut stx = block.transaction();
-        let executor = stx.world.executor().clone();
         let params = sample_pedersen_params(11);
         let publish: InstructionBox = confidential::PublishPedersenParams {
             params: params.clone(),
         }
         .into();
-        executor
-            .execute_instruction(&mut stx, &ALICE_ID.clone(), &publish)
-            .expect("initial publish");
+        execute_native(&mut stx, &publish).expect("initial publish");
         stx.apply();
-        executor
-    };
+    }
     {
         let mut stx_dup = block.transaction();
         let params = sample_pedersen_params(11);
@@ -156,9 +161,8 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
             params: params.clone(),
         }
         .into();
-        let dup_err = executor
-            .execute_instruction(&mut stx_dup, &ALICE_ID.clone(), &duplicate)
-            .expect_err("duplicate publish must fail");
+        let dup_err =
+            execute_native(&mut stx_dup, &duplicate).expect_err("duplicate publish must fail");
         match dup_err {
             ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
                 msg,
@@ -179,8 +183,7 @@ fn publish_pedersen_params_rejects_duplicate_or_withdrawn() {
             },
         };
         let mut stx_withdrawn = block.transaction();
-        let err = executor
-            .execute_instruction(&mut stx_withdrawn, &ALICE_ID.clone(), &withdrawn.into())
+        let err = execute_native(&mut stx_withdrawn, &withdrawn.into())
             .expect_err("withdrawn publish must fail");
         match err {
             ValidationFail::InstructionFailed(InstructionExecutionError::InvalidParameter(
@@ -206,22 +209,18 @@ fn set_pedersen_params_lifecycle_updates_entry() {
     let mut block = state.block(header);
     let params = sample_pedersen_params(5);
     let id = params.params_id;
-    let executor = {
+    {
         let mut stx = block.transaction();
-        let executor = stx.world.executor().clone();
-        executor
-            .execute_instruction(
-                &mut stx,
-                &ALICE_ID.clone(),
-                &confidential::PublishPedersenParams {
-                    params: params.clone(),
-                }
-                .into(),
-            )
-            .expect("publish pedersen params");
+        execute_native(
+            &mut stx,
+            &confidential::PublishPedersenParams {
+                params: params.clone(),
+            }
+            .into(),
+        )
+        .expect("publish pedersen params");
         stx.apply();
-        executor
-    };
+    }
     {
         let mut stx_update = block.transaction();
         let update = confidential::SetPedersenParamsLifecycle {
@@ -230,9 +229,7 @@ fn set_pedersen_params_lifecycle_updates_entry() {
             activation_height: Some(42),
             withdraw_height: Some(80),
         };
-        executor
-            .execute_instruction(&mut stx_update, &ALICE_ID.clone(), &update.into())
-            .expect("update lifecycle");
+        execute_native(&mut stx_update, &update.into()).expect("update lifecycle");
         stx_update.apply();
     }
     block
@@ -255,7 +252,6 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
     let header = BlockHeader::new(nonzero!(5_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let executor = stx.world.executor().clone();
     // Missing entry
     let missing = confidential::SetPedersenParamsLifecycle {
         params_id: ConfidentialParamsId::new(99),
@@ -263,9 +259,7 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
         activation_height: None,
         withdraw_height: None,
     };
-    let err = executor
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), &missing.into())
-        .expect_err("missing params should fail");
+    let err = execute_native(&mut stx, &missing.into()).expect_err("missing params should fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::Find(find_err)) => {
             assert!(
@@ -281,16 +275,14 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
     let id = params.params_id;
     {
         let mut stx_publish = block.transaction();
-        executor
-            .execute_instruction(
-                &mut stx_publish,
-                &ALICE_ID.clone(),
-                &confidential::PublishPedersenParams {
-                    params: params.clone(),
-                }
-                .into(),
-            )
-            .expect("publish pedersen params");
+        execute_native(
+            &mut stx_publish,
+            &confidential::PublishPedersenParams {
+                params: params.clone(),
+            }
+            .into(),
+        )
+        .expect("publish pedersen params");
         stx_publish.apply();
     }
     {
@@ -301,9 +293,7 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
             activation_height: None,
             withdraw_height: Some(120),
         };
-        executor
-            .execute_instruction(&mut stx_withdraw, &ALICE_ID.clone(), &withdraw.into())
-            .expect("withdraw params");
+        execute_native(&mut stx_withdraw, &withdraw.into()).expect("withdraw params");
         stx_withdraw.apply();
     }
     // Attempt to update withdrawn entry again.
@@ -315,8 +305,7 @@ fn set_pedersen_params_lifecycle_missing_or_withdrawn() {
             activation_height: None,
             withdraw_height: None,
         };
-        let err = executor
-            .execute_instruction(&mut stx_again, &ALICE_ID.clone(), &update_again.into())
+        let err = execute_native(&mut stx_again, &update_again.into())
             .expect_err("updating withdrawn params must fail");
         match err {
             ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
@@ -342,22 +331,18 @@ fn publish_poseidon_params_and_update_lifecycle() {
     let mut block = state.block(header);
     let params = sample_poseidon_params(2);
     let id = params.params_id;
-    let executor = {
+    {
         let mut stx = block.transaction();
-        let executor = stx.world.executor().clone();
-        executor
-            .execute_instruction(
-                &mut stx,
-                &ALICE_ID.clone(),
-                &confidential::PublishPoseidonParams {
-                    params: params.clone(),
-                }
-                .into(),
-            )
-            .expect("publish poseidon params");
+        execute_native(
+            &mut stx,
+            &confidential::PublishPoseidonParams {
+                params: params.clone(),
+            }
+            .into(),
+        )
+        .expect("publish poseidon params");
         stx.apply();
-        executor
-    };
+    }
     {
         // Update lifecycle metadata.
         let mut stx_update = block.transaction();
@@ -367,9 +352,7 @@ fn publish_poseidon_params_and_update_lifecycle() {
             activation_height: Some(30),
             withdraw_height: Some(120),
         };
-        executor
-            .execute_instruction(&mut stx_update, &ALICE_ID.clone(), &update.into())
-            .expect("update poseidon lifecycle");
+        execute_native(&mut stx_update, &update.into()).expect("update poseidon lifecycle");
         stx_update.apply();
     }
     block
@@ -392,7 +375,6 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
     let header = BlockHeader::new(nonzero!(7_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let executor = stx.world.executor().clone();
     // Missing entry
     let missing = confidential::SetPoseidonParamsLifecycle {
         params_id: ConfidentialParamsId::new(200),
@@ -400,9 +382,8 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
         activation_height: None,
         withdraw_height: None,
     };
-    let err = executor
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), &missing.into())
-        .expect_err("missing poseidon params should fail");
+    let err =
+        execute_native(&mut stx, &missing.into()).expect_err("missing poseidon params should fail");
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::Find(find_err)) => {
             assert!(
@@ -418,16 +399,14 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
     let id = params.params_id;
     {
         let mut stx_publish = block.transaction();
-        executor
-            .execute_instruction(
-                &mut stx_publish,
-                &ALICE_ID.clone(),
-                &confidential::PublishPoseidonParams {
-                    params: params.clone(),
-                }
-                .into(),
-            )
-            .expect("publish poseidon params");
+        execute_native(
+            &mut stx_publish,
+            &confidential::PublishPoseidonParams {
+                params: params.clone(),
+            }
+            .into(),
+        )
+        .expect("publish poseidon params");
         stx_publish.apply();
     }
     {
@@ -438,26 +417,22 @@ fn poseidon_lifecycle_missing_and_withdrawn_behaviour() {
             activation_height: None,
             withdraw_height: Some(250),
         };
-        executor
-            .execute_instruction(&mut stx_withdraw, &ALICE_ID.clone(), &withdraw.into())
-            .expect("withdraw poseidon params");
+        execute_native(&mut stx_withdraw, &withdraw.into()).expect("withdraw poseidon params");
         stx_withdraw.apply();
     }
     let err = {
         let mut stx_again = block.transaction();
-        executor
-            .execute_instruction(
-                &mut stx_again,
-                &ALICE_ID.clone(),
-                &confidential::SetPoseidonParamsLifecycle {
-                    params_id: id,
-                    status: ConfidentialStatus::Active,
-                    activation_height: None,
-                    withdraw_height: None,
-                }
-                .into(),
-            )
-            .expect_err("updating withdrawn poseidon params must fail")
+        execute_native(
+            &mut stx_again,
+            &confidential::SetPoseidonParamsLifecycle {
+                params_id: id,
+                status: ConfidentialStatus::Active,
+                activation_height: None,
+                withdraw_height: None,
+            }
+            .into(),
+        )
+        .expect_err("updating withdrawn poseidon params must fail")
     };
     match err {
         ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(msg)) => {

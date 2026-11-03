@@ -118,6 +118,9 @@ specs/da/_generated/threat_model_report.json
 .build/
 # Nested agent worktrees are generated checkouts, not this workspace source.
 /.claude/worktrees/
+# Public docs live in the sibling `../iroha-docs` repository; a nested copy
+# must never be committed here as a gitlink.
+/iroha-docs/
 # Personal agent permissions and settings are local to each checkout.
 **/.claude/settings.local.json
 /.codex_artifacts/

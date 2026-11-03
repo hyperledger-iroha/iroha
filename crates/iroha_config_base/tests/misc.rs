@@ -162,18 +162,20 @@ pub mod sample_config {
             })
         }
     }
-    /// Verbosity of log output.
-    #[derive(Debug, Default, strum::Display, strum::EnumString, Copy, Clone)]
-    pub enum LogLevel {
-        /// Debug-level logging.
-        Debug,
-        /// Info-level logging.
-        #[default]
-        Info,
-        /// Warning-level logging.
-        Warning,
-        /// Error-level logging.
-        Error,
+    iroha_config_base::config_enum! {
+        /// Verbosity of log output.
+        #[derive(Debug, Default, Copy, Clone)]
+        pub enum LogLevel {
+            /// Debug-level logging.
+            Debug => "Debug",
+            /// Info-level logging.
+            #[default]
+            Info => "Info",
+            /// Warning-level logging.
+            Warning => "Warning",
+            /// Error-level logging.
+            Error => "Error",
+        }
     }
     impl JsonSerialize for LogLevel {
         fn json_serialize(&self, out: &mut String) {
@@ -692,4 +694,30 @@ fn multiple_env_parsing_errors() {
         │
         ╰─▶ Matching variant not found"#]]
     .assert_eq_report(&report);
+}
+
+#[test]
+fn sample_log_level_preserves_exact_environment_spellings() {
+    use sample_config::LogLevel;
+
+    assert_eq!(LogLevel::default().as_str(), "Info");
+    for (variant, spelling) in [
+        (LogLevel::Debug, "Debug"),
+        (LogLevel::Info, "Info"),
+        (LogLevel::Warning, "Warning"),
+        (LogLevel::Error, "Error"),
+    ] {
+        assert_eq!(variant.as_str(), spelling);
+        assert_eq!(variant.to_string(), spelling);
+        assert_eq!(spelling.parse::<LogLevel>().unwrap().as_str(), spelling);
+        assert_eq!(LogLevel::try_from(spelling).unwrap().as_str(), spelling);
+        for invalid in [
+            spelling.to_lowercase(),
+            format!(" {spelling}"),
+            format!("{spelling} "),
+        ] {
+            let error = invalid.parse::<LogLevel>().unwrap_err();
+            assert_eq!(error.to_string(), "Matching variant not found");
+        }
+    }
 }

@@ -32,6 +32,8 @@ where
         + Display,
 {
     assert_eq!(value.to_string(), expected);
+    assert_eq!(value.encoded_len_hint(), Some(expected.len()));
+    assert_eq!(value.encoded_len_exact(), Some(expected.len()));
     let mut canonical = vec![u8::try_from(expected.len()).unwrap()];
     canonical.extend_from_slice(expected.as_bytes());
     assert_eq!(value.encode(), canonical);

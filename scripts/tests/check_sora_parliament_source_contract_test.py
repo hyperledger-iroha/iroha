@@ -219,7 +219,8 @@ def test_queue_signed_proposal_gas_baseline_and_entrypoint() -> None:
      "                    return Err(Self::refused(Error::Deferred(original), checked));\n"
      "                }",
      "                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_original)) => 0,"),
-    (1, GAS_ADMISSION, "Self::refused(Error::Deferred(original), checked)", "Self::refused(Error::Full, checked)"),
+    (1, GAS_ADMISSION, "return Err(Self::refused(Error::Deferred(original), checked));",
+     "return Err(Self::refused(Error::Full, checked));"),
     (1, GAS_REFUSED, "tx: Box::new(checked.into_accepted()),", "tx: Box::new(other.into_accepted()),"),
     (1, GAS_ADMISSION, "code: FeeRejectionCode::InvalidGasLimit", "code: FeeRejectionCode::Other"),
     (1, GAS_ADMISSION, "            proposal_gas_cost,\n            enqueued_at_ms,", "            proposal_gas_cost: 0,\n            enqueued_at_ms,"),
@@ -311,6 +312,31 @@ def test_queue_signed_proposal_gas_admission_prefix_preserves_literal_spaces() -
         guard.require_queue_signed_proposal_gas(*sources)
 
 
+@pytest.mark.parametrize("original,replacement,message", (
+    ("return Err(Self::refused(Error::RuntimeRejected(rejection), checked));", "let _ = rejection;",
+     "signed proposal gas admission prefix changed"),
+    ("Err(original) => return Err(Self::refused(Error::Deferred(original), checked)),",
+     "Err(_original) => LanePrivacyRegistry::default(),",
+     "signed proposal gas admission prefix changed"),
+    ("Err(original) => return Err(Self::refused(Error::Deferred(original), checked)),",
+     "Err(original) => return Err(Self::refused(Error::Deferred(original), foreign_input)),",
+     "signed proposal gas admission prefix changed"),
+    ("        retired: &mut QueuePrivacyRetirements,\n", "",
+     "signed proposal gas admission signature changed"),
+))
+def test_queue_signed_proposal_gas_pins_runtime_selection_and_privacy_refusals(
+    original: str, replacement: str, message: str,
+) -> None:
+    """Pre-quote selection and State-pool privacy refusals stay moved, real rejections."""
+    sources = [guard.read(path) for path in QUEUE_GAS_PATHS]
+    guard.require_queue_signed_proposal_gas(*sources)
+    item = guard.rust_item(sources[1], GAS_ADMISSION, QUEUE_GAS_PATHS[1])
+    assert item.count(original) == 1
+    sources[1] = sources[1].replace(item, item.replace(original, replacement, 1), 1)
+    with pytest.raises(RuntimeError, match=message):
+        guard.require_queue_signed_proposal_gas(*sources)
+
+
 @pytest.mark.parametrize("declaration,original,replacement", (
     (GAS_ENTRYPOINT, "TransactionEntrypoint::AnonymousBallot(_)", "TransactionEntrypoint::External(_)"),
     (GAS_ENTRYPOINT, "Err(crate::execution_attempt::ExecutionAttemptError::Deferred(\n"
@@ -322,8 +348,10 @@ def test_queue_signed_proposal_gas_admission_prefix_preserves_literal_spaces() -
     (GAS_REFUSED, "checked.into_accepted()", "checked.as_accepted().clone()"),
     (GAS_REFUSED, "checked.into_accepted()", "foreign_input"),
     (GAS_REFUSED, "            err,", "            err: Error::Full,"),
-    (GAS_ADMISSION, "Error::Deferred(original), checked", "Error::Deferred(foreign_refusal()), checked"),
-    (GAS_ADMISSION, "Error::Deferred(original), checked", "Error::Deferred(original), foreign_input"),
+    (GAS_ADMISSION, "return Err(Self::refused(Error::Deferred(original), checked));",
+     "return Err(Self::refused(Error::Deferred(foreign_refusal()), checked));"),
+    (GAS_ADMISSION, "return Err(Self::refused(Error::Deferred(original), checked));",
+     "return Err(Self::refused(Error::Deferred(original), foreign_input));"),
     (GAS_ADMISSION, "Ok(cost) => cost", "Ok(_cost) => 0"),
     (GAS_ADMISSION, "Some(enqueued_at_ms)", "Some(0)"),
     (GAS_ADMISSION, "Self::entrypoint_frame_digest(checked.as_accepted())",
@@ -523,6 +551,25 @@ def test_beacon_parliament_fixture_module_cannot_be_disconnected(
     sources[path] = sources[path].replace(anchor, replacement, 1) + "\n/* " + anchor + " */\n"
     with pytest.raises(RuntimeError, match="original test module"):
         _check_pulse_fixtures(sources)
+
+
+def test_beacon_parliament_fixture_has_one_live_declaration() -> None:
+    """The shared pending-sortition fixture keeps exactly one live declaration."""
+    _check_pulse_fixtures(_pulse_fixture_sources())
+    path = "crates/iroha_core/src/beacon/tests.rs"
+    declaration = "pub fn pending_batched_sortition_attempt(\n"
+    for replacement in (
+        "pub fn other_pending_attempt(\n",
+        "// pub fn pending_batched_sortition_attempt(\npub fn other_pending_attempt(\n",
+        'const _: &str = "pub fn pending_batched_sortition_attempt(";\n'
+        "pub fn other_pending_attempt(\n",
+        "pub fn pending_batched_sortition_attempt() {}\n" + declaration,
+    ):
+        sources = _pulse_fixture_sources()
+        assert sources[path].count(declaration) == 1
+        sources[path] = sources[path].replace(declaration, replacement, 1)
+        with pytest.raises(RuntimeError, match="expected one live declaration"):
+            _check_pulse_fixtures(sources)
 
 
 INDEX_ADMISSION_TEST = "fn parliament_required_beacon_slot_index_tracks_lifecycle_and_removal()"
@@ -1385,8 +1432,13 @@ def test_signed_staking_fee_boundary_baseline() -> None:
     (
         (
             "crates/iroha_core/src/validation_fee.rs",
-            "crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)",
-            "crate::deferred_authority::unchecked_opaque_operations(groups, stx)",
+            "crate::deferred_authority::reject_opaque_instruction_authority(",
+            "crate::deferred_authority::unchecked_opaque_operations(",
+        ),
+        (
+            "crates/iroha_core/src/deferred_authority.rs",
+            "return iroha_data_model::isi::wire_id_of::<$ty>();",
+            "return None;",
         ),
         (
             "crates/iroha_core/src/deferred_authority.rs",
@@ -1426,6 +1478,7 @@ def test_signed_staking_fee_boundary_rejects_omitted_guards(
 ) -> None:
     """Policy absence, nested overlays and actual payment assets cannot mask a leg."""
     sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
     assert original in sources[path]
     sources[path] = sources[path].replace(original, replacement, 1)
     with pytest.raises(RuntimeError, match="missing modeled source binding"):
@@ -1553,18 +1606,18 @@ def test_sortition_registration_rejects_disconnected_admission(
         (
             "gov::ParliamentLifecycleTransitionV1::RegisterInitialSortition => {",
             "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
-            "candidates,",
+            "&(candidates),",
         )
         if initial
         else (
             "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
             "gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {",
-            "expected_candidates,",
+            "&(expected_candidates),",
         )
     )
     branch = guard.section(source, start, end, WORLD_PATH)
     removed = "apply_parliament_sortition_request_batch_v1(" if bypass else candidates
-    replacement = "unchecked_sortition_registration(" if bypass else "Vec::new(),"
+    replacement = "unchecked_sortition_registration(" if bypass else "&[],"
     assert branch.count(removed) == 1
     mutated = source.replace(branch, branch.replace(removed, replacement))
     with pytest.raises(RuntimeError, match="must use shared sortition admission"):
@@ -1865,6 +1918,10 @@ CONSTRUCTION_POLICY_PATH = "crates/iroha_core/src/state/canonical_runtime/static
     (CONSTRUCTION_PATH, "network_signatures_prechecked: false,", "network_signatures_prechecked: true,"),
     (CONSTRUCTION_PATH, "ivm_elections_cache: ivm_elections::SnapshotCache::new(),",
      "ivm_elections_cache: foreign_cache,"),
+    (CONSTRUCTION_PATH, "ivm_zk_roots_cache: ivm_zk_roots::SnapshotCache::new(),",
+     "ivm_zk_roots_cache: foreign_cache,"),
+    (CONSTRUCTION_RUNTIME_PATH, "pending.finish(&mut projection, privacy)",
+     "pending.finish(&mut projection, foreign_privacy)"),
     (CONSTRUCTION_RUNTIME_PATH, "static_inputs: StaticExecutionPolicy::capture(state),",
      "static_inputs: StaticExecutionPolicy::capture(foreign_state),"),
     (CONSTRUCTION_POLICY_PATH, "oracle: state.oracle.clone(),", "oracle: foreign.oracle.clone(),"),
@@ -2129,6 +2186,29 @@ def test_construction_guard_binds_complete_defining_module_names(
         guard.require_block_start_construction(original_read(STATE_PATH))
 
 
+FIELDS_LINT = (
+    "#[expect(\n    clippy::struct_excessive_bools,\n"
+    '    reason = "Independent block journals retain their own completion and refusal observations"\n)]\n'
+    "pub struct StateBlockFields<'state> {"
+)
+
+
+@pytest.mark.parametrize("replacement", (
+    "#[cfg(any())]\n" + FIELDS_LINT,
+    FIELDS_LINT.replace("#[expect(", "#[cfg_attr(any(), expect(", 1).replace(")]\npub", "))]\npub", 1),
+    FIELDS_LINT.replace("observations", "observation", 1),
+    "pub struct StateBlockFields<'state> {",
+), ids=("disabled", "conditional-lint", "changed-reason", "removed-lint"))
+def test_construction_fields_owner_tolerates_only_its_reviewed_lint(replacement: str) -> None:
+    """The armed State fields owner admits exactly its reviewed lint expectation."""
+    source = guard.read(STATE_PATH)
+    guard.require_block_start_construction(source)
+    assert source.count(FIELDS_LINT) == 1
+    with pytest.raises(RuntimeError, match=re.escape(
+            f"{STATE_PATH}: start construction changed reviewed item attributes")):
+        guard.require_block_start_construction(source.replace(FIELDS_LINT, replacement, 1))
+
+
 @pytest.mark.parametrize("mutation", (
     "missing_expiry", "missing_enactment", "duplicate", "swapped",
     "wrong_height", "conditional", "late_before_flag", "late_after_execution",
@@ -2245,6 +2325,7 @@ def test_block_start_admission_and_stage_refusals_remain_typed(
 @pytest.mark.parametrize("mutation", (
     "foreign_policy", "foreign_reason", "misclassified_policy", "callback_before_refusal",
     "callback_inside_refusal", "removed_refusal", "relabelled_local_refusal",
+    "relabelled_privacy_limit_refusal",
 ))
 def test_block_start_intrinsic_policy_refuses_before_either_callback(mutation: str) -> None:
     """Invalid retained policy cannot authorize callbacks or absorb a local resource refusal."""
@@ -2271,9 +2352,15 @@ def test_block_start_intrinsic_policy_refuses_before_either_callback(mutation: s
     elif mutation == "removed_refusal":
         changed = item.replace(branch, "", 1)
     else:
-        original = "StateBlockStartError::ExecutionDeferred(original)"
+        # DA hydration and due privacy limits each keep their local deferral class.
+        refusal = ("DaIndexHydrationError" if mutation == "relabelled_local_refusal"
+                   else "crate::execution_attempt::ExecutionAttemptError")
+        original = (refusal + "::Deferred(original) => {\n"
+                    "                    StateBlockStartError::ExecutionDeferred(original)")
         assert item.count(original) == 1
-        changed = item.replace(original, "StateBlockStartError::Policy(original.to_string())", 1)
+        changed = item.replace(original, original.replace(
+            "StateBlockStartError::ExecutionDeferred(original)",
+            "StateBlockStartError::Policy(original.to_string())", 1), 1)
     assert changed != item
     with pytest.raises(RuntimeError, match="start phases"):
         guard.require_block_start_phase_call_order(source.replace(item, changed, 1))
@@ -2878,6 +2965,38 @@ def test_publication_retains_original_block_capture_policy(
         guard.require_parliament_commit_publication(state)
 
 
+ENGINE_LINT = (
+    "#[expect(\n    clippy::result_large_err,\n"
+    '    reason = "Refusal returns the original retained owner without an additional fallible '
+    'error allocation"\n)]\n'
+    "impl<'state> StateBlock<'state> {"
+)
+
+
+@pytest.mark.parametrize("replacement,message", (
+    ("#[cfg(any())]\n" + ENGINE_LINT, "declaration must retain its unconditional owner"),
+    (ENGINE_LINT.replace("impl<'state>", "#[cfg(test)]\nimpl<'state>", 1),
+     "original publication changed its reviewed lint attributes"),
+    (ENGINE_LINT.replace("allocation", "allocation box", 1),
+     "original publication changed its reviewed lint attributes"),
+    ("impl<'state> StateBlock<'state> {", "original publication changed its reviewed lint attributes"),
+), ids=("disabled", "conditional-impl", "changed-reason", "removed-lint"))
+def test_publication_engine_owner_tolerates_only_its_reviewed_lint(
+    replacement: str, message: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Only the exact reviewed lint expectation may precede the retained publication engine."""
+    state = guard.read(STATE_PATH)
+    guard.require_parliament_commit_publication(state)
+    publication = guard.read(PUBLICATION_PATH)
+    assert publication.count(ENGINE_LINT) == 1
+    changed = publication.replace(ENGINE_LINT, replacement, 1)
+    original_read = guard.read
+    monkeypatch.setattr(guard, "read", lambda path:
+                        changed if path == PUBLICATION_PATH else original_read(path))
+    with pytest.raises(RuntimeError, match=re.escape(f"{PUBLICATION_PATH}: {message}")):
+        guard.require_parliament_commit_publication(state)
+
+
 BEACON_SOURCE_PATHS = (
     guard.EPOCH_BEACON_PATH, guard.BEACON_PRODUCER_PATH, guard.BEACON_READINESS_PATH,
 )
@@ -3048,16 +3167,18 @@ def test_indexed_beacon_requirement_gates_native_admission_and_production() -> N
     (guard.BEACON_PRODUCER_PATH, "        let active = if required {",
      "        let _ = attempt.requires_beacon_pulse_at(slot);\n        let active = if required {"),
     (guard.BEACON_PRODUCER_PATH,
-     "                signer\n"
-     "                    .attest_partial_signing_capability(active.aggregator.session(), index)\n"
-     "                    .map_err(|_| NativeBeaconError::LocalSigning)?;\n", ""),
+     "            signer\n"
+     "                .attest_partial_signing_capability(active.aggregator.session(), index)\n"
+     "                .map_err(|_| NativeBeaconError::LocalSigning)?;\n", ""),
     (guard.BEACON_PRODUCER_PATH,
-     "                signer\n"
-     "                    .attest_partial_signing_capability(active.aggregator.session(), index)\n"
-     "                    .map_err(|_| NativeBeaconError::LocalSigning)?;",
-     "                signer\n"
-     "                    .attest_partial_signing_capability(active.aggregator.session(), index)\n"
-     "                    .unwrap();"),
+     "            signer\n"
+     "                .attest_partial_signing_capability(active.aggregator.session(), index)\n"
+     "                .map_err(|_| NativeBeaconError::LocalSigning)?;",
+     "            signer\n"
+     "                .attest_partial_signing_capability(active.aggregator.session(), index)\n"
+     "                .unwrap();"),
+    (guard.BEACON_PRODUCER_PATH,
+     "        if active.own.is_none()\n            && let", "        if active.own.is_some()\n            && let"),
 ))
 def test_beacon_requirement_rejects_lost_demand_or_unauthenticated_activation(
     path: str, old: str, new: str,
@@ -3200,6 +3321,9 @@ def test_native_beacon_pulse_application_baseline_and_entrypoint() -> None:
     (guard.SCHEDULE_EXECUTION_PATH, "source.header() != self._curr_block", "false"),
     (guard.SCHEDULE_EXECUTION_PATH,
      "authenticate_successor_context(self, &self._curr_block, expected)?;", ""),
+    (guard.SCHEDULE_EXECUTION_PATH, "original.recheck(self, &self._curr_block, expected)?;", ""),
+    (guard.SCHEDULE_EXECUTION_PATH, "original.recheck(self, &self._curr_block, expected)?;",
+     "original.recheck(self, &foreign_header, expected)?;"),
     (guard.SCHEDULE_EXECUTION_PATH, ".insert(value.pulse_id, value);", ".insert(value.pulse_id, other);"),
     (guard.SCHEDULE_EXECUTION_PATH, "                value.height,", "                value.height + 1,"),
     (guard.SCHEDULE_EXECUTION_PATH, ".insert(slot, value.pulse_id);", ".insert(slot, other.pulse_id);"),
@@ -3216,6 +3340,10 @@ def test_native_beacon_pulse_application_baseline_and_entrypoint() -> None:
      "            state\n                .block_with_recorded_pristine_carrier_stage("),
     (BLOCK_PATH, "                                    profile.sumeragi_pulse(),\n",
      "                                    None,\n"),
+    (BLOCK_PATH, "                                    successor_context,\n                                )",
+     "                                    None,\n                                )"),
+    (BLOCK_PATH, "                                    crate::sumeragi::startup::GENESIS_HEIGHT,\n",
+     "                                    2,\n"),
     (BLOCK_PATH, '    include!("block/native_header_source.rs");',
      '    // include!("block/native_header_source.rs");'),
     (guard.NATIVE_HEADER_SOURCE_PATH,
@@ -3241,7 +3369,9 @@ def test_native_beacon_pulse_application_rejects_second_owner_or_unverified_writ
     """No payload pulse, skipped admission, foreign epoch or unverified write is accepted."""
     sources = _pulse_application_sources()
     owner = (
-        guard.rust_item(sources[path], "    pub(crate) fn request_sumeragi_schedule(", path)
+        guard.rust_item(
+            sources[path], "    pub(crate) fn request_sumeragi_schedule_with_preparation(", path,
+        )
         if path == guard.SCHEDULE_EXECUTION_PATH else sources[path]
     )
     assert owner.count(old) == 1
@@ -3388,7 +3518,7 @@ def test_native_beacon_application_requires_signed_or_committed_original_root(
         guard.require_native_beacon_pulse_application(*sources.values())
 
 
-@pytest.mark.parametrize("path,declaration,original,replacement", (('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH', 'false'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'reject_opaque_committee_operation(instruction, index)?;', 'let _ = instruction;'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'resolve(&approval)', 'None'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'if visited.insert(identity)', 'if false'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'proposal.instructions.iter(),', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'proved.overlay.iter(),', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'std::slice::from_ref(instruction),', '&[], '), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'active_policy(state_transaction)?', 'None::<()>'), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'crate::retail_fee::admit(tx, state_transaction)?;', 'let _ = tx;'), ('crates/iroha_core/src/validation_fee.rs', 'fn reject_ivm_proved_completed_axt_effects(', 'OpaqueIvmProvedAxtEffects', 'OpaqueAcceptedEffects'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'RETAIL_FEE_ASSESSMENT_METADATA_KEY', 'UNAUTHENTICATED_ASSESSMENT_KEY'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'Some(*tx.hash().as_ref())', 'Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'now >= assessment.expires_at_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'if stx.world.retail_fee_assessment.is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit_deferred(', 'if reviewed.replace(assessment).is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'log.msg.len() > 4096', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'norito::decode_canonical(&bytes)', 'norito::decode_from_bytes(&bytes)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.multisig_deferred_execution_stack.is_empty()', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', '!stx.world.retail_fee_assessment_marker_pending', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment.as_ref() != Some(&assessment)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment_marker_pending = false;', 'stx.world.retail_fee_assessment_marker_pending = true;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'if stx.world.retail_fee_assessment.is_none()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'approved_amount == amount', 'true'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if stx.world.retail_fee_assessment_marker_pending', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if !stx.world.retail_fee_exempt_payments.is_empty()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'observed.iter().any(|(id, _)| id != source)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'from.checked_sub(assessment.fee_minor)', 'Some(from)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'source_transaction_hash: Some(source_transaction_hash)', 'source_transaction_hash: Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment: Some(assessment.clone())', 'assessment: None'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn validate_stateful_admission(', 'crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)', 'Ok::<(), ExecutionAttemptError<TransactionRejectionReason>>(())'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn execute_accepted_transaction_in_overlay(', 'crate::retail_fee::finalize(state_transaction)?;', 'let _ = state_transaction;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.retail_enrolled != expected.retail_enrolled', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.account_id != expected.account_id', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.billing_month_start_ms != expected.billing_month_start_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.policy_revision != expected.policy_revision', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.payments_used_before != expected.payments_used_before', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.qualifying_payments != expected.qualifying_payments', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.fee_minor != expected.fee_minor', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.state_commitment != expected.state_commitment', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.intent_hash != expected.intent_hash', 'false')))
+@pytest.mark.parametrize("path,declaration,original,replacement", (('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH', 'false'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'reject_opaque_committee_operation(instruction, index)?;', 'let _ = instruction;'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'resolve(&approval)', 'None'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'if visited.insert(identity)', 'if false'), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'proposal.instructions.iter(),', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'proved.overlay.iter(),', '&[], '), ('crates/iroha_core/src/deferred_authority.rs', "fn reject_opaque_committee_operations_with<'a, F>(", 'std::slice::from_ref(instruction),', '&[], '), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'active_policy(state_transaction)?', 'None::<()>'), ('crates/iroha_core/src/validation_fee.rs', 'pub(crate) fn enforce_validation_fee_admission(', 'crate::retail_fee::admit(tx, state_transaction)?;', 'let _ = tx;'), ('crates/iroha_core/src/validation_fee.rs', 'fn reject_ivm_proved_completed_axt_effects(', 'OpaqueIvmProvedAxtEffects', 'OpaqueAcceptedEffects'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'RETAIL_FEE_ASSESSMENT_METADATA_KEY', 'UNAUTHENTICATED_ASSESSMENT_KEY'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit(', 'Some(*tx.hash().as_ref())', 'Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'now >= assessment.expires_at_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn bind_assessment(', 'if stx.world.retail_fee_assessment.is_some()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn admit_deferred(', '&& reviewed.replace(assessment).is_some()', '&& false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'log.msg.len() > 4096', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'fn decode_assessment_marker(', 'norito::decode_canonical(&bytes)', 'norito::decode_from_bytes(&bytes)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.multisig_deferred_execution_stack.is_empty()', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', '!stx.world.retail_fee_assessment_marker_pending', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment.as_ref() != Some(&assessment)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn execute_assessment_marker(', 'stx.world.retail_fee_assessment_marker_pending = false;', 'stx.world.retail_fee_assessment_marker_pending = true;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'if stx.world.retail_fee_assessment.is_none()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn record_payment(', 'approved_amount == amount', 'true'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if stx.world.retail_fee_assessment_marker_pending', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'if !stx.world.retail_fee_exempt_payments.is_empty()', 'if false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'observed.iter().any(|(id, _)| id != source)', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'from.checked_sub(assessment.fee_minor)', 'Some(from)'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'source_transaction_hash: Some(source_transaction_hash)', 'source_transaction_hash: Some([0; 32])'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment: Some(assessment.clone())', 'assessment: None'), ('crates/iroha_core/src/tx.rs', 'pub(crate) fn validate_stateful_admission(', 'crate::validation_fee::enforce_validation_fee_admission(tx, state_transaction)', 'Ok::<(), ExecutionAttemptError<TransactionRejectionReason>>(())'), ('crates/iroha_core/src/tx.rs', 'fn execute_signed_transaction_in_overlay(', 'crate::retail_fee::finalize(state_transaction)?;', 'let _ = state_transaction;'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.retail_enrolled != expected.retail_enrolled', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.account_id != expected.account_id', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.billing_month_start_ms != expected.billing_month_start_ms', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.policy_revision != expected.policy_revision', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.payments_used_before != expected.payments_used_before', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.qualifying_payments != expected.qualifying_payments', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.fee_minor != expected.fee_minor', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.state_commitment != expected.state_commitment', 'false'), ('crates/iroha_core/src/retail_fee.rs', 'pub(crate) fn finalize(', 'assessment.intent_hash != expected.intent_hash', 'false')))
 def test_native_fee_boundary_rejects_changed_live_authority_or_assessment(
     path: str, declaration: str, original: str, replacement: str,
 ) -> None:
@@ -3417,14 +3547,23 @@ def test_native_fee_boundary_requires_each_common_asset_payment_hook(method: str
         _check_fee_boundary(sources)
 
 
+CORE_MODULE_LINT = "#[cfg_attr(test, deny(clippy::large_stack_arrays))]\n"
+
+
+@pytest.mark.parametrize("attributes", (
+    CORE_MODULE_LINT + "#[cfg(any())]\n", "#[cfg(any())]\n" + CORE_MODULE_LINT,
+    "#[cfg_attr(test, cfg(any()))]\n", "#[cfg(not(test))]\n", '#[path = "decoy.rs"]\n',
+))
 @pytest.mark.parametrize("module", ("deferred_authority", "retail_fee", "validation_fee", "tx"))
-def test_native_fee_boundary_requires_unconditional_registered_owners(module: str) -> None:
+def test_native_fee_boundary_requires_unconditional_registered_owners(module: str, attributes: str) -> None:
+    """Only the reviewed test-only lint level may precede a native fee owner module."""
     sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
     path = FEE_BOUNDARY_PATHS[5]
     prefix = "pub(crate)" if module == "deferred_authority" else "pub"
     declaration = prefix + " mod " + module + ";"
-    assert sources[path].count(declaration) == 1
-    sources[path] = sources[path].replace(declaration, "#[cfg(any())]\n" + declaration, 1)
+    assert sources[path].count(CORE_MODULE_LINT + declaration) == 1
+    sources[path] = sources[path].replace(CORE_MODULE_LINT + declaration, attributes + declaration, 1)
     with pytest.raises(RuntimeError, match="must be unconditional"):
         _check_fee_boundary(sources)
 
@@ -3432,8 +3571,9 @@ def test_native_fee_boundary_requires_unconditional_registered_owners(module: st
 @pytest.mark.parametrize("mutation", ("missing", "duplicate", "before_runtime", "after_sequence"))
 def test_native_fee_boundary_finalizes_once_after_runtime_and_triggers_before_sequence(mutation: str) -> None:
     sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
     path = FEE_BOUNDARY_PATHS[4]
-    body = guard.rust_item(sources[path], "pub(crate) fn execute_accepted_transaction_in_overlay(", path)
+    body = guard.rust_item(sources[path], "fn execute_signed_transaction_in_overlay(", path)
     call = "crate::retail_fee::finalize(state_transaction)?;"
     assert body.count(call) == 1
     if mutation == "missing":
@@ -3441,7 +3581,7 @@ def test_native_fee_boundary_finalizes_once_after_runtime_and_triggers_before_se
     elif mutation == "duplicate":
         changed = body.replace(call, call + call, 1)
     elif mutation == "before_runtime":
-        runtime = "Self::validate_transaction_with_runtime_executor(\n            signed.clone(),\n            state_transaction,\n            ivm_cache,\n        )?;"
+        runtime = "Self::validate_transaction_with_runtime_executor(signed, state_transaction, ivm_cache)?;"
         assert body.count(runtime) == 1
         changed = body.replace(call, "", 1).replace(runtime, call + runtime, 1)
     else:
@@ -3450,6 +3590,29 @@ def test_native_fee_boundary_finalizes_once_after_runtime_and_triggers_before_se
         changed = body.replace(call, "", 1).replace(sequence, sequence + call, 1)
     sources[path] = sources[path].replace(body, changed, 1) + "\n/* " + call + " */\n"
     with pytest.raises(RuntimeError):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ("        Self::execute_signed_transaction_in_overlay(\n            signed,",
+     "        crate::retail_fee::finalize(state_transaction)?;\n"
+     "        Self::execute_signed_transaction_in_overlay(\n            signed,"),
+    ("Self::execute_signed_transaction_in_overlay(\n            signed,\n",
+     "Self::execute_unmetered_signed_transaction(\n            signed,\n"),
+    ("            TransactionEntrypoint::External(signed) => signed,",
+     "            TransactionEntrypoint::External(_) => foreign_signed,"),
+))
+def test_native_fee_boundary_accepted_entrypoint_delegates_to_the_signed_owner(
+    original: str, replacement: str,
+) -> None:
+    """The accepted owner hands its external input to the one fee-finishing signed owner."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    path = FEE_BOUNDARY_PATHS[4]
+    body = guard.rust_item(sources[path], "pub(crate) fn execute_accepted_transaction_in_overlay(", path)
+    assert body.count(original) == 1
+    sources[path] = sources[path].replace(body, body.replace(original, replacement, 1), 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
         _check_fee_boundary(sources)
 
 
@@ -3488,18 +3651,23 @@ def test_block_start_due_execution_keeps_original_local_deferral(replacement: st
 
 
 @pytest.mark.parametrize("path,declaration,original,replacement", (
-    (FEE_BOUNDARY_PATHS[0], "pub(crate) fn enforce_opaque_deferred_instruction_groups(",
-     "transaction_attempt_rejection(stx, error)", "discard_original_authority_refusal(stx, error)"),
+    (FEE_BOUNDARY_PATHS[0], "pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(",
+     "transaction_attempt_rejection(\n            stx,\n            error.map_rejection(",
+     "discard_original_authority_refusal(\n            stx,\n            error.map_rejection("),
     (FEE_BOUNDARY_PATHS[0], "fn transaction_attempt_rejection(",
      "state.defer_execution(reason)", "reject_local_capacity(reason)"),
-    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_deferred_authority(",
-     ".flat_map(|instructions| instructions.iter())", ".flat_map(|_| [].iter())"),
-    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_deferred_authority(",
+    (FEE_BOUNDARY_PATHS[0], "pub(crate) fn enforce_opaque_deferred_instruction_groups(",
+     ".map(move |instruction| (authority, instruction))",
+     ".filter(|_| false).map(move |instruction| (authority, instruction))"),
+    (FEE_BOUNDARY_PATHS[0], "pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(",
+     "groups.clone().map(|(_, instruction)| instruction)",
+     "groups.clone().filter(|_| false).map(|(_, instruction)| instruction)"),
+    (FEE_BOUNDARY_PATHS[0], "pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(",
      "error.map_rejection(TransactionRejectionReason::Validation)",
      "Attempt::Rejected(TransactionRejectionReason::Validation(error))"),
-    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_instruction_authority<'a>(",
+    (FEE_BOUNDARY_PATHS[1], "pub fn reject_opaque_instruction_authority<'a>(",
      "live_proposal_instructions_for_approval(state_transaction, approve)", "Ok(None)"),
-    (FEE_BOUNDARY_PATHS[1], "pub(crate) fn reject_opaque_instruction_authority<'a>(",
+    (FEE_BOUNDARY_PATHS[1], "pub fn reject_opaque_instruction_authority<'a>(",
      "error.map_rejection(|error|", "Attempt::Rejected(|error|"),
     (FEE_BOUNDARY_PATHS[1], "fn reject_opaque_committee_operations_with<'a, F>(",
      "Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason))",
@@ -3528,9 +3696,17 @@ def test_signed_staking_authority_precedes_optional_fee_policy_resolution() -> N
     sources = _fee_boundary_sources()
     _check_fee_boundary(sources)
     path = FEE_BOUNDARY_PATHS[0]
-    body = guard.rust_item(sources[path], "pub(crate) fn enforce_opaque_deferred_instruction_groups(", path)
-    guard_call = ("crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)\n"
-                  "        .map_err(|error| transaction_attempt_rejection(stx, error))?;")
+    body = guard.rust_item(sources[path], "pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(", path)
+    guard_call = ("crate::deferred_authority::reject_opaque_instruction_authority(\n"
+                  "        groups.clone().map(|(_, instruction)| instruction),\n"
+                  "        stx,\n"
+                  "    )\n"
+                  "    .map_err(|error| {\n"
+                  "        transaction_attempt_rejection(\n"
+                  "            stx,\n"
+                  "            error.map_rejection(TransactionRejectionReason::Validation),\n"
+                  "        )\n"
+                  "    })?;")
     policy_call = ("let registry = validated_policy_registry(stx)\n"
                    "        .map_err(|error| transaction_attempt_rejection(stx, error))?;")
     assert body.count(guard_call) == body.count(policy_call) == 1
@@ -3560,7 +3736,7 @@ def test_beacon_capture_requires_original_borrowed_roster_and_current_seal(old: 
     sources = _beacon_sources()
     guard.require_parliament_beacon_requirement(*sources.values())
     path = guard.EPOCH_BEACON_PATH
-    body = guard.rust_item(sources[path], "pub(crate) fn capture(", path)
+    body = guard.rust_item(sources[path], "pub fn capture(", path)
     assert body.count(old) == 1
     sources[path] = sources[path].replace(body, body.replace(old, new, 1), 1)
     sources[path] += "\n/* " + old + " */\n"
@@ -4498,8 +4674,22 @@ def test_sortition_slot_rule_baseline_and_entrypoint() -> None:
     (WORLD_PATH, CREATE_ATTEMPT, CADENCE_CALL,
      "            state_transaction.world.parliament_attempt_counts.get_mut();\n" + CADENCE_CALL),
     (WORLD_PATH, CREATE_ATTEMPT,
-     "                sortition_pulse_epoch_length_blocks,\n                effect_preimage_hash,",
-     "                3,\n                effect_preimage_hash,"),
+     ".parliament_sortition_pulse_delay_blocks, sortition_pulse_epoch_length_blocks),",
+     ".parliament_sortition_pulse_delay_blocks, 3),"),
+    # Both frozen schedule inputs are `u64`: a swapped tuple still compiles.
+    (WORLD_PATH, CREATE_ATTEMPT,
+     "(state_transaction\n                    .gov\n"
+     "                    .parliament_sortition_pulse_delay_blocks, sortition_pulse_epoch_length_blocks),",
+     "(sortition_pulse_epoch_length_blocks, state_transaction\n                    .gov\n"
+     "                    .parliament_sortition_pulse_delay_blocks),"),
+    (REDUCER_PATH, "    pub fn try_new(",
+     "                sortition_pulse_delay_blocks,\n                sortition_pulse_epoch_length_blocks,\n"
+     "            ),",
+     "                sortition_pulse_epoch_length_blocks,\n                sortition_pulse_delay_blocks,\n"
+     "            ),"),
+    (REDUCER_PATH, CONSTRUCTOR,
+     "(sortition_pulse_delay_blocks, sortition_pulse_epoch_length_blocks): (u64, u64),",
+     "(sortition_pulse_epoch_length_blocks, sortition_pulse_delay_blocks): (u64, u64),"),
     (WORLD_PATH, "    fn canonical_confirmation_sortition_request_v1(",
      ".next_sortition_generation_pulse_height_v1(request_height, beacon_session_id)",
      ".sortition_pulse_delay_blocks().checked_add(request_height)"),
@@ -4913,6 +5103,10 @@ def test_kura_claim_cleanup_live_noop_cannot_hide_behind_disabled_copy(
      "state.releases.push(Arc::clone(&self.signal));", "immediate.push(Arc::clone(&self.signal));"),
     (KURA_RAW_CLAIM_PATH, "fn release(&self, abandoned: bool)",
      'state.publication && !cfg!(all(test, sumeragi_core_mutation = "HC352"))', "false"),
+    (KURA_LEASE_PATH, None,
+     "pub struct KuraPublicationReleases {", "pub(super) struct KuraPublicationReleases {"),
+    (KURA_RAW_CLAIM_PATH, None,
+     "pub struct RawGeometryReleases {", "pub(super) struct RawGeometryReleases {"),
     (KURA_CALLBACK_TESTS_PATH,
      "fn original_kura_partial_refusal_callbacks_follow_all_state_siblings()",
      "check_kura_release(true, false);", "check_kura_release(false, false);"),
@@ -5201,7 +5395,7 @@ def test_beacon_borrow_rejects_changed_codec_handoff(
     """A borrowed pulse reaches the returned witness through the exact fallible canonical writer."""
     sources = _beacon_borrow_sources()
     path = guard.BEACON_CONTROL_PATH
-    item = guard.rust_item(sources[path], "pub(crate) fn encode(", path)
+    item = guard.rust_item(sources[path], "pub fn encode(", path)
     assert item.count(original) == 1
     changed = item.replace(original, ("/* " + original + " */" if retain_comment else "") + replacement, 1)
     sources[path] = sources[path].replace(item, changed, 1)
@@ -5209,12 +5403,15 @@ def test_beacon_borrow_rejects_changed_codec_handoff(
         guard.require_beacon_borrowed_witness(*sources.values())
 
 
-@pytest.mark.parametrize("path,name", ((guard.BEACON_PRODUCER_PATH, "build"), (guard.BEACON_CONTROL_PATH, "encode")))
+@pytest.mark.parametrize("path,visibility,name", (
+    (guard.BEACON_PRODUCER_PATH, "pub(crate)", "build"),
+    (guard.BEACON_CONTROL_PATH, "pub", "encode"),
+))
 @pytest.mark.parametrize("mode", ("disabled", "foreign", "macro", "raw_duplicate", "comment_only", "qualifier", "inner_cfg"))
-def test_beacon_borrow_rejects_nonoriginal_owner(path: str, name: str, mode: str) -> None:
+def test_beacon_borrow_rejects_nonoriginal_owner(path: str, visibility: str, name: str, mode: str) -> None:
     """Disabled, shadowed, foreign and quoted owners cannot stand in for the live entry."""
     sources = _beacon_borrow_sources()
-    item = guard.rust_item(sources[path], "pub(crate) fn " + name + "(", path)
+    item = guard.rust_item(sources[path], visibility + " fn " + name + "(", path)
     if mode == "disabled":
         changed = "#[cfg(any())]\n" + item
     elif mode == "foreign":
@@ -5226,7 +5423,7 @@ def test_beacon_borrow_rejects_nonoriginal_owner(path: str, name: str, mode: str
     elif mode == "comment_only":
         changed = "/* " + item + " */"
     elif mode == "qualifier":
-        changed = item.replace("pub(crate) fn", "pub(crate) unsafe fn", 1)
+        changed = item.replace(visibility + " fn", visibility + " unsafe fn", 1)
     else:
         sources[path] = "#![cfg(any())]\n" + sources[path]
         changed = item
@@ -5236,8 +5433,8 @@ def test_beacon_borrow_rejects_nonoriginal_owner(path: str, name: str, mode: str
 
 
 @pytest.mark.parametrize("path,route", (
-    (guard.EPOCH_BEACON_PATH, "pub(crate) mod control;"),
-    (guard.EPOCH_BEACON_PATH, "pub(crate) mod producer;"),
+    (guard.EPOCH_BEACON_PATH, "pub mod control;"),
+    (guard.EPOCH_BEACON_PATH, "pub mod producer;"),
     (guard.BEACON_PRODUCER_PATH, "use super::control;"),
 ))
 @pytest.mark.parametrize("mode", ("disabled", "nested", "comment_only", "duplicate"))
@@ -5278,7 +5475,8 @@ def test_beacon_borrow_accepts_only_presentation_changes() -> None:
     sources = _beacon_borrow_sources()
     for path in sources:
         sources[path] = "/* fn r#encode() {} impl Foreign { fn build() {} } */\n" + sources[path]
-    sources[guard.EPOCH_BEACON_PATH] = sources[guard.EPOCH_BEACON_PATH].replace("pub(crate) mod control;", "pub ( crate ) mod /* codec */ control ;")
+    assert sources[guard.EPOCH_BEACON_PATH].count("pub mod control;") == 1
+    sources[guard.EPOCH_BEACON_PATH] = sources[guard.EPOCH_BEACON_PATH].replace("pub mod control;", "pub  mod /* codec */ control ;")
     sources[guard.BEACON_PRODUCER_PATH] = sources[guard.BEACON_PRODUCER_PATH].replace("control::encode(pulse.as_ref())", "control :: encode ( pulse . as_ref ( ) )")
     sources[guard.BEACON_CONTROL_PATH] = sources[guard.BEACON_CONTROL_PATH].replace("write_canonical_to_writer(pulse,", "write_canonical_to_writer( /* exact pulse */ pulse ,")
     guard.require_beacon_borrowed_witness(*sources.values())

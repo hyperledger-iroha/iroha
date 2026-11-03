@@ -24,6 +24,12 @@ Artifact-backed readers can disable ambient process variables with
 must finish every reader with [`read::ConfigReader::into_result`], including after successfully
 loading an `extends` graph.
 
+[`config_enum!`] defines small configuration enums and their exact text spellings together.
+It provides borrowed `as_str()` output, case-sensitive `FromStr` and `TryFrom<&str>`, and
+`Display` with ordinary string formatting. Unknown values return [`enum_text::ParseError`]
+without retaining the supplied text. Configuration serializers can borrow the canonical spelling
+instead of allocating a temporary display string.
+
 ## Example: raw usage
 
 Let's say we want to read the following config:

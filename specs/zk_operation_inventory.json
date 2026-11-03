@@ -4663,7 +4663,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -4698,7 +4698,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -4733,7 +4733,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -4768,7 +4768,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []

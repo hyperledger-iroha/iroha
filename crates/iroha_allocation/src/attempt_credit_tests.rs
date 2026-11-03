@@ -60,14 +60,24 @@ fn refused_attempt_keeps_its_own_refunds_until_an_external_release() {
     let (release, retained) = budget.with_attempt_credits(None, || {
         // A transient refund stays with the attempt and pays for its next reservation.
         drop(budget.try_reserve_bytes(16).unwrap());
-        assert_eq!(budget.reserved_bytes(), LIMIT - 48);
+        assert_eq!(budget.pool.reserved.load(Ordering::Acquire), LIMIT - 48);
+        assert_eq!(budget.reserved_bytes(), LIMIT - 64);
         let prefix = without_allocations(|| budget.try_reserve_bytes(64).unwrap());
         assert_eq!(budget.reserved_bytes(), LIMIT);
-        let release = capacity_release(budget.try_reserve_bytes(1).unwrap_err());
+        let refusal = budget.try_reserve_bytes(1).unwrap_err();
+        assert!(matches!(
+            refusal,
+            AllocationRefusal::Capacity {
+                requested_bytes: 1,
+                reserved_bytes: LIMIT,
+                ..
+            }
+        ));
         // The rolled-back prefix stays with the refused attempt.
         drop(prefix);
-        assert_eq!(budget.reserved_bytes(), LIMIT);
-        release
+        assert_eq!(budget.pool.reserved.load(Ordering::Acquire), LIMIT);
+        assert_eq!(budget.reserved_bytes(), LIMIT - 64);
+        capacity_release(refusal)
     });
     let retained = retained.expect("the refused attempt keeps its rolled-back prefix");
     assert_eq!(retained.retained_bytes(), 64);
@@ -164,9 +174,11 @@ fn foreign_credits_unwind_and_other_pools_keep_ordinary_refunds() {
         assert_eq!(other.reserved_bytes(), 0);
         // Kept credits pay for later reservations of the same attempt.
         drop(mine);
-        assert_eq!(budget.reserved_bytes(), 96);
+        assert_eq!(budget.pool.reserved.load(Ordering::Acquire), 96);
+        assert_eq!(budget.reserved_bytes(), 0);
         let spent = budget.try_reserve_bytes(16).unwrap();
-        assert_eq!(budget.reserved_bytes(), 96);
+        assert_eq!(budget.pool.reserved.load(Ordering::Acquire), 96);
+        assert_eq!(budget.reserved_bytes(), 16);
         drop(spent);
     });
     assert_eq!(kept.unwrap().retained_bytes(), 96);
@@ -177,13 +189,38 @@ fn foreign_credits_unwind_and_other_pools_keep_ordinary_refunds() {
             let prefix = budget.try_reserve_bytes(128).unwrap();
             assert!(budget.try_reserve_bytes(1).is_err());
             drop(prefix);
-            assert_eq!(budget.reserved_bytes(), 128);
+            assert_eq!(budget.pool.reserved.load(Ordering::Acquire), 128);
             panic!("abandoned attempt");
         })
     }));
     assert!(unwound.is_err());
     assert_eq!(budget.reserved_bytes(), 0);
     assert!(AttemptCreditScope::innermost(&budget.pool).is_none());
+}
+
+#[test]
+fn exhausting_the_pool_inside_an_attempt_also_spends_its_kept_credits() {
+    let budget = AllocationBudget::new(LIMIT);
+    let other = budget.try_reserve_bytes(LIMIT / 2).unwrap();
+    let ((), retained) = budget.with_attempt_credits(None, || {
+        drop(budget.try_reserve_bytes(64).unwrap());
+        assert_eq!(budget.reserved_bytes(), LIMIT / 2);
+        let all = budget
+            .try_reserve_bytes(LIMIT - budget.reserved_bytes())
+            .unwrap();
+        assert_eq!(budget.reserved_bytes(), LIMIT);
+        assert!(matches!(
+            budget.try_reserve_bytes(1),
+            Err(AllocationRefusal::Capacity {
+                reserved_bytes: LIMIT,
+                ..
+            })
+        ));
+        drop(all);
+    });
+    assert_eq!(retained.unwrap().retained_bytes(), LIMIT - LIMIT / 2);
+    drop(other);
+    assert_eq!(budget.reserved_bytes(), 0);
 }
 
 #[test]

@@ -6,16 +6,13 @@ use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
     smartcontracts::ivm::host::CoreHost,
-    state::{State, World, WorldReadOnly},
+    state::{State, World},
 };
 use iroha_crypto::{Algorithm, KeyPair};
-use iroha_data_model::{account::NewAccount, prelude::*};
+use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
-use mv::storage::StorageReadOnly;
-#[path = "common/root_scope_fixture.rs"]
-mod root_scope_fixture;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -120,47 +117,17 @@ fn zk_roots_get_respects_cap_and_max() {
             },
         })
         .expect("empty state accepts roots-cap test configuration");
-    // Instruction execution requires committed root authority: the first height commits the
-    // Global root scope, so the seed executes at height two.
-    root_scope_fixture::commit_global_root_scope(&state);
-    // Seed world: domain/account/asset and mint
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
+    // Domain, account, asset and confidential-asset registration are signed-genesis
+    // instructions, and this syscall test only reads one asset's bounded root history.
+    // Seed the state `RegisterZkAsset` installs for an asset without an unshield verifier
+    // (the default tree) and its authenticated-tree transitions directly.
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("zkd", "universal").unwrap(),
             "zcoin".parse().unwrap(),
         );
     let owner = checked_random_zk_roots_account_id();
-    for instr in [
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "zcoin".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .into(),
-        Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner.clone())).into(),
-        // Register zk policy
-        iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, &instr)
-            .unwrap();
-    }
-    // Seed authenticated-tree transitions directly; the syscall test only exercises root caps.
-    let mut zk_state = stx
-        .world
-        .zk_assets()
-        .get(&asset_def_id)
-        .cloned()
-        .expect("registered confidential asset state");
+    let mut zk_state = iroha_core::state::ZkAssetState::default();
     for i in 0_u8..16 {
         let mut commitment = [7_u8; 32];
         commitment[0] = i.saturating_add(1);
@@ -168,19 +135,7 @@ fn zk_roots_get_respects_cap_and_max() {
             .push_commitment(commitment, nonzero!(4_usize))
             .expect("seed bounded confidential root history");
     }
-    stx.world
-        .zk_assets_mut_for_testing()
-        .remove(asset_def_id.clone());
-    stx.world
-        .zk_assets_mut_for_testing()
-        .insert(asset_def_id.clone(), zk_state);
-    let zk_snapshot = stx
-        .world
-        .zk_assets()
-        .iter()
-        .map(|(asset_id, state)| (asset_id.clone(), state.clone()))
-        .collect();
-    stx.apply();
+    let zk_snapshot = std::collections::BTreeMap::from([(asset_def_id.clone(), zk_state)]);
     // Build CoreHost and snapshot roots
     let mut vm = ivm::IVM::new(1_000_000);
     let mut host = CoreHost::new(owner.clone());

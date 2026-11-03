@@ -10,7 +10,7 @@ use sorafs_manifest::signer::stream_token_evidence::{
     SignerStreamTokenObservationExpectedV1, SignerStreamTokenObservationPhaseV1,
     verify_stream_token_signer_current_evidence_v1,
 };
-use std::fs;
+use std::{fs, time::SystemTime};
 
 fn now_ms() -> u64 {
     SystemTime::now()
@@ -192,6 +192,7 @@ fn source_with_timeout(
         .unwrap(),
         timeout,
         uncertainty_ms: 0,
+        clock: TimeSource::new_system(),
     }
 }
 fn reviewed(source: &NativeStreamTokenSourceV1) -> StreamTokenReviewedV1 {
@@ -348,34 +349,44 @@ fn emergency_fast_skips_native_stream_credentials_on_every_platform() {
 
 #[test]
 fn native_constructor_rejects_epoch_substitution_and_utc_interval_outside_policy() {
-    let fixture = Fixture::new_at(now_ms());
+    let enrolled_at = now_ms();
+    let fixture = Fixture::new_at(enrolled_at);
     let (_dir, mut storage) = config(&fixture);
+    // Every build reads the same UTC instant, one second after the custody statement was
+    // issued, so only the configuration decides each outcome however long setup took.
+    let build = |storage: &actual::SorafsStorage| {
+        runtime::build_native_stream_token_runtime_with_clock_v1(
+            storage,
+            fixture.state.clone(),
+            queue(),
+            TimeSource::new_fixed(Duration::from_millis(enrolled_at + 1_000)),
+        )
+    };
+    assert!(
+        build(&storage).unwrap().is_some(),
+        "the exact configuration is admitted at this instant"
+    );
     storage
         .stream_tokens
         .signer
         .as_mut()
         .unwrap()
         .policy_revision += 1;
-    assert!(
-        runtime::build_native_stream_token_runtime_v1(&storage, fixture.state.clone(), queue())
-            .is_err()
-    );
+    assert!(build(&storage).is_err());
     storage
         .stream_tokens
         .signer
         .as_mut()
         .unwrap()
         .policy_revision -= 1;
+    // A five-second uncertainty interval around the same instant begins before issuance.
     storage
         .stream_tokens
         .signer
         .as_mut()
         .unwrap()
         .clock_uncertainty_ms = 5000;
-    assert!(
-        runtime::build_native_stream_token_runtime_v1(&storage, fixture.state.clone(), queue())
-            .is_err()
-    );
+    assert!(build(&storage).is_err());
 }
 
 #[test]
