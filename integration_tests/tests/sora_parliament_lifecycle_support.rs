@@ -58,8 +58,8 @@ pub const MIN_ENACTMENT_DELAY: u64 = 4;
 
 // One signed NPoS epoch length for every converted sortition corridor. A sortition slot
 // is a consensus-native pre-boundary pulse height, so each draw waits for `(h + 1) % L == 0`.
-// The corridors submit at exact heights, one carrier per height, and a native pulse height
-// finalizes without a carrier. `L` therefore has to exceed the longest exact-height run
+// The corridors submit at exact heights, one carrier per height, including native pulse
+// heights. `L` has to exceed the longest exact-height run
 // between two draws: the invitation window (40, 56 or 68 blocks), the roster seal, and the
 // public-finding phases with their 8 or 20 block deadline. 128 covers each of those runs
 // with margin while the first slot (height 127) stays reachable by plain carriers.
@@ -302,18 +302,6 @@ pub async fn advance_to_execution_predecessor(
             )
         })?;
     advance_to_height_with_carriers(network, client, authority_height, label).await
-}
-
-pub async fn advance_to_autonomous_predecessor(
-    network: &iroha_test_network::Network,
-    client: &Client,
-    target_height: u64,
-    label: &str,
-) -> Result<()> {
-    let predecessor_height = target_height.checked_sub(1).ok_or_else(|| {
-        eyre!("{label}: autonomous target height {target_height} has no predecessor")
-    })?;
-    advance_to_height_with_carriers(network, client, predecessor_height, label).await
 }
 
 pub async fn submit_transition(
@@ -695,15 +683,15 @@ pub async fn expected_sortition_slot(
     Ok(slot)
 }
 
-/// Governance-local wait: carry the chain to the slot's predecessor, then observe the
-/// consensus-native pre-boundary pulse that every validator finalized at the slot.
+/// Governance-local wait: submit ordinary work through the native slot, then observe the
+/// consensus-native pre-boundary pulse that every validator finalized with that work.
 pub async fn await_native_sortition_pulse(
     network: &iroha_test_network::Network,
     client: &Client,
     slot: u64,
     label: &str,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    advance_to_autonomous_predecessor(network, client, slot, label).await?;
+    advance_to_height_with_carriers(network, client, slot, label).await?;
     network.ensure_blocks(slot).await?;
     // The native pre-boundary pulse must finalize exactly the slot height.
     observe_exact_height(client, slot, label).await?;
@@ -754,6 +742,14 @@ pub async fn cross_native_boundary_after_pulse(
     let successor_height = boundary_height
         .checked_add(1)
         .ok_or_else(|| eyre!("{label}: successor height overflow"))?;
+    admit_parliament_height_carrier(
+        client,
+        [Log::new(
+            Level::INFO,
+            format!("{label} successor carrier {successor_height}"),
+        )],
+    )
+    .await?;
     network.ensure_blocks(successor_height).await?;
     observe_exact_height(client, successor_height, label).await?;
     let successor_epoch = boundary_height / epoch_length_blocks;

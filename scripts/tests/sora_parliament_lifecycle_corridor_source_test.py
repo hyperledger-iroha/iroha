@@ -204,6 +204,28 @@ NO_RESULT_TEST = re.compile(
 # A sortition slot is the first consensus-native pulse height at or after the frozen delay
 # and above every earlier generation slot. The wait for it is governance-local.
 SORTITION_SLOT_HELPER_MARKERS = {
+    "install_threshold_sessions": (
+        "submit_parliament_instructions(",
+        'observe_exact_height(client, install_height, "failure-corridor threshold-key installation",).await?;',
+        'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry Parliament failure-corridor threshold-key activation".to_owned(),)],).await?;',
+        "network.ensure_blocks(activation_height).await?;",
+        'observe_exact_height(client, activation_height, "failure-corridor threshold-key activation",).await?;',
+    ),
+    "admit_parliament_height_carrier": (
+        "submission::prepare_parliament_transaction(client, instructions).await?;",
+        "let admitted_hash = tokio::time::timeout(OPERATION_TIMEOUT, client.account_client().submit_transaction(&transaction),)",
+        "if admitted_hash != transaction.hash() {",
+        '"Parliament carrier admission substituted the signed hash"',
+    ),
+    "advance_to_height_with_carriers": (
+        "let height = current_height(client).await?;",
+        "if height == target_height { return Ok(()); }",
+        "if height > target_height {",
+        "let carrier_height = height .checked_add(1)",
+        'admit_parliament_height_carrier(client, [Log::new(Level::INFO, format!("{label} admission carrier {carrier_height}"),)],).await?;',
+        "network.ensure_blocks(carrier_height).await?;",
+        "observe_exact_height(client, carrier_height, label).await?;",
+    ),
     "with_signed_npos_epoch": (
         "epoch_length_blocks: NonZeroU64::new(epoch_length_blocks)",
         "evidence_horizon_blocks: epoch_length_blocks * 2,",
@@ -239,7 +261,7 @@ SORTITION_SLOT_HELPER_MARKERS = {
         "aligned_native_pulse_height(earliest, epoch_length_blocks)?;",
     ),
     "await_native_sortition_pulse": (
-        "advance_to_autonomous_predecessor(network, client, slot, label).await?;",
+        "advance_to_height_with_carriers(network, client, slot, label).await?;",
         "network.ensure_blocks(slot).await?;",
         "observe_exact_height(client, slot, label).await?;",
         "pulses.push(pulse_at(&peer.client(), slot, network).await?);",
@@ -249,6 +271,7 @@ SORTITION_SLOT_HELPER_MARKERS = {
     "cross_native_boundary_after_pulse": (
         "if boundary_height % epoch_length_blocks != 0 {",
         "network.ensure_blocks(boundary_height).await?;",
+        'admit_parliament_height_carrier(client, [Log::new(Level::INFO, format!("{label} successor carrier {successor_height}"),)],).await?;',
         "network.ensure_blocks(successor_height).await?;",
         "observe_exact_height(client, successor_height, label).await?;",
         "context.authorization.epoch != successor_epoch",
@@ -257,6 +280,7 @@ SORTITION_SLOT_HELPER_MARKERS = {
     ),
 }
 RETIRED_SORTITION_SLOT_RULES = (
+    "advance_to_autonomous_predecessor",
     "request_height + 4",
     ".checked_add(CAPACITY_SORTITION_DELAY_BLOCKS)",
     "the demanded sortition threshold-beacon effect",
@@ -306,16 +330,46 @@ GOVERNANCE_ISOLATION_CONSTANTS = (
     "const ISOLATION_CARRIERS_AFTER_RESTART: u64 = 3;",
     "pub const CORRIDOR_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 128;",
 )
-AUTONOMOUS_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
+NATIVE_PULSE_PROGRESSION = '''network.ensure_blocks(pulse_height).await?;
+    observe_exact_height(
+        &client,
+        pulse_height,
+        "initial mandatory pre-boundary pulse",
+    )
+    .await?;
     assert_eq!(
         current_height(&client).await?,
         pulse_height,
-        "the mandatory threshold-beacon effect must autonomously finalize its exact pre-boundary height",
+        "the mandatory threshold beacon must finalize the carrier at its exact pre-boundary height",
     );'''
 BOUNDARY_PROGRESSION = '''network.ensure_blocks(boundary_height).await?;
+    observe_exact_height(&client, boundary_height, "first native boundary").await?;
     assert_eq!(current_height(&client).await?, boundary_height);'''
 SUCCESSOR_PROGRESSION = '''network.ensure_blocks(boundary_height + 1).await?;
+    observe_exact_height(&client, boundary_height + 1, "first native successor").await?;
     assert_eq!(current_height(&client).await?, boundary_height + 1);'''
+MANDATORY_NATIVE_WORK = (
+    'advance_to_height_with_carriers(&network, &client, pulse_height - 1, "initial mandatory pre-boundary pulse",).await?;',
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the initial mandatory pre-boundary pulse".to_owned(),)],).await?;',
+    "network.ensure_blocks(pulse_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry retained-authority successor progression".to_owned(),)],).await?;',
+    "network.ensure_blocks(boundary_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the first native successor epoch".to_owned(),)],).await?;',
+    "network.ensure_blocks(boundary_height + 1).await?;",
+    'advance_to_height_with_carriers(&network, &client, successor_pulse_height, "retained-session mandatory pre-boundary pulse",).await?;',
+    "network.ensure_blocks(successor_pulse_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the retained-session NPoS boundary".to_owned(),)],).await?;',
+    "network.ensure_blocks(second_boundary_height).await?;",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "carry the second native successor epoch".to_owned(),)],).await?;',
+    "network.ensure_blocks(second_boundary_height + 1).await?;",
+)
+FAIL_CLOSED_NATIVE_WORK = (
+    'advance_to_height_with_carriers(&network, &client, predecessor_height, "fail-closed mandatory pulse predecessor",).await?;',
+    "network.ensure_blocks(predecessor_height).await?;",
+    "assert_eq!(current_height(&client).await?, predecessor_height);",
+    'admit_parliament_height_carrier(&client, [Log::new(Level::INFO, "pending work for the below-threshold mandatory pulse".to_owned(),)],).await?;',
+    "let pulse_status_is_active = |status: &SumeragiStatus| -> bool {",
+)
 SUCCESSOR_SEED_EQUALITY = (
     "assert_eq!(context.leader_seed, successor_seed);"
 )
@@ -538,6 +592,13 @@ def validate_native_sortition_helpers(source: str) -> None:
                 compact(marker) in helper,
                 f"native sortition helper `{name}` lost `{marker}`",
             )
+    for name in (
+        "install_threshold_sessions", "admit_parliament_height_carrier", "advance_to_height_with_carriers",
+        "await_native_sortition_pulse", "cross_native_boundary_after_pulse",
+    ):
+        require_exact_ordered_markers(
+            corridor_helper(source, name), SORTITION_SLOT_HELPER_MARKERS[name], name,
+        )
     for retired in RETIRED_SORTITION_SLOT_RULES:
         require(
             retired not in source,
@@ -547,6 +608,17 @@ def validate_native_sortition_helpers(source: str) -> None:
         'tick(&client, "finalize the demanded sortition pulse")' not in source,
         "demanded Parliament pulse regained a racing tick",
     )
+
+
+def require_exact_ordered_markers(source: str, markers: tuple[str, ...], owner: str) -> None:
+    """Bind real carrier admission before its exact observation, once per step."""
+    body = compact(re.sub(r"/\*.*?\*/|//[^\n]*", "", source, flags=re.S))
+    positions = []
+    for marker in markers:
+        expected = compact(marker)
+        require(body.count(expected) == 1, f"{owner} lost unique native work `{marker}`")
+        positions.append(body.index(expected))
+    require(positions == sorted(positions), f"{owner} observes native work before admission")
 
 
 def governance_isolation_test(source: str) -> tuple[re.Match[str], str]:
@@ -1000,6 +1072,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
     """Require genuine pulses and genesis-bound authority across retained epochs."""
 
     _, test = mandatory_npos_test(source)
+    require_exact_ordered_markers(test, MANDATORY_NATIVE_WORK, "mandatory NPoS corridor")
     require(
         source.count("const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;") == 1,
         "mandatory NPoS epoch length is not one exact eight-block constant",
@@ -1018,7 +1091,7 @@ def validate_mandatory_npos_boundary(source: str) -> None:
         "assert_eq!(beacon_record.session.threshold, 2);",
         "let boundary_height = MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS;",
         "pulse_height = boundary_height - 1",
-        AUTONOMOUS_PULSE_PROGRESSION,
+        NATIVE_PULSE_PROGRESSION,
         "verify_finalized_global_threshold_beacon_pulse_v1(",
         "let successor_epoch = 1;",
         "global_threshold_beacon_npos_successor_seed_v1(",
@@ -1141,6 +1214,7 @@ def validate_fail_closed_npos_boundary(source: str) -> None:
     """Require four live validators to stall exactly below a mandatory pulse."""
 
     _, test = fail_closed_npos_test(source)
+    require_exact_ordered_markers(test, FAIL_CLOSED_NATIVE_WORK, "below-threshold NPoS corridor")
     required = (
         "SumeragiNposParameters::default()",
         ".with_peers(VALIDATOR_COUNT)",
@@ -1541,8 +1615,8 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "sortition pulse transaction race": corridor
             + '\n    tick(&client, "finalize the demanded sortition pulse")?;\n',
             "restored Parliament-demanded pulse wait": corridor.replace(
-                "advance_to_autonomous_predecessor(network, client, slot, label).await?;",
-                "advance_to_autonomous_predecessor(network, client, slot, label).await?;\n"
+                "advance_to_height_with_carriers(network, client, slot, label).await?;",
+                "advance_to_height_with_carriers(network, client, slot, label).await?;\n"
                 "    network.ensure_blocks(sortition_pulse_height).await?;",
                 1,
             ),
@@ -1817,13 +1891,13 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
             "missing epoch constant": corridor.replace(
                 "const MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS: u64 = 8;", "", 1
             ),
-            "non-autonomous pulse": mutate_mandatory_npos_test(
+            "missing native pulse observation": mutate_mandatory_npos_test(
                 corridor,
                 "network.ensure_blocks(pulse_height).await?;",
                 'tick(&client, "commit mandatory pre-boundary pulse")?;',
             ),
-            "missing autonomous-height equality": mutate_mandatory_npos_test(
-                corridor, AUTONOMOUS_PULSE_PROGRESSION
+            "missing exact pulse-height equality": mutate_mandatory_npos_test(
+                corridor, NATIVE_PULSE_PROGRESSION
             ),
             "missing boundary progression": mutate_mandatory_npos_test(
                 corridor, BOUNDARY_PROGRESSION
@@ -1880,6 +1954,60 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 validate_mandatory_npos_boundary(
                     mutate_mandatory_npos_test(corridor, marker)
                 )
+
+    def test_native_pulse_cases_require_ordered_real_work_before_observation(self) -> None:
+        """Idle silence cannot prove a valid pulse or a below-threshold refusal."""
+        corridor = read_corridor_source()
+        for name, markers, validate in (
+            (MANDATORY_NPOS_TEST_NAME, MANDATORY_NATIVE_WORK, validate_mandatory_npos_boundary),
+            (FAIL_CLOSED_NPOS_TEST_NAME, FAIL_CLOSED_NATIVE_WORK, validate_fail_closed_npos_boundary),
+        ):
+            owner = name + "_impl"
+            validate(corridor)
+            for marker in markers:
+                for replacement in ("", f"/* {marker} */", marker + "\n" + marker):
+                    with self.subTest(owner=owner, marker=marker, replacement=replacement):
+                        changed = mutate_marker(corridor, marker, replacement, owner=owner)
+                        with self.assertRaises(ContractError):
+                            validate(changed)
+            # Retaining every call is insufficient if admission happens after its wait.
+            changed = mutate_marker(corridor, markers[0], "", owner=owner)
+            changed = mutate_marker(
+                changed, markers[-1], markers[-1] + "\n" + markers[0], owner=owner,
+            )
+            with self.subTest(owner=owner, mutation="late admission"), self.assertRaises(ContractError):
+                validate(changed)
+        pending = FAIL_CLOSED_NATIVE_WORK[3]
+        with self.subTest(mutation="waiting for the refused transaction to apply"), self.assertRaises(ContractError):
+            validate_fail_closed_npos_boundary(mutate_marker(
+                corridor, pending,
+                pending.replace("admit_parliament_height_carrier", "submit_parliament_instructions"),
+                owner=FAIL_CLOSED_NPOS_TEST_NAME + "_impl",
+            ))
+
+    def test_threshold_installation_observes_exact_publication_in_order(self) -> None:
+        """Durable storage cannot substitute for the client's installed State projection."""
+        corridor = read_corridor_source()
+        owner = "install_threshold_sessions"
+        markers = SORTITION_SLOT_HELPER_MARKERS[owner]
+        validate_native_sortition_helpers(corridor)
+        for marker in (markers[1], markers[4]):
+            for replacement in (
+                marker.replace("observe_exact_height", "assert_current_height"),
+                marker.replace("client, install_height,", "client, install_height + 1,")
+                .replace("client, activation_height,", "client, activation_height + 1,"),
+                f"/* {marker} */",
+                marker + "\n" + marker,
+            ):
+                with self.subTest(marker=marker, replacement=replacement), self.assertRaises(ContractError):
+                    validate_native_sortition_helpers(mutate_marker(
+                        corridor, marker, replacement, owner=owner,
+                    ))
+        # A retained activation observer before the durable-block barrier is still wrong.
+        changed = mutate_marker(corridor, markers[4], "", owner=owner)
+        changed = mutate_marker(changed, markers[3], markers[4] + markers[3], owner=owner)
+        with self.subTest(mutation="publication observation before storage barrier"), self.assertRaises(ContractError):
+            validate_native_sortition_helpers(changed)
 
     def test_native_finality_rejects_missing_or_disconnected_authentication(self) -> None:
         """Genesis, source, committee, votes and deadline checks must precede the callback."""
