@@ -7,9 +7,11 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -1072,6 +1074,70 @@ class KotodamaPerfGateTests(unittest.TestCase):
             self.assertRaisesRegex(PERF.GateError, "source drift"),
         ):
             PERF.validate_candidate_provenance(candidate, revision)
+
+    def test_measurement_shell_preserves_original_warning_policy_and_commands(self) -> None:
+        """Execute both actual steps, preserving diagnostics and every failure status."""
+        workflow = (ROOT / ".github/workflows/kotodama_perf.yml").read_text()
+        for revision in ("base", "candidate"):
+            marker = f"      - name: Measure {revision} revision\n"
+            step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
+            command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+            expected = [
+                ["bench", "--locked", "--jobs", "1", "-p", "ivm", "--bench",
+                 "bench_kotodama", "--", "--save-baseline", revision],
+                ["bench", "--locked", "--jobs", "1", "-p", "iroha_core", "--bench",
+                 "kotodama_runtime_cache", "--", "--save-baseline", revision],
+                ["bench", "--locked", "--jobs", "1", "-p", "iroha_core", "--features",
+                 "bench,iroha-core-tests", "--bench", "queries", "--", "typed_core_query_",
+                 "--save-baseline", revision],
+            ]
+            for failure_at in (0, 1, 2, 3):
+                with self.subTest(revision=revision, failure_at=failure_at):
+                    root = self.root / f"{revision}-{failure_at}"
+                    root.mkdir()
+                    bin_dir = root / "bin"
+                    bin_dir.mkdir()
+                    receipt = root / "calls.jsonl"
+                    cargo = bin_dir / "cargo"
+                    cargo.write_text(
+                        f"#!{sys.executable}\n"
+                        "import json, os, pathlib, sys\n"
+                        "receipt = pathlib.Path(os.environ['TEST_CARGO_RECEIPT'])\n"
+                        "count = len(receipt.read_text().splitlines()) if receipt.exists() else 0\n"
+                        "keys = ('CARGO_BUILD_WARNINGS', 'RUSTUP_TOOLCHAIN', 'CARGO_BUILD_JOBS', "
+                        "'CARGO_INCREMENTAL', 'CARGO_TARGET_DIR', 'RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS')\n"
+                        "with receipt.open('a') as out:\n"
+                        "    out.write(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+                        "'environment': {key: os.environ[key] for key in keys if key in os.environ}}) + '\\n')\n"
+                        "print('cargo output')\n"
+                        "print('warning: retained compiler diagnostic', file=sys.stderr)\n"
+                        "raise SystemExit(23 if count + 1 == int(os.environ['TEST_FAIL_AT']) else 0)\n"
+                    )
+                    cargo.chmod(0o700)
+                    retained = {
+                        "RUSTUP_TOOLCHAIN": "1.99.1", "CARGO_BUILD_JOBS": "1",
+                        "CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(self.root / "target"),
+                        "RUSTFLAGS": "--cfg retained_warning_policy",
+                        "CARGO_ENCODED_RUSTFLAGS": "-C\x1fdebuginfo=1",
+                    }
+                    environment = {
+                        **os.environ, **retained, "CARGO_BUILD_WARNINGS": "deny",
+                        "PATH": str(bin_dir) + os.pathsep + os.environ["PATH"],
+                        "TEST_CARGO_RECEIPT": str(receipt), "TEST_FAIL_AT": str(failure_at),
+                    }
+                    result = subprocess.run(["bash", "-e", "-c", command], cwd=root,
+                                            env=environment, text=True, capture_output=True)
+                    calls = [json.loads(line) for line in receipt.read_text().splitlines()]
+                    count = failure_at or 3
+                    self.assertEqual(result.returncode, 23 if failure_at else 0)
+                    self.assertEqual([call["argv"] for call in calls], expected[:count])
+                    self.assertEqual(result.stdout, "cargo output\n" * count)
+                    self.assertEqual(result.stderr, "warning: retained compiler diagnostic\n" * count)
+                    for call in calls:
+                        self.assertEqual(call["cwd"], str(root.resolve()))
+                        self.assertNotIn("CARGO_BUILD_WARNINGS", call["environment"])
+                        for name, value in retained.items():
+                            self.assertEqual(call["environment"][name], value)
 
     def test_release_workflow_runs_the_complete_artifact_gate(self) -> None:
         workflow = (

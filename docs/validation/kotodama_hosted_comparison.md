@@ -4,6 +4,10 @@ The `representative-regression` job in `.github/workflows/kotodama_perf.yml`
 measures the pinned, untouched baseline and current candidate serially on the
 same Ubuntu VM, with the same explicit Rust toolchain and one Cargo build job.
 The shared native setup installs dependencies from the `candidate` checkout.
+Both measurement steps remove its newly injected `CARGO_BUILD_WARNINGS`
+override to preserve the original benchmark warning policy. Compiler warnings
+remain visible; source-level diagnostics, compiler flags, the immutable
+baseline, and the separate strict current-source Clippy gates are unchanged.
 Cached Criterion measurements are cleared before sampling; baseline `new`
 slots are cleared before the candidate runs. Source, inventory, original lock,
 timed-body, and complete artifact checks remain mandatory.
