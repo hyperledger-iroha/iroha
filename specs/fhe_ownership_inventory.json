@@ -13189,6 +13189,12 @@
    "evidence": {"path": "crates/iroha_core/src/runtime/catalog/tests.rs", "literal": "fn regenerate_runtime_baseline_catalog()"}
   },
   {
+   "path": "specs/runtime_baseline_instruction_layouts.tsv",
+   "registered": false,
+   "purpose": "Pinned baseline instruction layouts include FHE and RAM-LFE instructions; the registry test compares actual layouts with the complete table.",
+   "evidence": {"path": "crates/iroha_data_model/src/isi/registry.rs", "literal": "fn baseline_instruction_layouts_stay_frozen()"}
+  },
+  {
    "path": "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
    "kind": "registered_regions_only",
    "registered": true,
@@ -17360,7 +17366,14 @@
    "id": "ivm.gas_benchmark_policy",
    "role": "incidental",
    "summary": "Benchmark-only IVM acceleration policy; its comment excludes FHE from the policy scope and it implements no FHE arithmetic.",
-   "files": [{"path": "crates/ivm/benches/support/gas_policy.rs", "patterns": ["fhe"], "test_only": true}]
+   "files": [
+    {
+     "path": "crates/ivm/benches/support/gas_policy.rs",
+     "patterns": ["fhe"],
+     "test_only": true,
+     "evidence": "control Ed25519, FHE or other libraries' independent dispatch."
+    }
+   ]
   }
  ]
 }
