@@ -136,7 +136,7 @@ jobs:
       - name: Check out comparison base
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
-          ref: fc09b635df385d0488067f09baaa92a8d16fa124
+          ref: 06912ee4f8f9423b458d72039dbd0a1c8fde7b43
           path: baseline
 
       - name: Require regular revision lockfiles

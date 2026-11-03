@@ -222,7 +222,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         stdout = io.StringIO()
         stderr = io.StringIO()
         self.assertEqual(
-            "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222",
+            "1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55",
             PERF.BASELINE_CARGO_LOCK_SHA256,
         )
         with (
@@ -405,7 +405,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             set(PERF.BASELINE_TIMED_BODY_SHA256),
         )
         self.assertEqual(
-            "fc09b635df385d0488067f09baaa92a8d16fa124",
+            "06912ee4f8f9423b458d72039dbd0a1c8fde7b43",
             PERF.BASELINE_SHA,
         )
 

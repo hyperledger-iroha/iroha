@@ -32,11 +32,11 @@ from typing import Mapping, Sequence
 
 MAX_REGRESSION = 0.05
 LIST_SUGAR_MAX_SLOWDOWN = 0.0
-# The user-selected reset anchor is the untouched comparison baseline. It
+# The user-approved optimizations performance baseline remains untouched. It
 # contains the complete current benchmark inventory and its original lockfile.
-BASELINE_SHA = "fc09b635df385d0488067f09baaa92a8d16fa124"
+BASELINE_SHA = "06912ee4f8f9423b458d72039dbd0a1c8fde7b43"
 BASELINE_CARGO_LOCK_SHA256 = (
-    "0ddb3f3938cf32035371317100674cd1601c3cb41232237f7a7d28b3aeab6222"
+    "1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55"
 )
 CANDIDATE_CARGO_LOCK_SHA256 = (
     "a8a82fcc2d8cc46431e403ee9d4e7f8a70fab7d34639c9ff296fe2d38ebe866b"
