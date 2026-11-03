@@ -143,6 +143,56 @@ fn no_stages(root: &Path) -> bool {
 }
 
 #[test]
+fn stored_content_streams_through_retained_writer_and_reader_interfaces() {
+    let canonical = vec![0x5a; 10_000];
+    let stored = Stored::new(
+        &canonical,
+        Layout {
+            lanes: Some((1024, 8192)),
+            anchors: None,
+        },
+    );
+    let mut encoded = Vec::new();
+    stored.write_to(&mut encoded).unwrap();
+    assert_eq!(encoded.len(), stored.stored_len());
+    stored
+        .verify_stream(&mut io::Cursor::new(&encoded))
+        .unwrap();
+    let mut changed = encoded.clone();
+    changed[0] ^= 1;
+    assert!(
+        stored
+            .verify_stream(&mut io::Cursor::new(&changed))
+            .is_err()
+    );
+    assert!(
+        stored
+            .verify_stream(&mut io::Cursor::new(&encoded[..encoded.len() - 1]))
+            .is_err()
+    );
+    encoded.push(0);
+    assert!(
+        stored
+            .verify_stream(&mut io::Cursor::new(&encoded))
+            .is_err()
+    );
+
+    let inline = canonical.as_slice();
+    encoded.clear();
+    inline.write_to(&mut encoded).unwrap();
+    assert_eq!(encoded.len(), inline.stored_len());
+    inline
+        .verify_stream(&mut io::Cursor::new(&encoded))
+        .unwrap();
+    encoded[0] ^= 1;
+    assert!(
+        inline
+            .verify_stream(&mut io::Cursor::new(&encoded))
+            .is_err()
+    );
+}
+
+#[test]
 fn layout_shares_the_lane_records_and_complete_anchor_pieces() {
     let dir = tempfile::tempdir().unwrap();
     let writer = archive(dir.path(), AllocationBudget::new(1 << 20));
@@ -295,22 +345,18 @@ fn canonical_record_and_stage_from_an_earlier_release_are_accepted() {
     fs::remove_file(&target).unwrap();
     writer.publish(&original).unwrap();
     assert_eq!(fs::read(&target).unwrap()[..4], MAGIC);
-    let directory = File::open(dir.path().join("native-contexts")).unwrap();
-    verify_original(
-        &directory,
-        File::open(&target).unwrap(),
-        original.canonical_bytes(),
-        true,
-    )
-    .unwrap();
+    let (_, directory) = open_directory(dir.path(), false).unwrap();
+    let name = RecordName::new(2, carrier(2), false);
+    let mut selected = open_named_record(&directory, &name).unwrap();
+    // Verification borrows the selected original, rewinds it and retains its custody.
+    let mut prefix = [0; 4];
+    selected.read_exact(&mut prefix).unwrap();
+    verify_original(&directory, &mut selected, original.canonical_bytes(), true).unwrap();
+    selected.rewind().unwrap();
+    selected.read_exact(&mut prefix).unwrap();
+    assert_eq!(prefix, MAGIC);
     assert!(
-        verify_original(
-            &directory,
-            File::open(&target).unwrap(),
-            original.canonical_bytes(),
-            false,
-        )
-        .is_err(),
+        verify_original(&directory, &mut selected, original.canonical_bytes(), false,).is_err(),
         "only context records may be stored packed"
     );
 }

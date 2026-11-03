@@ -257,7 +257,7 @@ impl Kura {
         moved
             .require_source_absent()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
-        self.sync_bound_evidence_namespace(namespace, kind)?;
+        Self::sync_bound_evidence_namespace(namespace, kind)?;
         moved
             .snapshot()
             .map_err(|error| Error::IO(error, path.to_path_buf()))?;
