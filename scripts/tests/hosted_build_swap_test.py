@@ -166,8 +166,8 @@ def test_only_observed_build_owners_provision_before_their_work():
     jobs = dict(zip(blocks[1::2], blocks[2::2]))
     selected = {name for name, body in jobs.items() if command in body}
     observed = {"pre_build", "sumeragi", "zk_phase_tree_measurement", "x2_maximum_proof_transport"}
-    assert selected == observed | {"rust_affected"}
-    assert workflow.count(command) == 5
+    assert selected == observed | {"rust_affected", "sora_parliament_lifecycle"}
+    assert workflow.count(command) == 6
     for name in observed:
         body = jobs[name]
         assert "runs-on: ubuntu-24.04" in body
@@ -184,6 +184,13 @@ def test_only_observed_build_owners_provision_before_their_work():
         f"        run: {command}"
     )
     assert generic.index(command) < generic.index("      - name: Run locked affected checks")
+    parliament = jobs["sora_parliament_lifecycle"]
+    assert "runs-on: ubuntu-24.04" in parliament
+    assert "timeout-minutes: 120" in parliament
+    assert parliament.index("Verify isolated Parliament corridor source contract") < parliament.index(command)
+    step = parliament.split("      - name: Provision bounded hosted build swap for Parliament Core tests\n", 1)[1]
+    assert step.split("\n      - ", 1)[0] == f"        run: {command}"
+    assert parliament.index(command) < parliament.index("ci/observe_build_capacity.py -- bash ci/check_sora_parliament_lifecycle.sh")
     assert "scripts/tests/hosted_build_swap_test.py" in jobs["rust_changes"]
 
 

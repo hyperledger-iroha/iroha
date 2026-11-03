@@ -131,8 +131,8 @@ cumulative child high-water mark. The separate Cargo-process peak includes its
 child accounting and must not be interpreted as simultaneous process-tree
 memory or as an individual compiler unit's memory.
 
-The three dedicated Core library-test commands, selected release-binary build,
-and generic affected-crate checks in PR CI run through
+The three dedicated Core library-test commands, Parliament debug corridor,
+selected release-binary build, and generic affected-crate checks in PR CI run through
 `ci/observe_build_capacity.py`. This observer flushes a
 capacity snapshot to stderr every five seconds, capped at 1,080 periodic snapshots plus
 a final snapshot. It records host memory, swap and pressure, root and actual
@@ -149,7 +149,7 @@ executable test prerequisites. For `xtask`, it selects `xtask/dev-tools` so
 Cargo builds the binary invoked by its integration tests. Ordinary build
 commands keep their default feature selection.
 
-The four dedicated build jobs also provision one additional 16 GiB swap file on
+The five dedicated build jobs also provision one additional 16 GiB swap file on
 their GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup
 for the execution lane or when their selected package list contains `iroha_core`:
 the latter's `cargo test` command compiles the same Core library-test target.
@@ -165,6 +165,16 @@ The disposable runner reclaims it. Compiler settings and test resource limits
 are unchanged. The release-binary job has a 240-minute allowance for both
 feature-isolated cold builds and paging; its first build exceeded one hour on
 the hosted runner. This setup and its observations are not release qualification.
+
+The Parliament debug corridor reuses its existing Cargo target for the daemon,
+nine exact Core private-share ownership and native-producer controls, and the
+four-validator integration suite. It lists the same nine mandatory tests before
+execution and rejects missing, duplicate, or unexpected selections. The bounded
+swap setup runs after crypto evidence and source checks, immediately before the
+observed corridor; this Core library-test build has the same owner as the measured
+heavy Core jobs. Its native jobserver, 120-minute job budget, and network refusal
+settings remain unchanged. Hosted elapsed-time qualification still comes from
+the current candidate's complete job.
 
 The release-binary job stages its selected artifacts in a fresh child of
 `RUNNER_TEMP`, outside the restored Cargo target caches. Existing staging

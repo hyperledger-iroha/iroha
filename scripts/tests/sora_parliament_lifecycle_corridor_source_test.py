@@ -3,7 +3,13 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import shlex
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -29,6 +35,21 @@ BEACON_TEST_SIGNER = (
 )
 BEACON_LIFECYCLE = ROOT / "crates/iroha_core/src/sumeragi/epoch_beacon/producer.rs"
 BEACON_PRODUCER_TESTS = ROOT / "crates/iroha_core/src/sumeragi/epoch_beacon/producer/tests.rs"
+CORE_OWNER_TESTS = (
+    "beacon::parliament_test_network_signer::tests::authenticated_fixture_requires_exact_keys_and_every_signed_private_edge",
+    "beacon::parliament_test_network_signer::tests::exact_seat_signer_matches_the_public_fixture_and_rejects_foreign_roster",
+    "beacon::parliament_test_network_signer::tests::exact_seat_signer_supports_one_domain_separated_successor_session",
+    "beacon::parliament_test_network_signer::tests::custody_retains_only_exact_initial_and_successor_owners_without_replacement",
+    "beacon::parliament_test_network_signer::tests::poisoned_fixture_custody_refuses_capability_and_signing",
+    "beacon::parliament_test_network_signer::tests::invalid_provider_mode_preserves_owned_capability_but_returns_a_malformed_share",
+    "sumeragi::epoch_beacon::producer::tests::parliament_fixture_owners_drive_real_threshold_shares_and_refuse_invalid_provider_output",
+    "sumeragi::epoch_beacon::producer::tests::native_invalid_local_share_is_never_retained_or_counted",
+    "sumeragi::epoch_beacon::producer::tests::wrong_source_sender_and_proof_never_change_the_owned_round",
+)
+CORE_OWNER_COMMAND = (
+    "test", "--locked", "--profile", "test", "-p", "iroha_core", "--lib",
+    "--features", "mutation-testing,iroha-core-tests,test-network-parliament-signers",
+)
 MANDATORY_NPOS_TEST_NAME = (
     "four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_gate"
 )
@@ -518,6 +539,8 @@ def require(condition: bool, message: str) -> None:
 def validate_runner(source: str) -> None:
     """Validate the exact debug prebuild and no-skip execution corridor."""
 
+    source = "\n".join(line for line in source.splitlines()
+                       if not line.lstrip().startswith("#"))
     required = (
         "cargo build --locked",
         "--features test-network-parliament-signers",
@@ -525,6 +548,7 @@ def validate_runner(source: str) -> None:
         "IROHA_TEST_SKIP_BUILD=1",
         "IROHA_TEST_REQUIRE_NETWORK=1",
         "IROHA_FAIL_ON_SANDBOX_SKIP=1",
+        "IROHA_TEST_NETWORK_START_ATTEMPTS=1",
         "cargo test --locked",
         "--features parliament-test-signers",
         "--test sora_parliament_lifecycle_smoke",
@@ -533,13 +557,29 @@ def validate_runner(source: str) -> None:
     for marker in required:
         require(marker in source, f"Parliament runner lost `{marker}`")
     require("--release" not in source, "test signer runner must remain debug-only")
+    require("CARGO_BUILD_JOBS" not in source, "runner must preserve the native Cargo jobserver")
     require(source.count("cargo build ") == 1, "runner needs one exact daemon prebuild")
-    require(source.count("cargo test ") == 1, "runner needs one exact test invocation")
+    require(source.count("cargo test ") == 2, "runner needs exact Core and network test commands")
+    selected = re.findall(r"readonly -a CORE_TESTS=\(\n(.*?)\n\)", source, re.DOTALL)
+    command = re.findall(r"readonly -a CORE_CARGO=\(\n(.*?)\n\)", source, re.DOTALL)
+    require(len(selected) == 1 and tuple(shlex.split(selected[0])) == CORE_OWNER_TESTS,
+            "runner must select every exact Core ownership control once")
+    require(len(command) == 1 and shlex.split(command[0]) == ["cargo", *CORE_OWNER_COMMAND],
+            "runner must preserve the validated debug Core command")
+    listing = 'CORE_TEST_LIST="$("${CORE_CARGO[@]}" -- "${CORE_TESTS[@]}" --exact --include-ignored --list)"'
+    execution = '"${CORE_CARGO[@]}" -- "${CORE_TESTS[@]}" --exact --include-ignored --nocapture --test-threads=1'
+    for marker in (listing, execution,
+                   'grep -Fxc -- "${core_test}: test" <<<"$CORE_TEST_LIST" || true',
+                   "grep -Ec ': (test|benchmark)$'",
+                   '!= "${#CORE_TESTS[@]}"',
+                   'for core_test in "${CORE_TESTS[@]}"; do'):
+        require(source.count(marker) == 1, f"runner lost exact nonempty Core selection `{marker}`")
     require(
         source.index("cargo build ")
         < source.index("TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS")
-        < source.index("cargo test "),
-        "runner must prebuild, pin the exact daemon, then run the test",
+        < source.index(listing) < source.index(execution)
+        < source.index("cargo test --locked \\\n  -p integration_tests"),
+        "runner must prebuild, pin the daemon, list and run Core controls, then run the network",
     )
 
 
@@ -570,10 +610,22 @@ def validate_workflow(source: str) -> None:
     for marker in (
         "CARGO_TARGET_DIR: target/sora-parliament-lifecycle",
         "python3 -I -S scripts/tests/sora_parliament_lifecycle_corridor_source_test.py",
-        "bash ci/check_sora_parliament_lifecycle.sh",
+        "python3 -I -S ci/observe_build_capacity.py -- bash ci/check_sora_parliament_lifecycle.sh",
         *PARLIAMENT_CRYPTO_WORKFLOW_MARKERS,
     ):
         require(marker in body, f"Parliament PR job lost `{marker}`")
+    swap_step = (
+        "      - name: Provision bounded hosted build swap for Parliament Core tests\n"
+        "        run: python3 -I -S ci/provision_hosted_build_swap.py\n"
+    )
+    require(body.count(swap_step) == 1,
+            "Parliament Core tests require one unconditional bounded swap step")
+    require(body.index("Verify isolated Parliament corridor source contract")
+            < body.index(swap_step)
+            < body.index("Run exact four-validator Parliament lifecycle corridor"),
+            "Parliament swap must follow crypto/source checks and precede Core compilation")
+    require("timeout-minutes: 120" in body and "CARGO_BUILD_JOBS" not in body,
+            "Parliament must retain its timeout and native Cargo jobserver")
     require(
         body.index(setup) < body.index("cargo bench --locked -p iroha_crypto"),
         "Parliament native setup must precede compilation",
@@ -1481,6 +1533,118 @@ def validate_native_beacon_admission_and_fixture_isolation(
         require(marker in producer_tests, f"native invalid-share unit coverage lost `{marker}`")
 
 
+class SoraParliamentLifecycleRunnerTests(unittest.TestCase):
+    """Execute the real shell route with only external Cargo replaced."""
+
+    def run_runner(self, *, phase: str = "", listing: str = "", wrapped: bool = False):
+        with tempfile.TemporaryDirectory(prefix="parliament runner ") as directory:
+            root = Path(directory).resolve()
+            (root / "ci").mkdir()
+            (root / "bin").mkdir()
+            (root / "ci/check_sora_parliament_lifecycle.sh").write_bytes(RUNNER.read_bytes())
+            (root / "ci/observe_build_capacity.py").write_bytes(
+                (ROOT / "ci/observe_build_capacity.py").read_bytes()
+            )
+            cargo = root / "bin/cargo"
+            cargo.write_text(
+                f"#!{sys.executable}\n" + '''import json, os, sys
+from pathlib import Path
+args = sys.argv[1:]
+phase = ("build" if args[0] == "build" else
+         "list" if "--list" in args else
+         "core" if "iroha_core" in args else "integration")
+with Path(os.environ["CALLS"]).open("a") as stream:
+    stream.write(json.dumps({"phase": phase, "args": args, "cwd": os.getcwd(),
+        "target": os.environ.get("CARGO_TARGET_DIR"),
+        "jobs": os.environ.get("CARGO_BUILD_JOBS"),
+        "flags": {key: os.environ.get(key) for key in (
+            "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS", "IROHA_TEST_SKIP_BUILD",
+            "IROHA_TEST_REQUIRE_NETWORK", "IROHA_FAIL_ON_SANDBOX_SKIP",
+            "IROHA_TEST_NETWORK_START_ATTEMPTS", "NORITO_SKIP_BINDINGS_SYNC")}}) + "\\n")
+print(phase + " stderr", file=sys.stderr)
+if phase == os.environ.get("FAIL_PHASE"):
+    sys.exit({"build": 21, "list": 22, "core": 23, "integration": 24}[phase])
+if phase == "build":
+    daemon = Path(os.environ["CARGO_TARGET_DIR"]) / "debug/iroha3d"
+    daemon.parent.mkdir(parents=True)
+    daemon.write_text("#!/bin/sh\\nexit 0\\n")
+    daemon.chmod(0o700)
+elif phase == "list":
+    names = [item for item in args[args.index("--") + 1:] if not item.startswith("--")]
+    mode = os.environ.get("LISTING_MODE")
+    if mode == "empty": names = []
+    elif mode == "missing": names = names[:-1]
+    elif mode == "duplicate": names.append(names[0])
+    elif mode == "extra": names.append("unexpected::test")
+    for name in names: print(name + ": test")
+    print(f"\\n{len(names)} tests, 0 benchmarks")
+else:
+    print(phase + " stdout")
+''', encoding="utf-8")
+            cargo.chmod(0o700)
+            target = root / "warm target"
+            calls = root / "calls.jsonl"
+            env = dict(os.environ)
+            env.pop("CARGO_BUILD_JOBS", None)
+            env.update(PATH=str(root / "bin") + os.pathsep + env["PATH"],
+                       CARGO_TARGET_DIR=str(target), CALLS=str(calls),
+                       FAIL_PHASE=phase, LISTING_MODE=listing)
+            command = "bash ci/check_sora_parliament_lifecycle.sh"
+            if wrapped:
+                match = re.search(
+                    r"Run exact four-validator Parliament lifecycle corridor\n        run: ([^\n]+)",
+                    WORKFLOW.read_text(),
+                )
+                self.assertIsNotNone(match)
+                command = match.group(1)
+                self.assertEqual(command, "python3 -I -S ci/observe_build_capacity.py -- "
+                                 "bash ci/check_sora_parliament_lifecycle.sh")
+            result = subprocess.run(["bash", "-c", command], cwd=root, env=env,
+                                    text=True, capture_output=True, timeout=20)
+            rows = [json.loads(line) for line in calls.read_text().splitlines()]
+            return result, rows, str(root), str(target)
+
+    def test_actual_runner_selects_every_exact_owner_and_preserves_network_route(self):
+        result, rows, root, target = self.run_runner()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([row["phase"] for row in rows], ["build", "list", "core", "integration"])
+        selected = [*CORE_OWNER_COMMAND, "--", *CORE_OWNER_TESTS,
+                    "--exact", "--include-ignored"]
+        self.assertEqual(rows[1]["args"], [*selected, "--list"])
+        self.assertEqual(rows[2]["args"], [*selected, "--nocapture", "--test-threads=1"])
+        self.assertEqual(rows[0]["args"], ["build", "--locked", "-p", "irohad", "--bin",
+                                           "iroha3d", "--features", "test-network-parliament-signers"])
+        self.assertEqual(rows[3]["args"], ["test", "--locked", "-p", "integration_tests",
+            "--features", "parliament-test-signers", "--test", "sora_parliament_lifecycle_smoke",
+            "--", "--nocapture", "--test-threads=1"])
+        for row in rows:
+            self.assertEqual((row["cwd"], row["target"], row["jobs"]), (root, target, None))
+        self.assertEqual(rows[-1]["flags"], {
+            "TEST_NETWORK_BIN_IROHAD_PARLIAMENT_SIGNERS": target + "/debug/iroha3d",
+            "IROHA_TEST_SKIP_BUILD": "1", "IROHA_TEST_REQUIRE_NETWORK": "1",
+            "IROHA_FAIL_ON_SANDBOX_SKIP": "1", "IROHA_TEST_NETWORK_START_ATTEMPTS": "1",
+            "NORITO_SKIP_BINDINGS_SYNC": "1"})
+        self.assertIn("core stdout", result.stdout)
+        self.assertIn("integration stdout", result.stdout)
+
+    def test_actual_runner_rejects_empty_missing_duplicate_or_extra_selection(self):
+        for mode in ("empty", "missing", "duplicate", "extra"):
+            with self.subTest(mode=mode):
+                result, rows, _, _ = self.run_runner(listing=mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([row["phase"] for row in rows], ["build", "list"])
+
+    def test_actual_workflow_observer_preserves_success_and_every_child_failure(self):
+        phases = ["build", "list", "core", "integration"]
+        for failed, code in (("", 0), *zip(phases, (21, 22, 23, 24))):
+            with self.subTest(failed=failed):
+                result, rows, _, _ = self.run_runner(phase=failed, wrapped=True)
+                self.assertEqual(result.returncode, code, result.stderr)
+                self.assertEqual([row["phase"] for row in rows],
+                                 phases[:phases.index(failed) + 1] if failed else phases)
+                self.assertIn((failed or "integration") + " stderr", result.stderr)
+
+
 class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
     """Mutation-resistant source checks for the dedicated network corridor."""
 
@@ -1576,6 +1740,42 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         ):
             with self.subTest(marker=marker), self.assertRaises(ContractError):
                 validate_runner(source.replace(marker, "", 1))
+
+    def test_core_selection_rejects_removed_duplicated_or_weakened_controls(self) -> None:
+        source = RUNNER.read_text(encoding="utf-8")
+        for name in CORE_OWNER_TESTS:
+            for replacement in ("", name + "\n  " + name, "# " + name):
+                with self.subTest(name=name, replacement=replacement), self.assertRaises(ContractError):
+                    validate_runner(source.replace(name, replacement, 1))
+        for old, new in (
+            ("--exact --include-ignored --list", "--list"),
+            ("--exact --include-ignored --nocapture", "--nocapture"),
+            ('grep -Fxc -- "${core_test}: test"', 'grep -Fc -- "${core_test}"'),
+            ("grep -Ec ': (test|benchmark)$'", "grep -c test"),
+            ("--profile test -p iroha_core --lib", "--profile release -p iroha_core --lib"),
+            ("mutation-testing,iroha-core-tests,test-network-parliament-signers", "iroha-core-tests"),
+        ):
+            with self.subTest(old=old), self.assertRaises(ContractError):
+                validate_runner(source.replace(old, new, 1))
+
+    def test_parliament_capacity_step_cannot_skip_or_precede_crypto_and_source_checks(self) -> None:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        prefix, body = source.split("  sora_parliament_lifecycle:\n", 1)
+        step = (
+            "      - name: Provision bounded hosted build swap for Parliament Core tests\n"
+            "        run: python3 -I -S ci/provision_hosted_build_swap.py\n"
+        )
+        for modified in (
+            body.replace(step, "", 1),
+            body.replace(step, step + step, 1),
+            body.replace(step, step.replace("        run:", "        if: false\n        run:"), 1),
+            body.replace(step, "", 1).replace("      - name: Verify isolated Parliament", step + "      - name: Verify isolated Parliament", 1),
+            body.replace("python3 -I -S ci/observe_build_capacity.py -- bash ci/check_sora_parliament_lifecycle.sh",
+                         "bash ci/check_sora_parliament_lifecycle.sh", 1),
+            body.replace("timeout-minutes: 120", "timeout-minutes: 240", 1),
+        ):
+            with self.subTest(modified=modified[-300:]), self.assertRaises(ContractError):
+                validate_workflow(prefix + "  sora_parliament_lifecycle:\n" + modified)
 
     def test_workflow_contract_rejects_each_removed_crypto_evidence_marker(self) -> None:
         source = WORKFLOW.read_text(encoding="utf-8")
@@ -1758,7 +1958,10 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         validate_sortition_corridors_execute(corridor)
         runner = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn("--ignored", runner)
-        self.assertNotIn("--include-ignored", runner)
+        # Only the nine exact Core controls force execution of ignored tests;
+        # the complete network suite retains its ordinary never-ignored route.
+        network_runner = runner[runner.index("cargo test --locked \\\n  -p integration_tests"):]
+        self.assertNotIn("--include-ignored", network_runner)
         mutations = {}
         for name in SORTITION_ONLY_CORRIDOR_TEST_NAMES:
             mutations[f"{name} bare ignore"] = corridor.replace(

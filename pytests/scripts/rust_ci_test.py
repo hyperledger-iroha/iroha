@@ -77,7 +77,7 @@ def test_core_host_capacity_policy_preserves_every_test_command() -> None:
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
     assert workflow.count('CARGO_BUILD_JOBS: "2"') == 2
     observer = "python3 -I -S ci/observe_build_capacity.py -- "
-    assert workflow.count(observer) == 5
+    assert workflow.count(observer) == 6
     seeds = "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS "
     expected = {
         "sumeragi": [
