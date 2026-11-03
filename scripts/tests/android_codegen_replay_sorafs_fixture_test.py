@@ -639,11 +639,13 @@ def test_build_fixture_example_uses_reviewed_metadata_timestamp() -> None:
     example = MODULE.build_fixture_example(
         fixture_meta,
         manifest_report,
-        MODULE.REPO_ROOT / "target-codex" / "android_codegen" / "report.json",
         "AQID",
     )
 
     assert example["generated_at"] == "2024-08-30T06:40:00Z"
+    assert example["manifest_report_path"] == (
+        "target-codex/android_codegen/sorafs_manifest/multi_peer_parity_v1.json"
+    )
     assert example["instruction"]["manifest_payload_base64"] == "AQID"
     assert "submitted_epoch" not in example["instruction"]
     assert "digest_hex" not in example["instruction"]
@@ -700,6 +702,64 @@ def test_main_rejects_nonfuture_retention_before_subprocess(
         assert "retention_epoch must be later than now_unix_secs" in str(error)
     else:
         raise AssertionError("nonfuture retention was accepted")
+
+
+def test_main_keeps_external_replay_stage_out_of_fixture_bytes(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    """Exercise real output I/O with only the external Cargo producer replaced."""
+
+    chunker_fixture = json.loads(MODULE.DEFAULT_CHUNKER_FIXTURE.read_text())
+    report = {
+        "manifest": {
+            "chunk_digest_sha3_256_hex": chunker_fixture["chunk_digest_sha3_256"],
+            "council_signatures": [{"signer_hex": "a" * 64, "signature_hex": "b" * 128}],
+        },
+        "chunk_digests": [{"digest_blake3": "c" * 64}],
+    }
+    invocations = []
+
+    def produce_report(cargo_proxy, payload_path, plan_path, profile_handle, **outputs):
+        invocations.append((cargo_proxy, payload_path, plan_path, profile_handle))
+        assert outputs["council_signing_key_file"].read_bytes()
+        outputs["json_out"].write_text(json.dumps(report))
+        outputs["manifest_out"].write_bytes(b"fixture-path-test")
+
+    monkeypatch.setattr(MODULE, "run_manifest_builder", produce_report)
+    captured = []
+    for name in ("first", "second"):
+        stage = (tmp_path / name).resolve()
+        stage.mkdir()
+        assert not stage.is_relative_to(MODULE.REPO_ROOT)
+        example = stage / "codegen" / "instruction_examples" / "RegisterPinManifest.json"
+        example.parent.mkdir(parents=True)
+        example.write_text('{"existing":true}\n')
+        report_dir = stage / "codegen" / "sorafs_manifest"
+        tracked = stage / "generated" / "fixtures" / "sorafs.json"
+        assert MODULE.main([
+            "--register-pin-example", str(example),
+            "--report-dir", str(report_dir),
+            "--tracked-fixture-out", str(tracked),
+        ]) == 0
+        report_file = report_dir / "multi_peer_parity_v1.json"
+        fixture = json.loads(tracked.read_bytes())
+        assert fixture["manifest_report_path"] == (
+            "target-codex/android_codegen/sorafs_manifest/multi_peer_parity_v1.json"
+        )
+        updated = json.loads(example.read_bytes())
+        assert updated == {"existing": True, "fixture_example": fixture}
+        assert json.loads(report_file.read_bytes()) == report
+        captured.append((example.read_bytes(), tracked.read_bytes(), report_file.read_bytes()))
+        assert all(str(stage).encode() not in data for data in captured[-1])
+        diagnostics = capsys.readouterr().out
+        assert str(report_file) in diagnostics
+        assert str(example) in diagnostics
+        assert str(tracked) in diagnostics
+    assert len(invocations) == 2
+    assert invocations[0] == invocations[1]
+    assert captured[0] == captured[1]
 
 
 def test_main_rejects_absolute_payload_metadata_path_before_subprocess_without_leaking(

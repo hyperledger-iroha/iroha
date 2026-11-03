@@ -428,9 +428,15 @@ def require_generated_council_signature(manifest_report: dict) -> None:
 def build_fixture_example(
     fixture_meta: dict,
     manifest_report: dict,
-    manifest_report_path: Path,
     manifest_payload_base64: str,
 ) -> dict:
+    # This is the logical report location in the generated bundle, not the
+    # physical replay stage. Independent sealed-source replays use distinct
+    # external stages and must still produce identical fixture bytes.
+    fixture_name = require_fixture_name(fixture_meta["fixture"])
+    manifest_report_reference = (
+        DEFAULT_REPORT_DIR.relative_to(REPO_ROOT) / f"{fixture_name}.json"
+    )
     timestamp = iso_utc_from_unix_timestamp(fixture_meta["now_unix_secs"])
     instruction = {
         "manifest_payload_base64": manifest_payload_base64,
@@ -443,7 +449,7 @@ def build_fixture_example(
         "plan_file": fixture_meta["plan_file"],
         "providers_file": fixture_meta["providers_file"],
         "telemetry_file": fixture_meta["telemetry_file"],
-        "manifest_report_path": str(manifest_report_path.relative_to(REPO_ROOT)),
+        "manifest_report_path": manifest_report_reference.as_posix(),
         "chunk_digests_blake3": [
             entry["digest_blake3"] for entry in manifest_report["chunk_digests"]
         ],
@@ -603,22 +609,21 @@ def main(argv: list[str] | None = None) -> int:
     fixture_example = build_fixture_example(
         fixture_meta,
         manifest_report,
-        report_path,
         manifest_payload_base64,
     )
     update_register_pin_example(args.register_pin_example, fixture_example)
     write_json(args.tracked_fixture_out, fixture_example, label="tracked fixture")
     print(
         f"[android-codegen] updated fixture example in "
-        f"{args.register_pin_example.relative_to(REPO_ROOT)}"
+        f"{path_diagnostic_label(args.register_pin_example)}"
     )
     print(
         f"[android-codegen] manifest report written to "
-        f"{report_path.relative_to(REPO_ROOT)}"
+        f"{path_diagnostic_label(report_path)}"
     )
     print(
         f"[android-codegen] tracked fixture written to "
-        f"{args.tracked_fixture_out.relative_to(REPO_ROOT)}"
+        f"{path_diagnostic_label(args.tracked_fixture_out)}"
     )
     return 0
 
