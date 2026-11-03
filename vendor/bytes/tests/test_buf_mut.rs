@@ -291,7 +291,7 @@ fn test_deref_bufmut_forwards() {
 #[test]
 #[should_panic]
 fn write_byte_panics_if_out_of_bounds() {
-    let mut data = [b'b', b'a', b'r'];
+    let mut data = *b"bar";
 
     let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), 3) };
     slice.write_byte(4, b'f');
@@ -300,7 +300,7 @@ fn write_byte_panics_if_out_of_bounds() {
 #[test]
 #[should_panic]
 fn copy_from_slice_panics_if_different_length_1() {
-    let mut data = [b'b', b'a', b'r'];
+    let mut data = *b"bar";
 
     let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), 3) };
     slice.copy_from_slice(b"a");
@@ -309,7 +309,7 @@ fn copy_from_slice_panics_if_different_length_1() {
 #[test]
 #[should_panic]
 fn copy_from_slice_panics_if_different_length_2() {
-    let mut data = [b'b', b'a', b'r'];
+    let mut data = *b"bar";
 
     let slice = unsafe { UninitSlice::from_raw_parts_mut(data.as_mut_ptr(), 3) };
     slice.copy_from_slice(b"abcd");
