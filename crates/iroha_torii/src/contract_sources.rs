@@ -3662,23 +3662,22 @@ mod tests {
         let second_bytes = norito::json::to_vec(&second).expect("encode second contender");
         let maximum = first_bytes.len().max(second_bytes.len());
         let barrier = Arc::new(Barrier::new(3));
-        let contenders = [first, second]
-            .into_iter()
-            .map(|record| {
-                let path = Arc::clone(&path);
-                let barrier = Arc::clone(&barrier);
-                std::thread::spawn(move || {
-                    barrier.wait();
-                    write_json_file_atomic(
-                        &path,
-                        &record,
-                        maximum,
-                        "concurrent verified-source test record",
-                    )
-                    .is_ok()
-                })
+        // Array mapping eagerly starts both writers before the parent joins
+        // the three-party barrier; a lazy iterator here would deadlock.
+        let contenders = [first, second].map(|record| {
+            let path = Arc::clone(&path);
+            let barrier = Arc::clone(&barrier);
+            std::thread::spawn(move || {
+                barrier.wait();
+                write_json_file_atomic(
+                    &path,
+                    &record,
+                    maximum,
+                    "concurrent verified-source test record",
+                )
+                .is_ok()
             })
-            .collect::<Vec<_>>();
+        });
         barrier.wait();
         let successes = contenders
             .into_iter()
