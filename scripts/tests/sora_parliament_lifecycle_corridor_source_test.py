@@ -17,6 +17,7 @@ NO_RESULT_PATHS = ROOT / "integration_tests/tests/sora_parliament_no_result_path
 FAILURE_PATHS = ROOT / "integration_tests/tests/sora_parliament_failure_paths.rs"
 ENACTMENT = ROOT / "integration_tests/tests/sora_parliament_enactment.rs"
 SUPPORT = ROOT / "integration_tests/tests/sora_parliament_lifecycle_support.rs"
+SUBMISSION = ROOT / "integration_tests/tests/support/parliament_submission.rs"
 NATIVE_FINALITY = ROOT / "integration_tests/tests/sora_parliament_finality.rs"
 USER_CONFIG = ROOT / "crates/iroha_config/src/parameters/user.rs"
 ACTUAL_CONFIG = ROOT / "crates/iroha_config/src/parameters/actual.rs"
@@ -53,6 +54,25 @@ NO_RESULT_RESTART_CONTRACT_ABSENCE = '''assert_governed_contract_absent(
         "public-finding restart effect isolation",
     )
     .await?;'''
+NO_RESULT_PUBLICATION_MARKERS = (
+    'observe_exact_height(client, request_height, "public-finding sortition registration",).await?;',
+    "assert_eq!(current_height(client).await?, request_height);",
+    'observe_exact_height(client, roster_seal_height, "public-finding roster sealing").await?;',
+    "assert_eq!(current_height(client).await?, roster_seal_height);",
+    'observe_exact_height(client, retry_request_height, "deadline retry sortition registration",).await?;',
+    "assert_eq!(current_height(client).await?, retry_request_height);",
+    'observe_exact_height(client, retry_roster_seal_height, "deadline retry roster sealing",).await?;',
+    "assert_eq!(current_height(client).await?, retry_roster_seal_height);",
+    "network.ensure_blocks(second_retry_height).await?;",
+    'observe_exact_height(client, second_retry_height, "second public-finding retry").await?;',
+    "let second_retry_state = read_attempt(client, second_retry_id).await?;",
+    "let peer_client = peer.client();",
+    'observe_exact_height(&peer_client, second_retry_height, "public-finding peer publication",).await?;',
+    "let peer_rejected = read_on_dedicated_thread({",
+    "restart_peer.once_block(second_retry_height)",
+    'observe_exact_height(&restart_peer.client(), second_retry_height, "public-finding restored publication",).await?;',
+    "let restored_rejected = read_on_dedicated_thread({",
+)
 EXACT_INACTIVE_CONTRACT_PROJECTION = '''if object.len() != 3
         || object.get("found").and_then(norito::json::Value::as_bool) != Some(false)
         || object
@@ -156,6 +176,7 @@ def read_corridor_source() -> str:
             FAILURE_PATHS.read_text(encoding="utf-8"),
             ENACTMENT.read_text(encoding="utf-8"),
             SUPPORT.read_text(encoding="utf-8"),
+            SUBMISSION.read_text(encoding="utf-8"),
             NATIVE_FINALITY.read_text(encoding="utf-8"),
         )
     )
@@ -204,6 +225,24 @@ NO_RESULT_TEST = re.compile(
 # A sortition slot is the first consensus-native pulse height at or after the frozen delay
 # and above every earlier generation slot. The wait for it is governance-local.
 SORTITION_SLOT_HELPER_MARKERS = {
+    "submit_parliament_instructions": (
+        "let transaction = prepare_parliament_transaction(client, instructions).await?;",
+        "let deadline = Instant::now() + OPERATION_TIMEOUT;",
+        "submit_prepared_parliament_transaction_until(client, &transaction, deadline).await",
+    ),
+    "submit_prepared_parliament_transaction_until": (
+        "let signed_hash = transaction.hash();",
+        "let bounded = client.with_request_deadline(deadline)?;",
+        "tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), async {",
+        "let applied_hash = bounded.account_client().submit_transaction_and_wait(transaction).await?;",
+        "if applied_hash != signed_hash {",
+        '"Parliament Applied response substituted the signed transaction hash"',
+        "let local = bounded.client().wait_until_transaction_applied_local(signed_hash, TransactionWaitOptions { timeout: deadline.saturating_duration_since(Instant::now()), ..TransactionWaitOptions::default() },).await?;",
+        "let applied_height = local.block_height.ok_or_else(|| {",
+        'observe_exact_height(&bounded, applied_height, "Parliament local Applied publication",).await?;',
+        "if Instant::now() >= deadline {",
+        '.wrap_err_with(|| format!("Parliament Applied publication unresolved for {signed_hash}"))',
+    ),
     "install_threshold_sessions": (
         "submit_parliament_instructions(",
         'observe_exact_height(client, install_height, "failure-corridor threshold-key installation",).await?;',
@@ -593,6 +632,7 @@ def validate_native_sortition_helpers(source: str) -> None:
                 f"native sortition helper `{name}` lost `{marker}`",
             )
     for name in (
+        "submit_parliament_instructions", "submit_prepared_parliament_transaction_until",
         "install_threshold_sessions", "admit_parliament_height_carrier", "advance_to_height_with_carriers",
         "await_native_sortition_pulse", "cross_native_boundary_after_pulse",
     ):
@@ -731,6 +771,9 @@ def validate_public_finding_no_result_retries_and_restore(source: str) -> None:
     )
     require(helper is not None, "public-finding closure helper is absent")
     helper_source = helper.group(0)
+    require_exact_ordered_markers(
+        helper_source, NO_RESULT_PUBLICATION_MARKERS, "public-finding State observations",
+    )
     for marker in (
         "expected_sortition_slot(network, client, attempt_id, request_height, None).await?;",
         "expected_sortition_slot(network, client, retry_id, retry_request_height, None).await?;",
@@ -2008,6 +2051,35 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
         changed = mutate_marker(changed, markers[3], markers[4] + markers[3], owner=owner)
         with self.subTest(mutation="publication observation before storage barrier"), self.assertRaises(ContractError):
             validate_native_sortition_helpers(changed)
+
+    def test_public_finding_observes_the_exact_peer_before_state_assertions(self) -> None:
+        """Global Applied and durable blocks do not fence another peer's State projection."""
+        corridor = read_corridor_source()
+        owner = "exercise_public_finding_no_result_retries_and_restore"
+        validate_public_finding_no_result_retries_and_restore(corridor)
+        for marker in NO_RESULT_PUBLICATION_MARKERS:
+            with self.subTest(marker=marker), self.assertRaises(ContractError):
+                validate_public_finding_no_result_retries_and_restore(
+                    mutate_marker(corridor, marker, "", owner=owner)
+                )
+            if not marker.startswith("observe_exact_height"):
+                continue
+            for replacement in (f"/* {marker} */", marker + marker):
+                with self.subTest(marker=marker, replacement=replacement), self.assertRaises(ContractError):
+                    validate_public_finding_no_result_retries_and_restore(
+                        mutate_marker(corridor, marker, replacement, owner=owner)
+                    )
+        for marker in (NO_RESULT_PUBLICATION_MARKERS[12], NO_RESULT_PUBLICATION_MARKERS[15]):
+            replacement = marker.replace("&peer_client", "client").replace("&restart_peer.client()", "client")
+            with self.subTest(marker=marker, mutation="wrong peer"), self.assertRaises(ContractError):
+                validate_public_finding_no_result_retries_and_restore(
+                    mutate_marker(corridor, marker, replacement, owner=owner)
+                )
+        observer, query = NO_RESULT_PUBLICATION_MARKERS[12:14]
+        changed = mutate_marker(corridor, observer, "", owner=owner)
+        changed = mutate_marker(changed, query, query + observer, owner=owner)
+        with self.subTest(mutation="observation after query"), self.assertRaises(ContractError):
+            validate_public_finding_no_result_retries_and_restore(changed)
 
     def test_native_finality_rejects_missing_or_disconnected_authentication(self) -> None:
         """Genesis, source, committee, votes and deadline checks must precede the callback."""

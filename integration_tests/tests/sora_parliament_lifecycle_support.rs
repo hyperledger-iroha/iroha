@@ -80,7 +80,9 @@ pub const POSITIVE_BEACON_SIGNER_MODES: [ParliamentBeaconSignerMode; VALIDATOR_C
 
 #[path = "support/parliament_submission.rs"]
 pub mod submission;
-pub use submission::{OPERATION_TIMEOUT, submit_parliament_instructions};
+pub use submission::{
+    OPERATION_TIMEOUT, current_height, observe_exact_height, submit_parliament_instructions,
+};
 
 pub fn citizen_keys() -> Vec<KeyPair> {
     (0..CITIZEN_COUNT)
@@ -117,87 +119,6 @@ pub fn client_for(base: &Client, account: &AccountId, keys: &[KeyPair]) -> Clien
         builder.account = account.clone();
         builder.key_pair = key;
     })
-}
-
-const STATUS_RETRY_DELAY: Duration = Duration::from_millis(150);
-const STATUS_RETRY_WINDOW: Duration = Duration::from_secs(30);
-
-/// Classify the two typed transient status refusals; every other error is final.
-///
-/// Same policy as `support/committee_status.rs`: only the SDK's typed `StateBusy` and
-/// `DeadlineElapsed` reasons are retry authority, and never past the remaining window.
-fn status_retry_delay(error: &iroha::Error, remaining: Duration) -> Option<Duration> {
-    let iroha::Error::StatusUnavailable {
-        reason:
-            Some(iroha::StatusFailureReason::DeadlineElapsed | iroha::StatusFailureReason::StateBusy),
-        retry_after,
-    } = error
-    else {
-        return None;
-    };
-    let delay = retry_after
-        .unwrap_or(STATUS_RETRY_DELAY)
-        .max(STATUS_RETRY_DELAY);
-    (delay < remaining).then_some(delay)
-}
-
-/// Read the finalized height from the status projection.
-///
-/// A status read that lost the State publication race answers HTTP 503 `status_state_busy`
-/// without publishing a snapshot. That is a property of the read, not of the chain, so it is
-/// retried inside one bounded window; any other failure is returned unchanged.
-pub async fn current_height(client: &Client) -> Result<u64> {
-    let deadline = Instant::now() + STATUS_RETRY_WINDOW;
-    loop {
-        match client.client().status().get().await {
-            Ok(status) => return Ok(status.blocks),
-            Err(error) => {
-                let Some(delay) =
-                    status_retry_delay(&error, deadline.saturating_duration_since(Instant::now()))
-                else {
-                    return Err(error.into());
-                };
-                tokio::time::sleep(delay).await;
-            }
-        }
-    }
-}
-
-#[test]
-fn status_retry_accepts_only_typed_busy_or_deadline_inside_the_window() {
-    use iroha::StatusFailureReason;
-    let window = Duration::from_secs(1);
-    for reason in [
-        StatusFailureReason::StateBusy,
-        StatusFailureReason::DeadlineElapsed,
-    ] {
-        let error = iroha::Error::StatusUnavailable {
-            reason: Some(reason),
-            retry_after: None,
-        };
-        assert_eq!(status_retry_delay(&error, window), Some(STATUS_RETRY_DELAY));
-        assert_eq!(status_retry_delay(&error, STATUS_RETRY_DELAY), None);
-        let advised = iroha::Error::StatusUnavailable {
-            reason: Some(reason),
-            retry_after: Some(Duration::from_millis(400)),
-        };
-        assert_eq!(
-            status_retry_delay(&advised, window),
-            Some(Duration::from_millis(400))
-        );
-    }
-    for reason in [
-        None,
-        Some(StatusFailureReason::StateUnavailable),
-        Some(StatusFailureReason::MissingBlock),
-        Some(StatusFailureReason::MetricsStale),
-    ] {
-        let error = iroha::Error::StatusUnavailable {
-            reason,
-            retry_after: None,
-        };
-        assert_eq!(status_retry_delay(&error, window), None);
-    }
 }
 
 pub async fn tick(client: &Client, label: impl Into<String>) -> Result<u64> {
@@ -255,36 +176,6 @@ pub async fn advance_to_height_with_carriers(
         .await?;
         network.ensure_blocks(carrier_height).await?;
         observe_exact_height(client, carrier_height, label).await?;
-    }
-}
-
-/// Observe one exact finalized height through the client's status projection.
-///
-/// `ensure_blocks` can return from durable block storage before the status projection
-/// publishes the same height. The projection may therefore trail by a bounded interval,
-/// but it must never pass the expected height.
-pub async fn observe_exact_height(
-    client: &Client,
-    expected_height: u64,
-    label: &str,
-) -> Result<()> {
-    let deadline = Instant::now() + OPERATION_TIMEOUT;
-    loop {
-        let observed_height = current_height(client).await?;
-        if observed_height == expected_height {
-            return Ok(());
-        }
-        if observed_height > expected_height {
-            return Err(eyre!(
-                "{label}: expected exact height {expected_height}, observed {observed_height}"
-            ));
-        }
-        if Instant::now() >= deadline {
-            return Err(eyre!(
-                "{label}: status stayed at height {observed_height} below committed height {expected_height} for {OPERATION_TIMEOUT:?}"
-            ));
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
 
