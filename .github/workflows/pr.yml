@@ -1065,7 +1065,8 @@ jobs:
     env:
       CARGO_TARGET_DIR: target/sora-parliament-lifecycle
       SORA_PARLIAMENT_ALERT_EVIDENCE_DIR: target/sora-parliament-alert-evidence
-      SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+      # Cargo runs benchmarks from the package directory; all producers share this absolute root.
+      SORA_PARLIAMENT_CRYPTO_EVIDENCE_DIR: ${{ github.workspace }}/target/sora-parliament-crypto-evidence-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ./.github/actions/setup-native-ci
