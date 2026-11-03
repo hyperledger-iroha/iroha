@@ -9121,8 +9121,11 @@ fn require_taira_validator_config_directory_identity(
 #[cfg(unix)]
 #[expect(
     clippy::useless_conversion,
-    clippy::unnecessary_fallible_conversions,
     reason = "Unix stat integer widths and signedness differ across the supported platforms."
+)]
+#[allow(
+    clippy::unnecessary_fallible_conversions,
+    reason = "Unix stat widening conversions occur on some supported platforms but not Linux x86_64; keep checked conversions on every platform."
 )]
 fn taira_file_identity_from_stat(stat: &rustix::fs::Stat) -> Result<TairaFileIdentity> {
     Ok(TairaFileIdentity {
