@@ -461,6 +461,8 @@ run_segmented_fast_tests() {
         test_features=()
         if [[ "${package}" == "iroha_torii" ]]; then
             test_features=(--features iroha_torii/test-fixtures)
+        elif [[ "${package}" == "iroha_release_bundle" || "${package}" == "iroha_native_source_delivery" ]]; then
+            test_features=(--features "${package}/dev-tools")
         fi
         if [[ -n "${test_threads}" ]]; then
             echo "==> cargo test --locked -p ${package} ${test_features[*]-} -- --test-threads=${test_threads}"
@@ -549,11 +551,11 @@ if (( run_fast )); then
     if [[ "${segmented_fast}" == true ]]; then
         run_segmented_fast_tests
     elif [[ -n "${test_threads}" ]]; then
-        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures -- --test-threads=${test_threads}"
-        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures -- --test-threads="${test_threads}"
+        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools -- --test-threads=${test_threads}"
+        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools -- --test-threads="${test_threads}"
     else
-        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures"
-        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures
+        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
+        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools
     fi
 else
     echo "==> skipping fast test suite"

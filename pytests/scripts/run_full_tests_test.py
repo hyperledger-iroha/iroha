@@ -1,4 +1,4 @@
-"""Exercise complete Torii test routing with inert child command recorders."""
+"""Exercise complete explicit test routing with inert child command recorders."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
+FULL_TEST_FEATURES = "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
 
 
 @pytest.fixture
@@ -33,8 +34,8 @@ def workflow(tmp_path: Path):
         "    output.write(json.dumps(args) + '\\n')\n"
         "if args[0] == 'metadata':\n"
         "    print(json.dumps({'packages': [{'id': name, 'name': name} for name in "
-        "['iroha_core', 'iroha_torii', 'integration_tests']], 'workspace_members': "
-        "['iroha_core', 'iroha_torii', 'integration_tests']}))\n"
+        "['iroha_core', 'iroha_torii', 'iroha_release_bundle', 'iroha_native_source_delivery', 'integration_tests']], 'workspace_members': "
+        "['iroha_core', 'iroha_torii', 'iroha_release_bundle', 'iroha_native_source_delivery', 'integration_tests']}))\n"
         "if args[0] == 'test' and os.environ.get('TEST_FAST_FAILURE') == '1':\n"
         "    if '--workspace' in args or ('-p' in args and args[args.index('-p') + 1] == 'iroha_torii'):\n"
         "        raise SystemExit(37)\n"
@@ -66,10 +67,10 @@ def invoke(workflow, *arguments: str, failure: bool = False):
 
 @pytest.mark.parametrize("segmented", [False, True])
 @pytest.mark.parametrize("threads", [False, True])
-def test_full_and_segmented_routes_include_explicit_torii_integrations(
+def test_full_and_segmented_routes_include_explicit_test_owners(
     workflow, segmented: bool, threads: bool,
 ) -> None:
-    """Every complete fast-test route admits the required Torii fixture feature."""
+    """Every complete fast-test route selects fixture and helper test owners."""
     arguments = (["--segmented-fast"] if segmented else []) + (["--test-threads", "2"] if threads else [])
     result, calls = invoke(workflow, "--nocapture", *arguments)
     assert result.returncode == 0, result.stderr
@@ -81,8 +82,10 @@ def test_full_and_segmented_routes_include_explicit_torii_integrations(
     )
     assert "--features" not in tests[-1]
     if segmented:
-        assert [call[call.index("-p") + 1] for call in tests[:-1]] == ["iroha_core", "iroha_torii"]
+        assert [call[call.index("-p") + 1] for call in tests[:-1]] == ["iroha_core", "iroha_torii", "iroha_release_bundle", "iroha_native_source_delivery"]
         assert "--features" not in tests[0]
+        for call, package in zip(tests[2:4], ("iroha_release_bundle", "iroha_native_source_delivery")):
+            assert call[call.index("--features") + 1] == f"{package}/dev-tools"
         torii = tests[1]
     else:
         assert len(tests) == 2
@@ -90,7 +93,7 @@ def test_full_and_segmented_routes_include_explicit_torii_integrations(
         assert "--workspace" in torii
         assert torii[torii.index("--exclude") + 1] == "integration_tests"
     assert "--features" in torii, "complete Torii test routes must select the required integration fixture owner"
-    assert torii[torii.index("--features") + 1] == "iroha_torii/test-fixtures"
+    assert torii[torii.index("--features") + 1] == ("iroha_torii/test-fixtures" if segmented else FULL_TEST_FEATURES)
     assert "mutation-testing" not in " ".join(torii)
     assert ("--test-threads=2" in torii) is threads
 
@@ -112,7 +115,7 @@ def test_default_route_keeps_empty_integration_arguments_on_stock_bash(workflow)
     assert calls == [
         ["build", "--locked", "--workspace"],
         ["test", "--locked", "--workspace", "--exclude", "integration_tests",
-         "--features", "iroha_torii/test-fixtures"],
+         "--features", FULL_TEST_FEATURES],
         ["test", "--locked", "-p", "integration_tests"],
     ]
 

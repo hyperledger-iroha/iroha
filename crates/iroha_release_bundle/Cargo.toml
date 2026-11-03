@@ -13,7 +13,13 @@ workspace = true
 
 [features]
 default = []
+dev-tools = []
 tokio = ["dep:tokio"]
+
+[[bin]]
+name = "iroha_release_bundle"
+path = "src/bin/iroha_release_bundle.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 iroha_fs.workspace = true

@@ -11,6 +11,15 @@ publish = false
 [lints]
 workspace = true
 
+[features]
+default = []
+dev-tools = []
+
+[[bin]]
+name = "iroha_native_source_delivery"
+path = "src/main.rs"
+required-features = ["dev-tools"]
+
 [dependencies]
 iroha_fs.workspace = true
 norito = { workspace = true, default-features = false, features = ["json"] }

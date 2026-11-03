@@ -947,10 +947,17 @@ def commands_for_checks(
         elif check == "build":
             commands.append(["cargo", "build", "--locked", *package_args])
         elif check == "test":
-            # Torii integration targets explicitly opt into fixture entry points. A self
-            # dev-dependency would also compile its owning mutation feature as a library.
-            test_features = (["--features", "iroha_torii/test-fixtures"]
-                             if "iroha_torii" in packages else [])
+            # Select package-owned executable tests explicitly while preserving
+            # the ordinary build's shipping-only binary inventory.
+            selected_features = [
+                feature for package, feature in (
+                    ("iroha_torii", "iroha_torii/test-fixtures"),
+                    ("iroha_release_bundle", "iroha_release_bundle/dev-tools"),
+                    ("iroha_native_source_delivery", "iroha_native_source_delivery/dev-tools"),
+                ) if package in packages
+            ]
+            test_features = (["--features", ",".join(selected_features)]
+                             if selected_features else [])
             commands.append(
                 ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
             )

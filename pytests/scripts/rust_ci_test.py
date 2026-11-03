@@ -1244,6 +1244,26 @@ def test_missing_mutated_or_duplicate_feature_inventory_is_refused(inventory) ->
         rust_ci.commands_for_checks(("iroha_data_model",), ("clippy",), features_by_package=inventory)
 
 
+@pytest.mark.parametrize("workspace", (False, True))
+@pytest.mark.parametrize("helpers", (
+    ("iroha_release_bundle",),
+    ("iroha_native_source_delivery",),
+    ("iroha_release_bundle", "iroha_native_source_delivery"),
+))
+def test_native_helper_tests_select_only_their_owned_development_features(
+    workspace: bool, helpers: tuple[str, ...],
+) -> None:
+    """Ordinary builds stay shipping-only while complete tests include helpers."""
+    build, test = rust_ci.commands_for_checks(
+        ("iroha_torii", *helpers), ("build", "test"), workspace=workspace,
+    )
+    assert "--features" not in build
+    assert test[test.index("--features") + 1].split(",") == [
+        "iroha_torii/test-fixtures", *(f"{package}/dev-tools" for package in helpers),
+    ]
+    assert ("--workspace" in test) is workspace
+
+
 def test_workspace_and_package_cli_selections_are_exclusive() -> None:
     parser = rust_ci.build_parser()
     assert parser.parse_args(["run", "--workspace", "--checks", "doc"]).workspace
