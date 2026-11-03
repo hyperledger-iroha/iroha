@@ -10,32 +10,37 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env,
     ffi::{OsStr, OsString},
-    fs::{self, Metadata},
-    io::{self, Read, Write},
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    fs,
+    io::{self, Write},
+    os::unix::fs::{MetadataExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     process::{Command, ExitCode},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
-    },
     thread,
     time::Duration,
 };
 
 #[cfg(target_os = "macos")]
 use std::{
-    fs::File,
+    fs::{File, Metadata},
+    io::Read,
     os::{
         fd::AsRawFd,
-        unix::process::{CommandExt, ExitStatusExt},
+        unix::{
+            fs::OpenOptionsExt,
+            process::{CommandExt, ExitStatusExt},
+        },
     },
     process::{Child, Output, Stdio},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
     time::Instant,
 };
 
 const CONTRACT: &str = "iroha.authenticated-tool-os-isolation.v1";
 const CONTROLLER_ERROR: u8 = 125;
+#[cfg(target_os = "macos")]
 const CONTROLLER_LIMIT: u8 = 124;
 const MAX_ARGUMENTS: usize = 512;
 const MAX_WRITABLE_FILES: usize = 64;
@@ -43,7 +48,9 @@ const MAX_READABLE_PATHS: usize = 256;
 const MAX_ARGUMENT_BYTES: usize = 1024 * 1024;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_WALL_SECONDS: f64 = 3600.0;
+#[cfg(target_os = "macos")]
 const MONITOR_INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(target_os = "macos")]
 const CLEANUP_GRACE: Duration = Duration::from_millis(250);
 
 #[cfg(target_os = "macos")]
@@ -63,6 +70,7 @@ impl ControllerError {
         }
     }
 
+    #[cfg(target_os = "macos")]
     fn limit(message: impl Into<String>) -> Self {
         Self {
             message: message.into(),
@@ -81,30 +89,44 @@ enum Platform {
 
 #[derive(Clone, Debug)]
 struct WritableFile {
+    #[cfg(any(target_os = "macos", test))]
     name: String,
     path: PathBuf,
     maximum_bytes: u64,
 }
 
 #[derive(Clone, Debug)]
+// Parse and validate the complete contract on every host. Only the macOS
+// backend consumes execution state; tests retain it to check parser results.
 struct Request {
     platform: Platform,
     expected_user: u32,
     expected_group: u32,
     working_directory: PathBuf,
+    #[cfg(any(target_os = "macos", test))]
     readable_files: Vec<PathBuf>,
+    #[cfg(any(target_os = "macos", test))]
     readable_directories: Vec<PathBuf>,
     deny_all_writes: bool,
+    #[cfg(any(target_os = "macos", test))]
     writable_files: Vec<WritableFile>,
+    #[cfg(any(target_os = "macos", test))]
     cumulative_write_limit: u64,
+    #[cfg(any(target_os = "macos", test))]
     maximum_live_write_root: u64,
+    #[cfg(any(target_os = "macos", test))]
     wall_time: Duration,
+    #[cfg(any(target_os = "macos", test))]
     stdout_limit: u64,
+    #[cfg(any(target_os = "macos", test))]
     stderr_limit: u64,
+    #[cfg(any(target_os = "macos", test))]
     combined_output_limit: Option<u64>,
+    #[cfg(any(target_os = "macos", test))]
     tool: Vec<OsString>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct FileIdentity {
     device: u64,
@@ -119,12 +141,14 @@ struct FileIdentity {
     sha256: [u8; 32],
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Clone, Debug)]
 struct RootSnapshot {
     directory: FileIdentity,
     entries: BTreeMap<String, FileIdentity>,
 }
 
+#[cfg(target_os = "macos")]
 #[derive(Debug)]
 struct ReaderResult {
     bytes: Vec<u8>,
@@ -378,6 +402,7 @@ fn parse_request(arguments: &[OsString]) -> Result<Request> {
             ));
         }
         writable_files.push(WritableFile {
+            #[cfg(any(target_os = "macos", test))]
             name: name.to_owned(),
             path: working_directory.join(name),
             maximum_bytes,
@@ -441,8 +466,8 @@ fn parse_request(arguments: &[OsString]) -> Result<Request> {
             "wall-time limit is outside the supported range",
         ));
     }
-    let stdout_limit = positive_limit(&values, "--stdout-limit-bytes")?;
-    let stderr_limit = positive_limit(&values, "--stderr-limit-bytes")?;
+    let _stdout_limit = positive_limit(&values, "--stdout-limit-bytes")?;
+    let _stderr_limit = positive_limit(&values, "--stderr-limit-bytes")?;
     let combined_output_limit = values
         .get("--combined-output-limit-bytes")
         .map(|value| parse_u64(value, "--combined-output-limit-bytes"))
@@ -459,16 +484,26 @@ fn parse_request(arguments: &[OsString]) -> Result<Request> {
         expected_user,
         expected_group,
         working_directory,
+        #[cfg(any(target_os = "macos", test))]
         readable_files,
+        #[cfg(any(target_os = "macos", test))]
         readable_directories,
         deny_all_writes,
+        #[cfg(any(target_os = "macos", test))]
         writable_files,
+        #[cfg(any(target_os = "macos", test))]
         cumulative_write_limit,
+        #[cfg(any(target_os = "macos", test))]
         maximum_live_write_root,
+        #[cfg(any(target_os = "macos", test))]
         wall_time: Duration::from_secs_f64(wall_seconds),
-        stdout_limit,
-        stderr_limit,
+        #[cfg(any(target_os = "macos", test))]
+        stdout_limit: _stdout_limit,
+        #[cfg(any(target_os = "macos", test))]
+        stderr_limit: _stderr_limit,
+        #[cfg(any(target_os = "macos", test))]
         combined_output_limit,
+        #[cfg(any(target_os = "macos", test))]
         tool,
     })
 }
@@ -1968,6 +2003,7 @@ fn seatbelt_literal(path: &Path) -> Result<String> {
     Ok(escaped)
 }
 
+#[cfg(target_os = "macos")]
 fn validate_working_directory(request: &Request) -> Result<()> {
     if request.working_directory == Path::new("/") {
         if !request.deny_all_writes {
@@ -1993,6 +2029,7 @@ fn validate_working_directory(request: &Request) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn validate_readable_inputs(request: &Request) -> Result<Vec<(PathBuf, FileIdentity)>> {
     let mut snapshots =
         Vec::with_capacity(request.readable_files.len() + request.readable_directories.len());
@@ -2007,6 +2044,7 @@ fn validate_readable_inputs(request: &Request) -> Result<Vec<(PathBuf, FileIdent
     Ok(snapshots)
 }
 
+#[cfg(target_os = "macos")]
 fn validate_readable_path(path: &Path, require_directory: bool) -> Result<()> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| ControllerError::policy("readable input metadata is unavailable"))?;
@@ -2028,6 +2066,7 @@ fn validate_readable_path(path: &Path, require_directory: bool) -> Result<()> {
     validate_trusted_parent_chain(path)
 }
 
+#[cfg(target_os = "macos")]
 fn validate_readable_snapshots(snapshots: &[(PathBuf, FileIdentity)]) -> Result<()> {
     for (path, expected) in snapshots {
         let require_regular = expected.mode & 0o170_000 == 0o100_000;
@@ -2041,6 +2080,7 @@ fn validate_readable_snapshots(snapshots: &[(PathBuf, FileIdentity)]) -> Result<
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn prepare_writable_files(request: &Request) -> Result<()> {
     if request.deny_all_writes {
         return Ok(());
@@ -2053,10 +2093,7 @@ fn prepare_writable_files(request: &Request) -> Result<()> {
                 validate_trusted_path_acl(&writable.path)?;
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                #[cfg(target_os = "macos")]
                 const SAFE_CREATE_FLAGS: i32 = 0x0000_0100 | 0x0100_0000; // O_NOFOLLOW | O_CLOEXEC.
-                #[cfg(target_os = "linux")]
-                const SAFE_CREATE_FLAGS: i32 = 0x0002_0000 | 0x0008_0000; // O_NOFOLLOW | O_CLOEXEC.
                 let mut options = fs::OpenOptions::new();
                 options
                     .write(true)
@@ -2091,6 +2128,7 @@ fn prepare_writable_files(request: &Request) -> Result<()> {
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn validate_trusted_path(path: &Path, require_root_owner: bool) -> Result<()> {
     let canonical = fs::canonicalize(path)
         .map_err(|_| ControllerError::policy("trusted executable path is unavailable"))?;
@@ -2120,10 +2158,12 @@ fn validate_trusted_path(path: &Path, require_root_owner: bool) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn trusted_executable_mode_is_safe(mode: u32) -> bool {
     mode & 0o6022 == 0 && mode & 0o111 != 0
 }
 
+#[cfg(target_os = "macos")]
 fn validate_trusted_parent_chain(path: &Path) -> Result<()> {
     let runtime_uid = effective_user();
     for parent in path.ancestors().skip(1) {
@@ -2191,11 +2231,7 @@ fn validate_trusted_path_acl(path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn validate_trusted_path_acl(_path: &Path) -> Result<()> {
-    Ok(())
-}
-
+#[cfg(target_os = "macos")]
 fn root_snapshot(root: &Path) -> Result<RootSnapshot> {
     let directory = file_identity(root, false, false)?;
     let mut entries = BTreeMap::new();
@@ -2218,6 +2254,7 @@ fn root_snapshot(root: &Path) -> Result<RootSnapshot> {
     Ok(RootSnapshot { directory, entries })
 }
 
+#[cfg(target_os = "macos")]
 fn validate_write_state(request: &Request, initial: Option<&RootSnapshot>) -> Result<()> {
     if request.deny_all_writes {
         return Ok(());
@@ -2284,6 +2321,7 @@ fn validate_write_state(request: &Request, initial: Option<&RootSnapshot>) -> Re
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn directory_stable_fields(identity: &FileIdentity) -> (u64, u64, u32, u32, u32) {
     (
         identity.device,
@@ -2294,6 +2332,7 @@ fn directory_stable_fields(identity: &FileIdentity) -> (u64, u64, u32, u32, u32)
     )
 }
 
+#[cfg(target_os = "macos")]
 fn validate_writable_identity(name: &str, identity: &FileIdentity, limit: u64) -> Result<()> {
     if identity.mode & 0o170_000 != 0o100_000
         || identity.links != 1
@@ -2312,6 +2351,7 @@ fn validate_writable_identity(name: &str, identity: &FileIdentity, limit: u64) -
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 fn file_identity(path: &Path, require_regular: bool, hash_contents: bool) -> Result<FileIdentity> {
     let metadata = fs::symlink_metadata(path).map_err(|_| {
         ControllerError::policy(format!("path metadata is unavailable: {}", path.display()))
@@ -2341,11 +2381,9 @@ fn file_identity(path: &Path, require_regular: bool, hash_contents: bool) -> Res
     })
 }
 
+#[cfg(target_os = "macos")]
 fn sha256_file(path: &Path) -> Result<[u8; 32]> {
-    #[cfg(target_os = "macos")]
     const SAFE_OPEN_FLAGS: i32 = 0x0000_0100 | 0x0100_0000; // O_NOFOLLOW | O_CLOEXEC.
-    #[cfg(target_os = "linux")]
-    const SAFE_OPEN_FLAGS: i32 = 0x0002_0000 | 0x0008_0000; // O_NOFOLLOW | O_CLOEXEC.
     let mut options = fs::OpenOptions::new();
     options.read(true).custom_flags(SAFE_OPEN_FLAGS);
     let mut file = options
@@ -2381,6 +2419,7 @@ fn sha256_file(path: &Path) -> Result<[u8; 32]> {
     Ok(hash.finish())
 }
 
+#[cfg(target_os = "macos")]
 fn stable_metadata(metadata: &Metadata) -> (u64, u64, u32, u32, u32, u64, u64, i64, i64) {
     (
         metadata.dev(),
@@ -2395,6 +2434,7 @@ fn stable_metadata(metadata: &Metadata) -> (u64, u64, u32, u32, u32, u64, u64, i
     )
 }
 
+#[cfg(target_os = "macos")]
 fn bounded_reader<R: Read + Send + 'static>(
     mut reader: R,
     stream_limit: u64,
@@ -2525,7 +2565,7 @@ impl Watchdog {
             fn pipe(fds: *mut i32) -> i32;
             fn fork() -> i32;
             fn close(fd: i32) -> i32;
-            fn read(fd: i32, buffer: *mut u8, count: usize) -> isize;
+            fn read(fd: i32, buffer: *mut std::ffi::c_void, count: usize) -> isize;
             fn kill(pid: i32, signal: i32) -> i32;
             fn usleep(microseconds: u32) -> i32;
             fn _exit(status: i32) -> !;
@@ -2546,7 +2586,7 @@ impl Watchdog {
             unsafe {
                 close(fds[1]);
                 let mut normal = 0u8;
-                let read_count = read(fds[0], &raw mut normal, 1);
+                let read_count = read(fds[0], (&raw mut normal).cast(), 1);
                 close(fds[0]);
                 if read_count != 1 || normal != b'N' {
                     kill(-process_group, 15);
@@ -2573,12 +2613,12 @@ impl Watchdog {
     )]
     fn finish(mut self) -> Result<()> {
         unsafe extern "C" {
-            fn write(fd: i32, buffer: *const u8, count: usize) -> isize;
+            fn write(fd: i32, buffer: *const std::ffi::c_void, count: usize) -> isize;
             fn close(fd: i32) -> i32;
             fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
         }
         let normal = b'N';
-        let wrote = unsafe { write(self.write_fd, &raw const normal, 1) };
+        let wrote = unsafe { write(self.write_fd, (&raw const normal).cast(), 1) };
         let closed = unsafe { close(self.write_fd) };
         self.write_fd = -1;
         let watchdog_pid = self.pid;
@@ -2629,6 +2669,7 @@ fn effective_user() -> u32 {
     unsafe { geteuid() }
 }
 
+#[cfg(target_os = "macos")]
 #[allow(unsafe_code, reason = "getegid has no safe standard-library wrapper")]
 fn effective_group() -> u32 {
     unsafe extern "C" {
@@ -2848,6 +2889,7 @@ fn probe_path(arguments: &[OsString], index: usize) -> Result<&Path> {
         .ok_or_else(|| ControllerError::policy("qualification probe path is missing"))
 }
 
+#[cfg(any(target_os = "macos", test))]
 struct Sha256 {
     state: [u32; 8],
     block: [u8; 64],
@@ -2855,6 +2897,7 @@ struct Sha256 {
     length: u64,
 }
 
+#[cfg(any(target_os = "macos", test))]
 impl Sha256 {
     const K: [u32; 64] = [
         0x428a_2f98,
@@ -3149,6 +3192,99 @@ mod tests {
         assert!(request.readable_files.is_empty());
         assert!(request.readable_directories.is_empty());
         assert_eq!(request.tool, [OsString::from("/usr/bin/true")]);
+    }
+
+    #[test]
+    fn parser_preserves_execution_limits_and_write_policy() {
+        let mut arguments = base_request();
+        let write_policy = arguments
+            .iter()
+            .position(|value| value == "--deny-all-writes")
+            .expect("write policy");
+        arguments[write_policy] = "--deny-write-outside-allowlist".into();
+        for (option, value) in [
+            ("--cumulative-write-limit-bytes", "8"),
+            ("--maximum-live-write-root-bytes", "12"),
+            ("--wall-time-seconds", "0.5"),
+            ("--stdout-limit-bytes", "2"),
+            ("--stderr-limit-bytes", "3"),
+        ] {
+            let position = arguments
+                .iter()
+                .position(|arg| arg == option)
+                .expect(option);
+            arguments[position + 1] = value.into();
+        }
+        arguments.splice(
+            0..0,
+            [
+                "--deny-link-rename-unlink",
+                "--deny-symlink",
+                "--deny-special-files",
+                "--writable-file",
+                "output:16",
+                "--combined-output-limit-bytes",
+                "4",
+            ]
+            .map(OsString::from),
+        );
+        let request = parse_request(&arguments).expect("parse allowlisted request");
+        assert!(!request.deny_all_writes);
+        assert_eq!(request.writable_files.len(), 1);
+        assert_eq!(request.writable_files[0].name, "output");
+        assert_eq!(request.writable_files[0].path, Path::new("/output"));
+        assert_eq!(request.writable_files[0].maximum_bytes, 16);
+        assert_eq!(request.cumulative_write_limit, 8);
+        assert_eq!(request.maximum_live_write_root, 12);
+        assert_eq!(request.wall_time, Duration::from_millis(500));
+        assert_eq!(request.stdout_limit, 2);
+        assert_eq!(request.stderr_limit, 3);
+        assert_eq!(request.combined_output_limit, Some(4));
+    }
+
+    #[test]
+    fn parser_rejects_invalid_execution_limits_on_every_host() {
+        for (option, value) in [
+            ("--cumulative-write-limit-bytes", "1"),
+            ("--maximum-live-write-root-bytes", "1"),
+            ("--wall-time-seconds", "NaN"),
+            ("--wall-time-seconds", "0"),
+            ("--wall-time-seconds", "3601"),
+            ("--stdout-limit-bytes", "0"),
+            ("--stderr-limit-bytes", "0"),
+        ] {
+            let mut arguments = base_request();
+            let position = arguments
+                .iter()
+                .position(|arg| arg == option)
+                .expect(option);
+            arguments[position + 1] = value.into();
+            let error = parse_request(&arguments).expect_err("invalid limit must reject");
+            assert_eq!(error.exit, CONTROLLER_ERROR, "{option}={value}");
+        }
+        let mut arguments = base_request();
+        arguments.splice(
+            0..0,
+            ["--combined-output-limit-bytes", "0"].map(OsString::from),
+        );
+        let error = parse_request(&arguments).expect_err("zero combined limit must reject");
+        assert!(
+            error
+                .message
+                .contains("combined output limit must be positive")
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_host_qualification_refuses_without_a_qualified_backend() {
+        let error = qualify_host(&[]).expect_err("Linux has no qualified isolation backend");
+        assert_eq!(error.exit, CONTROLLER_ERROR);
+        assert!(
+            error
+                .message
+                .contains("unavailable without the macOS backend")
+        );
     }
 
     #[test]
