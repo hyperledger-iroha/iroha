@@ -19,3 +19,8 @@ the reviewed vendor tree. Downstream standalone curve suites also need a Cargo
 The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the
 unmodified upstream manifest. Remove the macro dependency patch when an upstream
 release carries it; retain the repository's native-only build policy.
+
+Remove the ineffective `#[must_use]` attributes from the two `Neg::neg` trait
+implementations. Rust 1.99 rejects these placements under the existing CI
+warning gate; the standard `Neg` trait retains its result-use annotation.
+Arithmetic and compiler warning policy are unchanged.

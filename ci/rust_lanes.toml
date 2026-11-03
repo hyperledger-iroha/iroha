@@ -248,6 +248,7 @@ generated = [
 # deliberately fail closed to every Rust lane.
 all = [
   ".cargo/**",
+  ".github/actions/**",
   ".github/workflows/**",
   ".gitignore",
   "Cargo.lock",

@@ -86,6 +86,24 @@ def test_checked_in_manifest_exhaustively_maps_locked_workspace() -> None:
     assert len(packages) == sum(len(packages) for packages in manifest.lanes.values())
 
 
+def test_shared_ci_setup_action_selects_every_validation_lane() -> None:
+    """A shared environment action affects every package and qualified consumer."""
+
+    metadata = rust_ci.load_cargo_metadata(root=ROOT)
+    manifest = rust_ci.load_lane_manifest()
+    path = ".github/actions/setup-native-ci/action.yml"
+    result = rust_ci.classify_paths(
+        [path], metadata=metadata, manifest=manifest, root=ROOT,
+    )
+    assert result.full and not result.foundation_only
+    assert f"full-workspace input changed: {path}" in result.reasons
+    assert result.lane_packages == {
+        lane: tuple(sorted(packages)) for lane, packages in manifest.lanes.items()
+    }
+    assert result.consumers and all(result.consumers.values())
+    assert result.deferred_packages == () and result.deferred_consumers == ()
+
+
 def test_every_active_vendor_patch_routes_to_workspace_validation() -> None:
     """Each patched source owner selects its package closure or the full workspace."""
 
@@ -203,7 +221,16 @@ def test_native_filesystem_owner_selects_real_custody_consumers() -> None:
         "iroha_fs", "iroha_contract_deploy", "iroha_deploy",
         "iroha_kagami", "iroha_storage_client",
     } <= set(result.impacted_packages)
-    assert result.lane_packages["foundation"] == ("iroha_fs", "iroha_operation_journal")
+    # Configuration and Windows telemetry now use filesystem custody. The
+    # conservative closure also follows iroha_derive's dev-only configuration
+    # dependency into its consumers; keep every selected foundation owner.
+    assert result.lane_packages["foundation"] == (
+        "build-support", "iroha_config_base", "iroha_crypto", "iroha_derive", "iroha_fhe",
+        "iroha_fs", "iroha_i18n", "iroha_macro", "iroha_measurement", "iroha_model_base",
+        "iroha_operation_journal", "iroha_petal", "iroha_primitives", "iroha_primitives_derive",
+        "iroha_schema", "iroha_schema_derive", "iroha_telemetry", "iroha_version", "mv",
+        "norito", "norito_derive",
+    )
     assert "iroha_storage_client" in result.lane_packages["services"]
     assert "iroha_deploy" in result.lane_packages["node"]
 
