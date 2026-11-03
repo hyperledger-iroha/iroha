@@ -119,7 +119,7 @@ def bridge_receipt(raw: bytes, expected: Path) -> dict[str, str]:
 
 @contextmanager
 def retained_executable(path: Path):
-    """Execute the exact Cargo-emitted original through its held Linux descriptor."""
+    """Yield the held original descriptor and an explicit custody revalidation fence."""
     executable(path)
     before = path.lstat()
     descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC)
@@ -127,11 +127,16 @@ def retained_executable(path: Path):
     def identity(value):
         """Compare the held original and its selected name without access-time drift."""
         return tuple(getattr(value, field) for field in fields)
-    try:
-        require(identity(os.fstat(descriptor)) == identity(before), "publisher changed while retained")
-        yield descriptor
+
+    def revalidate():
+        """Refuse a changed tool or selected name before accepting its outputs."""
         require(identity(os.fstat(descriptor)) == identity(before)
-                and identity(path.lstat()) == identity(before), "publisher original changed during use")
+                and identity(path.lstat()) == identity(before), "executable original changed during use")
+
+    try:
+        revalidate()
+        yield descriptor, revalidate
+        revalidate()
     finally:
         os.close(descriptor)
 
@@ -179,8 +184,8 @@ def run(args: argparse.Namespace) -> None:
     with ExitStack() as owners:
         # Installed tools stay retained across the bootstrap and normal producer;
         # the normal producer additionally enforces its native tool-image policy.
-        owners.enter_context(retained_executable(cargo))
-        owners.enter_context(retained_executable(rustc))
+        _, revalidate_cargo = owners.enter_context(retained_executable(cargo))
+        _, revalidate_rustc = owners.enter_context(retained_executable(rustc))
         source = owners.enter_context(source_module.retained_workspace_source(repository, manifest))
         build_environment = {**environment, "CARGO_TARGET_DIR": str(roots["bootstrap"]),
                              "CARGO": str(cargo), "RUSTC": str(rustc), "NORITO_SKIP_BINDINGS_SYNC": "1"}
@@ -190,20 +195,25 @@ def run(args: argparse.Namespace) -> None:
                                       stdout=output, check=False)
         source.revalidate()
         metadata.check_returncode()
+        revalidate_cargo()
+        revalidate_rustc()
         package_id = publisher_package((evidence / "publisher-metadata.json").read_bytes(), repository)
         print("Building the reviewed normal publisher under retained source custody", flush=True)
         with (evidence / "publisher-build.jsonl").open("xb") as output:
             built = subprocess.run([str(cargo), "build", "--locked", "--offline", "--target", native,
-                                    "-p", "iroha_release_bundle", "--features", "dev-tools", "--bin",
+                                    "-p", "iroha_release_bundle", "--no-default-features",
+                                    "--features", "dev-tools", "--bin",
                                     "iroha_release_bundle", "--message-format=json-render-diagnostics"],
                                    cwd=repository, env=build_environment, stdout=output, check=False)
         source.revalidate()
         built.check_returncode()
+        revalidate_cargo()
+        revalidate_rustc()
         publisher = publisher_from_events((evidence / "publisher-build.jsonl").read_bytes(), repository,
                                           roots["bootstrap"], native, package_id)
         name = "invocation.ci0001"
         expected_bridge = roots["artifacts"] / "sumeragi-release" / manifest / "bridges" / name
-        with retained_executable(publisher) as descriptor:
+        with retained_executable(publisher) as (descriptor, revalidate_publisher):
             print("Publishing the native observer through the maintained producer", flush=True)
             with (evidence / "bridge-receipt.tsv").open("xb") as output:
                 published = subprocess.run([
@@ -215,6 +225,9 @@ def run(args: argparse.Namespace) -> None:
                 ], cwd=repository, env=environment, pass_fds=(descriptor,), stdout=output, check=False)
             source.revalidate()
             published.check_returncode()
+            revalidate_publisher()
+            revalidate_cargo()
+            revalidate_rustc()
         pins = bridge_receipt((evidence / "bridge-receipt.tsv").read_bytes(), expected_bridge)
         print("Running every harness test against the independent original publisher receipt", flush=True)
         result = subprocess.run([

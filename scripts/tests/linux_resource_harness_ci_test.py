@@ -162,7 +162,8 @@ def test_retained_executable_rejects_aliases_and_changed_originals(tmp_path, mut
         return
     def exercise():
         """Hold the original while a deterministic custody mutation occurs."""
-        with CI.retained_executable(path) as descriptor:
+        with CI.retained_executable(path) as (descriptor, revalidate):
+            revalidate()
             assert os.read(descriptor, 8) == b"original"
             if mutation == "replacement":
                 other = root / "replacement"
@@ -178,7 +179,8 @@ def test_retained_executable_rejects_aliases_and_changed_originals(tmp_path, mut
             exercise()
 
 
-@pytest.mark.parametrize("failure", ["none", "seal", "metadata", "build", "publication", "receipt", "source", "tests"])
+@pytest.mark.parametrize("failure", ["none", "seal", "metadata", "build", "publication", "receipt", "source",
+                                      "cargo-after-build", "rustc-after-publication", "tests"])
 def test_controller_preserves_live_source_owner_and_original_receipt(tmp_path, monkeypatch, failure):
     """Fault-inject process boundaries; no fixture is admitted by a real loader here."""
     root = tmp_path.resolve()
@@ -241,12 +243,15 @@ def test_controller_preserves_live_source_owner_and_original_receipt(tmp_path, m
         elif "build" in command:
             phase = "build"
             assert "--locked" in command and "--offline" in command
+            assert "--no-default-features" in command
             target = args.run_root / "bootstrap"
             binary = target / NATIVE / "debug/iroha_release_bundle"
             binary.parent.mkdir(parents=True)
             binary.write_bytes(b"fixture output")
             binary.chmod(0o700)
             kwargs["stdout"].write(encoded_events(events(repository, target)))
+            if failure == "cargo-after-build":
+                args.cargo_bin.write_bytes(b"changed original")
         elif "build-bridge-publish" in command:
             phase = "publication"
             assert command[0] == f"/proc/self/fd/{kwargs['pass_fds'][0]}"
@@ -256,6 +261,8 @@ def test_controller_preserves_live_source_owner_and_original_receipt(tmp_path, m
             # can feed the next command; hashing disk output would fail this test.
             raw = f"bridge_dir\t{bridge}\nmodule_sha256\t{PIN}\nprovenance_sha256\t{'b' * 64}\n"
             kwargs["stdout"].write(raw.encode() if failure != "receipt" else b"partial\n")
+            if failure == "rustc-after-publication":
+                args.rustc_bin.write_bytes(b"changed original")
         else:
             phase = "tests"
             assert command[-1] == "--all-tests"
