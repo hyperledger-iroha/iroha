@@ -14,7 +14,9 @@ use iroha_core_zk::kagemusha_wallet_enrollment_v1::issuer_worker::{
 use iroha_data_model::kagemusha::KagemushaWalletAssetScopeV1;
 use iroha_fs::{FileSnapshot, PrivateDirectory, RetainedFile};
 use sha2::{Digest as _, Sha256};
-use std::{io, path::Path};
+#[cfg(unix)]
+use std::io;
+use std::path::Path;
 use zeroize::Zeroizing;
 
 type Result<T> = std::result::Result<T, Error>;
