@@ -49,6 +49,10 @@ function runNativeBuild(options) {
 const SOURCE_DIGEST = "b".repeat(64);
 const SOURCE_REVISION = "a".repeat(40);
 
+// This contract authenticates the real /usr/bin/xcrun host entry. The mandatory
+// macOS native-provenance lane owns its execution; other hosts do not register it.
+const macosOnlyTest = process.platform === "darwin" ? test : () => undefined;
+
 function sourceState(overrides = {}) {
   return {
     sourceGitRevision: SOURCE_REVISION,
@@ -424,9 +428,7 @@ test("native build uses stock Cargo with exact live root manifest, root lock, an
   );
 });
 
-test("macOS native build seals SDK, deployment target, and Apple tools into Cargo fingerprints", {
-  skip: process.platform !== "darwin",
-}, (t) => {
+macosOnlyTest("macOS native build seals SDK, deployment target, and Apple tools into Cargo fingerprints", (t) => {
   const fixture = createFixture(t);
   fixture.nativePath = nativeBuildOutputPath({
     repoRoot: fixture.repoRoot,

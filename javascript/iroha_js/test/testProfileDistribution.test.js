@@ -27,10 +27,19 @@ function profileFixture(t, distributionBuilder, testSource) {
   return root;
 }
 
-function runUnitProfile(root) {
+function runProfile(root, profile = "unit", platform) {
   const env = { ...process.env };
   delete env.NODE_TEST_CONTEXT;
-  return spawnSync(process.execPath, ["scripts/run-test-profile.mjs", "unit"], {
+  // Only this isolated fixture overrides the host name, to exercise selection
+  // for every CI runner without adding a production environment override.
+  const args = platform === undefined
+    ? ["scripts/run-test-profile.mjs", profile]
+    : ["--input-type=module", "--eval", `
+Object.defineProperty(process, "platform", { value: ${JSON.stringify(platform)} });
+process.argv = [process.execPath, "scripts/run-test-profile.mjs", ${JSON.stringify(profile)}];
+await import("./scripts/run-test-profile.mjs");
+`];
+  return spawnSync(process.execPath, args, {
     cwd: root,
     env,
     encoding: "utf8",
@@ -53,7 +62,7 @@ test("reads current distribution", () => {
 });
 `,
   );
-  const result = runUnitProfile(root);
+  const result = runProfile(root);
   assert.equal(result.status, 0, result.stderr + result.stdout);
   assert.match(result.stdout, /# pass 1/u);
 });
@@ -68,8 +77,43 @@ test("distribution publication failure prevents the unit corpus from starting", 
 writeFileSync(new URL("../test-started", import.meta.url), "started");
 `,
   );
-  const result = runUnitProfile(root);
+  const result = runProfile(root);
   assert.equal(result.status, 1, result.stderr + result.stdout);
   assert.match(result.stderr, /distribution publication failed/u);
   assert.equal(existsSync(join(root, "test-started")), false);
+});
+
+for (const platform of ["linux", "darwin", "win32"]) {
+  test(`native provenance owns the Apple build contract on ${platform}`, (t) => {
+    const root = profileFixture(t, "export async function buildDistribution() {}\n", "");
+    writeFileSync(join(root, "test", "nativeBuildProvenance.test.js"), `
+import test from "node:test";
+test("portable provenance fixture", () => {});
+`);
+    writeFileSync(join(root, "test", "nativeBuildProfile.test.js"), `
+import test from "node:test";
+test("Apple build fingerprint fixture", () => {});
+`);
+    const result = runProfile(root, "native-provenance", platform);
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    assert.match(result.stdout, /portable provenance fixture/u);
+    assert.equal(result.stdout.includes("Apple build fingerprint fixture"), platform === "darwin");
+    assert.match(result.stdout, platform === "darwin" ? /# pass 2/u : /# pass 1/u);
+    assert.match(result.stdout, /# skipped 0/u);
+  });
+}
+
+test("macOS provenance refuses a skipped Apple build contract", (t) => {
+  const root = profileFixture(t, "export async function buildDistribution() {}\n", "");
+  writeFileSync(join(root, "test", "nativeBuildProvenance.test.js"), `
+import test from "node:test";
+test("portable provenance fixture", () => {});
+`);
+  writeFileSync(join(root, "test", "nativeBuildProfile.test.js"), `
+import test from "node:test";
+test("Apple build fingerprint fixture", { skip: true }, () => {});
+`);
+  const result = runProfile(root, "native-provenance", "darwin");
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.match(result.stderr, /reported skipped or todo tests/u);
 });
