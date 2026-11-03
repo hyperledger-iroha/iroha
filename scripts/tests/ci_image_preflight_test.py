@@ -82,6 +82,8 @@ def hosted_violations(source: str, names: tuple[str, ...]) -> list[str]:
             errors.append(f"{name} retains external infrastructure")
         if "uses: ./.github/actions/setup-native-ci" not in block:
             errors.append(f"{name} has no native tool provisioning")
+        elif "actions/setup-python@" in block.split("uses: ./.github/actions/setup-native-ci", 1)[1]:
+            errors.append(f"{name} replaces the provisioned Python environment")
     return errors
 
 
@@ -99,6 +101,35 @@ def test_development_jobs_run_without_image_or_private_runner_configuration(
             assert f"{job} has no native tool provisioning" in hosted_violations(
                 source.replace(block, changed), names,
             )
+
+
+@pytest.mark.parametrize("name,names", HOSTED_NATIVE_JOBS.items())
+def test_native_jobs_retain_the_python_environment_with_script_requirements(
+    name: str, names: tuple[str, ...],
+) -> None:
+    source = (WORKFLOWS / name).read_text()
+    for job, block in jobs(source).items():
+        if job in names:
+            changed = block.replace(
+                "      - uses: ./.github/actions/setup-native-ci\n",
+                "      - uses: ./.github/actions/setup-native-ci\n"
+                "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0\n"
+                "        with:\n          python-version: \"3.11\"\n",
+            )
+            assert f"{job} replaces the provisioned Python environment" in hosted_violations(
+                source.replace(block, changed), names,
+            )
+
+
+def test_openapi_validation_tracks_both_branches_and_native_setup_changes() -> None:
+    source = (WORKFLOWS / "openapi.yml").read_text()
+    triggers = source.split("\non:\n", 1)[1].split("\npermissions:\n", 1)[0]
+    for event in ("pull_request", "push"):
+        block = re.search(rf"^  {event}:\n.*?(?=^  \w+:\n|\Z)", triggers, re.M | re.S)
+        assert block is not None
+        assert "branches: [main, optimizations]" in block.group()
+        assert '      - ".github/actions/**"' in block.group()
+        assert '      - ".github/workflows/openapi.yml"' in block.group()
 
 
 def test_python_static_analysis_uses_committed_locks_on_a_hosted_runner() -> None:
