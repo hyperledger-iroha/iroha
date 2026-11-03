@@ -4,15 +4,42 @@
 import unittest
 
 from norito.crc64 import crc64
-from norito.errors import UnsupportedFeatureError
+from norito.compression import decompress_zstd
+from norito.errors import ChecksumMismatchError, UnsupportedFeatureError
 from norito.header import (
     COMPACT_LEN,
+    COMPRESSION_ZSTD,
     MAX_HEADER_PADDING,
     NoritoHeader,
 )
 
 
 class NoritoHeaderPaddingTests(unittest.TestCase):
+    def test_compressed_frame_keeps_raw_length_checksum_and_layout(self) -> None:
+        # A standard Zstd single-segment raw block containing the CRC64 check
+        # vector. Native Metal/CUDA helper symbol names are not wire fields.
+        compressed = bytes.fromhex("28b52ffd2009490000313233343536373839")
+        fixed_header = bytes.fromhex(
+            "4e52543000000000000000000000000000000000000001"
+            "0900000000000000fa3919dfbbc95d9900"
+        )
+        for flags in (0, COMPACT_LEN):
+            with self.subTest(flags=flags):
+                expected_header = fixed_header[:-1] + bytes([flags])
+                header, encoded_payload = NoritoHeader.decode(expected_header + compressed)
+                self.assertEqual(header.encode(), expected_header)
+                self.assertEqual(header.compression, COMPRESSION_ZSTD)
+                self.assertEqual(header.payload_length, 9)
+                self.assertEqual(header.flags, flags)
+                self.assertEqual(encoded_payload, compressed)
+                payload = decompress_zstd(encoded_payload, target_size=header.payload_length)
+                self.assertEqual(payload, b"123456789")
+                header.validate_checksum(payload)
+                with self.assertRaises(ChecksumMismatchError):
+                    header.validate_checksum(compressed)
+                with self.assertRaises(ChecksumMismatchError):
+                    header.validate_checksum(b"123456780")
+
     def test_decode_accepts_zero_padding(self) -> None:
         payload = b"norito-padding"
         checksum = crc64(payload)

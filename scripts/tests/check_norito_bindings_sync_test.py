@@ -135,6 +135,25 @@ def test_jvm_lane_runs_java_consumers_and_kotlin_fixtures(monkeypatch: pytest.Mo
     assert "org.hyperledger.iroha.sdk.tx.norito.TransactionFixtureParityTest" in args
 
 
+def test_python_lane_runs_reference_regressions_and_propagates_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = []
+    monkeypatch.setattr(MODULE, "run_command", lambda args, **kwargs: calls.append((args, kwargs)))
+    MODULE.run_python_parity_checks()
+    assert calls == [(
+        [sys.executable, "-m", "pytest", "-q", MODULE.REPO_ROOT / "python/norito_py/tests"],
+        {"cwd": MODULE.REPO_ROOT},
+    )]
+
+    def failed_suite(*_args, **_kwargs):
+        raise MODULE.CheckError("reference regression failed")
+
+    monkeypatch.setattr(MODULE, "run_command", failed_suite)
+    with pytest.raises(MODULE.CheckError, match="reference regression failed"):
+        MODULE.run_python_parity_checks()
+
+
 def test_java_source_changes_select_canonical_jvm_lane(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     flags = MODULE.PathFlags()
