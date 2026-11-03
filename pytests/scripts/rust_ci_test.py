@@ -59,6 +59,19 @@ def test_source_guards_run_independently_and_remain_required() -> None:
         assert "rust_source_guards" not in _workflow_job(name)
 
 
+def test_python_network_consumers_share_the_binary_producer_host() -> None:
+    """Keep pinned Python available on the same Linux release as prebuilt binaries."""
+    producer = _workflow_job("pre_build")
+    consumer = _workflow_job("pytests")
+    assert "    runs-on: ubuntu-24.04\n" in producer
+    assert "    runs-on: ubuntu-24.04\n" in consumer
+    assert "          python-version: 3.11.12\n" in consumer
+    assert "needs: [rust_changes, pre_build]" in consumer
+    assert "run: ./scripts/test_env.py setup" in consumer
+    assert "working-directory: pytests/iroha_torii_tests" in consumer
+    assert "working-directory: pytests/iroha_cli_tests" in consumer
+
+
 def test_core_host_capacity_policy_preserves_every_test_command() -> None:
     """Only the two heavy Core jobs bound build concurrency; every suite stays selected."""
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()

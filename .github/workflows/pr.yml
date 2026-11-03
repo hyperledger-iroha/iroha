@@ -693,7 +693,7 @@ jobs:
   pytests:
     if: needs.rust_changes.outputs.run_pytests == 'true'
     needs: [rust_changes, pre_build]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       IROHA_CONTAINER: "defaults-irohad0-1"
       BIN_IROHAD: bins/iroha3d
