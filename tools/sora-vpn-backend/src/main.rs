@@ -3457,8 +3457,7 @@ mod tests {
     async fn tun_file_registration_preserves_poll_registration_error() {
         let file = fs::File::open("/dev/null").expect("non-pollable file");
         let error = LinuxTunDevice::from_owned_file(file, "fixture".to_owned())
-            .err()
-            .expect("epoll must reject a non-pollable file");
+            .expect_err("epoll must reject a non-pollable file");
         assert_eq!(error.raw_os_error(), Some(nix::libc::EPERM));
     }
     #[test]
