@@ -100,7 +100,7 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
 ) -> None:
     """Run the real shell step through the observer without compiling release binaries."""
     job = _workflow_job("pre_build")
-    assert "    timeout-minutes: 60\n" in job
+    assert "    timeout-minutes: 120\n" in job
     assert "CARGO_BUILD_JOBS" not in job
     body = job.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     command = textwrap.dedent(body)

@@ -54,8 +54,8 @@ jobs:
     if: needs.rust_changes.outputs.has_binaries == 'true'
     needs: [rust_changes]
     runs-on: ubuntu-24.04
-    # The cold release build reached 26 minutes before exhausting hosted memory.
-    timeout-minutes: 60
+    # The cold release build outlasted one hour after hosted memory was provisioned.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: ./.github/actions/setup-native-ci

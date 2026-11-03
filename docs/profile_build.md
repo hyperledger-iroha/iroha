@@ -155,7 +155,7 @@ the complete private file before formatting and activation; it does not use
 sparse allocation (see the
 [Linux swap-file requirements](https://man7.org/linux/man-pages/man8/swapon.8.html)).
 The disposable runner reclaims it. Compiler settings and test resource limits
-are unchanged. The release-binary job has a 60-minute allowance for the cold
+are unchanged. The release-binary job has a 120-minute allowance for the cold
 build and paging; this setup and its observations are not release qualification.
 
 `result.compiler_measurements.compiled` contains one measurement for each
