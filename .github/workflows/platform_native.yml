@@ -142,6 +142,27 @@ jobs:
               assert (root / "file-link").is_symlink()
               assert (root / "directory-link").is_symlink()
           PY
+      - name: Prepare current-user known-folder ownership for native fixtures
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # The hosted image can supply a system-owned LocalAppData directory.
+          # Positive OS-folder fixtures require its actual user to own the leaf;
+          # production lookup still refuses foreign ownership without repairing it.
+          $folder = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+          if ([string]::IsNullOrWhiteSpace($folder)) { throw 'Missing OS-selected local data directory' }
+          $item = Get-Item -LiteralPath $folder -Force
+          if (!$item.PSIsContainer -or ($item.Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+            throw 'OS-selected local data directory must be a real directory'
+          }
+          $user = [Security.Principal.WindowsIdentity]::GetCurrent().User
+          $acl = Get-Acl -LiteralPath $folder
+          if ($acl.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne $user.Value) {
+            $acl.SetOwner($user)
+            Set-Acl -LiteralPath $folder -AclObject $acl
+          }
+          $owner = (Get-Acl -LiteralPath $folder).GetOwner([Security.Principal.SecurityIdentifier])
+          if ($owner.Value -ne $user.Value) { throw 'Known-folder fixture ownership differs from the effective user' }
       - name: Exercise native filesystem custody and documentation contracts
         run: |
           set -euo pipefail
