@@ -360,6 +360,7 @@ jobs:
             scripts/tests/check_zk_resource_contract_test.py \
             scripts/tests/check_zk_runtime_validity_test.py \
             scripts/tests/check_zk_feature_parity_test.py \
+            scripts/tests/native_dif_workflow_test.py \
             scripts/tests/check_zk_operation_inventory_test.py \
             scripts/tests/check_durable_workflow_contract_test.py \
             scripts/tests/check_operation_contract_test.py \
