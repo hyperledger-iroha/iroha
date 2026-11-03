@@ -19,7 +19,7 @@ use super::super::capacity::{FROZEN_BOUND, PLAN_BOUND};
 #[derive(Clone, Copy)]
 enum DispatchAdmission<'a> {
     Ordinary,
-    ReviewedUnbound { checkpoint: [u8; 32] },
+    ReviewedUnbound { checkpoint: &'a [u8; 32] },
     Archive(&'a super::super::scheduling::ArchiveDispatchPermit),
 }
 
@@ -739,7 +739,9 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
         self.execute_intent_with(
             NativeIntentV1::user(request),
             speculative,
-            DispatchAdmission::ReviewedUnbound { checkpoint },
+            DispatchAdmission::ReviewedUnbound {
+                checkpoint: &checkpoint,
+            },
         )
     }
 
@@ -768,7 +770,7 @@ impl<C: Custody, A: ArchiveStore, N: NativePreparation> Coordinator<C, A, N> {
     ) -> Result<ReviewedExecutionV1, Error> {
         let bytes = self.canonical_intent(&request)?;
         let reviewed_checkpoint = match admission {
-            DispatchAdmission::ReviewedUnbound { checkpoint } => Some(checkpoint),
+            DispatchAdmission::ReviewedUnbound { checkpoint } => Some(*checkpoint),
             _ => None,
         };
         let archive_permit = match admission {

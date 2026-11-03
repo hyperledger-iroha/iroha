@@ -478,16 +478,41 @@ _PUBLIC_BASENAMES = frozenset({
 
 # Reviewed exact vendor roles: original Cargo manifests named by their normalized
 # owners, spelling ignore words consumed by Concread's Makefile, and deterministic
-# public BLS generator vectors included by the curve tests, and the public NESSIE
-# AES known-answer vectors read by the vendored aes 0.8.4 upstream tests. This
-# does not admit any other .orig/.dat/.blb filename or override
+# public BLS generator vectors included by the curve tests, public NESSIE AES
+# known-answer vectors, AT-SPI XML schemas, the Halo2 release template, and
+# Metal example shader libraries. The versioned resources match their upstream
+# crates.io package originals. This does not admit other filenames or override
 # material/provider/alias refusal.
 _REVIEWED_PUBLIC_VENDOR_INPUTS = frozenset({
     "vendor/concread/.codespell_ignore",
+    "vendor/accesskit_atspi_common-0.21.1/Cargo.toml.orig",
+    "vendor/accesskit_unix-0.24.1/Cargo.toml.orig",
+    "vendor/ark-bls12-381-0.5.0/Cargo.toml.orig",
+    "vendor/ark-ff-0.5.0/Cargo.toml.orig",
+    "vendor/atspi-common-0.14.0/Cargo.toml.orig",
+    "vendor/atspi-proxies-0.14.0/Cargo.toml.orig",
     "vendor/axum-core/Cargo.toml.orig",
     "vendor/bytes/Cargo.toml.orig",
     "vendor/http-body-util/Cargo.toml.orig",
     "vendor/concread/Cargo.toml.orig",
+    "vendor/halo2curves-0.10.0/Cargo.toml.orig",
+    "vendor/metal-0.33.0/Cargo.toml.orig",
+    "vendor/num-bigint-0.4.6/Cargo.toml.orig",
+    "vendor/zbus-lockstep-0.7.0/Cargo.toml.orig",
+    "vendor/zbus-lockstep-macros-0.7.0/Cargo.toml.orig",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g1_compressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g1_uncompressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g2_compressed_valid_test_vectors.dat",
+    "vendor/ark-bls12-381-0.5.0/src/curves/tests/g2_uncompressed_valid_test_vectors.dat",
+    "vendor/atspi-common-0.14.0/xml/schemas/DBus.xsd",
+    "vendor/atspi-common-0.14.0/xml/schemas/XMLSchema.xsd",
+    "vendor/halo2curves-0.10.0/.github/release-pr-template.ejs",
+    "vendor/metal-0.33.0/examples/circle/shaders.metallib",
+    "vendor/metal-0.33.0/examples/compute/shaders.metallib",
+    "vendor/metal-0.33.0/examples/mesh-shader/shaders.metallib",
+    "vendor/metal-0.33.0/examples/mps/shaders.metallib",
+    "vendor/metal-0.33.0/examples/raytracing/shaders.metallib",
+    "vendor/metal-0.33.0/examples/window/shaders.metallib",
     "vendor/aes/tests/data/aes128.blb",
     "vendor/aes/tests/data/aes192.blb",
     "vendor/aes/tests/data/aes256.blb",

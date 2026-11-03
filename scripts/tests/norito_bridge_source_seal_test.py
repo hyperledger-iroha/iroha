@@ -23,6 +23,43 @@ sys.modules[SPEC.name] = seal
 SPEC.loader.exec_module(seal)
 
 
+class NoritoBridgeVendoredOriginalManifestTests(unittest.TestCase):
+    """Packaged Cargo originals retain byte custody and exact-path admission."""
+
+    ORIGINAL = "vendor/zbus-lockstep-macros-0.7.0/Cargo.toml.orig"
+
+    def test_vendored_original_is_hashed_and_rejects_a_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            original = root / self.ORIGINAL
+            original.parent.mkdir(parents=True)
+            original.write_bytes(b'[package]\nname = "public-test-package"\n')
+            lockfile = root / "Cargo.lock"
+            lockfile.write_bytes(b"public synthetic lock\n")
+            with mock.patch.object(seal, "listed_files", return_value=[self.ORIGINAL]), \
+                    mock.patch.object(seal, "selected_lockfile_path", return_value=lockfile), \
+                    mock.patch.object(seal, "lockfile_identity", return_value=("0" * 64,)):
+                before = seal.fingerprint(root, [self.ORIGINAL], lockfile)
+                original.write_bytes(original.read_bytes() + b'version = "0.1.0"\n')
+                self.assertNotEqual(before, seal.fingerprint(root, [self.ORIGINAL], lockfile))
+                target = original.with_name("Cargo.toml")
+                original.rename(target)
+                original.symlink_to(target)
+                with self.assertRaisesRegex(RuntimeError, "symlinked"):
+                    seal.fingerprint(root, [self.ORIGINAL], lockfile)
+
+    def test_original_admission_does_not_extend_to_other_paths(self) -> None:
+        for relative in (
+            self.ORIGINAL + ".bak",
+            self.ORIGINAL.replace("0.7.0", "0.7.1"),
+            self.ORIGINAL.replace("Cargo.toml.orig", "credentials.orig"),
+            "secrets/" + self.ORIGINAL,
+        ):
+            with self.subTest(relative=relative):
+                with self.assertRaisesRegex(RuntimeError, "not an admitted public filename|prohibited"):
+                    seal._public_source_relative(relative)
+
+
 class NoritoBridgeAndroidConsumerRuleResourceTests(unittest.TestCase):
     """A maintained public resource filename never exempts source bytes or custody."""
 
