@@ -372,6 +372,36 @@ jobs:
           python-version: "3.11"
       - name: Install pinned router-test dependency
         run: python3 -m pip install --disable-pip-version-check pytest==9.0.3
+      - name: Provision the normal Linux observer prerequisites
+        run: |
+          set -euo pipefail
+          # The observer opens per-process userspace events; it does not need
+          # system-wide or kernel profiling. Executable-memfd policy is unchanged.
+          sudo sysctl -w kernel.perf_event_paranoid=2
+          test "$(sysctl -n kernel.perf_event_paranoid)" = 2
+          cargo_bin="$(rustup which cargo)"
+          rustc_bin="$(rustup which rustc)"
+          native_target="$("$rustc_bin" -vV | sed -n 's/^host: //p')"
+          RUSTC="$rustc_bin" "$cargo_bin" fetch --locked --target "$native_target"
+      - name: Run the complete harness through the normal native publisher
+        run: |
+          set -euo pipefail
+          # Both the CI invoker and public loader retain the complete source census.
+          ulimit -n 65536
+          python3 -I -S -B ci/run_linux_resource_harness.py \
+            --source-root "$(pwd -P)" \
+            --source-commit "$GITHUB_SHA" \
+            --cargo-bin "$(rustup which cargo)" \
+            --rustc-bin "$(rustup which rustc)" \
+            --cargo-home "$(cd "$HOME/.cargo" && pwd -P)" \
+            --run-root "$RUNNER_TEMP/iroha-linux-resource-harness"
+      - name: Retain Linux harness publication evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: linux-resource-harness-publication
+          path: ${{ runner.temp }}/iroha-linux-resource-harness/evidence
+          if-no-files-found: error
       - name: Verify repository source contracts and inventories
         run: |
           python3 -m pytest -q \
@@ -413,7 +443,7 @@ jobs:
             scripts/tests/check_zk_economic_invariants_test.py \
             scripts/tests/check_zk_primitive_workloads_test.py \
             scripts/tests/check_state_commitment_candidates_test.py \
-            scripts/tests/zk_resource_harness_test.py \
+            scripts/tests/linux_resource_harness_ci_test.py \
             pytests/scripts/iso_xsd_fixture_verify_test.py \
             pytests/scripts/iso_xsd_profile_catalog_include_test.py
           python3 scripts/check_cargo_feature_hygiene.py

@@ -44,6 +44,29 @@ fails when these inputs are absent. Keep the canonical source owner retained
 through publication and observation; a diagnostic shared library alone is not
 an authenticated installed bridge.
 
+The mandatory PR source-guard job invokes
+[`ci/run_linux_resource_harness.py`](../../ci/run_linux_resource_harness.py) to
+provision this fixture from the reviewed clean commit. The invoker validates the
+committed release-source seal, retains the canonical source census and installed
+Cargo/Rustc originals, and binds a fresh publisher executable to its exact Cargo
+metadata and build events. It executes that held original, accepts only its
+successful `build-bridge-publish` receipt, and passes the original six inputs to
+the public test runner. It keeps the source owner alive through the complete
+`--all-tests` module run; a missing test, a skipped test, any failed child, or a
+changed source rejects the job. Selected files and diagnostic provenance never
+supply authoritative pins. This CI handoff exercises the component contract and
+does not authorize deployment or establish release qualification.
+
+The hosted Linux job prefetches locked native dependencies before the normal
+producer's offline build. It sets `kernel.perf_event_paranoid=2`, which permits
+[per-process userspace observation](https://docs.kernel.org/admin-guide/perf-security.html),
+and raises the process descriptor soft limit to 65,536 so the invoker and public
+loader can each retain the complete source census. It does not change executable
+memfd policy: missing execute seals or policy denial still reject publication.
+The private external invocation directory retains the Cargo transcripts, original
+publisher receipt and final component-CI result; only these diagnostic records
+are uploaded, not the selected bridge or build cache.
+
 The final 2026-10-31 tightened harness passes all 20 native methods and six public
 delivery methods, alongside 225 regression controls. The native suite retains
 unchanged Python hashes and matching source censuses around its tracked-output

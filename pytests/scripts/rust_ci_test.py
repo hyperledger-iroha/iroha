@@ -45,7 +45,7 @@ def test_source_guards_run_independently_and_remain_required() -> None:
     assert "scripts/tests/check_dependency_budget_test.py" in guards
     assert "python3 -I -S scripts/check_release_feature_graph.py" in guards
     assert "python3 -I -S scripts/check_state_commitment_candidates.py" in guards
-    assert "    needs:" not in guards and "    if:" not in guards
+    assert re.search(r"(?m)^    (?:needs|if):", guards) is None
     assert "    if: always()" in required
     assert "needs: [rust_changes, rust_source_guards," in required
     assert "SOURCE_GUARDS_RESULT: ${{ needs.rust_source_guards.result }}" in required
