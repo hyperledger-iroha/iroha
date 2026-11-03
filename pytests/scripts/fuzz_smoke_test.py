@@ -204,6 +204,39 @@ class FuzzSmokeTests(unittest.TestCase):
         self.assertIn("group: numeric-v1-fuzz-${{ github.sha }}", workflow)
         self.assertIn("cancel-in-progress: false", workflow)
 
+    def test_pull_requests_provision_hosted_tools_without_changing_release_policy(self) -> None:
+        """PRs cannot queue on absent hosts; non-PR routing and fuzz limits stay fixed."""
+
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn(
+            "runs-on: ${{ fromJSON(github.event_name == 'pull_request' && "
+            "'[\"ubuntu-24.04\"]' || '[\"self-hosted\",\"Linux\",\"iroha2\"]') }}",
+            workflow,
+        )
+        provision = workflow.split(
+            "      - name: Provision hosted PR fuzz tools\n", 1
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("if: github.event_name == 'pull_request'", provision)
+        self.assertIn("uses: ./.github/actions/setup-native-ci", provision)
+        self.assertIn(f"toolchain: {PINNED_NIGHTLY}", provision)
+        release = workflow.split(
+            "      - uses: actions-rust-lang/setup-rust-toolchain@", 1
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("if: github.event_name != 'pull_request'", release)
+        self.assertIn(f"toolchain: {PINNED_NIGHTLY}", release)
+        for setting in ('RUNS: "10000"', 'FUZZ_MAX_TOTAL_TIME: "60"',
+                        'FUZZ_RSS_LIMIT_MB: "3072"', 'FUZZ_CODEGEN_UNITS: "16"',
+                        'timeout-minutes: 120', 'workspaces: "crates/ivm/fuzz -> target"'):
+            self.assertIn(setting, workflow)
+        self.assertNotIn("CARGO_TARGET_DIR", workflow)
+        self.assertNotIn("continue-on-error", workflow)
+        self.assertIn('".github/actions/setup-native-ci/**"', workflow)
+        check = workflow.split(
+            "      - name: Exercise strict fuzz prerequisite and routing regressions\n", 1
+        )[1].split("\n      - ", 1)[0]
+        self.assertIn("if: github.event_name == 'pull_request'", check)
+        self.assertIn("run: python3 pytests/scripts/fuzz_smoke_test.py", check)
+
     def test_dedicated_workflow_covers_every_numeric_semantics_input(self) -> None:
         """Compiler, ABI, fixture, syscall-test, and spec edits all trigger fuzzing."""
 
