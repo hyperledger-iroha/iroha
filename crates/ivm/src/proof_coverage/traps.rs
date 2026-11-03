@@ -216,9 +216,10 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     // The Upgrade-executor instruction: the authority check precedes the migration run,
     // and its failed outcome is relabelled for the instruction. Neither is the terminal
-    // trap of a run. The metadata clone-budget helpers are reached from the X.509
-    // attachment syscall: a demand overflow is a local refusal, and an account layout
-    // the codec cannot size traps the syscall.
+    // trap of a run. The shared clone-layout budget helpers (`add_clone_bytes`,
+    // `add_account_clone_bytes`) run only inside the X.509 attachment host handler:
+    // malformed stored identity material traps that syscall, and an overflowing demand
+    // is refused node-locally.
     producer!(
         "crates/iroha_core/src/executor.rs",
         PrepareRejection: [PermissionDenied],
@@ -236,7 +237,8 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     // The ledger host. Verifying keys and public-input records are rehydrated from State
     // before the run; `begin_tx` refuses an open nested-call journal, which an honest
-    // executor never leaves.
+    // executor never leaves. Output measurement preserves the original decoder resource
+    // refusal as a local deferral.
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host.rs",
         PrepareRejection: [NoritoInvalid],
@@ -246,7 +248,7 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             OutOfGas, PermissionDenied, UnknownSyscall,
         ],
         HostInvariant: [DecodeError],
-        LocalDeferral: [AllocationDeferred, ExecutionDeferred, VerificationDeferred],
+        LocalDeferral: [AllocationDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
     ),
     // Signed-attachment custody frames. Nested calls enter and leave a child inside the
     // call syscall. `begin_tx` requires an unchanged root, which an honest executor

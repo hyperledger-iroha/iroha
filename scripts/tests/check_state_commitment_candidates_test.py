@@ -1186,6 +1186,18 @@ class TrackedSummary(unittest.TestCase):
         )
         self.assert_reported(lambda s: s["units"].pop("wall_ns"), "units differs from the checker's table")
 
+    def test_a_run_records_a_digest_only_for_a_dirty_checkout(self) -> None:
+        def recording(dirty, digest):
+            return lambda s: s["benchmark_identity"]["runs"][0].update(source_dirty=dirty, source_dirty_digest=digest)
+
+        self.assert_reported(recording(True, None), "source_dirty_digest is not a SHA-256 digest")
+        self.assert_reported(recording(True, "abc"), "source_dirty_digest is not a SHA-256 digest")
+        self.assert_reported(recording(False, "d" * 64), "source_dirty_digest is recorded for a clean checkout")
+        self.assert_reported(recording(None, "d" * 64), "source_dirty is not recorded")
+        # What the harness writes for a clean checkout and for a dirty one.
+        for dirty, digest in ((False, None), (True, "d" * 64)):
+            self.assertFalse([error for error in self.errors(recording(dirty, digest)) if "source_dirty" in error])
+
     def test_classes_units_and_notes_of_the_measured_sections_are_the_checkers_text(self) -> None:
         text = "differs from the checker's text"
         for section, key in (

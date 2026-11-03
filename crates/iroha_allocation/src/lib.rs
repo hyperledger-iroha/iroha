@@ -57,6 +57,65 @@ thread_local! {
     // Scope records have stable stack or originally admitted control addresses.
     // Only their active thread links or follows this chain.
     static REFUND_SCOPES: Cell<*const RefundScope> = const { Cell::new(ptr::null()) };
+    // Attempt records live on their strictly nested `with_attempt_credits` frames.
+    // Only their own thread links or follows this chain.
+    static ATTEMPT_CREDITS: Cell<*const AttemptCreditScope> = const { Cell::new(ptr::null()) };
+}
+
+/// One thread's retryable attempt on one pool; see [`AllocationBudget::with_attempt_credits`].
+struct AttemptCreditScope {
+    pool: *const Pool,
+    previous: *const AttemptCreditScope,
+    // Credits owned by this attempt and still counted in `Pool::reserved`.
+    credits: Cell<usize>,
+}
+
+impl AttemptCreditScope {
+    /// The innermost attempt of `pool` on this thread.
+    ///
+    /// The record lives on an enclosing `with_attempt_credits` frame of this
+    /// thread, so it outlives every synchronous pool call made inside that
+    /// frame. Callers use the borrow only within such a call.
+    fn innermost(pool: &Pool) -> Option<&Self> {
+        let mut current = ATTEMPT_CREDITS.with(Cell::get);
+        while !current.is_null() {
+            // SAFETY: linked records stay at their frame's address until that
+            // same frame unlinks them; no other thread follows this chain.
+            let scope = unsafe { &*current };
+            if ptr::eq(scope.pool, pool) {
+                return Some(scope);
+            }
+            current = scope.previous;
+        }
+        None
+    }
+}
+
+// Unlinks its record on exit or unwind. An unwind abandons the attempt and
+// returns its credits to the pool.
+struct EnteredAttemptScope<'scope> {
+    scope: &'scope AttemptCreditScope,
+    pool: &'scope Pool,
+}
+
+impl EnteredAttemptScope<'_> {
+    fn finish(self) -> usize {
+        let credits = self.scope.credits.replace(0);
+        drop(self);
+        credits
+    }
+}
+
+impl Drop for EnteredAttemptScope<'_> {
+    fn drop(&mut self) {
+        ATTEMPT_CREDITS.with(|head| {
+            // The closure API nests attempt frames strictly on one thread.
+            debug_assert!(ptr::eq(head.get(), self.scope));
+            head.set(self.scope.previous);
+        });
+        let credits = self.scope.credits.replace(0);
+        self.pool.refund(credits);
+    }
 }
 
 struct RefundScope {
@@ -136,6 +195,14 @@ struct Pool {
 impl Pool {
     fn refund(&self, bytes: usize) {
         if bytes == 0 {
+            return;
+        }
+        // An attempt keeps what it returns on this thread, including its own
+        // rollback: no credit, sequence or wake reaches the pool's waiters.
+        if let Some(scope) = AttemptCreditScope::innermost(self) {
+            let credits = scope.credits.get().saturating_add(bytes);
+            debug_assert!(credits <= self.reserved.load(Ordering::Acquire));
+            scope.credits.set(credits);
             return;
         }
         // Credits and callback-free thread retries become available immediately.
@@ -582,6 +649,61 @@ impl AllocationBudget {
         AllocationRefundBatch::new(self.clone())
     }
 
+    /// Run one synchronous retryable attempt whose own refunds cannot wake its refusal.
+    ///
+    /// Inside `operation`, this thread's refunds to this pool stay with the
+    /// attempt, and this thread's reservations spend them before the pool's. No
+    /// credit, sequence or deferred wake of the attempt's own releases, its
+    /// rollback included, reaches the pool, so a capacity refusal's release
+    /// observation can be satisfied only by another owner's release. The attempt
+    /// therefore holds its peak demand until it ends. `retained` credits of the
+    /// same job's earlier attempt seed the scope; credits of another pool are
+    /// first returned to that pool.
+    ///
+    /// The caller receives the attempt's remaining credits. A refused job keeps
+    /// them for its next attempt; dropping them returns them to the pool and
+    /// wakes its waiters. Refunds this thread makes for other owners inside the
+    /// scope, such as deferred reclamation, also stay until then. Refunds made
+    /// on other threads return to the pool. Entering and leaving the scope
+    /// allocate nothing; an unwind returns the attempt's credits to the pool.
+    pub fn with_attempt_credits<R>(
+        &self,
+        retained: Option<RetainedAttemptCredits>,
+        operation: impl FnOnce() -> R,
+    ) -> (R, Option<RetainedAttemptCredits>) {
+        let credits = match retained {
+            Some(original) if original.belongs_to(self) => original.into_credits(),
+            foreign => {
+                drop(foreign);
+                0
+            }
+        };
+        let scope = AttemptCreditScope {
+            pool: Arc::as_ptr(&self.pool),
+            previous: ATTEMPT_CREDITS.with(Cell::get),
+            credits: Cell::new(credits),
+        };
+        let entered = EnteredAttemptScope {
+            scope: &scope,
+            pool: &self.pool,
+        };
+        ATTEMPT_CREDITS.with(|head| head.set(ptr::from_ref(&scope)));
+        let output = operation();
+        let credits = entered.finish();
+        let retained = (credits > 0).then(|| RetainedAttemptCredits {
+            pool: Arc::clone(&self.pool),
+            credits,
+        });
+        (output, retained)
+    }
+
+    /// Whether credit returns to this exact pool can satisfy `wait`.
+    ///
+    /// This compares notification identity only and grants no capacity.
+    pub fn is_source_of(&self, wait: &ReleaseWait) -> bool {
+        self.pool.released.observed_by(wait)
+    }
+
     fn with_refund_scope<R>(
         &self,
         retained: Option<&Cell<bool>>,
@@ -658,12 +780,25 @@ impl AllocationBudget {
                 limit_bytes: limit,
             });
         }
+        // An attempt spends credits its own rollback retained before the pool's.
+        let attempt = AttemptCreditScope::innermost(&self.pool);
+        let retained = attempt.map_or(0, |scope| scope.credits.get());
+        if let Some(scope) = attempt
+            && retained >= bytes
+        {
+            scope.credits.set(retained - bytes);
+            return Ok(AllocationReservation {
+                pool: Arc::clone(&self.pool),
+                remaining: bytes,
+            });
+        }
+        let needed = bytes - retained;
         let release = self.pool.released.observe();
         let mut reserved = self.pool.reserved.load(Ordering::Acquire);
         loop {
             // A shrink may leave prior reservations above the new limit.
             // The limit read lock serializes this decision with reconfiguration.
-            if bytes > limit.saturating_sub(reserved) {
+            if needed > limit.saturating_sub(reserved) {
                 return Err(AllocationRefusal::Capacity {
                     requested_bytes: bytes,
                     reserved_bytes: reserved,
@@ -673,14 +808,17 @@ impl AllocationBudget {
             }
             match self.pool.reserved.compare_exchange_weak(
                 reserved,
-                reserved + bytes,
+                reserved + needed,
                 Ordering::AcqRel,
                 Ordering::Acquire,
             ) {
                 Ok(_) => {
+                    if let Some(scope) = attempt {
+                        scope.credits.set(0);
+                    }
                     self.pool
                         .peak_reserved
-                        .fetch_max(reserved + bytes, Ordering::AcqRel);
+                        .fetch_max(reserved + needed, Ordering::AcqRel);
                     return Ok(AllocationReservation {
                         pool: Arc::clone(&self.pool),
                         remaining: bytes,
@@ -849,6 +987,48 @@ impl Drop for AllocationReservation {
     }
 }
 
+/// Original-pool credits a refused attempt kept from its own rollback.
+///
+/// They stay reserved in the pool, so retaining them cannot wake the attempt's
+/// own refusal. Pass them to the same job's next
+/// [`AllocationBudget::with_attempt_credits`] scope, or drop them to return them
+/// to the pool and wake its waiters.
+#[must_use = "keep an attempt's credits with its refused job or drop them to return them"]
+pub struct RetainedAttemptCredits {
+    pool: Arc<Pool>,
+    credits: usize,
+}
+
+impl RetainedAttemptCredits {
+    /// Credits still reserved for the refused attempt.
+    pub fn retained_bytes(&self) -> usize {
+        self.credits
+    }
+
+    /// Whether these credits belong to the exact original pool, not an equal limit.
+    pub fn belongs_to(&self, budget: &AllocationBudget) -> bool {
+        Arc::ptr_eq(&self.pool, &budget.pool)
+    }
+
+    fn into_credits(mut self) -> usize {
+        std::mem::take(&mut self.credits)
+    }
+}
+
+impl fmt::Debug for RetainedAttemptCredits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RetainedAttemptCredits")
+            .field("retained_bytes", &self.credits)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for RetainedAttemptCredits {
+    fn drop(&mut self) {
+        self.pool.refund(self.credits);
+    }
+}
+
 /// An allocation or component partition exceeds this owner's prepaid remainder.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InsufficientReservation {
@@ -910,6 +1090,10 @@ impl Drop for AllocationCharge {
 #[cfg(test)]
 #[path = "allocation_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "attempt_credit_tests.rs"]
+mod attempt_credit_tests;
 
 #[cfg(test)]
 pub(crate) use test_support::without_allocations;

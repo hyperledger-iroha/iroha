@@ -741,7 +741,6 @@ pub fn build_privacy_release_zk_x509_network_actions_v1(
 ) -> Result<PrivacyReleaseZkX509NetworkActionsV1, PrivacyReleaseEvidenceErrorClassV1> {
     let build_started = Instant::now();
     let PreparedZkX509NetworkActionV1 {
-        profile,
         fixture,
         proof,
         intent,
@@ -842,7 +841,6 @@ enum ZkX509NetworkCrlLineageV1<'a> {
     Successor(&'a PrivacyZkX509CrlRecordV1),
 }
 struct PreparedZkX509NetworkActionV1 {
-    profile: CompiledPrivacyProfileV1,
     fixture: ZkX509ReleaseFixtureV1,
     proof: Vec<u8>,
     intent: PrivacyTransactionIntentDigestV1,
@@ -936,7 +934,6 @@ fn prepare_zk_x509_network_action_v1(
         return Err(PrivacyReleaseEvidenceErrorClassV1::ResourceCeilingExceeded);
     }
     Ok(PreparedZkX509NetworkActionV1 {
-        profile,
         fixture,
         proof,
         intent,

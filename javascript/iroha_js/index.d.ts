@@ -4731,7 +4731,7 @@ export interface ParliamentAutomaticExecutionOutcomeLayoutV1 {
   readonly jsonTag: "Enacted" | "Superseded" | "ExecutionFailed";
   readonly jsonPayloadRequired: boolean;
   readonly eventKind: "MarkEnacted" | "MarkSuperseded" | "MarkExecutionFailed";
-  readonly eventKindIndex: 10 | 11 | 12;
+  readonly eventKindIndex: 17 | 18 | 19;
 }
 
 export type ParliamentNoResultKindTagV1 =

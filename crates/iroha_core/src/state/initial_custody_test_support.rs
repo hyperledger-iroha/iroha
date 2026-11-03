@@ -33,7 +33,7 @@ pub(super) fn world_live_bytes() -> usize {
         + initialized_cell_bytes::<RetainedStateParameters>()
 }
 
-fn initialized_cell_bytes<T: mv::Value>() -> usize {
+fn initialized_cell_bytes<T: mv::CellValue>() -> usize {
     CellInitialization::<T>::allocation_layouts()
         .into_iter()
         .map(|layout| layout.size())
@@ -50,7 +50,7 @@ pub(super) fn world_retired_bytes() -> usize {
         + retired_cell_bytes::<RetainedStateParameters>()
 }
 
-fn retired_cell_bytes<T: mv::Value>() -> usize {
+fn retired_cell_bytes<T: mv::CellValue>() -> usize {
     Cell::<T, AllocationCharge>::allocation_layouts()
         .into_iter()
         .map(|layout| layout.size())

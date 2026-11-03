@@ -612,11 +612,31 @@ fn a_world_without_its_uninstalled_members_restores_them_empty() {
 }
 
 #[test]
-fn every_member_of_a_baseline_world_is_installed() {
+fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
     let world = World::default();
+    let catalog = crate::runtime::release_catalog().expect("release catalog");
+    let mut added: Vec<String> = catalog
+        .additions
+        .iter()
+        .flat_map(|addition| addition.storage.keys())
+        .map(|field| {
+            field
+                .strip_prefix("world.")
+                .expect("an addition adds World fields")
+                .to_owned()
+        })
+        .collect();
+    added.sort_unstable();
+    assert_eq!(added, ["game_partitions"]);
+    let mut uninstalled: Vec<String> =
+        crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
+            .expect("uninstalled members")
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    uninstalled.sort_unstable();
     assert_eq!(
-        crate::runtime::uninstalled_world_members(world.runtime_selection.view().get()),
-        Ok(Vec::new()),
-        "the baseline installs every World field of this release"
+        uninstalled, added,
+        "the baseline installs every World field of this release but those its additions add"
     );
 }

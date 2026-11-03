@@ -1,6 +1,6 @@
 //! Block header Norito roundtrip and consensus hash behavior tests
 use iroha_data_model::block::BlockHeader;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use norito::codec::{DecodeAll as NoritoDecodeAll, Encode as NoritoEncode};
 #[test]
 fn block_header_norito_roundtrip() {

@@ -591,8 +591,8 @@ class ParliamentApiV1Test {
         val layout = ParliamentApiV1.PUBLIC_TRANSITIONS.single {
             it.jsonTag == "RegisterInitialSortition"
         }
-        assertEquals(12, layout.noritoIndex)
-        assertEquals(15, layout.eventKindIndex)
+        assertEquals(21, layout.noritoIndex)
+        assertEquals(24, layout.eventKindIndex)
         assertEquals(false, layout.jsonPayloadRequired)
         val transition = bytes("""{"transition":"RegisterInitialSortition"}""")
         val request = objectValue(ParliamentApiV1.transitionDraftRequestJson(attemptId, transition))

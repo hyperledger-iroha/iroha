@@ -132,10 +132,9 @@ impl Args {
     /// If this returns `Ok(true)`, then Swarm is allowed to proceed.
     fn user_allows_overwrite(&self) -> Result<bool, inquire::InquireError> {
         if self.out_file.exists() && !self.force {
-            use owo_colors::OwoColorize;
             return inquire::Confirm::new(&format!(
                 "File {} already exists. Overwrite it?",
-                self.out_file.display().blue().bold()
+                crate::terminal_style::Style::BoldBlue.apply(self.out_file.display())
             ))
             .with_help_message("Pass the `--force` flag to overwrite the file anyway.")
             .with_default(false)

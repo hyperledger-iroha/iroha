@@ -248,7 +248,7 @@ mod tests {
                 error.to_string(),
                 "unsupported inherited compiler, linker or Cargo override: RUSTUP_TOOLCHAIN"
             );
-            assert!(output.is_empty());
+            assert_eq!(output, Vec::<u8>::new());
             for name in DIRECTORIES {
                 assert_eq!(
                     std::fs::read_dir(root.join(name)).unwrap().count(),

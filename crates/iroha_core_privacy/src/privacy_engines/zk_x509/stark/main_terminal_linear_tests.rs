@@ -611,6 +611,10 @@ fn linear_grouping_keeps_allocation_refusals_and_payload_unchanged() {
 
 #[test]
 #[ignore = "actual maximum bound fixture; original versus production linear terminal grouping, complete source/transform/erase cost"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn maximum_fixture_terminal_linear_grouping_matches_all_coefficients_and_reports_complete_cost() {
     use crate::privacy_engines::transparent_stark::sample_trace_mask_v1;
     use rand::SeedableRng;

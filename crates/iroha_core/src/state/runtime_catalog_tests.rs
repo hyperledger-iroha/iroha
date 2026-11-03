@@ -1772,6 +1772,15 @@ fn catalog_observer_rejects_inner_protocol_reconstructed_and_stale_resource_erro
     }
 }
 
+/// Exact retained charge of one JSON leaf: its text and shared control, admitted
+/// into a separate pool through the same production retention kernel.
+fn retained_json_charge(leaf: &iroha_primitives::json::Json) -> usize {
+    let scratch = iroha_allocation::AllocationBudget::new(1 << 20);
+    let copy = leaf.try_retain_in(&scratch).unwrap();
+    assert!(!copy.ptr_eq(leaf), "a foreign pool funds its own leaf");
+    scratch.reserved_bytes()
+}
+
 #[test]
 fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_refunds_intermediate()
 {
@@ -1808,6 +1817,29 @@ fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_ref
         assert!(tx.world.parameters.touched_value().is_some());
         assert!(tx.canonical_runtime.touched_value().is_some());
         let prepared = tx.prepare_consensus_catalog_transition(&payload).unwrap();
+        // The fixture copy decodes its own custom JSON leaves. The successor shares
+        // every unchanged same-pool leaf instead of charging it again, so those
+        // leaves outlive the intermediate graph; all of its other backing must not.
+        let shared_leaf_bytes: usize = tx
+            .world
+            .parameters
+            .get()
+            .custom()
+            .values()
+            .map(|current| {
+                let successor = prepared
+                    .parameters
+                    .custom()
+                    .get(current.id())
+                    .expect("the catalog transition only adds custom parameters");
+                assert!(
+                    successor.payload().ptr_eq(current.payload()),
+                    "an unchanged same-pool leaf is shared, never charged twice"
+                );
+                retained_json_charge(current.payload())
+            })
+            .sum();
+        assert!(shared_leaf_bytes > 0 && shared_leaf_bytes < intermediate_bytes);
         let before_publication = pool.reserved_bytes();
         assert_eq!(
             crate::test_allocations::allocations_during(|| {
@@ -1818,7 +1850,7 @@ fn runtime_catalog_publication_after_prior_cell_writes_allocates_nothing_and_ref
         );
         assert_eq!(
             pool.reserved_bytes(),
-            before_publication - intermediate_bytes,
+            before_publication - (intermediate_bytes - shared_leaf_bytes),
             "the intermediate is not retained by a census-only shadow owner"
         );
         assert!(original.same_version(tx.world.parameters.get_before_transaction()));

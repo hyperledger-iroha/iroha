@@ -1,0 +1,505 @@
+{
+  "network": "hash:1111111111111111111111111111111111111111111111111111111111111111#4667",
+  "root": {
+    "kind": "Universal",
+    "content": null
+  },
+  "predecessor": "2121212121212121212121212121212121212121212121212121212121212121",
+  "successor": "2222222222222222222222222222222222222222222222222222222222222222",
+  "effective_height": 120,
+  "publish": [
+    {
+      "kind": "Interface",
+      "content": {
+        "wire_id": "iroha.fixture.call.v1",
+        "payload": {
+          "kind": "Codec",
+          "content": "norito:iroha.fixture.Call@1.0.0"
+        },
+        "rejection_codes": [
+          "fixture_rejected"
+        ],
+        "events": [
+          "0101010101010101010101010101010101010101010101010101010101010101"
+        ],
+        "metering_class": "iroha.fixture",
+        "contract_statement": "0202020202020202020202020202020202020202020202020202020202020202"
+      }
+    },
+    {
+      "kind": "Implementation",
+      "content": {
+        "entrypoint": {
+          "kind": "Instructions",
+          "content": [
+            "0303030303030303030303030303030303030303030303030303030303030303"
+          ]
+        },
+        "code": {
+          "kind": "Native",
+          "content": {
+            "module": "iroha.fixture.instructions",
+            "reference_closure": "0404040404040404040404040404040404040404040404040404040404040404"
+          }
+        },
+        "reads": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "writes": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "scans": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "events": [
+          "0101010101010101010101010101010101010101010101010101010101010101"
+        ],
+        "permissions": [
+          "0606060606060606060606060606060606060606060606060606060606060606"
+        ],
+        "parameters": [
+          "0707070707070707070707070707070707070707070707070707070707070707"
+        ],
+        "invokes": [
+          "0303030303030303030303030303030303030303030303030303030303030303"
+        ],
+        "host_profile": null,
+        "services_profile": "0808080808080808080808080808080808080808080808080808080808080808",
+        "limits": {
+          "max_gas": 18446744073709551615,
+          "max_effects": 64,
+          "max_call_depth": 8
+        }
+      }
+    },
+    {
+      "kind": "Implementation",
+      "content": {
+        "entrypoint": {
+          "kind": "Hook",
+          "content": "iroha.fixture.hook"
+        },
+        "code": {
+          "kind": "Ivm",
+          "content": {
+            "code_hash": "0909090909090909090909090909090909090909090909090909090909090909",
+            "entrypoint": "main"
+          }
+        },
+        "reads": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "writes": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "scans": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "events": [
+          "0101010101010101010101010101010101010101010101010101010101010101"
+        ],
+        "permissions": [
+          "0606060606060606060606060606060606060606060606060606060606060606"
+        ],
+        "parameters": [
+          "0707070707070707070707070707070707070707070707070707070707070707"
+        ],
+        "invokes": [
+          "0303030303030303030303030303030303030303030303030303030303030303"
+        ],
+        "host_profile": "0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a",
+        "services_profile": "0808080808080808080808080808080808080808080808080808080808080808",
+        "limits": {
+          "max_gas": 18446744073709551615,
+          "max_effects": 64,
+          "max_call_depth": 8
+        }
+      }
+    },
+    {
+      "kind": "Implementation",
+      "content": {
+        "entrypoint": {
+          "kind": "Query",
+          "content": "iroha.fixture.query"
+        },
+        "code": {
+          "kind": "Native",
+          "content": {
+            "module": "iroha.fixture.query",
+            "reference_closure": "0404040404040404040404040404040404040404040404040404040404040404"
+          }
+        },
+        "reads": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "writes": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "scans": [
+          "0505050505050505050505050505050505050505050505050505050505050505"
+        ],
+        "events": [
+          "0101010101010101010101010101010101010101010101010101010101010101"
+        ],
+        "permissions": [
+          "0606060606060606060606060606060606060606060606060606060606060606"
+        ],
+        "parameters": [
+          "0707070707070707070707070707070707070707070707070707070707070707"
+        ],
+        "invokes": [
+          "0303030303030303030303030303030303030303030303030303030303030303"
+        ],
+        "host_profile": null,
+        "services_profile": "0808080808080808080808080808080808080808080808080808080808080808",
+        "limits": {
+          "max_gas": 18446744073709551615,
+          "max_effects": 64,
+          "max_call_depth": 8
+        }
+      }
+    },
+    {
+      "kind": "Storage",
+      "content": {
+        "namespace": "world.fixture_table",
+        "shape": {
+          "kind": "Table",
+          "content": {
+            "key": {
+              "kind": "Codec",
+              "content": "norito:iroha.fixture.Key@1.0.0"
+            }
+          }
+        },
+        "value": {
+          "kind": "Codec",
+          "content": "norito:iroha.fixture.Value@1.0.0"
+        },
+        "initial": null,
+        "invariants": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "projection": {
+          "kind": "BareNorito",
+          "content": null
+        }
+      }
+    },
+    {
+      "kind": "Storage",
+      "content": {
+        "namespace": "world.fixture_cell",
+        "shape": {
+          "kind": "Cell",
+          "content": null
+        },
+        "value": {
+          "kind": "Codec",
+          "content": "norito:iroha.fixture.Value@1.0.0"
+        },
+        "initial": "AQID",
+        "invariants": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+        "projection": {
+          "kind": "Semantic",
+          "content": "iroha.fixture.projection@1.0.0"
+        }
+      }
+    },
+    {
+      "kind": "Event",
+      "content": {
+        "name": "iroha.fixture.event",
+        "schema": {
+          "kind": "Carrier",
+          "content": {
+            "nodes": [
+              {
+                "kind": "Unit",
+                "content": null
+              },
+              {
+                "kind": "Bool",
+                "content": null
+              },
+              {
+                "kind": "U8",
+                "content": null
+              },
+              {
+                "kind": "U16",
+                "content": null
+              },
+              {
+                "kind": "U32",
+                "content": null
+              },
+              {
+                "kind": "U64",
+                "content": null
+              },
+              {
+                "kind": "U128",
+                "content": null
+              },
+              {
+                "kind": "I64",
+                "content": null
+              },
+              {
+                "kind": "String",
+                "content": {
+                  "max_bytes": 64
+                }
+              },
+              {
+                "kind": "Bytes",
+                "content": {
+                  "max_bytes": 64
+                }
+              },
+              {
+                "kind": "AccountId",
+                "content": null
+              },
+              {
+                "kind": "AssetDefinitionId",
+                "content": null
+              },
+              {
+                "kind": "Hash",
+                "content": null
+              },
+              {
+                "kind": "Option",
+                "content": {
+                  "inner": 0
+                }
+              },
+              {
+                "kind": "Vec",
+                "content": {
+                  "element": 1,
+                  "max_len": 8
+                }
+              },
+              {
+                "kind": "Map",
+                "content": {
+                  "key": 2,
+                  "value": 3,
+                  "max_len": 8
+                }
+              },
+              {
+                "kind": "Struct",
+                "content": {
+                  "fields": [
+                    {
+                      "name": "first",
+                      "node": 4
+                    }
+                  ]
+                }
+              },
+              {
+                "kind": "Enum",
+                "content": {
+                  "variants": [
+                    {
+                      "discriminant": 0,
+                      "name": "only",
+                      "node": 16
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "kind": "Permission",
+      "content": {
+        "name": "iroha.fixture.permission",
+        "payload": {
+          "kind": "Codec",
+          "content": "norito:iroha.fixture.Permission@1.0.0"
+        }
+      }
+    },
+    {
+      "kind": "Parameter",
+      "content": {
+        "name": "iroha.fixture.parameter",
+        "schema": {
+          "kind": "Codec",
+          "content": "norito:iroha.fixture.Parameter@1.0.0"
+        },
+        "initial": "BAU="
+      }
+    },
+    {
+      "kind": "HostProfile",
+      "content": {
+        "abi_version": 1,
+        "abi_hash": "0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c",
+        "metering": "0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d0d"
+      }
+    },
+    {
+      "kind": "ServicesProfile",
+      "content": {
+        "services": [
+          {
+            "name": "iroha.fixture.service",
+            "reference_closure": "0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e0e"
+          }
+        ]
+      }
+    },
+    {
+      "kind": "CommitmentProfile",
+      "content": {
+        "scheme": "iroha.fixture.scheme",
+        "parameters": "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f"
+      }
+    },
+    {
+      "kind": "Kernel",
+      "content": {
+        "name": "iroha.fixture.kernel",
+        "reference_closure": "1010101010101010101010101010101010101010101010101010101010101010"
+      }
+    },
+    {
+      "kind": "Migration",
+      "content": {
+        "code": {
+          "kind": "Native",
+          "content": {
+            "module": "iroha.fixture.migration",
+            "reference_closure": "0404040404040404040404040404040404040404040404040404040404040404"
+          }
+        },
+        "from": [
+          "1111111111111111111111111111111111111111111111111111111111111111"
+        ],
+        "to": [
+          "1212121212121212121212121212121212121212121212121212121212121212"
+        ],
+        "cursor": {
+          "kind": "Codec",
+          "content": "norito:iroha.fixture.Cursor@1.0.0"
+        },
+        "host_profile": null,
+        "services_profile": "0808080808080808080808080808080808080808080808080808080808080808",
+        "limits": {
+          "max_gas": 18446744073709551615,
+          "max_effects": 64,
+          "max_call_depth": 8
+        }
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "kind": "InstallStorage",
+      "content": "0505050505050505050505050505050505050505050505050505050505050505"
+    },
+    {
+      "kind": "RetireStorage",
+      "content": "1313131313131313131313131313131313131313131313131313131313131313"
+    },
+    {
+      "kind": "Activate",
+      "content": "0303030303030303030303030303030303030303030303030303030303030303"
+    },
+    {
+      "kind": "Deactivate",
+      "content": "1414141414141414141414141414141414141414141414141414141414141414"
+    },
+    {
+      "kind": "Bind",
+      "content": {
+        "wire_id": "iroha.fixture.call.v1",
+        "interface": "0303030303030303030303030303030303030303030303030303030303030303",
+        "implementation": "1515151515151515151515151515151515151515151515151515151515151515"
+      }
+    },
+    {
+      "kind": "Unbind",
+      "content": "iroha.fixture.retired.v1"
+    },
+    {
+      "kind": "Restrict",
+      "content": {
+        "definition": "1414141414141414141414141414141414141414141414141414141414141414",
+        "restriction": {
+          "kind": "Deprecated",
+          "content": null
+        }
+      }
+    },
+    {
+      "kind": "Restrict",
+      "content": {
+        "definition": "1414141414141414141414141414141414141414141414141414141414141414",
+        "restriction": {
+          "kind": "AdmissionClosed",
+          "content": null
+        }
+      }
+    },
+    {
+      "kind": "Restrict",
+      "content": {
+        "definition": "1414141414141414141414141414141414141414141414141414141414141414",
+        "restriction": {
+          "kind": "CompletionOnly",
+          "content": null
+        }
+      }
+    },
+    {
+      "kind": "Restrict",
+      "content": {
+        "definition": "1414141414141414141414141414141414141414141414141414141414141414",
+        "restriction": {
+          "kind": "Disabled",
+          "content": null
+        }
+      }
+    },
+    {
+      "kind": "Lift",
+      "content": "1414141414141414141414141414141414141414141414141414141414141414"
+    },
+    {
+      "kind": "SetKernel",
+      "content": "1616161616161616161616161616161616161616161616161616161616161616"
+    },
+    {
+      "kind": "SetCommitmentProfile",
+      "content": "1717171717171717171717171717171717171717171717171717171717171717"
+    },
+    {
+      "kind": "SetServicesProfile",
+      "content": "0808080808080808080808080808080808080808080808080808080808080808"
+    },
+    {
+      "kind": "RetainCompletion",
+      "content": {
+        "obligation": "1818181818181818181818181818181818181818181818181818181818181818",
+        "definitions": [
+          "0303030303030303030303030303030303030303030303030303030303030303"
+        ]
+      }
+    },
+    {
+      "kind": "ReleaseCompletion",
+      "content": "1818181818181818181818181818181818181818181818181818181818181818"
+    }
+  ],
+  "qualification": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+}

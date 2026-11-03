@@ -92,8 +92,11 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   its peers fail this release's handshake (`ConsensusConfigCaps`), so Taira's validators switch to
   this release together. A storage descriptor likewise names only its
   value's nominal type, and World value layouts are not pinned yet (TODO: pin them from the State
-  field registry the same way). This release declares one addition,
-  `iroha.runtime.endorsed_change_set_proposal.v1`.
+  field registry the same way). This release declares two additions, in activation order:
+  `iroha.runtime.endorsed_change_set_proposal.v1`, and `iroha.game_partition.v1`, which adds the
+  six `iroha.game_partition.*.v1` instructions and the `world.game_partitions` table. Activating
+  the game-partition addition on a live network waits until in-flight unit exports are live
+  obligations (TODO in `additions.rs`).
 - **Definitions.** Each addition publishes one native implementation, one interface per wire ID it
   adds and one storage definition per field; a cell's definition carries its initial bytes. Like
   the baseline bundle it declares a conservative superset of dependencies, every storage definition
@@ -113,10 +116,12 @@ World fields after it (design §4, "Add an instruction", "Add storage"):
   initial bytes its published definition declares through the installer of the release that adds
   it; a node whose release lacks the storage stops at block start like any unsupported node. The
   World root commits installed storage from its installation height.
-
-TODO(§5.5): snapshot writers omit, and readers default, fields their selection does not install.
-The first release that adds a World field needs this so that a previous release can still read
-its snapshots before activation; this release adds none, so its strict reader is unchanged.
+- **Snapshots.** A snapshot holds the World members its selection installs (design §5.5). The
+  writer leaves out each top-level member whose storage is not installed
+  (`runtime::uninstalled_world_members`), and a restore reads it as its empty default and refuses a
+  snapshot that carries it. Until a change set installs an addition's storage, a node of this
+  release therefore writes the snapshots a node of the previous release writes, and a rollback
+  before activation is a binary swap. An addition adds only top-level World fields.
 
 ## Envelopes
 
@@ -359,19 +364,26 @@ without reading its runtime-signer descriptors.
 - The whole store (blocks, native execution context records, lane stores and geometry journals;
   every file but the store-root lock) is copied into a temporary directory, and the original is
   released. The State is built on the copy as a Strict startup builds it: restored from the
-  newest authenticated snapshot, or empty to re-execute signed genesis. Blocks at or below
-  `snapshot.upgrade_checkpoint` are never re-executed.
+  newest snapshot whose World the next stored block certifies (a snapshot at the tip has no
+  successor yet, so an older generation is used), or empty to re-execute signed genesis when none
+  restores. Blocks at or below `snapshot.upgrade_checkpoint` are never re-executed.
 - Every later block's certificate is verified and the block re-executed through the startup
   executor. The first block whose execution result differs from its certificate ends the check
   with `outcome: "diverged"`, naming the first differing commitment component in report order
   (`validity`, `height`, `parent_world_state_root`, `transaction_inputs`,
   `transaction_results`, `transaction_outputs`, `events`, the witnessed roots,
   `world_state_root`, `native_lanes`, `schedule`, `beacon`, `finality_header`) with both values.
-  A body the store no longer holds is `outcome: "missing_history"`, never a divergence. After the
+  A body the store no longer holds is `outcome: "missing_history"`, never a divergence, and a
+  store without blocks is `outcome: "empty"`: nothing was replayed. After the
   last block the replayed World is checked against a cold capture
   (`world_state_accumulator`).
 - The JSON report is the last line of standard output and the command exits nonzero unless
-  every replayed block matched.
+  it replayed blocks and every one matched.
+- `--check-storage` reads the store in place and never restores a snapshot, which needs the
+  certified chain above it; this command is the snapshot check. A release qualifies against a
+  node's snapshot only when the report shows `start.source = "snapshot"` with
+  `0 < start.height < tip_height`, `outcome = "matched"` and `replayed_to = tip_height`: a replay
+  that fell back to signed genesis qualifies the history, not the snapshot.
 
 ## Adoption
 
@@ -384,14 +396,39 @@ The checkpoint stays as the history boundary (`iroha_core::state::upgrade_checkp
 `H` has another hash. Blocks up to `H` are never re-executed or replayed: startup restores a
 snapshot of this release above `H`, and `--check-replay` refuses to start below it.
 
+### Taking over a Taira store
+
+This release reads and replays a store that a660d601da wrote; no reset and no new checkpoint.
+That was verified on a disposable a660d601da network (replays matched from signed genesis and
+from snapshots; Strict start on stores holding a660d601da triggers and a
+`ProposeRuntimeUpgradeProposal` block). Only Taira's own store establishes Taira's exposure:
+
+1. Confirm the running build. Taira reports `git_commit_sha` `e7f7840ee2…`, which this repository
+   does not hold. Its `wire_schema_hash`, which covers block, consensus and certified-result
+   framing and the IVM ABI, and its feature set equal a660d601da's; instruction payloads and
+   execution are not covered.
+2. On a consistent copy of a stopped validator's store, run this release's `--check-config`,
+   `--check-storage` (every retained block decodes, including rejected transactions), and
+   `--check-replay`. The replay qualifies only from a snapshot above `H` (Operations). A Strict
+   start on a copy without peers then shows that every stored State row restores, including
+   trigger executables, pending multisig instructions, Kaigi relays, containment records and
+   private-settlement locks.
+3. Switch every validator at once. Unlike the rolling sequence of design §9, a660d601da peers fail
+   this release's handshake (`ConsensusConfigCaps`) and cannot decode the appended trigger-filter
+   encodings.
+4. Then, through governance, activate `iroha.runtime.endorsed_change_set_proposal.v1` (its change
+   set from `POST /v1/runtime/upgrades/draft`). Commit `runtime_provenance_policy_v1`, and propose
+   a change set that restricts the baseline `ProposeRuntimeUpgradeProposal` interface
+   `AdmissionClosed`; a restriction takes the disable notice, so it is its own change set. Only
+   then does every scheduled change set carry endorsements. The baseline interface is deactivated,
+   and its code deleted, once no selection needs it.
+
 ## Still open
 
 Tracked in [`live_runtime_upgrades.md`](live_runtime_upgrades.md) §14 and `roadmap.md` N14:
 
-- **Before the first World-field addition:** snapshots that follow the selection (a writer omits
-  and a reader defaults every field the snapshot's selection does not install), so a previous
-  release reads this release's snapshots until activation; a catalog test refuses such an
-  addition until then.
+- **Nested World fields:** an addition of a field inside a top-level World member needs snapshots
+  to leave it out of its owner's member; the catalog refuses such an addition until then.
 - **Obligations:** kernel registration of contract-created obligations and migration cursors,
   completion capabilities retained across rebinding, explicit current-binding consent and
   narrower authenticated dynamic-call manifests.

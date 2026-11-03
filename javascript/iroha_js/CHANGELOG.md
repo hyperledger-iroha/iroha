@@ -4,6 +4,19 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 
 ## [Unreleased]
 
+- The Exact12 capability manifest parser accepts what current nodes return. It reads digests and the
+  feature mask in the one-element tuple-struct arrays Core's JSON writes, which every real manifest
+  failed on before; the parsed model still exposes the inner 32 bytes and number.
+
+- `createPrivateSettlementHost(limits)` works against the installed addon, which now exports
+  `privateSettlementDescriptorMaxBytes` under that name; napi had registered it as `DESCRIPTOR_MAX_BYTES`.
+
+- `PARLIAMENT_PUBLIC_TRANSITIONS_V1`, `PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1` and
+  `PARLIAMENT_NO_RESULT_KINDS_V1` state Core's actual Norito and event-kind indices: rows after
+  `EndorsePublicFinding` keep the sparse numbers that the retired timed-OVN transitions and no-result
+  kinds still occupy in the codec. `ParliamentAutomaticExecutionOutcomeLayoutV1.eventKindIndex` is
+  typed `17 | 18 | 19` to match.
+
 - `attestRuntimeUpgrade(idHex)` has the node sign its support for a scheduled runtime change set with
   its own validator key (`POST /v1/runtime/upgrades/attest/{id}`) and admits exactly one
   `iroha.runtime.support.attest.v1` draft. `getRuntimeRelease()` reads `GET /v1/runtime/release` as

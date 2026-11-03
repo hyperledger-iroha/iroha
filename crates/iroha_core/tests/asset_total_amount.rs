@@ -1,9 +1,8 @@
 //! Validates that aggregate asset totals stay aligned with per-account balances.
 
+use crate::native_genesis::certified_state;
 use core::num::NonZeroU64;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::{Execute, ValidQuery},
     state::{State, World},
 };
@@ -11,29 +10,37 @@ use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
+/// Apply the authenticated genesis over `ALICE_ID` and the domains it owns.
+///
+/// Live domain registration requires an SNS lease, which is not the subject of these
+/// accounting tests, so the owned domains are part of the genesis World.
+fn state_with_domains(domains: &[&DomainId]) -> State {
+    certified_state(World::with(
+        domains
+            .iter()
+            .map(|domain| Domain::new((*domain).clone()).build(&ALICE_ID)),
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [],
+    ))
+}
+/// An ordinary fixture block after the authenticated genesis at height one.
+fn ordinary_header(state: &State, height: u64) -> BlockHeader {
+    BlockHeader::new(
+        NonZeroU64::new(height).expect("non-zero"),
+        state.view().latest_block_hash(),
+        None,
+        height,
+        0,
+    )
+}
 #[test]
 #[allow(clippy::too_many_lines)]
 fn asset_totals_track_multi_account_mint_and_burn() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut state_block = state.block(header);
-    let mut stx = state_block.transaction();
     let wonderland: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let looking_glass: DomainId = DomainId::try_new("looking_glass", "universal").expect("domain");
-    Register::domain(Domain::new(wonderland.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register wonderland");
-    Register::domain(Domain::new(looking_glass.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register looking_glass");
+    let state = state_with_domains(&[&wonderland, &looking_glass]);
+    let mut state_block = state.block(ordinary_header(&state, 2));
+    let mut stx = state_block.transaction();
     let (holder_wonderland, _kp_a) = gen_account_in("wonderland");
     let (holder_looking_glass, _kp_b) = gen_account_in("looking_glass");
     let (burn_to_zero, _kp_c) = gen_account_in("looking_glass");
@@ -119,22 +126,10 @@ fn asset_totals_track_multi_account_mint_and_burn() {
 }
 #[test]
 fn asset_totals_drop_when_unregistering_account() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    let header_1 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block_1 = state.block(header_1);
-    let mut stx_1 = block_1.transaction();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register domain");
+    let state = state_with_domains(&[&domain_id]);
+    let mut block_1 = state.block(ordinary_header(&state, 2));
+    let mut stx_1 = block_1.transaction();
     let (holder, _holder_key) = gen_account_in("wonderland");
     Register::account(Account::new(holder.clone()))
         .execute(&ALICE_ID, &mut stx_1)
@@ -159,14 +154,7 @@ fn asset_totals_drop_when_unregistering_account() {
     block_1
         .commit_world_overlay_for_testing()
         .expect("commit block 1");
-    let header_2 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(2).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block_2 = state.block(header_2);
+    let mut block_2 = state.block(ordinary_header(&state, 3));
     let mut stx_2 = block_2.transaction();
     Unregister::account(holder.clone())
         .execute(&ALICE_ID, &mut stx_2)
@@ -194,26 +182,11 @@ fn asset_totals_drop_when_unregistering_account() {
 }
 #[test]
 fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    let header_1 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block_1 = state.block(header_1);
-    let mut stx_1 = block_1.transaction();
     let source_domain: DomainId = DomainId::try_new("source", "universal").expect("domain");
     let foreign_domain: DomainId = DomainId::try_new("foreign", "universal").expect("domain");
-    Register::domain(Domain::new(source_domain.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register source domain");
-    Register::domain(Domain::new(foreign_domain.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register foreign domain");
+    let state = state_with_domains(&[&source_domain, &foreign_domain]);
+    let mut block_1 = state.block(ordinary_header(&state, 2));
+    let mut stx_1 = block_1.transaction();
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
     Register::account(Account::new(source_holder.clone()))
@@ -251,14 +224,7 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     block_1
         .commit_world_overlay_for_testing()
         .expect("commit block 1");
-    let header_2 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(2).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block_2 = state.block(header_2);
+    let mut block_2 = state.block(ordinary_header(&state, 3));
     let mut stx_2 = block_2.transaction();
     Unregister::domain(foreign_domain.clone())
         .execute(&ALICE_ID, &mut stx_2)
@@ -294,26 +260,11 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
 }
 #[test]
 fn unregistering_definition_domain_cleans_foreign_assets() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    let header_1 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(1).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block_1 = state.block(header_1);
-    let mut stx_1 = block_1.transaction();
     let source_domain: DomainId = DomainId::try_new("source", "universal").expect("domain");
     let foreign_domain: DomainId = DomainId::try_new("foreign", "universal").expect("domain");
-    Register::domain(Domain::new(source_domain.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register source domain");
-    Register::domain(Domain::new(foreign_domain.clone()))
-        .execute(&ALICE_ID, &mut stx_1)
-        .expect("register foreign domain");
+    let state = state_with_domains(&[&source_domain, &foreign_domain]);
+    let mut block_1 = state.block(ordinary_header(&state, 2));
+    let mut stx_1 = block_1.transaction();
     let (source_holder, _source_key) = gen_account_in("source");
     let (foreign_holder, _foreign_key) = gen_account_in("foreign");
     Register::account(Account::new(source_holder.clone()))
@@ -351,14 +302,7 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     block_1
         .commit_world_overlay_for_testing()
         .expect("commit block 1");
-    let header_2 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(2).expect("non-zero"),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block_2 = state.block(header_2);
+    let mut block_2 = state.block(ordinary_header(&state, 3));
     let mut stx_2 = block_2.transaction();
     Unregister::domain(source_domain.clone())
         .execute(&ALICE_ID, &mut stx_2)

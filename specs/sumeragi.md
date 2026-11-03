@@ -823,6 +823,36 @@ slow resource stopped every honest node at once. Here:
 
 ### 4.5 Application clock guard on Prepare votes (application layer)
 
+**Native scheduled work.** The validator-owned progress duty may submit the existing signed,
+standalone `Keepalive` carrier for an opted-in due committed `ExecutionTime::Schedule` action. No client,
+external scheduler, proof producer or empty block is needed. Eligibility reads the exact original
+parent trigger incarnations and the authenticated parent execution time, before candidate writes.
+Registration or replacement inside a carrier block cannot create its own eligibility. The same
+predicate governs queue admission, original-parent fee classification, proposal retention and block
+validation. `PreCommit`, disabled, depleted and same-height registrations never create scheduled
+carriers. Opt-in is a registration-only `native_progress_attempts` integer from 1 to 1,024.
+Registration captures it in the reserved `__native_progress_remaining` counter. Each actual Time
+attempt consumes one native allowance on success, business rejection or output-limit rollback;
+local execution deferrals do not consume one. A callback cannot register or replenish an autonomous
+allowance, and neither metadata writes nor repeat minting can restore it. Zero remaining attempts
+stop autonomous carriers while preserving the original transaction-driven Time semantics. This
+bound applies even when periodic business failures leave the success-repeat count unchanged.
+Scheduled Time intervals are `[parent_time, block_time)`, so a schedule at `s` first becomes
+due at block time `s + 1 ms`; a persisted retry has an inclusive deadline. A failed one-shot without
+a retry cannot keep waking the chain after its interval has passed. Normal Time output limits,
+callback rollback, retries and repeat depletion remain authoritative.
+
+The first-release registration limit is 4,096 retained Time actions, counting disabled and
+`PreCommit` actions. A new registration beyond the limit is refused before acquiring an obligation;
+it never silences an admitted schedule. Current and predecessor snapshot rows enforce the same
+limit. Due scans borrow these bounded original rows without cloning executable payloads. Validators
+poll locally once per second and stagger scheduled carriers by one second per committee rank.
+These are liveness plumbing and bounded observation, not a throughput qualification or a generic
+native scheduled-work fee escrow. Applications that need funded work must enforce their own atomic
+budget debit and finite obligation; the Tides prototype uses finite native attempts, finite repeats
+and its callback budget. Generic priced autonomous work and fair service when the Time phase is
+oversubscribed remain unqualified; a finite attempt allowance is not payment for the native work.
+
 **Status.** Clock policy belongs to the application executor (`iroha_core`). The sans-IO
 core supplies the genuine `certified` flag and retains the application's source-bound local
 admission owner with a successful execution. It checks that owner immediately before a first
@@ -874,6 +904,13 @@ The same parent-State rule governs `DueWorkMaxLagMs`. Genesis, lane policy admis
 parameter changes validate the combined drift/lag/cadence bound. A parameter write cannot
 weaken its own block's admission. The native execution owner captures the parent lag before
 executing any instruction; cached admission does not reread a later State or node setting.
+A native CT5 rollback discards provisional ledger effects while retaining the exact signed
+proposal and ordinary continuation schedule. The schedule's original allocation lease stays
+with the inputs, completed result and live execution; a stale result returns that same graph
+and ledger to its preparation bank, restoring only fixed pristine fields. While either owner
+is live, another preparation or lend refuses. Retry still reacquires the current State cut,
+root and pulse and verifies the original source and pool; it never recreates the graph or
+turns the local clock refusal into an invalid verdict.
 
 **Certified re-proposals.** The core sets `certified = !certified_results(bh).is_empty()` whenever
 it emits `Execute` (§6.2 step 9), re-evaluated when a `RetryAt` entry re-emits it; this covers a
@@ -2915,6 +2952,56 @@ Choices beyond the rules above are Appendix E, E58 (node) and E59 (simulator).
   decision followed by a late `No` preparation retains one settlement and makes no ledger
   movement; the oracle rejects a changed decision or a second monetary effect.
 
+### Independent-root game-unit transport prototype
+
+`game_partition` is a finite, non-monetary native application protocol for two
+independently signed Global roots. It is not two contract namespaces in one State,
+not a public-lane merge, and not a replacement for AMX monetary settlement.
+Governance (`CanSetParameters`, or the genuine signed-genesis execution capability)
+installs the one supported direct-IVM kernel hash, seeds units and registers each
+foreign root. Registration verifies the foreign signed G1 and genuine H2 using the
+existing native prefix verifier; the peer's network hash, chain label and at most
+four read endpoints are explicit on-chain trust inputs. Endpoints never authorize
+imports. The current finite prototype does not support committee handoffs.
+
+The typed unit contains its original source-derived identity, universal owner,
+HP, signed position, transfer sequence and nonrefillable work allowance. The
+approved real-IVM adapter currently advances a living unit's position by one
+bounded step; it does not implement full RTS combat, supply, economy or bonded
+custody. An owner-authorized export atomically removes the active source unit,
+increments its sequence and records an immutable ordinary-write receipt and
+permanent source tombstone. There is no timeout refund or source resurrection.
+Import is public and requires the registered source's exact native CommitQC,
+result preimage and a Merkle path to the complete receipt. The receipt binds world,
+source, sole destination, kernel, every unit field and source height. The exact
+receipt is idempotent even after the destination re-exports the unit; retained
+sequence watermarks reject older substitute receipts. A returning unit preserves
+its identity and remaining work allowance.
+
+Each root admits at most 16 worlds. Each world admits at most two peers, 64 active
+units and 256 retained exports, imports and unit identities; each seeded unit has
+at most 4,096 direct-IVM advances. A full table rejects new work before mutation.
+The encoded import proof is bounded to 1 MiB, with tighter native header/QC/path
+bounds checked before cryptographic verification. These are finite prototype
+bounds, not throughput qualifications. A registered owner must also have an account
+on the destination before issuing subsequent signed orders there.
+
+Native validator propagation reads durable source exports and original certified
+archives, verifies the identical import predicate before signing, and submits an
+ordinary fee-paying import with the current validator key. No operator relay key,
+sidecar journal, external keeper or execution-proof producer authorizes progress.
+A missing/corrupt original archive is a retryable delivery failure, never evidence
+that the unit can be restored at source. Test setup funds validator accounts;
+automatic production fee-budget management is not implemented. The finite scheduled
+Time allowance in §4.5 can drive owner-authorized advance/export instructions while
+all application clients are off.
+
+Qualification remains open for the eight-validator crash/replay run, committee
+changes, priced relay work, original-pool custody of every bounded cloned graph,
+block-level metering of direct adapter work, full RTS state transfers and sustained
+capacity. The adapter's instruction gas/cycles and any successful component test
+must not be presented as an entire-world scaling result.
+
 ---
 
 ## 12. Sans-IO node interface
@@ -4281,6 +4368,7 @@ profile and the same strict named-test, normal-exit and complete-harness require
 | HC490 | Charge authority handoff recovery against a full ordinary pending pool | `cold_full_ordinary_custody_preserves_capacity_for_one_exact_handoff_group` | One exact handoff group has bounded reserved custody even after cold restart with all ordinary slots occupied. Admission preserves every unresolved ordinary identity and refuses a second handoff group. |
 | HC334 | omit native final freshness after original encoding and admission waits | `ct5_post_encoding_clock_advance_rolls_back_actual_begin_and_fees_with_original_decode`, `sccp_ct5_completion_resamples_clock_and_retains_original_for_certified_retry` | time-sensitive effects must be locally deferred after the last encoding wait. |
 | HC335 | reuse cached native Valid without checking the actual wall clock | `ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source` | cached native Valid cannot bypass a fresh local clock check. |
+| HC981 | discard the ordinary continuation graph on rollback | `ordinary_continuation_requested_and_done_rollback_reuse_exact_graph_at_full_capacity` | Requested, completed and extracted owners return the same graph and ledger without refunding capacity that could satisfy their own outstanding wait. The two CT5 paid-Begin regressions additionally retain nested key/proof addresses and canonical schedule bytes through finishing/live rollback and genuine retry. |
 | HC336 | allow a first-Prepare request to substitute the original native result | `ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source` | a certificate flag cannot substitute another result. |
 | HC337 | omit native first-signing freshness after execution | `ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source`, `sccp_ct5_prepare_signing_resamples_original_after_valid_and_binds_every_coordinate` | native first signing must recheck the actual wall clock after execution. |
 | HC382 | Omit native CT1 at first Prepare after retained execution | `ct1_native_first_prepare_rechecks_original_clock_after_execution`, `prepare_withheld_while_block_time_ahead` | A rewind beyond the committed original parent's drift refuses signing for both ordinary and paid AMX work without replacing the executed state; the inclusive boundary resumes and certification cannot substitute a source. |

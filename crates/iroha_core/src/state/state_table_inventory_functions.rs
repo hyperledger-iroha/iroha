@@ -101,6 +101,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/query/native_receipts.rs",
+        "game_partition_export_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/query/native_receipts.rs",
         "parliament_casting_proof",
         1,
         UseOwner::Roots(&[
@@ -200,6 +206,18 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "retain_execution_verification",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition.rs",
+        "game_partition_export_proof",
+        1,
+        UseOwner::Roots(&["execution_witness_roots"]),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/game_partition.rs",
+        "local_instance",
+        1,
+        UseOwner::Other(Use::Seed, DERIVED_SEED),
     ),
     function(
         "crates/iroha_core/src/smartcontracts/isi/multisig.rs",

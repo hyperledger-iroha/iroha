@@ -1272,8 +1272,8 @@ produce the same semantic result as the scalar path or fall back:
   portable CRC64-XZ fallback; any mismatch marks the helper unavailable and the
   call is recomputed on CPU.
 - CPU SIMD CRC64 candidates are selected only after startup parity checks against
-  the portable fallback. Targets with a broken local SIMD routine use
-  `crc64fast`'s runtime-selected implementation instead.
+  the portable fallback. Targets whose SIMD kernel fails the check use the
+  portable slicing-by-16 tables instead.
 - GPU zstd compression is validated by requiring sampled GPU output to be a
   single zstd frame, decoding it on CPU, and comparing the uncompressed bytes to
   the original payload. GPU helpers may emit different valid single-frame zstd

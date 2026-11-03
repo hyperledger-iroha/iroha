@@ -71,7 +71,6 @@ ivm = { workspace = true }
 kotodama_lang = { workspace = true }
 norito_codegen_exporter = { path = "../tools/norito_codegen_exporter" }
 mv = { path = "../crates/mv" }
-fastpq_isi = { path = "../crates/fastpq_isi" }
 arrow-array = { version = "60.0.0", default-features = false }
 arrow-schema = { version = "60.0.0", default-features = false }
 parquet = { version = "60.0.0", default-features = false, features = ["arrow"] }
@@ -92,7 +91,6 @@ tokio = { workspace = true, features = ["rt", "rt-multi-thread", "time", "macros
 tower = { version = "0.5.2", features = ["util"] }
 axum = { workspace = true }
 base64 = { workspace = true }
-data-encoding = "2.5.0"
 zeroize = "1.8.2"
 blake3 = { version = "1.8.2" }
 reqwest = { workspace = true, features = ["blocking", "rustls"] }
@@ -102,7 +100,6 @@ time = { version = "0.3.44", features = ["formatting", "macros"] }
 thiserror = "2.0.17"
 toml = { workspace = true }
 eyre = { workspace = true }
-once_cell = { workspace = true }
 soranet-relay = { path = "../tools/soranet-relay", default-features = false }
 soranet_pq = { path = "../crates/soranet_pq" }
 

@@ -151,7 +151,7 @@ pub(in crate::state) fn initialize_original_field<'a, S: OriginalControlSource>(
 
 /// Split and allocate one actual Cell successor before any physical acquisition.
 /// The original parent and token must belong to the same configured execution pool.
-pub(in crate::state) fn original_cell<'a, V: Value>(
+pub(in crate::state) fn original_cell<'a, V: mv::CellValue>(
     target: &'a Cell<V>,
     budget: &AllocationBudget,
     parent: &mut AllocationReservation,
@@ -192,7 +192,7 @@ pub(in crate::state) fn original_cell<'a, V: Value>(
         .map_err(|(_charges, _successor)| AdmittedStorageError::PolicyIdentity)
 }
 
-impl<V: Value> OriginalControlSource for Cell<V> {
+impl<V: mv::CellValue> OriginalControlSource for Cell<V> {
     type Acquisition<'a>
         = CellAcquisition<'a, V>
     where
@@ -210,7 +210,7 @@ impl<V: Value> OriginalControlSource for Cell<V> {
     }
 }
 
-impl<V: Value> OriginalControlSource for Cell<V, iroha_allocation::AllocationCharge> {
+impl<V: mv::CellValue> OriginalControlSource for Cell<V, iroha_allocation::AllocationCharge> {
     type Acquisition<'a>
         = CellAcquisition<'a, V, iroha_allocation::AllocationCharge>
     where

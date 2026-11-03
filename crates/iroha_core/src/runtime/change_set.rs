@@ -266,7 +266,7 @@ fn check_transition_support(
 /// # Errors
 /// The release's installer refuses the published bytes: a defect of the release, since the
 /// catalog published exactly those bytes.
-fn install_cells(
+pub(super) fn install_cells(
     wtx: &mut crate::state::WorldTransaction<'_, '_>,
     change_set: &ChangeSetV1,
     catalog: &crate::runtime::ReleaseCatalog,

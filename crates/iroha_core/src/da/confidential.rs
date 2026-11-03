@@ -87,7 +87,7 @@ mod tests {
     use std::{collections::BTreeSet, num::NonZeroU32};
     fn lane_config(key_version: Option<NonZeroU32>) -> ConfigLaneConfig {
         let catalog = LaneCatalog::new(
-            nonzero_ext::nonzero!(1_u32),
+            iroha_primitives::nonzero!(1_u32),
             vec![ModelLaneConfig {
                 id: LaneId::new(0),
                 dataspace_id: DataSpaceId::UNIVERSAL,

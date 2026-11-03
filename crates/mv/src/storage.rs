@@ -1383,6 +1383,19 @@ mod tests {
     use super::*;
     use std::{collections::BTreeMap, ops::Bound};
     #[test]
+    fn thread_local_values_are_storable() {
+        // `Key`/`Value` carry no thread-safety bound; the maps' own `Send`/`Sync`
+        // impls keep a storage of thread-local values on its thread instead.
+        use std::rc::Rc;
+        let storage = Storage::<u64, Rc<u64>>::new();
+        {
+            let mut block = storage.block();
+            block.insert(1, Rc::new(7));
+            block.commit();
+        }
+        assert_eq!(storage.view().get(&1).map(|value| **value), Some(7));
+    }
+    #[test]
     fn get() {
         let storage = Storage::<u64, u64>::new();
         let view0 = storage.view();

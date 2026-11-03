@@ -30,6 +30,10 @@ use fixture_der::*;
 use iroha_crypto::{Algorithm, KeyPair};
 #[cfg(any(test, feature = "test-utils"))]
 use iroha_crypto::{Hash, HashOf};
+#[cfg(test)]
+use iroha_data_model::privacy::{
+    PrivacyZkX509CrlUpdateIntervalV1, PrivacyZkX509PresentationBoundsV1,
+};
 #[cfg(any(test, feature = "test-utils"))]
 use iroha_data_model::{
     NetworkId,
@@ -46,8 +50,7 @@ use iroha_data_model::{
         PrivacyPolicyIdV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
         PrivacyStatementContextV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1,
         PrivacyX509TrustStoreDigestV1, PrivacyZkX509CertificateValidityV1,
-        PrivacyZkX509CrlUpdateIntervalV1, PrivacyZkX509DisclosedAttributeV1,
-        PrivacyZkX509PresentationBoundsV1, PrivacyZkX509PresentationWindowV1,
+        PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509PresentationWindowV1,
         ZK_X509_MAX_CERTIFICATE_BYTES_V1, ZK_X509_MAX_CRL_AGE_SECONDS_V1,
     },
 };

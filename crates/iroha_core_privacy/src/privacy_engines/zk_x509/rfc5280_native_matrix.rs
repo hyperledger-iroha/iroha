@@ -35,6 +35,13 @@ pub(super) fn fill_base_v1(
     })
 }
 
+#[cfg_attr(
+    test,
+    expect(
+        clippy::large_stack_arrays,
+        reason = "the fixed 16-row transposition tile is public geometry charged by `scratch_payload_bytes_v1`"
+    )
+)]
 fn fill_with_v1(
     rows: usize,
     columns: &mut [&mut [F]],

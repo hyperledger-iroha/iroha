@@ -597,6 +597,7 @@ fn original_lane_finalizer_refusal_returns_same_graph_before_seal_and_publishes_
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
+                rollback_credits: None,
                 successor_context:
                     crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,
@@ -830,6 +831,7 @@ fn validated_witness_guard_failure_requires_recovery_without_reexecuting_origina
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
+                rollback_credits: None,
                 successor_context:
                     crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,

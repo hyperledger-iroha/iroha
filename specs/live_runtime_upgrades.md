@@ -595,7 +595,9 @@ functionality is retired, not executed forever. Recommended committed defaults:
 2. `iroha3d --check-replay` replays an immutable copy of a live store with the candidate, built on
    `NativeReplaySeed`/`IsolatedNativeReplay` (`sumeragi/node/replay.rs`). It reports the first
    differing commitment component and distinguishes missing historical bodies from divergence.
-3. Validators are replaced one at a time: stop, `--check-storage`, swap, start, certified catch-up.
+3. Validators are replaced one at a time: stop, `--check-storage` (every retained block decodes),
+   `--check-replay` (the newest snapshot below the tip restores and every later block reproduces
+   its certified result), swap, start, certified catch-up.
    Before each stop, the tooling checks that the remaining responsive validators still form a
    quorum with margin; it pauses on degradation, because an already exhausted fault budget plus one
    restart halts the chain.
@@ -732,10 +734,12 @@ not a date: it happens once everything its first selection needs is implemented 
    published initial bytes), and stable envelopes: a wire ID a release does not register decodes
    to an opaque envelope that re-encodes byte for byte, and execution stops at the first unbound
    or opaque envelope with `definition_inactive` or `malformed_payload` before any type-dependent
-   check. Still open: complete-State coverage, which first needs the policy cells of G1-D3 in
-   committed State and the decision how the pinned history meets the new root; snapshots through
-   the selection, required before the first addition of a World field; storage capabilities and
-   generic carriers.
+   check; and snapshots through the selection: the writer leaves out each top-level World member
+   whose storage the selection does not install, a restore reads it as its empty default, and an
+   addition adds only top-level World fields. Still open: complete-State coverage, which first
+   needs the policy cells of G1-D3 in committed State and the decision how the pinned history
+   meets the new root; snapshots of a nested World field, before an addition adds one; storage
+   capabilities and generic carriers.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the

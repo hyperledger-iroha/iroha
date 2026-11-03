@@ -8,6 +8,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_telemetry::metrics;
 use std::sync::OnceLock;
+pub mod progress;
 pub mod set;
 pub mod specialized;
 /// Trigger metadata key toggled by `set_trigger_enabled` syscalls/ISIs.
@@ -225,11 +226,12 @@ pub mod isi {
     use super::{super::prelude::*, *};
     use iroha_data_model::isi::error::{InvalidParameterError, RepetitionError};
     use iroha_model_base::name::Name;
-    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 4] = [
+    const RESERVED_TRIGGER_METADATA_KEYS: [&str; 5] = [
         TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY,
         "__registered_at_ms",
         DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY,
         DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY,
+        progress::REMAINING_KEY,
     ];
     pub(super) const MAX_DATA_TRIGGERS_PER_AUTHORITY: usize = 64;
     pub(super) const MAX_DATA_TRIGGERS_TOTAL: usize = 4_096;
@@ -738,6 +740,25 @@ pub mod isi {
                 ),
             ));
         }
+        let progress_attempts = progress::declaration(new_trigger.action().metadata())
+            .map_err(|message| InvalidParameterError::SmartContract(message.into()))?;
+        if progress_attempts.is_some() && state_transaction.is_trigger_execution_active() {
+            return Err(InvalidParameterError::SmartContract(
+                "a callback cannot acquire or replenish autonomous progress attempts".into(),
+            )
+            .into());
+        }
+        if progress_attempts.is_some()
+            && !matches!(
+                new_trigger.action().filter(),
+                EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(_)))
+            )
+        {
+            return Err(InvalidParameterError::SmartContract(
+                "native progress attempts require a scheduled Time trigger".into(),
+            )
+            .into());
+        }
         let duplicates_enacted_payout =
             |invocation: &iroha_data_model::transaction::executable::ContractInvocation| {
                 crate::validation_fee::is_enacted_validation_fee_payout_invocation(
@@ -802,6 +823,9 @@ pub mod isi {
             let mut metadata = new_trigger.action().clone().metadata;
             metadata.insert(key_height, Json::from(height));
             metadata.insert(key_time, Json::from(created_ms));
+            if let Some(attempts) = progress_attempts {
+                progress::initialize(&mut metadata, attempts);
+            }
             if let Some(authorization) = data_scope_authorization {
                 let (mode, grantee) = match authorization {
                     DataTriggerScopeAuthorization::Owned => {
@@ -1021,6 +1045,12 @@ pub mod isi {
                 ));
             }
             ensure_metadata_key_is_not_reserved(&key)?;
+            if key.as_ref() == progress::DECLARATION_KEY {
+                return Err(InvalidParameterError::SmartContract(
+                    "native progress declaration is registration-only".into(),
+                )
+                .into());
+            }
             crate::smartcontracts::limits::enforce_json_size(
                 state_transaction,
                 &value,
@@ -1061,6 +1091,12 @@ pub mod isi {
                 ));
             }
             ensure_metadata_key_is_not_reserved(self.key())?;
+            if self.key().as_ref() == progress::DECLARATION_KEY {
+                return Err(InvalidParameterError::SmartContract(
+                    "native progress declaration is registration-only".into(),
+                )
+                .into());
+            }
             let value = state_transaction
                 .world
                 .triggers

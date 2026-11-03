@@ -86,12 +86,16 @@ fn check_replay_reports_a_missing_store_as_nothing_to_replay() {
                 source: START_NONE.to_owned(),
             },
             replayed_to: 0,
-            outcome: OUTCOME_MATCHED.to_owned(),
+            outcome: OUTCOME_EMPTY.to_owned(),
             divergence: None,
             missing_height: None,
         }
     );
-    assert!(report.is_ok());
+    assert!(
+        !report.is_ok(),
+        "a store with nothing to replay qualifies no build"
+    );
+    assert!(report.failure_summary().contains("holds no blocks"));
     assert!(
         !root.path().join("kura").exists(),
         "the check never creates a store"
@@ -106,6 +110,8 @@ fn check_replay_reads_an_empty_store_without_writing() {
     let before = tree(root.path());
     let report = check_replay(&config).expect("inspect empty store");
     assert_eq!(report, ReplayCheckReportV1::unstarted(0, None));
+    assert_eq!(report.outcome, OUTCOME_EMPTY);
+    assert!(!report.is_ok(), "an empty store qualifies no build");
     assert_eq!(
         tree(root.path()),
         before,

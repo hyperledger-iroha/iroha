@@ -19,9 +19,9 @@ use iroha_data_model::{
 use iroha_logger::Level;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::topology::LaneId;
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
-use nonzero_ext::nonzero;
 
 pub(super) fn state() -> State {
     State::new(

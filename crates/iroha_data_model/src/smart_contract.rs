@@ -1,12 +1,12 @@
 //! This module contains data and structures related only to smart contract execution
 mod artifact_id;
+use crate::bech32::{self, Hrp, Variant};
 use crate::{
     account::{AccountAddressError, AccountId, rekey::AccountAliasDomain},
     id::NetworkId,
     nexus::DataSpaceCatalog,
 };
 pub use artifact_id::ContractArtifactId;
-use bech32::{Bech32m, Hrp};
 use iroha_data_model_derive::model;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_model_base::{error::ParseError, name::Name};
@@ -812,7 +812,7 @@ impl ContractAddress {
         payload.push(CONTRACT_ADDRESS_VERSION_V1);
         payload.extend_from_slice(&dataspace_id.as_u64().to_be_bytes());
         payload.extend_from_slice(&digest.as_bytes()[..CONTRACT_ADDRESS_HASH_LEN]);
-        let encoded = bech32::encode::<Bech32m>(hrp, &payload)
+        let encoded = bech32::encode(Variant::Bech32m, hrp, &payload)
             .map_err(|err| ContractAddressError::InvalidLiteral(err.to_string()))?;
         encoded.parse()
     }
@@ -995,7 +995,7 @@ fn reserve_contract_json_decode(
     norito::core::reserve_decode_allocation(bytes)
         .map_err(norito::json::Error::from_decode_resource)
 }
-fn decode_contract_address(value: &str) -> Result<(Hrp, Vec<u8>), ContractAddressError> {
+fn decode_contract_address(value: &str) -> Result<(Hrp<'_>, Vec<u8>), ContractAddressError> {
     if value.trim().is_empty() {
         return Err(ContractAddressError::InvalidLiteral(
             "contract address must not be empty".to_owned(),
@@ -1193,8 +1193,8 @@ mod contract_address_tests {
         .expect("derive contract address");
         let (_, payload) = bech32::decode(address.as_str()).expect("decode derived address");
         let wrong_hrp = Hrp::parse("sorac").expect("static wrong HRP");
-        let wrong_literal =
-            bech32::encode::<Bech32m>(wrong_hrp, &payload).expect("encode wrong-HRP literal");
+        let wrong_literal = bech32::encode(Variant::Bech32m, wrong_hrp, &payload)
+            .expect("encode wrong-HRP literal");
         assert!(matches!(
             wrong_literal.parse::<ContractAddress>(),
             Err(ContractAddressError::InvalidHrp(_))

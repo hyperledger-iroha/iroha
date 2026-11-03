@@ -345,14 +345,82 @@ pub(crate) fn read_committed_root_scope(
     else {
         return Ok(None);
     };
-    let metadata: ConsensusHandshakeMetadata =
-        norito::json::from_str(metadata.payload().get().as_str())?;
-    if metadata.validate().is_err()
-        || metadata.wire_protocol_version != u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)
-    {
-        return Ok(None);
+    let payload = metadata.payload().get().as_str();
+    reuse_or_decode_root_scope(payload, || {
+        let metadata: ConsensusHandshakeMetadata = norito::json::from_str(payload)?;
+        if metadata.validate().is_err()
+            || metadata.wire_protocol_version
+                != u32::from(iroha_data_model::sumeragi::PROTOCOL_VERSION)
+        {
+            return Ok(None);
+        }
+        Ok(Some(metadata.sumeragi_context.root_scope))
+    })
+}
+
+/// One completed root-scope decode and the exact metadata JSON it decoded.
+struct CompletedRootScopeRead {
+    payload: String,
+    scope: Option<SumeragiRootScope>,
+}
+
+/// Whether this thread reuses completed root-scope decodes.
+enum RootScopeReads {
+    /// Outside [`with_reused_root_scope_reads`]: every read decodes.
+    Decode,
+    /// Inside a reuse scope, holding its latest completed decode once one exists.
+    Reuse(Option<CompletedRootScopeRead>),
+}
+
+thread_local! {
+    static ROOT_SCOPE_READS: core::cell::RefCell<RootScopeReads> =
+        const { core::cell::RefCell::new(RootScopeReads::Decode) };
+}
+
+/// Run `operation` reusing completed root-scope decodes of byte-identical metadata JSON.
+///
+/// The root scope is a pure function of that JSON, so inside `operation` a read of the same
+/// metadata returns the first completed decode instead of parsing it again. The first read
+/// still decodes under the caller's limits and keeps its local refusal; a failed decode is
+/// never reused. Reads outside such a scope always decode.
+pub(crate) fn with_reused_root_scope_reads<R>(operation: impl FnOnce() -> R) -> R {
+    struct RestoreOuterScope(Option<RootScopeReads>);
+    impl Drop for RestoreOuterScope {
+        fn drop(&mut self) {
+            if let Some(outer) = self.0.take() {
+                ROOT_SCOPE_READS.with(|reads| *reads.borrow_mut() = outer);
+            }
+        }
     }
-    Ok(Some(metadata.sumeragi_context.root_scope))
+    let outer = ROOT_SCOPE_READS
+        .with(|reads| core::mem::replace(&mut *reads.borrow_mut(), RootScopeReads::Reuse(None)));
+    let _restore = RestoreOuterScope(Some(outer));
+    operation()
+}
+
+/// Return the reused decode of `payload` inside a reuse scope, otherwise run `decode`.
+/// Only a completed decode is remembered, and only inside a reuse scope.
+fn reuse_or_decode_root_scope(
+    payload: &str,
+    decode: impl FnOnce() -> Result<Option<SumeragiRootScope>, norito::json::Error>,
+) -> Result<Option<SumeragiRootScope>, norito::json::Error> {
+    let reused = ROOT_SCOPE_READS.with(|reads| match &*reads.borrow() {
+        RootScopeReads::Reuse(Some(read)) if read.payload == payload => Some(read.scope),
+        RootScopeReads::Reuse(_) | RootScopeReads::Decode => None,
+    });
+    if let Some(scope) = reused {
+        return Ok(scope);
+    }
+    let scope = decode()?;
+    ROOT_SCOPE_READS.with(|reads| {
+        if let RootScopeReads::Reuse(latest) = &mut *reads.borrow_mut() {
+            *latest = Some(CompletedRootScopeRead {
+                payload: payload.to_owned(),
+                scope,
+            });
+        }
+    });
+    Ok(scope)
 }
 
 #[cfg(test)]
@@ -848,6 +916,54 @@ mod tests {
             .execution_route(&upload, 2)
             .expect("completed routing read"),
             None
+        );
+    }
+
+    #[test]
+    fn root_scope_reads_reuse_completed_decodes_only_inside_a_reuse_scope() {
+        let global = test_support::world(SumeragiRootScope::Global);
+        let global_view = global.view();
+        let refusing = norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, 64);
+        let refused_read =
+            |view| norito::with_decode_limits_scope(refusing, || read_routing_root_scope(view));
+        assert!(
+            refused_read(&global_view).is_err(),
+            "outside a reuse scope every read decodes"
+        );
+        let private_scope = SumeragiRootScope::Dataspace {
+            parent_network_id: NetworkId::from_genesis_hash(
+                iroha_crypto::HashOf::from_untyped_unchecked(Hash::new(b"root-scope-reuse")),
+            ),
+            dataspace_id: DataSpaceId::new(7),
+        };
+        let private = test_support::world(private_scope);
+        with_reused_root_scope_reads(|| {
+            assert!(
+                refused_read(&global_view).is_err(),
+                "the first read decodes and keeps its local refusal"
+            );
+            assert_eq!(
+                read_routing_root_scope(&global_view).unwrap(),
+                Some(SumeragiRootScope::Global)
+            );
+            assert_eq!(
+                refused_read(&global_view).unwrap(),
+                Some(SumeragiRootScope::Global),
+                "a later read of identical metadata reuses the completed decode"
+            );
+            assert_eq!(
+                read_routing_root_scope(&private.view()).unwrap(),
+                Some(private_scope),
+                "different metadata decodes on its own"
+            );
+            assert_eq!(
+                read_routing_root_scope(&global_view).unwrap(),
+                Some(SumeragiRootScope::Global)
+            );
+        });
+        assert!(
+            refused_read(&global_view).is_err(),
+            "the reuse scope ends with its operation"
         );
     }
 

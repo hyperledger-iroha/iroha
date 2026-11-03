@@ -395,7 +395,7 @@ mod tests {
         isi::content::{PublishContentBundle, RetireContentBundle},
         prelude::*,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     fn make_tar(entries: &[(&str, &[u8])]) -> Vec<u8> {
         const HEADER_LEN: usize = 512;
         let mut out = Vec::new();

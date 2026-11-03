@@ -1,12 +1,12 @@
 # Generated instruction record identities
 
 `instruction_record_generated_identity_frames.json` contains immutable captures
-for the current instruction records and concrete generic instantiations. Its 356
-type rows preserve 400 populated values and 1,600 complete root, vector, option
+for the current instruction records and concrete generic instantiations. Its 353
+type rows preserve 397 populated values and 1,588 complete root, vector, option
 and map frames.
 
 The current fixture SHA-256 is
-`2e2df5cb97289c4de50bb2abf9c17d63fb490de98a3424a319fbb38a8a6d37e0`.
+`783474c981efdedd1e78699d74612793d1c0d81704bd76d0945b4e2c830a6e89`.
 The 2026-10-23 native escrow-scope and FI-context maintenance producers add
 `InitializeAssetEscrowReadScopeV1`, `AssertAssetFiContextV1` and
 `AssertAssetFiTransferReceiptV1` from executable canonical encodings. The other
@@ -244,3 +244,20 @@ the ignored `print_bond_record_fixture_rows`). They travel only inside
 The ninth leaf, `RetireBondTreasuryUnits`, was added on 2026-10-15 with one
 populated value from the same producer; the eight earlier bond rows are
 unchanged.
+
+On 2026-10-31 the rows of the retired privacy instructions
+`RegisterPrivacyExact12QualificationV1`, `RegisterPrivacyProtocolActivationV1`,
+`TransitionPrivacyProtocolLifecycleV1`, `SchedulePrivacyConsensusPolicyTighteningV1`
+and `SchedulePrivacyProtocolLimitsTighteningV1` were deleted. Their successors
+`SchedulePrivacyConsensusPolicyUpdateV1`, `SchedulePrivacyProtocolLimitsUpdateV1`
+and the new `SubmitPrivacyZkX509CertificateV1` were added from the typed
+constructors in `missing_record_values`. A complete `print_native_record_capture_v1`
+run decoded, compared and exactly re-encoded all 353 rows, 397 cases and 1,588
+frames with the current codec; the other 350 rows are byte-identical.
+
+On 2026-11-03 the `SchedulePrivacyConsensusPolicyUpdateV1` row was recaptured from
+its typed constructor. The 2026-10-31 frames carried an eleventh, 80-byte
+`next_limits` field that `PrivacyConsensusLimitsV1` (ten `u32` limits, the layout
+`runtime_baseline_instruction_layouts.tsv` freezes) does not have, so they no longer
+decoded. A complete `print_native_record_capture_v1` run re-encoded the other 352
+rows byte for byte.

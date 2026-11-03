@@ -1,29 +1,37 @@
 //! Regression tests for account asset lookup queries.
 
-use core::num::NonZeroU64;
+use crate::native_genesis::certified_state;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::{Execute, ValidQuery},
-    state::{State, World, WorldReadOnly},
+    state::{World, WorldReadOnly},
 };
 use iroha_data_model::{prelude::*, query::dsl::CompoundPredicate};
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
 use std::collections::BTreeSet;
 #[test]
 fn multi_account_mint_returns_only_positive_holders() {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::default(), kura, query_handle);
-    let header = BlockHeader::new(NonZeroU64::new(1).expect("non-zero"), None, None, 0, 0);
+    // The domain is part of the authenticated genesis World; live domain registration
+    // requires an SNS lease, which is not the subject of this holder-index test.
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+    let world = World::with(
+        [Domain::new(domain_id.clone()).build(&ALICE_ID)],
+        [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+        [],
+    );
+    let state = certified_state(world);
+    // The first ordinary block after the authenticated genesis.
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register domain");
     let (holder_a, _kp_a) = gen_account_in("wonderland");
     let (holder_b, _kp_b) = gen_account_in("wonderland");
     let (zero_holder, _kp_zero) = gen_account_in("wonderland");

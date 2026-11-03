@@ -49,6 +49,8 @@ pub mod alias;
 pub mod alias_setup;
 /// Asset definitions, instances, and utilities.
 pub mod asset;
+mod base58;
+mod bech32;
 mod inline_fields;
 pub use asset::{AssetDefinitionId, AssetId};
 /// Block-level data structures and helpers.
@@ -96,6 +98,7 @@ pub mod sccp;
 // and events are part of the canonical protocol model in every build.
 /// Application-independent game session records and signed gameplay messages.
 pub mod game;
+pub mod game_partition;
 pub mod game_resources;
 /// Governance protocol types.
 pub mod governance;

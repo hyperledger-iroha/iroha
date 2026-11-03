@@ -2,7 +2,7 @@
 use iroha_crypto::KeyPair;
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 #[test]
 fn query_accessors_return_inner_values() {
     let account_id = AccountId::new(

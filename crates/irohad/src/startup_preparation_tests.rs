@@ -215,7 +215,8 @@ mod startup_preparation_tests {
         let mut accounts = vec![genesis_account(signer.public_key().clone())];
         if let Some(account) = source_only_account {
             // This is the exact fresh target account set in PreparedStartup. The extra account
-            // exists only in the signing source, so Unregister succeeds there but not on replay.
+            // exists only in the signing source, so an instruction bound to it succeeds there
+            // but not on replay.
             assert!(accounts.iter().all(|existing| existing.id() != account));
             accounts.push(Account::new(account.clone()).build(&fixture.authority));
         }
@@ -276,7 +277,7 @@ mod startup_preparation_tests {
             panic!("fixture must genuinely execute before sealing: {error:?}")
         });
         if let Some(account) = source_only_account {
-            assert!(staged.world().accounts().get(account).is_none());
+            assert!(staged.world().accounts().get(account).is_some());
         }
         drop(staged);
         let mut executed: iroha_data_model::block::SignedBlock = valid.into();
@@ -354,8 +355,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn original_prepared_state_survives_provider_boundary_and_joins_before_release() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, fixture) = fixture([]);
@@ -419,8 +420,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn provider_refusal_retains_valid_genesis_but_releases_native_owners() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, fixture) = fixture([]);
@@ -450,8 +451,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn invalid_native_genesis_never_resolves_a_provider_or_publishes_h1() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let absent = AccountId::new(
@@ -459,8 +460,15 @@ mod startup_preparation_tests {
                 .public_key()
                 .clone(),
         );
+        // Genesis cannot unregister an account before a root fee policy is committed, so the
+        // source-only dependency is account metadata, which replay cannot write.
         let (_resources, fixture) = fixture_with_source_account(
-            [Unregister::account(absent.clone()).into()],
+            [iroha_data_model::isi::SetKeyValue::account(
+                absent.clone(),
+                "source_only".parse().expect("fixture metadata key"),
+                true,
+            )
+            .into()],
             Some(&absent),
         );
         let config = fixture.config.clone();
@@ -484,8 +492,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn late_prepare_refusal_joins_before_native_storage_can_be_reopened() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, mut fixture) = fixture([]);
@@ -511,8 +519,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn activation_provider_preflight_keeps_original_custody_until_children_exit() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, mut fixture) = fixture([]);
@@ -594,8 +602,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn late_activation_refusal_joins_manifest_watchers_before_release() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, mut fixture) = fixture([]);
@@ -654,8 +662,8 @@ mod startup_preparation_tests {
     }
 
     #[test]
-    #[serial_test::serial]
     fn emergency_fast_requires_its_exact_snapshot_without_replay_or_provider_resolution() {
+        let _serial = crate::tests::serial_test_guard();
         let _registry = instruction_registry_test_guard();
         iroha_genesis::init_instruction_registry();
         let (_resources, fixture) = fixture([]);

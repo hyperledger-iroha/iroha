@@ -1834,7 +1834,9 @@ request and its exact transaction fields. It derives the ordered intent and
 ActionStatement from the canonical signed-attachment plan and exposes the
 materialized statement for proving. `sign(rawProof:signingKey:)` revalidates the
 original network admission, binds the exact raw Proof/ActionProof occurrence,
-and signs with the matching single Ed25519 authority. The X509 execution wire
+and signs with the matching single Ed25519 authority. It enforces the 9 MiB proof
+and 10 MiB complete signed-transaction ceilings, including version and signature
+framing. Oversize transport returns `transactionBounds`. The X509 execution wire
 is `iroha.privacy.submit_zk_x509_certificate.v1`; the generic submit-proof wire
 is refused for X509. This builder does not create contract or mixed-action
 bindings. It does not establish proof validity, State freshness, or production

@@ -77,7 +77,7 @@ fn main() {
     println!("bundle_dir\t{}\nmanifest_sha256\t{}", path.display(), "d".repeat(64));
 }
 ''')
-    compiler=['rustc']+(['+1.93.1-x86_64-pc-windows-msvc'] if os.name=='nt' else [])
+    compiler=['rustc']
     subprocess.run([*compiler, '--edition=2024', '-C', 'debuginfo=0', str(code), '-o', str(program)], check=True)
     return program.read_bytes()
 

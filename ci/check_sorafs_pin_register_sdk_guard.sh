@@ -59,6 +59,7 @@ required_paths = (
     "crates/iroha/src/client.rs",
     "crates/iroha_torii/assets/openapi/torii.json",
     "crates/iroha_torii/src/openapi.rs",
+    "crates/iroha_torii/src/openapi/tests.rs",
     "crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs",
     "crates/iroha_torii/src/routing.rs",
     "crates/iroha_torii/tests/sorafs_discovery.rs",
@@ -401,7 +402,7 @@ def check_workflow():
     jvm = workflow_job(workflow, jvm_job)
     require("    runs-on: ubuntu-latest" in jvm, "JVM SDK tests must run on Ubuntu")
     java_setup_match = re.search(
-        r"(?m)^\s+- uses:\s+actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961\s*$",
+        r"(?m)^\s+- uses:\s+actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad\s*$",
         jvm,
     )
     java_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(jvm_command)}\s*$", jvm)
@@ -418,12 +419,12 @@ def check_workflow():
     csharp = workflow_job(workflow, csharp_job)
     require("    runs-on: ubuntu-latest" in csharp, "C# SDK tests must run on Ubuntu")
     dotnet_setup_match = re.search(
-        r"(?m)^\s+- uses:\s+actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1\s*$",
+        r"(?m)^\s+- uses:\s+actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68\s*$",
         csharp,
     )
     dotnet_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(csharp_command)}\s*$", csharp)
     require(dotnet_setup_match is not None, "C# SDK tests must set up .NET")
-    require(re.search(r"(?m)^\s+dotnet-version:\s+10\.0\.402\s*$", csharp) is not None, "C# SDK tests must pin .NET 10")
+    require(re.search(r"(?m)^\s+dotnet-version:\s+10\.0\.403\s*$", csharp) is not None, "C# SDK tests must pin .NET 10")
     require_run(csharp, csharp_command, "C# SDK tests")
     if dotnet_setup_match is not None and dotnet_command_match is not None:
         require(
@@ -434,7 +435,7 @@ def check_workflow():
     js = workflow_job(workflow, js_job)
     require("    runs-on: ubuntu-latest" in js, "JavaScript SDK tests must run on Ubuntu")
     node_setup_match = re.search(
-        r"(?m)^\s+- uses:\s+actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\s*$",
+        r"(?m)^\s+- uses:\s+actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1\s*$",
         js,
     )
     node_install_match = re.search(rf"(?m)^\s+run:\s+{re.escape(js_install_command)}\s*$", js)
@@ -463,7 +464,7 @@ def check_workflow():
     python = workflow_job(workflow, python_job)
     require("    runs-on: ubuntu-latest" in python, "Python SDK tests must run on Ubuntu")
     python_setup_match = re.search(
-        r"(?m)^\s+- uses:\s+actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\s*$",
+        r"(?m)^\s+- uses:\s+actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0\s*$",
         python,
     )
     python_command_match = re.search(rf"(?m)^\s+run:\s+{re.escape(python_command)}\s*$", python)
@@ -540,7 +541,7 @@ def check_scripts():
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", 'DOTNET_BIN="${SORAFS_PIN_REGISTER_DOTNET_BIN:-dotnet}"', "C# SDK dotnet override variable")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", 'DOTNET_VERSION="$("${DOTNET_BIN}" --version)"', "C# SDK selected dotnet capture")
     require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", 'printf \'%s\\n\' "${DOTNET_VERSION}"', "C# SDK dotnet version evidence")
-    require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", "8.0.*) ;;", "C# SDK dotnet 8 matcher")
+    require_contains("ci/check_sorafs_pin_register_csharp_sdk.sh", "10.0.*) ;;", "C# SDK dotnet 10 matcher")
 
 
 def check_rust_wire_contract():
@@ -586,6 +587,23 @@ def check_rust_wire_contract():
         ("InstructionBox::from(instruction)", "typed instruction assembly"),
     ):
         require(needle in pin_register_source, f"Rust pin-register client missing {label}")
+    manifest_validator = require_regex_slice(
+        client_path,
+        r"^    fn validate_sorafs_pin_register_manifest_payload\b.*?^    \}",
+        "Rust canonical manifest validator",
+    )
+    for needle in (
+        "manifest_payload.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+        "sorafs_manifest::decode_manifest_v1_canonical(manifest_payload)",
+    ):
+        require(needle in manifest_validator, f"Rust canonical manifest validator missing {needle}")
+    builder = require_regex_slice(
+        client_path,
+        r"^    fn build_sorafs_pin_register_instruction\b.*?^    \}",
+        "Rust canonical pin instruction builder",
+    )
+    require("manifest_payload.to_vec()" in builder, "Rust pin instruction must retain its canonical manifest input")
+    require("fn sorafs_pin_register_manifest_bytes(" not in client_source, "Rust client retains retired dual-source helper")
 
     torii_path = "crates/iroha_torii/src/routing.rs"
     torii_source = read(torii_path)
@@ -593,6 +611,17 @@ def check_rust_wire_contract():
         "pub struct RegisterPinManifestDto" not in torii_source,
         "Torii must not retain the secret-bearing pin request DTO",
     )
+    require("fn validate_manifest_payload_matches_request(" not in torii_source, "Torii retains retired manifest request matching helper")
+    manifest_decoder = require_regex_slice(
+        torii_path,
+        r"^fn decode_sorafs_pin_manifest_bytes\b.*?^\}",
+        "Torii canonical manifest decoder",
+    )
+    for needle in (
+        "manifest_bytes.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+        "sorafs_manifest::decode_manifest_v1_canonical(manifest_bytes)",
+    ):
+        require(needle in manifest_decoder, f"Torii canonical manifest decoder missing {needle}")
     response = require_regex_slice(
         torii_path,
         r"^pub struct RegisterPinManifestResponseDto\s*\{.*?^\}",
@@ -672,7 +701,9 @@ def check_rust_wire_contract():
         "Torii pin-register OpenAPI missing submitted-only status",
     )
     require(
-        'include!("openapi/tests/sorafs_contracts.rs");' in openapi_source,
+        '#[cfg(test)]\nmod tests;' in openapi_source
+        and 'include!("tests/sorafs_contracts.rs");'
+        in read("crates/iroha_torii/src/openapi/tests.rs"),
         "Torii pin-register OpenAPI missing its identity-preserving contract-test include",
     )
     openapi_contract_tests = read(
@@ -700,7 +731,8 @@ def check_javascript_contract():
         require(match is not None, f"{path} signed register API is missing")
         method = match.group(0)
         for needle, label in (
-            ("toVersionedTransactionPayload", "versioned transaction wrapping"),
+            ("encodeCanonicalVersionedSignedTransactionV1", "canonical versioned transaction encoding"),
+            ('"/v1/sorafs/pin/register"', "canonical registration endpoint"),
             ('"Content-Type": APPLICATION_NORITO', "Norito content type"),
             ("Accept: APPLICATION_JSON", "JSON response negotiation"),
             ("_expectStatus(response, [202])", "HTTP 202 admission"),
@@ -737,7 +769,7 @@ def check_javascript_contract():
     )
     for needle, label in (
         ("registerSorafsPinManifest(", "signed register declaration"),
-        ("signedTransaction: Buffer | ArrayBuffer | ArrayBufferView", "signed input"),
+        ("signedTransaction: VersionedSignedTransactionV1", "signed input"),
         ("buildRegisterPinManifestInstruction", "typed instruction declaration"),
         ("buildRegisterPinManifestTransaction", "local signed builder declaration"),
         ('status: "submitted";', "submitted admission response"),
@@ -746,7 +778,7 @@ def check_javascript_contract():
 
     tests = read("javascript/iroha_js/test/toriiClient.test.js")
     for needle, label in (
-        ("posts only a versioned signed transaction", "signed transport test"),
+        ("posts only an exact canonical V1 transaction", "signed transport test"),
         ("rejects legacy secret-bearing request objects", "secret rejection test"),
         ("rejects pre-finality fee or custody claims", "admission response guard"),
     ):
@@ -832,7 +864,7 @@ def check_csharp_contract():
     )
     for needle, label in (
         ("SignedTransactionEnvelope transaction", "signed envelope input"),
-        ("transaction.NoritoBytes", "signed Norito body"),
+        ("transaction.VersionedNoritoBytes", "canonical versioned signed Norito body"),
         ('"application/x-norito"', "Norito content type"),
         ('accept: "application/json"', "JSON negotiation"),
         ("HttpStatusCode.Accepted", "HTTP 202 admission"),
@@ -969,11 +1001,11 @@ if mode == "--negative-control-bytecode-workflow":
     )
 
 if mode == "--negative-control-openapi-test-include":
-    target = "crates/iroha_torii/src/openapi.rs"
+    target = "crates/iroha_torii/src/openapi/tests.rs"
     original = read(target)
     mutated = original.replace(
-        '    include!("openapi/tests/sorafs_contracts.rs");',
-        '    include!("openapi/tests/sorafs_contracts_disabled.rs");',
+        'include!("tests/sorafs_contracts.rs");',
+        'include!("tests/sorafs_contracts_disabled.rs");',
         1,
     )
     require(
@@ -1031,7 +1063,7 @@ if mode == "--negative-control-jvm-sdk-setup-order-workflow":
     mutated = original.replace(run_line, "", 1)
     require(mutated != original, "negative control failed: unable to mutate JVM SDK setup order")
     insert = mutated.index(
-        "      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961\n"
+        "      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad\n"
     )
     mutated = (
         mutated[:insert]
@@ -1047,7 +1079,7 @@ if mode == "--negative-control-csharp-sdk-setup-order-workflow":
     mutated = original.replace(run_line, "", 1)
     require(mutated != original, "negative control failed: unable to mutate C# SDK setup order")
     insert = mutated.index(
-        "      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1\n"
+        "      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68\n"
     )
     mutated = (
         mutated[:insert]
@@ -1074,7 +1106,7 @@ if mode == "--negative-control-csharp-sdk-dotnet-override-script":
 if mode == "--negative-control-csharp-sdk-dotnet-major-script":
     target = "ci/check_sorafs_pin_register_csharp_sdk.sh"
     original = read(target)
-    mutated = original.replace("8.0.*) ;;", "7.0.*) ;;", 1)
+    mutated = original.replace("10.0.*) ;;", "7.0.*) ;;", 1)
     require(mutated != original, "negative control failed: unable to mutate C# SDK dotnet major matcher")
     reject_mutation(target, mutated, "C# SDK dotnet major script drift")
 
@@ -1087,7 +1119,7 @@ if mode == "--negative-control-js-sdk-node-setup-order-workflow":
     mutated = original.replace(install_block, "", 1)
     require(mutated != original, "negative control failed: unable to move JavaScript SDK install before Node setup")
     insert = mutated.index(
-        "      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\n"
+        "      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1\n"
     )
     mutated = mutated[:insert] + install_block + mutated[insert:]
     reject_mutation(workflow_path, mutated, "JavaScript SDK Node setup ordering drift")
@@ -1098,7 +1130,7 @@ if mode == "--negative-control-python-sdk-setup-order-workflow":
     mutated = original.replace(run_line, "", 1)
     require(mutated != original, "negative control failed: unable to mutate Python SDK setup order")
     insert = mutated.index(
-        "      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n"
+        "      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0\n"
     )
     mutated = (
         mutated[:insert]
@@ -1205,26 +1237,26 @@ workflow_modes = {
     "--negative-control-swift-sdk-script-workflow": (f"        run: {swift_command}", "        run: bash ci/check_sorafs_pin_register_swift_sdk.sh --skip", "Swift SDK script drift"),
     "--negative-control-swift-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "Swift SDK dependency drift"),
     "--negative-control-jvm-sdk-job-workflow": ("  sorafs_pin_register_jvm_sdk_tests:\n", "  sorafs_pin_register_jvm_sdk_tests_disabled:\n", "JVM SDK job drift"),
-    "--negative-control-jvm-sdk-setup-workflow": ("      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961\n", "", "JVM SDK setup drift"),
+    "--negative-control-jvm-sdk-setup-workflow": ("      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad\n", "", "JVM SDK setup drift"),
     "--negative-control-jvm-sdk-distribution-workflow": ('          distribution: "temurin"', '          distribution: "zulu"', "JVM SDK Java distribution drift"),
     "--negative-control-jvm-sdk-java-version-workflow": ('          java-version: "21"', '          java-version: "17"', "JVM SDK Java version drift"),
     "--negative-control-jvm-sdk-script-workflow": (f"        run: {jvm_command}", "        run: bash ci/check_sorafs_pin_register_jvm_sdk.sh --skip", "JVM SDK script drift"),
     "--negative-control-jvm-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "JVM SDK dependency drift"),
     "--negative-control-csharp-sdk-job-workflow": ("  sorafs_pin_register_csharp_sdk_tests:\n", "  sorafs_pin_register_csharp_sdk_tests_disabled:\n", "C# SDK job drift"),
-    "--negative-control-csharp-sdk-setup-workflow": ("      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1\n", "", "C# SDK setup drift"),
-    "--negative-control-csharp-sdk-dotnet-version-workflow": ("          dotnet-version: 10.0.402", "          dotnet-version: 7.0.x", "C# SDK dotnet version drift"),
+    "--negative-control-csharp-sdk-setup-workflow": ("      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68\n", "", "C# SDK setup drift"),
+    "--negative-control-csharp-sdk-dotnet-version-workflow": ("          dotnet-version: 10.0.403", "          dotnet-version: 7.0.x", "C# SDK dotnet version drift"),
     "--negative-control-csharp-sdk-script-workflow": (f"        run: {csharp_command}", "        run: bash ci/check_sorafs_pin_register_csharp_sdk.sh --skip", "C# SDK script drift"),
     "--negative-control-csharp-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_javascript_sdk_tests, sorafs_pin_register_python_sdk_tests]", "C# SDK dependency drift"),
     "--negative-control-js-sdk-job-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n", "  sorafs_pin_register_javascript_sdk_tests_disabled:\n", "JavaScript SDK job drift"),
     "--negative-control-js-sdk-runner-workflow": ("  sorafs_pin_register_javascript_sdk_tests:\n    runs-on: ubuntu-latest", "  sorafs_pin_register_javascript_sdk_tests:\n    runs-on: macos-latest", "JavaScript SDK runner drift"),
-    "--negative-control-js-sdk-node-setup-workflow": ("      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38\n", "", "JavaScript SDK Node setup drift"),
+    "--negative-control-js-sdk-node-setup-workflow": ("      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1\n", "", "JavaScript SDK Node setup drift"),
     "--negative-control-js-sdk-node-version-workflow": ('          node-version: "24"', '          node-version: "22"', "JavaScript SDK Node version drift"),
     "--negative-control-js-sdk-node-cache-workflow": ("          cache-dependency-path: javascript/iroha_js/package-lock.json", "          cache-dependency-path: javascript/iroha_js/package.json", "JavaScript SDK cache path drift"),
     "--negative-control-js-sdk-install-workflow": (f"        run: {js_install_command}", "        run: npm install --prefix javascript/iroha_js", "JavaScript SDK install drift"),
     "--negative-control-js-sdk-script-workflow": (f"        run: {js_command}", "        run: bash ci/check_sorafs_pin_register_js_sdk.sh --skip", "JavaScript SDK script drift"),
     "--negative-control-js-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_python_sdk_tests]", "JavaScript SDK dependency drift"),
     "--negative-control-python-sdk-job-workflow": ("  sorafs_pin_register_python_sdk_tests:\n", "  sorafs_pin_register_python_sdk_tests_disabled:\n", "Python SDK job drift"),
-    "--negative-control-python-sdk-setup-workflow": ("      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065\n", "", "Python SDK setup drift"),
+    "--negative-control-python-sdk-setup-workflow": ("      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0\n", "", "Python SDK setup drift"),
     "--negative-control-python-sdk-version-workflow": ('          python-version: "3.12"', '          python-version: "3.11"', "Python SDK version drift"),
     "--negative-control-python-sdk-script-workflow": (f"        run: {python_command}", "        run: bash ci/check_sorafs_pin_register_python_sdk.sh --skip", "Python SDK script drift"),
     "--negative-control-python-sdk-needs-workflow": (main_job_needs_line, "    needs: [sorafs_pin_register_swift_sdk_check, sorafs_pin_register_jvm_sdk_tests, sorafs_pin_register_csharp_sdk_tests, sorafs_pin_register_javascript_sdk_tests]", "Python SDK dependency drift"),
@@ -1273,8 +1305,8 @@ source_modes = {
     ),
     "--negative-control-rust-client-manifest-b64-wire": (
         "crates/iroha/src/client.rs",
-        '            "manifest_payload".into(),\n',
-        '            "manifest_b64".into(),\n',
+        '            manifest_payload.to_vec(),\n',
+        '            manifest_b64.as_bytes().to_vec(),\n',
         "Rust client retired manifest_b64 wire key drift",
     ),
     "--negative-control-rust-client-manifest-bound": (
@@ -1300,37 +1332,34 @@ source_modes = {
     ),
     "--negative-control-torii-retired-manifest-b64": (
         "crates/iroha_torii/src/routing.rs",
-        "    pub manifest_payload: String,\n",
-        "    pub manifest_payload: String,\n"
-        "    pub manifest_b64: Option<String>,\n",
+        "pub struct RegisterPinManifestResponseDto {",
+        "pub struct RegisterPinManifestDto { pub manifest_b64: String }\n"
+        "pub struct RegisterPinManifestResponseDto {",
         "Torii retired manifest_b64 field drift",
     ),
     "--negative-control-torii-retired-summary-field": (
         "crates/iroha_torii/src/routing.rs",
-        "    pub submitted_epoch: u64,\n",
-        "    pub submitted_epoch: u64,\n"
-        "    pub content_length: u64,\n",
+        "pub struct RegisterPinManifestResponseDto {\n",
+        "pub struct RegisterPinManifestResponseDto {\n    pub content_length: u64,\n",
         "Torii retired summary field drift",
     ),
     "--negative-control-torii-manifest-bound": (
         "crates/iroha_torii/src/routing.rs",
-        "manifest_payload.len() > SORAFS_PIN_MANIFEST_MAX_BASE64_BYTES",
-        "manifest_payload.len() > usize::MAX",
+        "manifest_bytes.len() > sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES",
+        "manifest_bytes.len() > usize::MAX",
         "Torii encoded manifest bound drift",
     ),
     "--negative-control-torii-canonical-decode": (
         "crates/iroha_torii/src/routing.rs",
-        "sorafs_manifest::decode_manifest_v1_canonical(&manifest_bytes)",
-        "norito::decode_from_bytes(&manifest_bytes)",
+        "sorafs_manifest::decode_manifest_v1_canonical(manifest_bytes)",
+        "norito::decode_from_bytes(manifest_bytes)",
         "Torii canonical manifest decode drift",
     ),
     "--negative-control-torii-retired-helper": (
         "crates/iroha_torii/src/routing.rs",
-        "#[cfg(feature = \"app_api\")]\nfn decode_sorafs_pin_manifest_payload(\n",
-        "#[cfg(feature = \"app_api\")]\n"
+        "fn decode_sorafs_pin_manifest_bytes(\n",
         "fn validate_manifest_payload_matches_request() {}\n\n"
-        "#[cfg(feature = \"app_api\")]\n"
-        "fn decode_sorafs_pin_manifest_payload(\n",
+        "fn decode_sorafs_pin_manifest_bytes(\n",
         "Torii retired manifest matching helper drift",
     ),
     "--negative-control-python-fee-payment-field": (
@@ -1348,7 +1377,7 @@ source_modes = {
     ),
     "--negative-control-js-adversarial-test": (
         "javascript/iroha_js/test/toriiClient.test.js",
-        "registerSorafsPinManifest rejects all unknown and retired fields before fetch",
+        "registerSorafsPinManifest rejects legacy secret-bearing request objects",
         "registerSorafsPinManifest unknown-field test disabled",
         "JavaScript adversarial test drift",
     ),
@@ -1360,19 +1389,20 @@ source_modes = {
     ),
     "--negative-control-swift-contract-test": (
         "IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift",
-        "testRegisterSoraFsPinManifestRejectsMalformedInputsBeforeRequest",
+        "testRegisterSoraFsPinManifestRejectsPreFinalityFeeClaims",
         "testRegisterSoraFsPinManifestRejectsMalformedInputsDisabled",
         "Swift contract test drift",
     ),
     "--negative-control-swift-retired-request-field": (
         "IrohaSwift/Sources/IrohaSwift/ToriiClient.swift",
-        "    public var manifestPayload: String?\n",
-        "    public var manifestPayload: String?\n    public var manifest_b64: String?\n",
+        "    public func registerSoraFsPinManifest(",
+        "    struct ToriiSoraFsPinRegisterRequest { var manifest_b64: String }\n"
+        "    public func registerSoraFsPinManifest(",
         "Swift retired request field drift",
     ),
     "--negative-control-csharp-malformed-response-test": (
         "csharp/tests/Hyperledger.Iroha.Sdk.Tests/ToriiClientTests.cs",
-        "RegisterSoraFsPinManifestAsyncRejectsMalformedDigestResponse",
+        "RegisterSoraFsPinManifestAsyncRejectsNonAdmissionFields",
         "RegisterSoraFsPinManifestAsyncMalformedResponseDisabled",
         "C# malformed response test drift",
     ),

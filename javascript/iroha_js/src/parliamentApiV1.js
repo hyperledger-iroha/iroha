@@ -59,9 +59,9 @@ export const PARLIAMENT_PUBLIC_TRANSITIONS_V1 = Object.freeze([
   [7, "AdvanceBodyPhase", true, 7],
   [8, "RecordAttemptAbsence", true, 8],
   [9, "EndorsePublicFinding", true, 9],
-  [10, "RecordInvitationResponse", true, 13],
-  [11, "FailPublicFindingNoResult", true, 14],
-  [12, "RegisterInitialSortition", false, 15],
+  [17, "RecordInvitationResponse", true, 20],
+  [20, "FailPublicFindingNoResult", true, 23],
+  [21, "RegisterInitialSortition", false, 24],
 ].map(([noritoIndex, jsonTag, jsonPayloadRequired, eventKindIndex]) =>
   Object.freeze({ noritoIndex, jsonTag, jsonPayloadRequired, eventKindIndex }),
 ));
@@ -69,9 +69,9 @@ export const PARLIAMENT_PUBLIC_TRANSITIONS_V1 = Object.freeze([
 // These outcomes are exported for read/audit decoding only. The transition
 // builder below deliberately accepts only PARLIAMENT_PUBLIC_TRANSITIONS_V1.
 export const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1 = Object.freeze([
-  [0, "Enacted", false, "MarkEnacted", 10],
-  [1, "Superseded", true, "MarkSuperseded", 11],
-  [2, "ExecutionFailed", true, "MarkExecutionFailed", 12],
+  [0, "Enacted", false, "MarkEnacted", 17],
+  [1, "Superseded", true, "MarkSuperseded", 18],
+  [2, "ExecutionFailed", true, "MarkExecutionFailed", 19],
 ].map(([noritoIndex, jsonTag, jsonPayloadRequired, eventKind, eventKindIndex]) =>
   Object.freeze({
     noritoIndex,
@@ -85,9 +85,9 @@ export const PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1 = Object.freeze([
 export const PARLIAMENT_NO_RESULT_KINDS_V1 = Object.freeze([
   [0, "PublicFindingQuorumUnreachable"],
   [1, "PublicFindingDeadlineExpired"],
-  [2, "SortitionRetriesExhausted"],
-  [3, "ConfirmationJuryCapacityUnavailable"],
-  [4, "RandomnessRedrawBudgetExhausted"],
+  [7, "SortitionRetriesExhausted"],
+  [8, "ConfirmationJuryCapacityUnavailable"],
+  [9, "RandomnessRedrawBudgetExhausted"],
 ].map(([noritoIndex, jsonTag]) => Object.freeze({ noritoIndex, jsonTag })));
 
 export const PARLIAMENT_BODY_STATE_FIELDS_V1 = Object.freeze([

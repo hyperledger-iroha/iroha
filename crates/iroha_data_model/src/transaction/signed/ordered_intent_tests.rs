@@ -69,12 +69,26 @@ fn log_wire_id() -> String {
         .to_owned()
 }
 
+/// Authority payment carrying the signature-bound gas limit that contract calls require.
+fn gas_bound_fee_payment() -> FeePaymentIntent {
+    FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000))
+}
+
+/// Admission and SDK codecs refuse a payload whose executable lacks its required gas limit.
+fn assert_signature_bound_gas_limit(payload: &TransactionPayload) {
+    assert!(
+        !payload.instructions.requires_transaction_gas_limit()
+            || payload.fee_payment.gas_limit().is_some(),
+        "a contract-call or IVM payload requires a signature-bound gas limit"
+    );
+}
+
 fn builder(executable: Executable) -> TransactionBuilder {
     let mut builder = TransactionBuilder::new_with_time(
         TransactionDomain::Network(super::super::test_network_id(0x41)),
         authority(),
         CREATION_TIME_MS,
-        FeePaymentIntent::authority(Vec::new(), NonZeroU64::new(10_000)),
+        gas_bound_fee_payment(),
     )
     .with_executable(executable);
     builder.set_nonce(NonZeroU32::new(7).expect("nonzero"));
@@ -1276,6 +1290,7 @@ fn privacy_intent_vectors() -> Vec<norito::json::Value> {
         .into_payload()
         .expect("batch payload");
         for (kind, payload) in [("direct", direct), ("batch", batch)] {
+            assert_signature_bound_gas_limit(&payload);
             rows.push(json_object(vec![
                 ("name", json_value(&format!("privacy_{index}_{kind}"))),
                 (
@@ -1332,10 +1347,22 @@ fn x509_privacy_intent_vectors(
             .expect("proof-free X509 request");
     let projection = norito::encode_canonical(&request).unwrap();
     let generated_frame = projection.clone();
+    // SDKs inspect each X509 frame as a complete proof-free request under the first-release
+    // bounds before projecting it. One privacy action per transaction fixes the privacy
+    // ordinal at zero, so the independent change selects another governed parameter set.
     let mut independent = request.clone();
-    independent.statement.context.action_index += 1;
+    independent.statement.context.parameter_id =
+        crate::privacy::PrivacyParameterIdV1::new([0x61; 32]);
     let independent_frame = norito::encode_canonical(&independent).unwrap();
     assert_ne!(independent_frame, projection);
+    assert_ne!(
+        independent
+            .public_inputs_digest_v1()
+            .expect("the independent change is a valid proof-free request"),
+        request
+            .public_inputs_digest_v1()
+            .expect("the fixture is a valid proof-free request")
+    );
     let direct = TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
         .unwrap()
         .into_payload()
@@ -1385,11 +1412,13 @@ fn x509_privacy_intent_vectors(
         ]
         .into(),
     );
+    batch.fee_payment = gas_bound_fee_payment();
     batch.attachments = Some(plan.declare());
     batch.bind_attachment_statements_v1().unwrap();
     batch.validate_signed_attachments_v1().unwrap();
     let mut rows = Vec::new();
     for (kind, payload) in [("direct", direct), ("batch", batch)] {
+        assert_signature_bound_gas_limit(&payload);
         rows.push(json_object(vec![
             ("name", json_value(&format!("privacy_{index}_{kind}"))),
             (

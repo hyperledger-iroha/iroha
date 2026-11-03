@@ -2365,7 +2365,7 @@ mod tests {
     #[test]
     fn bounded_trigger_rows_preserve_typed_order_and_frozen_cursor_prefix() {
         use iroha_data_model::query::parameters::FetchSize;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let state = trigger_test_state();
         let view = state.view();
         let limits = trigger_test_limits(super::super::ORDINARY_NAME_ID_SOURCE_BYTES);
@@ -2459,7 +2459,7 @@ mod tests {
     #[test]
     fn bounded_active_trigger_ids_exclude_depleted_actions_and_honor_exact_limits() {
         use iroha_data_model::query::parameters::FetchSize;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let state = trigger_test_state();
         let view = state.view();
         let limits = trigger_test_limits(super::super::ORDINARY_NAME_ID_SOURCE_BYTES);
@@ -2694,7 +2694,7 @@ mod tests {
             query::{dsl::SelectorTuple, parameters::FetchSize},
             role::RoleId,
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let budget = super::super::QueryExecutionBudget::from_weighted_limit(128 * 1_024, 1, 1);
         let ordinary = OrdinaryQueryExecutionLimits::try_new(
             1,
@@ -2753,8 +2753,8 @@ mod tests {
             parameters::FetchSize,
             peer::prelude::FindPeers,
         };
+        use iroha_primitives::nonzero;
         use iroha_test_samples::ALICE_ID;
-        use nonzero_ext::nonzero;
 
         let world = World::default();
         {

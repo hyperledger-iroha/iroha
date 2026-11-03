@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -8,6 +9,27 @@ import {
   privacyCompiledProfileCatalogV1,
 } from "../src/crypto.js";
 import { getNativeBinding } from "../src/native.js";
+import { decodePrivacyExact12CapabilityManifestV1 } from "../src/privacyCapabilities.js";
+
+test("the real addon projection of Core's manifest reaches the managed parser", () => {
+  const archive = Buffer.from(
+    readFileSync(
+      new URL("../../../fixtures/privacy/exact12_capability_manifest_v1.norito.b64", import.meta.url),
+      "utf8",
+    ).trim(),
+    "base64",
+  );
+  assert.equal(getNativeBinding().privacyValidateExact12CapabilityManifestV1(archive), 0);
+  const manifest = decodePrivacyExact12CapabilityManifestV1(archive);
+  const { current_limits: current, pending_update: pending } = manifest.consensus_policy;
+  assert.equal(current.retained_root_count, 2048);
+  assert.equal(pending.next_limits.retained_root_count, 1024);
+  const note = manifest.protocols[10];
+  assert.equal(note.protocol_id.protocol, "iroha-ivm-private-note-stark-v1");
+  assert.ok(note.policy.pending_update);
+  assert.equal(note.privacy_feature_mask, 7);
+  assert.equal(manifest.manifest_digest.length, 32);
+});
 
 
 test("authenticated N-API ABI33 executes the canonical privacy catalog contract", () => {

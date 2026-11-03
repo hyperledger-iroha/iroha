@@ -8,12 +8,9 @@ use iroha_config::parameters::{
     defaults,
 };
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute as _,
     smartcontracts::{ValidQuery, ValidSingularQuery},
-    state::{State, StateTransaction, World, WorldReadOnly},
-    telemetry::StateTelemetry,
+    state::{State, StateBlock, StateTransaction, World, WorldReadOnly},
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey, SignatureOf};
 use iroha_data_model::{
@@ -42,18 +39,18 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::oracle as oracle_permission;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_primitives::numeric::Quantity;
-use iroha_telemetry::metrics::Metrics;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     str::FromStr,
-    sync::Arc,
 };
-fn test_telemetry() -> StateTelemetry {
-    StateTelemetry::new(Arc::new(Metrics::default()), false)
+/// Apply the original signed genesis to an Oracle fixture World. Oracle instructions then
+/// execute in ordinary blocks after that authenticated genesis, never in its context.
+fn oracle_state(world: World) -> State {
+    crate::native_genesis::certified_state(world)
 }
 fn oracle_config() -> OracleConfig {
     OracleConfig {
@@ -268,9 +265,21 @@ fn world_with_provider_role_permission(
     world.grant_role_for_tests(provider.clone(), role_id);
     world
 }
-fn header(height: u64) -> BlockHeader {
-    let nonzero_height = NonZeroU64::new(height).expect("height must be non-zero");
-    BlockHeader::new(nonzero_height, None, None, 0, 0)
+/// Header of the `ordinal`-th ordinary fixture block after the authenticated genesis.
+/// Ordinals keep the fixture's relative block spacing; the genesis owns height one.
+fn header(state: &State, ordinal: u64) -> BlockHeader {
+    let height = ordinal
+        .checked_add(1)
+        .and_then(NonZeroU64::new)
+        .expect("ordinary height follows genesis");
+    BlockHeader::new(height, state.view().latest_block_hash(), None, 0, 0)
+}
+/// Execute Oracle work under an explicit bounded invocation, as a signed transaction's
+/// retained producer call does; this grants no genesis, publication or finality authority.
+fn invocation<'block, 'state>(
+    block: &'block mut StateBlock<'state>,
+) -> StateTransaction<'block, 'state> {
+    block.transaction_for_fastpq_testing(Hash::new(b"oracle-component-invocation"))
 }
 fn oracle_state_with_accounts(
     providers: &[AccountId],
@@ -324,10 +333,7 @@ fn oracle_state_with_accounts(
     for provider in providers {
         grant_oracle_operator_permissions(&mut world, provider);
     }
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let telemetry = test_telemetry();
-    let mut state = State::with_telemetry(world, kura, query, telemetry);
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
     (state, asset_def_id, reward_pool, slash_receiver)
 }
@@ -399,8 +405,8 @@ fn oracle_flow_persists_history_and_prunes() {
     oracle_cfg.history_depth = nonzero!(1_usize);
     state.set_oracle(oracle_cfg);
     // First round: register feed, buffer observations, aggregate, and persist history.
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -444,8 +450,8 @@ fn oracle_flow_persists_history_and_prunes() {
         assert!(view.world().oracle_observations().iter().next().is_none());
     }
     // Second round: new slot should prune history because depth is capped at one.
-    let mut sb = state.block(header(2));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 2));
+    let mut stx = invocation(&mut sb);
     let req1 = Hash::new(b"req-1");
     aggregate_round(
         &mut stx,
@@ -475,12 +481,9 @@ fn oracle_rejects_wrong_authority() {
     let (outsider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "price_xor_usd".parse().expect("feed id");
     let world = world_with_providers(&[provider.clone(), outsider.clone()]);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let telemetry = test_telemetry();
-    let state = State::with_telemetry(world, kura, query, telemetry);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let state = oracle_state(world);
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     RegisterOracleFeed {
         feed: feed_config(feed_id.clone(), vec![provider.clone()]),
     }
@@ -505,15 +508,10 @@ fn oracle_register_requires_typed_permission_and_accepts_role_permission() {
         DomainId::try_new("validators", "universal").expect("domain");
     let domain = Domain::new(validator_domain_id).build(&provider);
     let account = Account::new(provider.clone()).build(&provider);
-    let mut state = State::with_telemetry(
-        World::with([domain], [account], []),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(World::with([domain], [account], []));
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let err = execute_boxed(
         RegisterOracleFeed {
             feed: feed_config(feed_id.clone(), vec![provider.clone()]),
@@ -532,15 +530,10 @@ fn oracle_register_requires_typed_permission_and_accepts_role_permission() {
         role_id,
         oracle_permission::CanRegisterOracleFeed,
     );
-    let mut state = State::with_telemetry(
-        role_world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(role_world);
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: feed_config(feed_id.clone(), vec![provider.clone()]),
@@ -576,8 +569,8 @@ fn oracle_instruction_box_dispatch_covers_operator_surface() {
         high: nonzero!(1_usize),
     };
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -763,15 +756,10 @@ fn oracle_register_rejects_invalid_feed_configs() {
     let (provider_b, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "invalid_feed_config".parse().expect("feed id");
     let world = world_with_providers(&[provider_a.clone(), provider_b.clone()]);
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut duplicate = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_a.clone()],
@@ -850,15 +838,10 @@ fn oracle_register_rejects_empty_oversized_and_duplicate_version_configs() {
     let (provider_b, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "invalid_feed_config_adversarial".parse().expect("feed id");
     let world = world_with_providers(&[provider_a.clone(), provider_b.clone()]);
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut empty_providers = feed_config(feed_id.clone(), vec![provider_a.clone()]);
     empty_providers.providers.clear();
     assert_rejects_with(
@@ -935,15 +918,10 @@ fn oracle_operator_calls_reject_unregistered_feed_and_missing_change() {
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "missing_operator_feed".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     assert_rejects_with(
         execute_boxed(
             AggregateOracleFeed {
@@ -995,8 +973,8 @@ fn oracle_observations_reject_unknown_provider_tampering_duplicates_and_version_
     let feed_id: FeedId = "observation_adversarial_guards".parse().expect("feed id");
     let (state, _, _, _) =
         oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone(), outsider.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: feed_config(
@@ -1073,8 +1051,8 @@ fn oracle_invalid_signature_does_not_poison_window_or_count_for_quorum() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "invalid_signature_window_guard".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1146,8 +1124,8 @@ fn oracle_feed_upgrade_rejects_stale_version_observations_and_old_windows() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "feed_upgrade_observation_guards".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: feed_config(
@@ -1195,8 +1173,8 @@ fn oracle_register_rejects_current_version_replay_and_downgrade_after_upgrade() 
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "feed_version_replay_guard".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(std::slice::from_ref(&provider));
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let feed_v1 = feed_config(feed_id.clone(), vec![provider.clone()]);
     execute_boxed(
         RegisterOracleFeed {
@@ -1231,8 +1209,8 @@ fn oracle_observations_reject_inactive_slot_and_connector_mismatch() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "observation_metadata_guards".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1284,8 +1262,8 @@ fn oracle_observations_reject_unregistered_feed_connector_version_and_processed_
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "observation_processed_guards".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     assert_rejects_with(
         SubmitOracleObservation {
             observation: observation(
@@ -1353,8 +1331,8 @@ fn oracle_aggregation_rejects_insufficient_quorum_replay_and_stale_windows() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "aggregation_guards".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1386,8 +1364,8 @@ fn oracle_aggregation_rejects_insufficient_quorum_replay_and_stale_windows() {
         "insufficient oracle quorum",
     );
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: config.clone(),
@@ -1457,8 +1435,8 @@ fn oracle_aggregation_wrong_request_does_not_consume_matching_window() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "aggregation_request_isolation".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1515,8 +1493,8 @@ fn oracle_aggregation_rejects_unauthorized_empty_mismatched_scale_and_stale_manu
     let feed_id: FeedId = "aggregation_adversarial_guards".parse().expect("feed id");
     let (state, _, _, _) =
         oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone(), outsider.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1576,8 +1554,8 @@ fn oracle_aggregation_rejects_unauthorized_empty_mismatched_scale_and_stale_manu
         "mismatched scales",
     );
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: config.clone(),
@@ -1623,8 +1601,8 @@ fn oracle_aggregation_rejects_value_overflow_and_all_outlier_quorum_collapse() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "aggregation_value_guards".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(feed_id.clone(), vec![provider_a.clone()]);
     config.max_value_len = 4;
     execute_boxed(
@@ -1659,8 +1637,8 @@ fn oracle_aggregation_rejects_value_overflow_and_all_outlier_quorum_collapse() {
         "observation value too long",
     );
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1697,8 +1675,8 @@ fn oracle_aggregation_rejects_error_rate_spikes_and_mismatched_error_quorum() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "error_outcome_adversarial".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1742,8 +1720,8 @@ fn oracle_aggregation_rejects_error_rate_spikes_and_mismatched_error_quorum() {
         "oracle error rate exceeded",
     );
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -1792,8 +1770,8 @@ fn oracle_dispute_rejects_non_feed_target_wrong_request_and_missing_resolution()
     let feed_id: FeedId = "dispute_exact_anchor_guards".parse().expect("feed id");
     let (state, _, _, _) =
         oracle_state_with_accounts(&[challenger.clone(), target.clone(), outsider.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(feed_id.clone(), vec![challenger.clone(), target.clone()]);
     config.min_signers = 2;
     execute_boxed(
@@ -1865,8 +1843,8 @@ fn oracle_dispute_rejects_old_version_anchor_after_feed_upgrade() {
     let (target, target_signer) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "dispute_upgrade_anchor_guard".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[challenger.clone(), target.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config_v1 = feed_config(feed_id.clone(), vec![challenger.clone(), target.clone()]);
     config_v1.min_signers = 2;
     execute_boxed(
@@ -1918,8 +1896,8 @@ fn oracle_dispute_rejects_oversized_bond_without_recording_dispute() {
     let (target, target_signer) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "dispute_bond_guard_feed".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[challenger.clone(), target.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(feed_id.clone(), vec![challenger.clone(), target.clone()]);
     config.min_signers = 2;
     execute_boxed(
@@ -1971,8 +1949,8 @@ fn oracle_dispute_requires_history_anchor_evidence_and_target_relevance() {
     let feed_id: FeedId = "dispute_anchor_guards".parse().expect("feed id");
     let (state, _, _, _) =
         oracle_state_with_accounts(&[challenger.clone(), target.clone(), uninvolved.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(
         feed_id.clone(),
         vec![challenger.clone(), target.clone(), uninvolved.clone()],
@@ -2053,8 +2031,8 @@ fn oracle_dispute_rejects_stale_duplicate_unauthorized_and_repeat_resolution() {
     let (outsider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "dispute_adversarial_guards".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[challenger.clone(), target.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut config = feed_config(feed_id.clone(), vec![challenger.clone(), target.clone()]);
     config.min_signers = 2;
     config.dispute_window_slots = nonzero!(1_u64);
@@ -2182,15 +2160,10 @@ fn oracle_change_votes_reject_missing_permission_and_stage_jumps() {
         &provider,
         oracle_permission::CanProposeOracleChange,
     );
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"stage-missing-permission"));
     execute_boxed(
         ProposeOracleChange {
@@ -2220,18 +2193,13 @@ fn oracle_change_votes_reject_missing_permission_and_stage_jumps() {
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "stage_jump_feed".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(1_usize);
     cfg.governance.rules_min_votes = nonzero!(1_usize);
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"stage-jump"));
     execute_boxed(
         ProposeOracleChange {
@@ -2289,17 +2257,12 @@ fn oracle_change_duplicate_vote_does_not_satisfy_quorum() {
     let (provider_b, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "duplicate_vote_quorum_feed".parse().expect("feed id");
     let world = world_with_providers(&[provider_a.clone(), provider_b.clone()]);
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(2_usize);
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"duplicate-vote-quorum"));
     execute_boxed(
         ProposeOracleChange {
@@ -2382,18 +2345,13 @@ fn oracle_change_stage_permission_is_specific_even_when_role_grants_intake() {
         &provider,
         oracle_permission::CanProposeOracleChange,
     );
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(1_usize);
     cfg.governance.rules_min_votes = nonzero!(1_usize);
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"stage-specific-role"));
     execute_boxed(
         ProposeOracleChange {
@@ -2437,12 +2395,7 @@ fn oracle_change_proposal_rejects_invalid_feeds_and_terminal_enacted_operations(
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "change_invalid_feed_guard".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(1_usize);
     cfg.governance.rules_min_votes = nonzero!(1_usize);
@@ -2458,8 +2411,8 @@ fn oracle_change_proposal_rejects_invalid_feeds_and_terminal_enacted_operations(
         high: nonzero!(1_usize),
     };
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let mut duplicate_provider =
         feed_config(feed_id.clone(), vec![provider.clone(), provider.clone()]);
     duplicate_provider.committee_size = 2;
@@ -2557,15 +2510,10 @@ fn oracle_change_rejects_vote_and_rollback_after_terminal_rejection() {
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "change_terminal_guard_feed".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"terminal-change"));
     execute_boxed(
         ProposeOracleChange {
@@ -2621,12 +2569,7 @@ fn oracle_change_rejects_duplicate_id_and_late_enactment_conflict() {
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "change_late_conflict_feed".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(1_usize);
     cfg.governance.rules_min_votes = nonzero!(1_usize);
@@ -2642,8 +2585,8 @@ fn oracle_change_rejects_duplicate_id_and_late_enactment_conflict() {
         high: nonzero!(1_usize),
     };
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"change-duplicate-conflict"));
     let feed = feed_config(feed_id.clone(), vec![provider.clone()]);
     execute_boxed(
@@ -2715,15 +2658,10 @@ fn oracle_change_rejects_unauthorized_proposal_unknown_change_and_rollback_stage
         DomainId::try_new("validators", "universal").expect("domain");
     let domain = Domain::new(validator_domain_id).build(&provider);
     let account = Account::new(provider.clone()).build(&provider);
-    let mut state = State::with_telemetry(
-        World::with([domain], [account], []),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(World::with([domain], [account], []));
     state.set_oracle(oracle_config());
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     assert_rejects_with(
         execute_boxed(
             ProposeOracleChange {
@@ -2739,17 +2677,12 @@ fn oracle_change_rejects_unauthorized_proposal_unknown_change_and_rollback_stage
         "does not have `CanProposeOracleChange`",
     );
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(1_usize);
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"rollback-stage-jump"));
     execute_boxed(
         ProposeOracleChange {
@@ -2817,8 +2750,8 @@ fn oracle_queries_return_feeds_history_stats_disputes_changes_and_bindings() {
     let (provider_b, signer_b) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "query_surface_feed".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let config = feed_config(
         feed_id.clone(),
         vec![provider_a.clone(), provider_b.clone()],
@@ -2987,8 +2920,8 @@ fn oracle_iter_queries_do_not_leak_unrelated_feed_records() {
     let feed_b: FeedId = "query_isolation_b".parse().expect("feed id");
     let missing_feed: FeedId = "query_isolation_missing".parse().expect("feed id");
     let (state, _, _, _) = oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     for feed_id in [&feed_a, &feed_b] {
         let mut config = feed_config(
             feed_id.clone(),
@@ -3130,8 +3063,8 @@ fn oracle_applies_rewards_and_penalties() {
         vec![provider_a.clone(), provider_b.clone(), provider_c.clone()],
     );
     config.outlier_policy = OutlierPolicy::Absolute(AbsoluteOutlier { max_delta: 5 });
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     RegisterOracleFeed {
         feed: config.clone(),
     }
@@ -3219,8 +3152,8 @@ fn oracle_reward_respects_reward_pool_outgoing_availability() {
     let feed_id: FeedId = "reward_pool_control".parse().expect("feed id");
     let (state, asset_def_id, reward_pool, _) =
         oracle_state_with_accounts(std::slice::from_ref(&provider));
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     SetAssetTransferAvailability::new(
         reward_pool.clone(),
         asset_def_id.clone(),
@@ -3266,8 +3199,8 @@ fn oracle_penalty_is_an_explicit_mandatory_control_exception() {
     let feed_id: FeedId = "mandatory_penalty_control".parse().expect("feed id");
     let (state, asset_def_id, reward_pool, slash_receiver) =
         oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone(), outlier.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     SetAssetTransferAvailability::new(
         outlier.clone(),
         asset_def_id.clone(),
@@ -3334,8 +3267,8 @@ fn oracle_penalty_preserves_receiver_admission() {
         let feed_id: FeedId = "penalty_receiver_control".parse().expect("feed id");
         let (state, asset_def_id, reward_pool, slash_receiver) =
             oracle_state_with_accounts(&[provider_a.clone(), provider_b.clone(), outlier.clone()]);
-        let mut sb = state.block(header(1));
-        let mut stx = sb.transaction();
+        let mut sb = state.block(header(&state, 1));
+        let mut stx = invocation(&mut sb);
         SetAssetTransferAvailability::new(
             outlier.clone(),
             asset_def_id.clone(),
@@ -3413,8 +3346,8 @@ fn oracle_dispute_bond_and_resolution_flow() {
     let (state, asset_def_id, _reward_pool, slash_receiver) =
         oracle_state_with_accounts(&[challenger.clone(), target.clone()]);
     let config = feed_config(feed_id.clone(), vec![challenger.clone(), target.clone()]);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     RegisterOracleFeed {
         feed: config.clone(),
     }
@@ -3485,10 +3418,7 @@ fn oracle_change_pipeline_applies_feed() {
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "change_price_feed".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let telemetry = test_telemetry();
-    let mut state = State::with_telemetry(world, kura, query, telemetry);
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_min_votes = nonzero!(1_usize);
     cfg.governance.rules_min_votes = nonzero!(1_usize);
@@ -3504,8 +3434,8 @@ fn oracle_change_pipeline_applies_feed() {
         high: nonzero!(1_usize),
     };
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let feed = feed_config(feed_id.clone(), vec![provider.clone()]);
     let change_id = OracleChangeId(Hash::new(b"change-ok"));
     ProposeOracleChange {
@@ -3563,10 +3493,7 @@ fn oracle_change_deadline_rolls_back() {
     let (provider, _) = iroha_test_samples::gen_account_in("validators");
     let feed_id: FeedId = "change_deadline_feed".parse().expect("feed id");
     let world = world_with_providers(std::slice::from_ref(&provider));
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let telemetry = test_telemetry();
-    let mut state = State::with_telemetry(world, kura, query, telemetry);
+    let mut state = oracle_state(world);
     let mut cfg = oracle_config();
     cfg.governance.intake_sla_blocks = 1;
     cfg.governance.rules_sla_blocks = 1;
@@ -3575,8 +3502,8 @@ fn oracle_change_deadline_rolls_back() {
     cfg.governance.policy_jury_sla_blocks = 1;
     cfg.governance.enact_sla_blocks = 1;
     state.set_oracle(cfg);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     let change_id = OracleChangeId(Hash::new(b"change-deadline"));
     ProposeOracleChange {
         change_id,
@@ -3590,7 +3517,7 @@ fn oracle_change_deadline_rolls_back() {
     stx.apply();
     sb.commit_world_overlay_for_testing()
         .expect("commit proposal block");
-    let sb2 = state.block(header(3));
+    let sb2 = state.block(header(&state, 3));
     sb2.commit_world_overlay_for_testing()
         .expect("commit sweep block");
     let view = state.view();
@@ -3670,8 +3597,8 @@ fn record_twitter_binding_updates_registry_and_index() {
         b"user-123",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 1_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     RegisterOracleFeed {
         feed: feed_config.clone(),
     }
@@ -3733,8 +3660,8 @@ fn record_twitter_binding_rejects_wrong_feed_pepper_missing_history_and_missing_
         b"user-negative",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: feed_config.clone(),
@@ -3808,8 +3735,8 @@ fn record_twitter_binding_rejects_missing_registered_feed_before_binding_lookup(
         b"user-missing-twitter-feed",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 1_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     assert_rejects_with(
         execute_boxed(
             RecordTwitterBinding {
@@ -3849,12 +3776,7 @@ fn record_twitter_binding_requires_management_permission_before_history_checks()
         [],
     );
     grant_oracle_operator_permissions(&mut world, &provider);
-    let mut state = State::with_telemetry(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-        test_telemetry(),
-    );
+    let mut state = oracle_state(world);
     state.set_oracle(oracle_config());
     let feed_id: FeedId = TWITTER_FOLLOW_FEED_ID.parse().expect("feed id");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-permission-negative"));
@@ -3870,8 +3792,8 @@ fn record_twitter_binding_requires_management_permission_before_history_checks()
         b"user-permission-negative",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 1_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed { feed: feed_config },
         &provider,
@@ -3919,8 +3841,8 @@ fn record_twitter_binding_rejects_attestation_value_not_anchored_to_history() {
         b"user-history-mismatch",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 1_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: feed_config.clone(),

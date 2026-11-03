@@ -1,5 +1,4 @@
 //! Configuration reader API.
-use drop_bomb::DropBomb;
 use error_stack::{Report, ResultExt};
 use norito::json::JsonDeserializeOwned;
 use std::{
@@ -16,7 +15,7 @@ use crate::{
     attach::{MissingParameter, UnknownParameter},
     env::{FromEnvStr, ReadEnv},
     toml::{self, TomlSource},
-    util::Emitter,
+    util::{DropBomb, Emitter},
 };
 /// Maximum number of `extends` edges plus the root source in one traversal.
 ///

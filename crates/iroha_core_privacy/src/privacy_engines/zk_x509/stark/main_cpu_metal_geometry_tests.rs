@@ -145,6 +145,14 @@ impl GeometrySample {
 
 #[test]
 #[ignore = "isolated complete native/fixed/quotient CPU versus Metal geometry A/B"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "reported timing means and ratios tolerate binary64 rounding"
+)]
 fn public_geometry_cpu_and_metal_cost_preserves_full_outputs_and_original_admission() {
     const ROUNDS: usize = 6;
     assert!(!cfg!(debug_assertions), "use an optimized build");

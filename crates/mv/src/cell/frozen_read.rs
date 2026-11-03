@@ -6,7 +6,7 @@
 
 use super::*;
 
-impl<V: Value, A, C: Send + Sync + 'static> Detached<V, A, C> {
+impl<V: CellValue, A, C: Send + Sync + 'static> Detached<V, A, C> {
     /// Borrow the exact original undo image without acquiring a current reader.
     /// For optional values, absent undo and an original `None` remain distinct.
     /// This grants no execution or publication authority.

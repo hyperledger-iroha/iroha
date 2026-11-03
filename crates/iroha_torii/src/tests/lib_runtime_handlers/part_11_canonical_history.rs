@@ -1,4 +1,4 @@
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 
 #[tokio::test]
 async fn ledger_headers_reports_missing_canonical_body() {

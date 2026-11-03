@@ -30,6 +30,9 @@ CONTROLLED_ENV_VARS = (
     "CARGO_ENCODED_RUSTFLAGS",
     "CARGO_FAST_TARGET_ROOT",
     "CARGO_FAST_TIMINGS",
+    "CARGO_FAST_PARALLEL_FRONTEND_THREADS",
+    "CARGO_FAST_INNER_RUSTC_WRAPPER",
+    "RUSTC_BOOTSTRAP",
     "CARGO_FAST_TEST_WORKSPACE_MANIFEST",
     "CARGO_INCREMENTAL",
     "CARGO_PROFILE_BENCH_BUILD_OVERRIDE_CODEGEN_UNITS",
@@ -65,7 +68,13 @@ def hermetic_wrapper_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     checkout = tmp_path / "checkout"
     scripts = checkout / "scripts"
     scripts.mkdir(parents=True)
-    for name in ("cargo_fast.sh", "check_cargo_target_owner.py", "cargo_zigbuild_linux.sh", "zig_linux_gnu.py"):
+    for name in (
+        "cargo_fast.sh",
+        "check_cargo_target_owner.py",
+        "cargo_zigbuild_linux.sh",
+        "zig_linux_gnu.py",
+        "rustc_parallel_frontend.sh",
+    ):
         shutil.copy2(REPO_ROOT / "scripts" / name, scripts / name)
     (checkout / "Cargo.toml").write_text("[workspace]\nmembers = []\n", encoding="utf-8")
     monkeypatch.setattr(sys.modules[__name__], "REPO_ROOT", checkout)
@@ -1227,3 +1236,136 @@ def test_gnu_wrapper_accepts_only_its_explicit_command_and_target(tmp_path: Path
     )
     assert result.returncode != 0
     assert not captured
+
+
+def test_parallel_frontend_selects_the_crate_wrapper(tmp_path: Path) -> None:
+    result, environment, arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--parallel-frontend", "8", "--", "check", "-p", "iroha_core",
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == str(SCRIPT.with_name("rustc_parallel_frontend.sh"))
+    assert environment["CARGO_FAST_PARALLEL_FRONTEND_THREADS"] == "8"
+    assert environment["CARGO_FAST_INNER_RUSTC_WRAPPER"] == ""
+    # The unstable-feature switch is scoped to selected rustc processes only.
+    assert "RUSTC_BOOTSTRAP" not in environment
+    assert arguments == ["check", "-p", "iroha_core"]
+    assert "parallel-frontend=8 threads" in result.stdout
+
+
+@pytest.mark.parametrize("variable", ("RUSTC_WRAPPER", "CARGO_BUILD_RUSTC_WRAPPER"))
+def test_parallel_frontend_chains_an_existing_wrapper(tmp_path: Path, variable: str) -> None:
+    result, environment, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--parallel-frontend", "4", "--", "check",
+        extra_env={variable: "/fixed/instrument-rustc"},
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["RUSTC_WRAPPER"] == str(SCRIPT.with_name("rustc_parallel_frontend.sh"))
+    assert environment["CARGO_FAST_INNER_RUSTC_WRAPPER"] == "/fixed/instrument-rustc"
+
+
+@pytest.mark.parametrize("profile", (
+    ("--release",),
+    ("-r",),
+    ("--profile", "release"),
+    ("--profile", "deploy"),
+    ("--profile=apple-release",),
+))
+def test_parallel_frontend_refuses_release_profiles(tmp_path: Path, profile: tuple[str, ...]) -> None:
+    result, captured, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--parallel-frontend", "8", "--", "build", *profile, "-p", "irohad",
+    )
+    assert result.returncode != 0
+    assert "--parallel-frontend is for local builds" in result.stderr
+    assert not captured
+
+
+def test_parallel_frontend_allows_local_profiles_and_harness_arguments(tmp_path: Path) -> None:
+    result, environment, arguments = _run_wrapper(
+        tmp_path, "--no-sccache", "--parallel-frontend", "8",
+        "--", "test", "--profile", "local-release", "-p", "norito", "--", "--release",
+    )
+    assert result.returncode == 0, result.stderr
+    assert environment["CARGO_FAST_PARALLEL_FRONTEND_THREADS"] == "8"
+    assert arguments == ["test", "--profile", "local-release", "-p", "norito", "--", "--release"]
+
+
+@pytest.mark.parametrize("threads", ("1", "0", "x8", "8x", ""))
+def test_parallel_frontend_requires_a_thread_count(tmp_path: Path, threads: str) -> None:
+    result, captured, _ = _run_wrapper(
+        tmp_path, "--no-sccache", "--parallel-frontend", threads, "--", "check",
+    )
+    assert result.returncode != 0
+    assert "thread count of at least 2" in result.stderr
+    assert not captured
+
+
+def _run_frontend_wrapper(tmp_path: Path, *rustc_args: str, extra_env: dict[str, str] | None = None) -> str:
+    fake_rustc = tmp_path / "fake-rustc"
+    _write_executable(
+        fake_rustc,
+        """
+        #!/bin/sh
+        printf 'bootstrap=%s\\n' "${RUSTC_BOOTSTRAP:-unset}"
+        printf 'arg=%s\\n' "$@"
+        """,
+    )
+    environment = {name: value for name, value in os.environ.items() if name not in CONTROLLED_ENV_VARS}
+    environment["CARGO_FAST_PARALLEL_FRONTEND_THREADS"] = "6"
+    environment.update(extra_env or {})
+    result = subprocess.run(
+        ["/bin/bash", str(SCRIPT.with_name("rustc_parallel_frontend.sh")), str(fake_rustc), *rustc_args],
+        cwd=REPO_ROOT,
+        env=environment,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout
+
+
+@pytest.mark.parametrize("root", ("crates/iroha_core/src/lib.rs", "{repo}/crates/norito/src/lib.rs"))
+def test_frontend_wrapper_parallelizes_repository_crates(tmp_path: Path, root: str) -> None:
+    output = _run_frontend_wrapper(
+        tmp_path, "--crate-name", "demo", "--edition=2024", root.format(repo=REPO_ROOT), "--emit=metadata",
+    )
+    assert "bootstrap=1" in output.splitlines()
+    assert output.splitlines()[-1] == "arg=-Zthreads=6"
+
+
+@pytest.mark.parametrize("arguments", (
+    ("--crate-name", "syn", "/registry/src/syn-2/src/lib.rs"),
+    ("--crate-name", "concread", "vendor/concread/src/lib.rs"),
+    ("-", "--crate-name", "___", "--print=cfg"),
+    ("-vV",),
+))
+def test_frontend_wrapper_leaves_other_invocations_unchanged(tmp_path: Path, arguments: tuple[str, ...]) -> None:
+    output = _run_frontend_wrapper(tmp_path, *arguments)
+    lines = output.splitlines()
+    assert lines[0] == "bootstrap=unset"
+    assert lines[1:] == ["arg=" + argument for argument in arguments]
+
+
+def test_frontend_wrapper_chains_the_inner_wrapper(tmp_path: Path) -> None:
+    inner = tmp_path / "inner-wrapper"
+    _write_executable(inner, "#!/bin/sh\necho inner\nexec \"$@\"\n")
+    output = _run_frontend_wrapper(
+        tmp_path, "--crate-name", "demo", "crates/demo/src/lib.rs",
+        extra_env={"CARGO_FAST_INNER_RUSTC_WRAPPER": str(inner)},
+    )
+    lines = output.splitlines()
+    assert lines[0] == "inner"
+    assert lines[1] == "bootstrap=1"
+    assert lines[-1] == "arg=-Zthreads=6"
+
+
+def test_frontend_wrapper_stays_compatible_with_stock_macos_bash() -> None:
+    wrapper = SCRIPT.with_name("rustc_parallel_frontend.sh")
+    result = subprocess.run(["/bin/bash", "-n", str(wrapper)], check=False, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    source = wrapper.read_text(encoding="utf-8")
+    for pattern in (
+        re.compile(r"\bdeclare\s+-A\b"),
+        re.compile(r"\blocal\s+-n\b"),
+        re.compile(r"\b(?:mapfile|readarray)\b"),
+    ):
+        assert pattern.search(source) is None, pattern.pattern

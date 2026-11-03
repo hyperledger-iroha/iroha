@@ -1572,7 +1572,8 @@ struct StorageLock {
 }
 impl StorageLock {
     fn revalidate(&self) -> io::Result<()> {
-        self.directory.require_same_lock(STORAGE_LOCK_FILE_NAME, &self.original)
+        self.directory
+            .require_same_lock(STORAGE_LOCK_FILE_NAME, &self.original)
     }
 }
 fn acquire_storage_lock(root_dir: &Path) -> Result<StorageLock, StorageError> {
@@ -1759,7 +1760,9 @@ fn remove_transaction_contents(directory: &OwnerDirectory) -> io::Result<()> {
     directory.visit_entries(|name| {
         let metadata = FileMetadata::symlink_metadata(directory.path().join(name))?;
         if metadata.file_type().is_symlink() {
-            return Err(io::Error::other("transaction cleanup refuses symbolic links"));
+            return Err(io::Error::other(
+                "transaction cleanup refuses symbolic links",
+            ));
         }
         if metadata.is_dir() {
             let child = directory.open_child(name)?;
@@ -1771,7 +1774,9 @@ fn remove_transaction_contents(directory: &OwnerDirectory) -> io::Result<()> {
         } else if metadata.is_file() {
             directory.remove_regular(name).map(drop)
         } else {
-            Err(io::Error::other("transaction cleanup refuses nonregular entries"))
+            Err(io::Error::other(
+                "transaction cleanup refuses nonregular entries",
+            ))
         }
     })
 }
@@ -8056,12 +8061,7 @@ mod tests {
         let leftovers = fs::read_dir(target.parent().expect("target parent"))
             .expect("read target parent")
             .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".iroha-")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".iroha-"))
             .collect::<Vec<_>>();
         assert!(leftovers.is_empty(), "temporary file must not remain");
     }
@@ -8476,12 +8476,7 @@ mod tests {
         let leftovers = fs::read_dir(temp_path)
             .expect("read temp dir")
             .filter_map(Result::ok)
-            .filter(|entry| {
-                entry
-                    .file_name()
-                    .to_string_lossy()
-                    .starts_with(".iroha-")
-            })
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with(".iroha-"))
             .collect::<Vec<_>>();
         assert!(
             leftovers.is_empty(),

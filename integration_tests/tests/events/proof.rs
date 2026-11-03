@@ -1,5 +1,4 @@
 //! Integration tests for ZK proof events over the Torii event stream.
-use assert_matches::assert_matches;
 use eyre::{Result, eyre};
 use futures_util::StreamExt;
 use integration_tests::sandbox;
@@ -105,14 +104,20 @@ async fn verify_proof_emits_event(
         })
         .await??;
         if expect_verified {
-            assert_matches!(
-                proof_event,
-                iroha::data_model::events::data::proof::ProofEvent::Verified(_)
+            assert!(
+                matches!(
+                    proof_event,
+                    iroha::data_model::events::data::proof::ProofEvent::Verified(_)
+                ),
+                "expected a verified proof event, got {proof_event:?}"
             );
         } else {
-            assert_matches!(
-                proof_event,
-                iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
+            assert!(
+                matches!(
+                    proof_event,
+                    iroha::data_model::events::data::proof::ProofEvent::Rejected(_)
+                ),
+                "expected a rejected proof event, got {proof_event:?}"
             );
         }
         Ok(())

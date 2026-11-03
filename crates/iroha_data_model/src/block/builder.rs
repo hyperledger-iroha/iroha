@@ -217,7 +217,7 @@ mod tests {
     };
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair, Signature};
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     fn checked_random_keypair_with_algorithm(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm)
             .expect("generate checked block-builder fixture keypair")

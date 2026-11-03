@@ -287,6 +287,10 @@ fn native_exact_cpu_path_and_word_injection_keep_original_inverse_and_validation
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "isolated native19 actual Metal transaction/word adapter allocation-and-clear A/B"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn native19_transactional_metal_preserves_all_fields_and_reports_complete_costs() {
     use crate::privacy_engines::zk_x509::prover_observation::ObservationV1;
     use std::time::{Duration, Instant};

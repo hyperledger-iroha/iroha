@@ -18,9 +18,9 @@ use iroha_data_model::{
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::{error::InstructionExecutionError, governance::CastZkBallot},
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 
 #[test]
 fn zk_ballot_rejects_when_vk_not_active() {

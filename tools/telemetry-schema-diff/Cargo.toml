@@ -23,7 +23,7 @@ required-features = ["dev-tools"]
 
 [dependencies]
 anyhow = "1.0.100"
-chrono = { version = "0.4.38", default-features = false, features = ["clock", "std"] }
+time = { workspace = true }
 clap = { version = "4.5.20", features = ["derive"] }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 

@@ -261,7 +261,7 @@ mod tests {
         },
     };
     use iroha_data_model::Level;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     #[test]
     #[allow(clippy::too_many_lines)]
     fn snapshot_serialized_form() {

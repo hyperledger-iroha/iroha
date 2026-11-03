@@ -277,6 +277,11 @@ impl ReleaseNotification {
         ErasedShared::ptr_eq(&self.state, &batch.notification.state)
     }
 
+    /// Whether `wait` observes this exact notification source.
+    pub(crate) fn observed_by(&self, wait: &ReleaseWait) -> bool {
+        ErasedShared::ptr_eq(&self.state, &wait.state)
+    }
+
     /// Bind a physical guard to notification after its actual release.
     /// Read guards and locks without poisoning use this form: their unwind does
     /// not turn later ordinary contention into a poisoned-writer failure.

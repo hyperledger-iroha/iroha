@@ -153,10 +153,10 @@ test("shared Parliament fixture pins routes, all transition inventories, and cer
 test("initial sortition draft accepts only the enclosing attempt binding", () => {
   const transition = { transition: "RegisterInitialSortition" };
   assert.deepEqual(PARLIAMENT_PUBLIC_TRANSITIONS_V1[12], {
-    noritoIndex: 12,
+    noritoIndex: 21,
     jsonTag: "RegisterInitialSortition",
     jsonPayloadRequired: false,
-    eventKindIndex: 15,
+    eventKindIndex: 24,
   });
   assert.deepEqual(
     buildParliamentTransitionDraftRequestV1(ATTEMPT_ID, transition),
@@ -201,6 +201,26 @@ test("initial sortition declarations expose an intent without caller payload fie
       "--module", "NodeNext", "--moduleResolution", "NodeNext",
       "--target", "ES2022", "--types", "node",
       "./test/fixtures/typescript/parliamentInitialSortition.types.ts",
+    ],
+    { cwd: packageRoot, encoding: "utf8" },
+  );
+  assert.equal(
+    result.status,
+    0,
+    [result.stdout, result.stderr].filter(Boolean).join("\n"),
+  );
+});
+
+test("automatic outcome declarations keep Core's event-kind indices", () => {
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+  const result = spawnSync(
+    process.execPath,
+    [
+      "./node_modules/typescript/bin/tsc",
+      "--noEmit", "--strict", "--skipLibCheck",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext",
+      "--target", "ES2022", "--types", "node",
+      "./test/fixtures/typescript/parliamentAutomaticOutcomes.types.ts",
     ],
     { cwd: packageRoot, encoding: "utf8" },
   );

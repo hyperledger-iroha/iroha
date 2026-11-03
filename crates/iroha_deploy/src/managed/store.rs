@@ -2,6 +2,7 @@
 
 use super::*;
 use iroha_fs::{PrivateDirectory, PublishMode};
+pub(super) use iroha_managed_ipc::random_token;
 use std::{
     fs::{self, File},
     io::{Read as _, Seek as _, SeekFrom},
@@ -630,7 +631,7 @@ impl ManagedStore {
                     request.startup_timeout,
                 );
                 return match cleanup {
-                    Ok(_) => Err(error),
+                    Ok(_) => Err(error.into()),
                     Err(cleanup) => Err(Error::Invalid(format!(
                         "listener handoff failed: {error}; startup cleanup is unconfirmed: {cleanup}"
                     ))),
@@ -1194,10 +1195,6 @@ fn discard_generation(directory: &PrivateDirectory) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn random_token() -> String {
-    hex::encode(rand::random::<[u8; 32]>())
-}
-
 pub(super) fn acquire(directory: &PrivateDirectory, file: &str, name: &str) -> Result<File> {
     let lock = directory.open_ownership_lock(file).map_err(|error| {
         if ownership_contended(&error) {
@@ -1484,8 +1481,9 @@ fn exchange_optional(
     );
     match observed {
         Ok(status) => Ok(Some(status)),
-        Err(transport::RequestFailure::Refused(error)) => Err(error),
+        Err(transport::RequestFailure::Refused(error)) => Err(error.into()),
         Err(transport::RequestFailure::Unavailable(error)) => {
+            let error = Error::from(error);
             let _runtime = match acquire(directory, "runtime.lock", &context.name) {
                 Ok(runtime) => runtime,
                 Err(Error::Busy(_)) => return Err(error),

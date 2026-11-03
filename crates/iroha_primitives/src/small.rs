@@ -933,10 +933,8 @@ mod small_vector {
         A::Item: SerializePayload,
     {
         fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-            use ncore::WriteBytesExt;
-            writer.write_u64::<ncore::LittleEndian>(
-                u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?,
-            )?;
+            let count = u64::try_from(self.0.len()).map_err(|_| ncore::Error::LengthMismatch)?;
+            writer.write_all(&count.to_le_bytes())?;
             for item in &self.0 {
                 ncore::write_fixed_len_prefixed(writer, item)?;
             }

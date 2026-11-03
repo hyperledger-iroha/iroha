@@ -205,19 +205,6 @@ fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
     raw.parse::<i32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
-#[cfg(test)]
-fn parse_decimal_arg(flag: &str, raw: &str, ctx: &str) -> Result<rust_decimal::Decimal, String> {
-    require_canonical_decimal_token(flag, raw, ctx)?;
-    let value = raw
-        .parse::<rust_decimal::Decimal>()
-        .map_err(|err| format!("failed to parse `{flag}` for `{ctx}`: {err}"))?;
-    if value.to_string() != raw {
-        return Err(format!(
-            "failed to parse `{flag}` for `{ctx}`: value must be a canonical decimal"
-        ));
-    }
-    Ok(value)
-}
 fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     let digits = raw.as_bytes();
     if digits.is_empty()
@@ -245,38 +232,6 @@ fn require_canonical_signed_decimal(flag: &str, raw: &str, context: &str) -> Res
     {
         return Err(format!(
             "failed to parse `{flag}` for `{context}`: value must be a canonical signed decimal integer"
-        ));
-    }
-    Ok(())
-}
-#[cfg(test)]
-fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
-    if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
-        return Err(format!(
-            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
-        ));
-    }
-    let body = raw.strip_prefix('-').unwrap_or(raw);
-    let (integer, fractional) = match body.split_once('.') {
-        Some((integer, fractional)) => {
-            if body.matches('.').count() != 1 || fractional.is_empty() || fractional.ends_with('0')
-            {
-                return Err(format!(
-                    "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
-                ));
-            }
-            (integer, Some(fractional))
-        }
-        None => (body, None),
-    };
-    if integer.is_empty()
-        || !integer.as_bytes().iter().all(u8::is_ascii_digit)
-        || (integer.len() > 1 && integer.as_bytes()[0] == b'0')
-        || fractional.is_some_and(|digits| !digits.as_bytes().iter().all(u8::is_ascii_digit))
-        || (raw.starts_with('-') && integer == "0" && fractional.is_none())
-    {
-        return Err(format!(
-            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
         ));
     }
     Ok(())
@@ -3011,7 +2966,7 @@ fn usage() -> String {
   sorafs_cli storage prepare --manifest=PATH --payload=PATH --payload-out=PATH --files-out=PATH [--summary-out=PATH]
   sorafs_cli fetch --plan=PATH --manifest-id=HEX [--chunker-handle=HANDLE] [--manifest-envelope=BASE64] [--manifest-report=PATH|-] [--manifest-cid=HEX] [--client-id=ID] [--telemetry-region=REGION] [--rollout-phase=canary|ramp|default] [--transport-policy=soranet-first|soranet-strict|direct-only] [--transport-policy-override=soranet-first|soranet-strict|direct-only] [--anonymity-policy=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--anonymity-policy-override=anon-guard-pq|anon-majority-pq|anon-strict-pq] [--write-mode=read-only|upload-pq-only] [--scoreboard-out=PATH] [--scoreboard-now=UNIX_SECS] [--telemetry-source-label=LABEL] [--profile=warm|cold] [--orchestrator-config=PATH] [--output=PATH] [--json-out=PATH] [--local-proxy-mode=bridge|metadata-only] [--local-proxy-norito-spool=PATH] [--max-peers=N] [--retry-budget=N] [--expected-cache-version=VERSION] --provider name=ALIAS,provider-id=HEX,gateway-key=HEX,base-url=URL,stream-token=BASE64 [...]
   sorafs_cli proof stream --manifest=PATH (--torii-url=HTTPS_ORIGIN | --gateway-url=HTTPS_URL) --provider-id-hex=HEX32 --bearer-token-env=VAR [--proof-kind=por|pdp|potr] [--challenge-id-hex=HEX32] [--samples=N] [--sample-seed=SEED] [--deadline-ms=N] [--tier=hot|warm|archive] [--nonce-b64=BASE64] [--orchestrator-job-id-hex=HEX16] [--summary-out=PATH] [--governance-evidence-dir=DIR] [--emit-events=true|false]
-  sorafs_cli proof verify --manifest=PATH --car=PATH [--chunk-plan=PATH] [--summary-out=PATH]
+  sorafs_cli proof verify --manifest=PATH --car=PATH [--payload=PATH] [--chunk-plan=PATH] [--summary-out=PATH]
   sorafs_cli pdp enqueue|next|submit|status|export --torii-url=HTTPS_ORIGIN --network-id=NETWORK_ID --operator-private-key-file=PATH [operation options; run `sorafs_cli pdp` for details]
   sorafs_cli reputation snapshot --torii-url=URL --network-id=NETWORK_ID --auth-account=I105 --auth-private-key-file=PATH [--output=PATH] [--summary-out=PATH]
   sorafs_cli reputation fetch --torii-url=URL --network-id=NETWORK_ID --provider-id=ID --auth-account=I105 --auth-private-key-file=PATH [--format=table|json] [--summary-out=PATH]
@@ -11684,16 +11639,18 @@ mod manifest_tests {
         fs::write(&target, b"manifest").expect("write target");
         std::os::unix::fs::symlink(&target, &linked).expect("create symlink");
         assert_eq!(
-            read_file_bounded(&target, 1024, "test input").expect("regular input"),
-            b"manifest"
+            read_file_bounded(&target, 1024, "test input").expect("read regular original"),
+            b"manifest",
         );
-        // Retained no-follow custody refuses the link itself, before any byte is read.
         let error = read_file_bounded(&linked, 1024, "test input")
             .expect_err("symlink input must be rejected");
+        // The retained owner refuses before any read. Native no-follow opens
+        // may report ELOOP rather than a platform-independent symlink message.
         assert!(
-            error.starts_with("failed to retain test input"),
+            error.starts_with("failed to retain test input "),
             "unexpected error: {error}"
         );
+        assert_eq!(fs::read(target).expect("unchanged original"), b"manifest");
     }
     #[test]
     fn proxy_set_mode_updates_config_file() {
@@ -14489,6 +14446,22 @@ fn load_prepared_storage_payload(
     input: &Path,
     manifest: &ManifestV1,
 ) -> Result<PreparedStoragePayload, String> {
+    let (plan, payload, kind) = load_prepared_storage_plan(input, manifest)?;
+    let files = (kind == "directory").then(|| {
+        plan.files
+            .iter()
+            .map(|file| StorageFileEntryOwned {
+                path: file.path.clone(),
+                size: file.size,
+            })
+            .collect()
+    });
+    Ok((payload, files, kind))
+}
+fn load_prepared_storage_plan(
+    input: &Path,
+    manifest: &ManifestV1,
+) -> Result<(CarBuildPlan, Vec<u8>, &'static str), String> {
     if manifest.content_length > PREPARED_STORAGE_MAX_PAYLOAD_BYTES {
         return Err(format!(
             "manifest payload exceeds the bounded preparation limit ({PREPARED_STORAGE_MAX_PAYLOAD_BYTES} bytes)"
@@ -14501,22 +14474,14 @@ fn load_prepared_storage_payload(
         let (plan, payload) = CarBuildPlan::from_directory_with_profile(input, profile)
             .map_err(|err| format!("failed to build directory payload plan: {err}"))?;
         validate_prepared_storage_payload(manifest, &plan, &payload)?;
-        let files = plan
-            .files
-            .iter()
-            .map(|file| StorageFileEntryOwned {
-                path: file.path.clone(),
-                size: file.size,
-            })
-            .collect();
-        return Ok((payload, Some(files), "directory"));
+        return Ok((plan, payload, "directory"));
     }
     if metadata.is_file() {
         let payload = read_file_bounded(input, manifest.content_length, "payload")?;
         let plan = CarBuildPlan::single_file_with_profile(&payload, profile)
             .map_err(|err| format!("failed to build file payload plan: {err}"))?;
         validate_prepared_storage_payload(manifest, &plan, &payload)?;
-        return Ok((payload, None, "file"));
+        return Ok((plan, payload, "file"));
     }
     Err("payload input must be a file or directory".to_string())
 }
@@ -14694,6 +14659,7 @@ fn manifest_proposal(raw_args: Vec<String>) -> Result<(), String> {
 fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let mut manifest_path: Option<PathBuf> = None;
     let mut car_path: Option<PathBuf> = None;
+    let mut payload_path: Option<PathBuf> = None;
     let mut chunk_plan_source: Option<JsonSource> = None;
     let mut chunk_plan_label: Option<String> = None;
     let mut summary_out: Option<PathBuf> = None;
@@ -14704,6 +14670,7 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
         match key {
             "--manifest" => manifest_path = Some(PathBuf::from(value)),
             "--car" => car_path = Some(PathBuf::from(value)),
+            "--payload" => payload_path = Some(PathBuf::from(value)),
             "--chunk-plan" => {
                 chunk_plan_source = Some(JsonSource::from_arg(value)?);
                 chunk_plan_label = Some(value.to_string());
@@ -14721,26 +14688,41 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     })?;
     let car_path = car_path
         .ok_or_else(|| "missing required `--car=PATH` for `sorafs_cli proof verify`".to_string())?;
-    let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
-        format!(
-            "failed to read manifest `{}`: {err}",
-            manifest_path.display()
-        )
-    })?;
-    let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes)
-        .map_err(|err| format!("failed to decode manifest: {err}"))?;
+    let manifest_bytes = read_file_bounded(
+        &manifest_path,
+        MAX_MANIFEST_ENCODED_BYTES as u64,
+        "manifest",
+    )?;
+    let manifest = decode_manifest_v1_canonical(&manifest_bytes)
+        .map_err(|err| format!("failed to decode exact canonical manifest: {err}"))?;
     let manifest_digest = manifest
         .digest()
         .map_err(|err| format!("failed to compute manifest digest: {err}"))?;
-    let car_bytes = fs::read(&car_path)
-        .map_err(|err| format!("failed to read CAR archive `{}`: {err}", car_path.display()))?;
-    let resolved_plan = if let Some(source) = chunk_plan_source {
+    let car_bytes = read_file_bounded(&car_path, manifest.car_size, "CAR archive")?;
+    let mut resolved_plan = if let Some(source) = chunk_plan_source {
         let plan_json = source.read()?;
         let chunker_handle = chunker_handle_from_profile(&manifest.chunking).to_handle();
         Some(build_plan_from_specs(&plan_json, Some(&chunker_handle))?)
     } else {
         None
     };
+    if let Some(path) = payload_path.as_ref() {
+        // Fetch envelopes bind chunks and complete payload bytes, but do not
+        // contain file paths. Reuse native bounded source acquisition to retain
+        // the full layout, then bind its paths, PoR and exact CAR to the manifest.
+        let (plan, _payload, _) = load_prepared_storage_plan(path, &manifest)?;
+        if let Some(supplied) = resolved_plan.as_ref()
+            && (supplied.plan.payload_digest != plan.payload_digest
+                || supplied.plan.content_length != plan.content_length
+                || supplied.plan.chunks != plan.chunks)
+        {
+            return Err("chunk plan does not match the authenticated source payload".to_owned());
+        }
+        resolved_plan = Some(PlanWithHandle {
+            plan,
+            chunker_handle: chunker_handle_from_profile(&manifest.chunking).to_handle(),
+        });
+    }
     let report = if let Some(plan_with_handle) = resolved_plan.as_ref() {
         CarVerifier::verify_full_car_with_plan(&manifest, &plan_with_handle.plan, &car_bytes)
     } else {
@@ -14755,6 +14737,9 @@ fn proof_verify(raw_args: Vec<String>) -> Result<(), String> {
     let mut summary = Map::new();
     insert_value!(summary["manifest_path"] = manifest_path.display().to_string());
     insert_value!(summary["car_path"] = car_path.display().to_string());
+    if let Some(path) = payload_path {
+        insert_value!(summary["payload_path"] = path.display().to_string());
+    }
     insert_value!(summary["chunk_count"] = report.chunk_store.chunks().len() as u64);
     if let Some(label) = chunk_plan_label {
         insert_value!(summary["chunk_plan_source"] = label);

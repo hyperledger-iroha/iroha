@@ -123,7 +123,7 @@
       "kind": "contains",
       "needles": [
         "let integer = SecretU256V1(value.retrieve())",
-        "SecretEncodedScalarV1(SecretCopyValueV1::new("
+        "integer.encode_le_v1()"
       ],
       "counts": []
     },
@@ -149,7 +149,7 @@
         "let y = SecretCopyValueV1::new(",
         "let integer = SecretU256V1(x.as_ref().retrieve())",
         "let y_integer = SecretU256V1(y.as_ref().retrieve())",
-        "let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes())",
+        "let y_bytes = y_integer.encode_le_v1()",
         "encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7",
         "Some(encoded)"
       ],
@@ -166,9 +166,9 @@
         "let x = SecretCopyValueV1::new(",
         "let y = SecretCopyValueV1::new(",
         "let integer = SecretU256V1(x.as_ref().retrieve())",
-        "SecretEncodedScalarV1(SecretCopyValueV1::new(integer.0.to_le_bytes()))",
+        "let mut encoded = integer.encode_le_v1()",
         "let y_integer = SecretU256V1(y.as_ref().retrieve())",
-        "let y_bytes = SecretCopyValueV1::new(y_integer.0.to_le_bytes())",
+        "let y_bytes = y_integer.encode_le_v1()",
         "encoded.as_mut()[31] |= (y_bytes.as_ref()[0] & 1) << 7",
         "drop(inverse);",
         "drop(point);",

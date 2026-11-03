@@ -17,9 +17,7 @@ use iroha_config::{
 };
 use iroha_core::{
     kiso::KisoHandle,
-    kura::Kura,
     prelude::World,
-    query::store::LiveQueryStore,
     queue::Queue as CoreQueue,
     smartcontracts::Execute,
     state::{State, StateReadOnly, WorldReadOnly},
@@ -1613,7 +1611,7 @@ struct ToriiHarness {
     #[allow(dead_code)]
     kiso_child: Child,
     state: Arc<State>,
-    native_history: Option<Mutex<Option<PinReadbackHistory>>>,
+    native_history: Mutex<Option<PinReadbackHistory>>,
     queue: Arc<CoreQueue>,
     network_id: NetworkId,
     alias_policy: actual_cfg::SorafsAliasCachePolicy,
@@ -2064,26 +2062,27 @@ fn discovery_compliance_fixture_persists_signed_promoted_catalog() {
 }
 
 fn build_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
-    build_torii_harness_with_history(cfg, None)
+    let harness = build_certified_torii_harness(cfg);
+    // Listener authority comes from the applied signed genesis.
+    commit_pin_readback_fixture(&harness);
+    harness
 }
 
 fn build_certified_torii_harness(cfg: &actual_cfg::Root) -> ToriiHarness {
     let mut config = TestChainConfig::new(World::default(), 1_000);
     config.chain_id = cfg.common.chain.clone();
     let original = CertifiedTestChain::prepare(config).expect("original discovery genesis");
-    build_torii_harness_with_history(cfg, Some(original))
+    build_torii_harness_with_history(cfg, original)
 }
 
 fn build_torii_harness_with_history(
     cfg: &actual_cfg::Root,
-    original: Option<PreparedTestChainConfig>,
+    original: PreparedTestChainConfig,
 ) -> ToriiHarness {
     let torii_data_dir = tempdir().expect("temporary Torii data directory");
     let mut cfg = cfg.clone();
-    if let Some(original) = &original {
-        cfg.genesis.expected_hash = original.genesis.expected_hash();
-        cfg.genesis.public_key = original.genesis.public_key().clone();
-    }
+    cfg.genesis.expected_hash = original.genesis.expected_hash();
+    cfg.genesis.public_key = original.genesis.public_key().clone();
     isolate_discovery_persistence(&mut cfg.torii, &torii_data_dir);
     let native_signers = cfg.torii.sorafs_storage.enabled.then(|| {
         let proof = Arc::new(DiscoveryNativeTransactionSigner::for_role(
@@ -2132,25 +2131,9 @@ fn build_torii_harness_with_history(
     let (kiso, kiso_child) = KisoHandle::start(cfg.clone());
     let chain_id = cfg.common.chain.clone();
     let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-    let (state, kura, native_history) = if let Some(original) = original {
-        (
-            Arc::clone(&original.state),
-            Arc::clone(&original.kura),
-            Some(Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(
-                original,
-            ))))),
-        )
-    } else {
-        let kura = Kura::blank_kura_for_testing();
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            World::default(),
-            Arc::clone(&kura),
-            LiveQueryStore::start_test(),
-            chain_id.clone(),
-            network_id,
-        ));
-        (state, kura, None)
-    };
+    let state = Arc::clone(&original.state);
+    let kura = Arc::clone(&original.kura);
+    let native_history = Mutex::new(Some(PinReadbackHistory::Prepared(Box::new(original))));
     let query = state.query_handle.clone();
     let queue_cfg = actual_cfg::Queue::default();
     let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
@@ -2793,7 +2776,8 @@ async fn sorafs_pin_register_queues_caller_signed_transaction_when_storage_off()
     assert!(!cfg.torii.sorafs_storage.enabled);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let submitted_hash = fixture.transaction.hash();
     let body = pin_register_json_body(&fixture.transaction);
@@ -2987,7 +2971,8 @@ async fn pin_register_json_fixture_roundtrips_through_the_public_http_route() {
     enable_storage_with_discovery_native_signers(&mut cfg);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let body = pin_register_json_body(&fixture.transaction);
     let envelope: json::Value = json::from_slice(&body).expect("versioned JSON object");
@@ -3113,7 +3098,8 @@ async fn sorafs_pin_register_route_accepts_caller_signed_transaction() {
     enable_storage_with_discovery_native_signers(&mut cfg);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let submitted_hash = fixture.transaction.hash();
     let body = pin_register_json_body(&fixture.transaction);
@@ -3177,7 +3163,8 @@ async fn sorafs_pin_register_route_accepts_versioned_norito_transaction() {
     enable_storage_with_discovery_native_signers(&mut cfg);
     let harness = build_torii_harness(&cfg);
     let fixture = manifest_request_fixture(harness.network_id, |_| {});
-    let mut next_height = 1;
+    // `build_torii_harness` has applied genesis at height one.
+    let mut next_height = 2;
     ensure_authority_registered(&harness, &fixture.authority, &mut next_height);
     let response = harness
         .app
@@ -3385,8 +3372,6 @@ async fn sorafs_pin_register_rejects_invalid_encoded_bodies() {
 fn commit_pin_readback_fixture(harness: &ToriiHarness) {
     let mut owner = harness
         .native_history
-        .as_ref()
-        .expect("certified query harness")
         .lock()
         .expect("native query history lock");
     let chain = match owner.take().expect("original native history") {

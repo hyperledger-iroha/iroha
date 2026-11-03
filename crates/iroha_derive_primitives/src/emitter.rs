@@ -1,5 +1,4 @@
 //! A wrapper type around [`manyhow::Emitter`] that provides a more ergonomic API.
-use drop_bomb::DropBomb;
 use manyhow::ToTokensError;
 use proc_macro2::TokenStream;
 /// A wrapper type around [`manyhow::Emitter`] that provides a more ergonomic API.
@@ -74,5 +73,66 @@ impl Default for Emitter {
 impl<E: ToTokensError + 'static> Extend<E> for Emitter {
     fn extend<T: IntoIterator<Item = E>>(&mut self, iter: T) {
         self.inner.extend(iter);
+    }
+}
+
+/// Guard that panics when dropped unless [`DropBomb::defuse`] was called.
+///
+/// The panic is skipped while the thread is already unwinding, so a failing
+/// macro never turns into an abort.
+#[must_use]
+struct DropBomb {
+    message: &'static str,
+    defused: bool,
+}
+
+impl DropBomb {
+    /// Arm a guard that panics with `message` if dropped undefused.
+    const fn new(message: &'static str) -> Self {
+        Self {
+            message,
+            defused: false,
+        }
+    }
+
+    /// Disarm the guard so dropping it is a no-op.
+    fn defuse(&mut self) {
+        self.defused = true;
+    }
+}
+
+impl Drop for DropBomb {
+    fn drop(&mut self) {
+        if !self.defused && !std::thread::panicking() {
+            panic!("{}", self.message);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[should_panic(expected = "Emitter dropped without consuming accumulated errors")]
+    fn unconsumed_emitter_panics_on_drop() {
+        drop(Emitter::new());
+    }
+
+    #[test]
+    fn defused_drop_bomb_drops_quietly() {
+        let mut bomb = DropBomb::new("unused");
+        bomb.defuse();
+        drop(bomb);
+    }
+
+    #[test]
+    fn drop_bomb_stays_quiet_while_unwinding() {
+        let result = std::panic::catch_unwind(|| {
+            let _bomb = DropBomb::new("second panic");
+            panic!("first panic");
+        });
+        let payload = result.expect_err("the first panic propagates");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"first panic"));
     }
 }

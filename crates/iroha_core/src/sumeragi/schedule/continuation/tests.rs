@@ -298,15 +298,31 @@ fn ordinary_continuation_requested_and_done_rollback_reuse_exact_graph_at_full_c
         norito::encode_canonical(&lease.get().schedule).unwrap(),
         pristine
     );
-    let completed = CompletedExecution::Retained(lease.complete(altered, None)).into_inputs();
+    let completed = CompletedExecution::Retained(lease.complete(altered, None));
     assert_eq!(pointers(completed.get()), physical);
     assert!(completed.belongs_to(&pool));
     assert!(
         original.prepare(&view, &header, None, expected).is_err(),
         "consumed output cannot reopen its original capture"
     );
-    drop(held);
     drop(completed);
+    assert_eq!(pool.reserved_bytes(), retained);
+    assert_eq!(
+        poll(&mut registration, &refusal),
+        Poll::Pending,
+        "extracted schedule rollback cannot refund its original graph"
+    );
+    original.prepare(&view, &header, None, expected).unwrap();
+    let returned = original
+        .lend(&view, &header, SumeragiRootScope::Global, &verified)
+        .unwrap();
+    assert_eq!(pointers(returned.get()), physical);
+    assert_eq!(
+        norito::encode_canonical(&returned.get().schedule).unwrap(),
+        pristine
+    );
+    drop(returned);
+    drop(held);
 }
 
 fn requested<'a>(block: &'a StateBlock<'_>) -> &'a NativeExecutionInputs {
@@ -402,7 +418,7 @@ fn ordinary_continuation_native_world_request_and_done_drop_return_original_cust
 }
 
 #[test]
-fn consumed_continuation_is_retired_before_abandoned_execution_reexecutes() {
+fn abandoned_completed_execution_returns_its_original_graph_for_reexecution() {
     let _retirement = crossbeam_epoch::pin();
     let chain = chain();
     let proposal = chain.proposal(Some(2_000), Vec::new());
@@ -431,18 +447,17 @@ fn consumed_continuation_is_retired_before_abandoned_execution_reexecutes() {
     };
     let mut original = SuccessorContextPreparation::default();
     prepare(&mut original).unwrap();
-    // A completed execution consumes the capture; a CT5 rollback then abandons that execution.
-    drop(execute(&original));
-    assert!(
-        matches!(
-            prepare(&mut original),
-            Err(ExecutionAttemptError::Deferred(_))
-        ),
-        "a consumed capture is never lent again"
-    );
-    original.retire_consumed_continuation();
+    let completed = execute(&original);
+    let backing = pointers(completed.get());
+    // A CT5 freshness rollback abandons the completed execution before publication.
+    drop(completed);
     prepare(&mut original).unwrap();
     let reexecuted = execute(&original);
+    assert_eq!(
+        pointers(reexecuted.get()),
+        backing,
+        "re-execution lends the same original graph"
+    );
     assert!(reexecuted.belongs_to(&chain.state().ivm_execution_budget()));
 }
 

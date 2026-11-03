@@ -46,3 +46,5 @@ mod gov_finalize_real_vk;
 mod manifest_signing_test_support;
 #[path = "../native_finality_proof.rs"]
 mod native_finality_proof;
+#[path = "../common/native_genesis.rs"]
+mod native_genesis;

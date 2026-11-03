@@ -81,7 +81,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "consensus": ("rand", "bls"),
         "ecc-batch": ("ed25519-dalek/batch",),
         "gost": (
-            "dep:once_cell",
             "dep:num-bigint",
             "dep:num-traits",
             "dep:streebog",
@@ -97,7 +96,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
             "dep:sm2",
             "dep:sm3",
             "dep:sm4",
-            "dep:rfc6979",
             "dep:sm4_gcm",
             "sm-neon",
         ),
@@ -312,7 +310,6 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
         "full": (
             "model-primitives",
             "dep:halo2curves",
-            "dep:once_cell",
             "dep:fastpq_isi",
             "dep:iroha_fhe",
             "dep:zeroize",
@@ -451,6 +448,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "dev-tools",
  "fastpq-gpu",
  "iroha-core-tests",
+ "kagemusha-simulator",
  "mutation-testing",
  "privacy-release-evidence",
  "profiling",
@@ -464,6 +462,7 @@ EXPLICIT_OPT_IN_FEATURES: dict[str, tuple[str, ...]] = {
  "zk-tests"),
     "iroha_core_zk": (
         "dev-tools",
+        "kagemusha-simulator",
         "test-utils",
         "zk-tests",
     ),

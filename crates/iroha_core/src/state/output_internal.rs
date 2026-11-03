@@ -3,7 +3,7 @@
 
 use super::*;
 use crate::smartcontracts::isi::triggers::{
-    TRIGGER_ENABLED_METADATA_KEY,
+    TRIGGER_ENABLED_METADATA_KEY, progress,
     set::{
         SetReadOnly,
         invocation_identity::{pipeline_trigger_use_v1, time_trigger_use_v1},
@@ -115,6 +115,39 @@ impl InternalInvocation {
         Ok(())
     }
 
+    // Output-limit rollback is also an attempted native invocation. Retain only
+    // its autonomous allowance debit, without introducing retry semantics.
+    fn consume_progress_attempt(
+        &self,
+        state: &mut StateBlock<'_>,
+        height: u64,
+    ) -> Result<(), String> {
+        if !matches!(self, Self::Time(_)) {
+            return Ok(());
+        }
+        self.authenticate(state, height)?;
+        let id = &self.trigger().trigger_id;
+        if state
+            .world
+            .triggers
+            .time_triggers()
+            .get(id)
+            .is_none_or(|action| progress::remaining(action.metadata()) == 0)
+        {
+            return Ok(());
+        }
+        let mut policy = OutputTransaction::new(state)?;
+        let tx = policy
+            .transaction
+            .as_mut()
+            .ok_or("missing progress attempt transaction")?;
+        tx.world
+            .triggers
+            .inspect_by_id_mut(id, |action| progress::consume(action.metadata_mut()))
+            .ok_or("progress action disappeared")?;
+        policy.apply()
+    }
+
     // Prepare only after the failed business overlay has been dropped. Persistent
     // action identity authenticates this separate quarantine/retry transaction.
     // Drop rolls the policy and witness back; preparation never commits them.
@@ -159,9 +192,10 @@ impl InternalInvocation {
                     .time_triggers()
                     .get(id)
                     .ok_or("retry action disappeared")?;
-                let Some(retry_policy) = action.retry_policy else {
+                let retry_policy = action.retry_policy;
+                if retry_policy.is_none() && progress::remaining(action.metadata()) == 0 {
                     return Ok(None);
-                };
+                }
                 let used = action
                     .retry_state
                     .map_or(0, |s| s.retries_used)
@@ -171,6 +205,13 @@ impl InternalInvocation {
                     .transaction
                     .as_mut()
                     .ok_or("missing retry transaction")?;
+                tx.world
+                    .triggers
+                    .inspect_by_id_mut(id, |action| progress::consume(action.metadata_mut()))
+                    .ok_or("progress action disappeared")?;
+                let Some(retry_policy) = retry_policy else {
+                    return Ok(Some(policy));
+                };
                 if used > retry_policy.max_retries.get() {
                     if !tx.world.triggers.remove(id) {
                         return Err("retry action disappeared".into());
@@ -322,6 +363,9 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         if matches!(invocation, InternalInvocation::Time(_))
             && tx.world.triggers.registration_generation(id) == generation
         {
+            tx.world
+                .triggers
+                .inspect_by_id_mut(id, |action| progress::consume(action.metadata_mut()));
             let _ = tx.world.triggers.set_time_trigger_retry_state(id, None);
             tx.decrease_trigger_repeats_and_cleanup(id);
         }
@@ -374,6 +418,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             attempt.apply()?;
         } else {
             drop(attempt);
+            invocation.consume_progress_attempt(self.state, height)?;
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;
         }
         work.account(self.state);

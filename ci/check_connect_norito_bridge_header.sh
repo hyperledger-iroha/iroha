@@ -53,6 +53,9 @@ SELF_TESTS=(
   --self-test-missing-domain-header-symbol
   --self-test-missing-domain-rust-symbol
   --self-test-bad-domain-length-width
+  --self-test-missing-name-header-symbol
+  --self-test-missing-name-rust-symbol
+  --self-test-bad-name-length-width
   --self-test-bad-abi
   --self-test-bad-wallet-memory-rust-status
   --self-test-bad-wallet-storage-header-status
@@ -113,6 +116,7 @@ privacy = Path(sys.argv[4]).read_text(encoding="utf-8")
 retail_model = Path(sys.argv[5]).read_text(encoding="utf-8")
 rust += "\n" + Path(sys.argv[6]).read_text(encoding="utf-8")
 jni_path = Path(sys.argv[7])
+rust += "\n" + (jni_path.parent / "privacy_construction.rs").read_text(encoding="utf-8")
 wallet_exports_path = jni_path.parent / "kagemusha_wallet_ffi/exports.rs"
 rust += "\n" + wallet_exports_path.read_text(encoding="utf-8")
 wallet_load_path = jni_path.parent / "kagemusha_wallet_load_original.rs"
@@ -136,6 +140,7 @@ PRIVACY_EXPORTS = {
     "iroha_privacy_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_fixture_bundle_v1",
     "iroha_privacy_validate_exact12_capability_manifest_v1",
+    "iroha_privacy_validate_exact12_submit_proof_construction_v1",
     "iroha_privacy_free_buffer",
 }
 SORAFS_REFERENCE_EXPORTS = {
@@ -605,7 +610,7 @@ require_signature_parity(
     | PRIVATE_SETTLEMENT_EXPORTS
     | KAGEMUSHA_WALLET_EXPORTS
     | rust_transaction_signers
-    | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1"}
+    | {"connect_norito_bridge_abi_version", "connect_norito_free", "connect_norito_domain_id_validate_v1", "connect_norito_name_validate_v1"}
 )
 
 require(r"#define\s+CONNECT_NORITO_BRIDGE_ABI_VERSION\s+33\b", header, "C bridge ABI version")
@@ -774,6 +779,7 @@ make_negative_workspace() {
   cp "${RUST_LIB}" "${tmp}/lib.rs"
   cp "${PRIVATE_SETTLEMENT_RUST}" "${tmp}/private_settlement_ffi.rs"
   cp "${PLATFORM_JNI_RUST}" "${tmp}/platform_jni.rs"
+  cp "${ROOT_DIR}/crates/connect_norito_bridge/src/privacy_construction.rs" "${tmp}/privacy_construction.rs"
   cp -R "${PLATFORM_JNI_RUST%.rs}" "${tmp}/platform_jni"
   cp "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi.rs" "${tmp}/kagemusha_wallet_ffi.rs"
   cp -R "${ROOT_DIR}/crates/connect_norito_bridge/src/kagemusha_wallet_ffi" "${tmp}/kagemusha_wallet_ffi"
@@ -1036,6 +1042,20 @@ if [[ "${MODE}" == --self-test-* ]]; then
       replace_once "${tmp_header}" \
         'connect_norito_domain_id_validate_v1(const char* input, unsigned long input_len)' \
         'connect_norito_domain_id_validate_v1(const char* input, uint32_t input_len)'
+      ;;
+    --self-test-missing-name-header-symbol)
+      replace_once "${tmp_header}" \
+        "connect_norito_name_validate_v1" "removed_name_validate_v1"
+      ;;
+    --self-test-missing-name-rust-symbol)
+      replace_once "${tmp_rust}" \
+        'pub unsafe extern "C" fn connect_norito_name_validate_v1' \
+        'pub unsafe extern "C" fn removed_name_validate_v1'
+      ;;
+    --self-test-bad-name-length-width)
+      replace_once "${tmp_header}" \
+        'connect_norito_name_validate_v1(const char* input, unsigned long input_len)' \
+        'connect_norito_name_validate_v1(const char* input, uint32_t input_len)'
       ;;
     --self-test-bad-abi)
       replace_once "${tmp_header}" \

@@ -273,13 +273,14 @@ def encoding_roles(sources: dict[str, str]) -> dict[str, Function]:
 def validate_encoding(sources: dict[str, str]) -> None:
     owners = encoding_roles(sources)
     skip, kind, constructor = (owners[key] for key in ("count_destination", "count_kind", "count_constructor"))
-    require(kind.code == "matches!(self.sink,EncoderSink::Counting(_))" and skip.code.startswith(f"if!self.{kind.name}(){{returnOk(false);}}"), "encoding.count_destination_isolation")
+    # The work charge refuses before touching any destination, so it may precede the isolation.
+    require(kind.code == "matches!(self.sink,EncoderSink::Counting(_))" and re.match(rf"super::encode_work::\w+\(0\)\?;if!self\.{kind.name}\(\)\{{returnOk\(false\);\}}", skip.code) is not None, "encoding.count_destination_isolation")
     factory_call = re.fullmatch(r"Self::(\w+)\(EncoderSink::Counting\(counter\)\)", constructor.code)
     require(factory_call is not None, "encoding.count_constructor_destination")
     counter = operation(sources, CORE, "encoded_payload_len")
     require(f"Encoder::{constructor.name}(" in counter.code and "value.serialize(&mutencoder)?" in counter.code and ".finish()?" in counter.code and "validate_header_flags(flags)?" in counter.code, "encoding.actual_measurement")
     owned = role(sources, CORE, lambda item: f".{skip.name}(" in item.code, "encoding.measured_emission_owner")
-    require(owned.code == f"ifwriter.{skip.name}(measured_len)?{{Ok(())}}else{{writer.{owners['exact_scope'].name}(measured_len,|writer|value.serialize(writer))}}", "encoding.measured_emission_uses_scope")
+    require(re.fullmatch(rf"ifwriter\.{skip.name}\(measured_len\)\?\{{Ok\(\(\)\)\}}else\{{writer\.{owners['exact_scope'].name}\(measured_len,\|writer\|\{{let\w+=encode_work::\w+::enter\(\)\?;value\.serialize\(writer\)\}}\)\}}", owned.code) is not None, "encoding.measured_emission_uses_scope")
     preceding = owned.source[max(0, owned.start - 20):owned.start]
     require(not re.search(r"\bpub(?:\([^)]*\))?\s*$", preceding), "encoding.measured_emission_private")
     field = operation(sources, CORE, "write_len_prefixed")
@@ -332,7 +333,10 @@ def validate_codegen(sources: dict[str, str]) -> None:
 
 def validate_identity(sources: dict[str, str]) -> None:
     frame_hash = operation(sources, IDENTITY, "frame_hash")
-    require("schema_hash_for_name(&T::frame_name())" in frame_hash.code, "identity.frame_hash_uses_declared_name")
+    memoized = re.fullmatch(r"\w+::\w+\((\w+)::<T>\)", frame_hash.code)
+    require(memoized is not None, "identity.frame_hash_uses_declared_name")
+    computed = operation(sources, IDENTITY, memoized.group(1))
+    require("schema_hash_for_name(&T::frame_name())" in computed.code, "identity.frame_hash_uses_declared_name")
     entry = operation(sources, DERIVE, "derive_norito_schema")
     call = re.search(r"schema_identity::(\w+)\(", entry.code)
     require(call is not None, "identity.derive_owner")

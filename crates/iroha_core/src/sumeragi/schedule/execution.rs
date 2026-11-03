@@ -91,10 +91,52 @@ impl CompletedExecution {
             Self::Retained(value) => value.get(),
         }
     }
-    pub(crate) fn into_inputs(self) -> RetainedPayload<NativeExecutionInputs> {
+    /// Preserve the original allocation graph and its rollback lease through result creation.
+    ///
+    /// # Safety
+    /// The mapping must retain every schedule/beacon allocation and add only fixed-size fields.
+    #[allow(
+        unsafe_code,
+        reason = "the caller maps the original fields without allocating"
+    )]
+    pub(crate) unsafe fn map_result(
+        self,
+        map: impl FnOnce(
+            NativeExecutionInputs,
+        ) -> iroha_data_model::sumeragi_finality::CertifiedResultV1,
+    ) -> CompletedResult {
+        match self {
+            // SAFETY: both branches preserve the caller's original allocation ledger.
+            Self::Standalone(value) => {
+                CompletedResult::Standalone(unsafe { value.map_payload(map) })
+            }
+            Self::Retained(value) => CompletedResult::Retained(unsafe { value.map_result(map) }),
+        }
+    }
+}
+impl std::ops::Deref for CompletedExecution {
+    type Target = RetainedPayload<NativeExecutionInputs>;
+
+    fn deref(&self) -> &Self::Target {
         match self {
             Self::Standalone(value) => value,
-            Self::Retained(value) => value.into_inputs(),
+            Self::Retained(value) => value.retained(),
+        }
+    }
+}
+
+/// A completed result retains the exact ordinary schedule lease until publication or rollback.
+pub(crate) enum CompletedResult {
+    Standalone(RetainedPayload<iroha_data_model::sumeragi_finality::CertifiedResultV1>),
+    Retained(super::continuation::ContinuationResultLease),
+}
+impl std::ops::Deref for CompletedResult {
+    type Target = RetainedPayload<iroha_data_model::sumeragi_finality::CertifiedResultV1>;
+
+    fn deref(&self) -> &Self::Target {
+        match self {
+            Self::Standalone(value) => value,
+            Self::Retained(value) => value.retained(),
         }
     }
 }
@@ -431,19 +473,15 @@ impl StateBlock<'_> {
                 })?;
                 CapturedExecution::Boundary(frozen)
             } else if let Some(original) = successor {
-                // The bank was prepared for the original proposal; certified lane expansion
-                // recomputes this execution header's roots (`specs/sumeragi_lanes.md` §4.3).
-                let proposal =
-                    norito::core::classify_decode_attempt(|| source.canonical_resultless_header())
-                        .map_err(|error| {
-                            crate::execution_attempt::canonical_decode_attempt_error(
-                                error,
-                                |error| ScheduleError::Epoch(error.to_string()),
-                            )
-                        })?;
-                CapturedExecution::Retained(
-                    original.lend_continuation(self, &proposal, root_scope, &pulse)?,
-                )
+                // The bank was prepared after certified lane expansion against this exact
+                // expanded execution header (`specs/sumeragi_lanes.md` §4.3); parent-service
+                // custody, not this continuation, keeps the original proposal-header identity.
+                CapturedExecution::Retained(original.lend_continuation(
+                    self,
+                    &self._curr_block,
+                    root_scope,
+                    &pulse,
+                )?)
             } else {
                 CapturedExecution::Ordinary(
                     epoch_election::capture_continuation(

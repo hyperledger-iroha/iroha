@@ -14,8 +14,7 @@ use sorafs_manifest::{
 #[cfg(unix)]
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::{
-    env,
-    fs,
+    env, fs,
     io::{self, Read, Write},
     path::{Component, Path, PathBuf},
     process,

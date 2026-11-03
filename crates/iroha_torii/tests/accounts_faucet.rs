@@ -19,7 +19,10 @@ use iroha_data_model::{
     isi::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     level::Level,
     nexus::PublicLaneMonetaryPlanV1,
-    parameter::{Parameter, system::SumeragiNposParameters},
+    parameter::{
+        Parameter,
+        system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
+    },
     prelude::{
         Account, Asset, AssetDefinition, Domain, InstructionBox, Log, Mint, SignedTransaction,
     },
@@ -225,9 +228,10 @@ fn build_faucet_test_context_with_authority(
     let stake_asset_id = staking.stake_asset_id.clone();
     let stake_domain = Domain::new(DomainId::try_new("nexus", "universal").expect("stake domain"))
         .build(&authority_id);
-    let stake_definition = AssetDefinition::numeric(
+    let stake_definition = AssetDefinition::new(
         stake_asset_id.clone(),
         "Staked XOR".to_owned(),
+        iroha_primitives::numeric::NumericSpec::fractional(9),
         iroha_data_model::asset::AssetBalancePolicy::Global,
         None,
     )
@@ -245,18 +249,23 @@ fn build_faucet_test_context_with_authority(
     });
     let chain_id = iroha_model_base::chain::ChainId::from("test-chain");
     let _network_id = iroha_torii::test_utils::signed_query_network_id();
-    let mut world = World::with_assets(
+    let world = World::with_assets(
         [domain, stake_domain],
         accounts,
         [asset_definition, stake_definition],
         stake_assets,
         [],
     );
-    world
-        .set_parameter_for_testing(Parameter::Custom(
-            SumeragiNposParameters::default().into_custom_parameter(),
-        ))
-        .expect("valid default consensus parameters");
+    // Monetary and consensus policy is authored by the signed genesis; a parameter seeded into
+    // the pre-genesis World would be read as parent authority without its staking policy.
+    let npos = SumeragiNposParameters::default();
+    native_config.consensus_mode = SumeragiConsensusMode::Npos;
+    native_config.genesis_parameters.extend([
+        Parameter::Sumeragi(SumeragiParameter::EpochLengthBlocks(
+            npos.epoch_length_blocks,
+        )),
+        Parameter::Custom(npos.into_custom_parameter()),
+    ]);
     if let Some(selector) = faucet_selector
         && selector != canonical_selector
     {

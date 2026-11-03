@@ -1047,7 +1047,7 @@
         "symbol": "max_block_bytes",
         "kind": "fn",
         "anchor": "pub mod sumeragi {",
-        "expr": "nonzero_ext::nonzero!(16_777_216_u32)"
+        "expr": "iroha_primitives::nonzero!(16_777_216_u32)"
       },
       "committed_as": "Parameters.sumeragi.max_block_bytes (SumeragiParameter::MaxBlockBytes), scheduled at h + 2 as ChainParams.max_block_bytes",
       "inclusive": true,
@@ -1346,7 +1346,7 @@
         "symbol": "max_time_trigger_invocations",
         "kind": "field",
         "anchor": "pub const fn new(max_transactions: NonZeroU64) -> Self {",
-        "expr": "nonzero_ext::nonzero!(512_u32)"
+        "expr": "iroha_primitives::nonzero!(512_u32)"
       },
       "inclusive": true,
       "committed_as": "Parameters.block.max_time_trigger_invocations (BlockParameter::MaxTimeTriggerInvocations)",
@@ -1661,6 +1661,51 @@
         "id": "execution_output_policy_v1",
         "field": "max_time_triggers"
       }
+    },
+    {
+      "id": "block.max_time_trigger_registrations",
+      "group": "block",
+      "what": "Fixed first-release ceiling of retained Time trigger registrations, disabled and PreCommit actions included, whatever the committed block.execution_output_max_time_triggers allows (4,096 by default). A new identifier at the ceiling is refused with TimeTriggerCapacity before the registration acquires an autonomous progress obligation; snapshot decode (current and predecessor rows) and every cold capture of the World state root refuse a larger registry. It bounds the rows each scheduled-progress due scan reads.",
+      "unit": "count",
+      "value": 4096,
+      "source": "constant",
+      "class": "consensus",
+      "owner": {
+        "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+        "symbol": "MAX_TIME_TRIGGERS_TOTAL",
+        "kind": "const",
+        "expr": "4_096"
+      },
+      "inclusive": true,
+      "enforcement": [
+        {
+          "stage": "follower",
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+          "contains": "if self.time_triggers.len() >= MAX_TIME_TRIGGERS_TOTAL"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+          "contains": "if history.current().len() > MAX_TIME_TRIGGERS_TOTAL"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+          "contains": ".take(MAX_TIME_TRIGGERS_TOTAL + 1)"
+        },
+        {
+          "stage": "storage",
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+          "contains": "if self.time_triggers().len() > MAX_TIME_TRIGGERS_TOTAL {"
+        }
+      ],
+      "tests": [
+        {
+          "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_scheduled_progress.rs",
+          "name": "time_registration_cap_rejects_overflow_without_silencing_admitted_work"
+        }
+      ],
+      "test_note": "The test registers exactly 4,096 new Time actions in one transaction and expects the next new identifier to be refused with TimeTriggerCapacity while the admitted schedule stays due; an existing identifier is answered as a duplicate, not refused for capacity. No test restores a snapshot or captures a World above the ceiling."
     },
     {
       "id": "block.execution_output_max_time_invocations",
@@ -6935,7 +6980,7 @@
         "symbol": "exec_budget_ms",
         "kind": "fn",
         "anchor": "pub mod sumeragi {",
-        "expr": "nonzero_ext::nonzero!(4_000_u64)"
+        "expr": "iroha_primitives::nonzero!(4_000_u64)"
       },
       "validity": false,
       "committed_as": "Parameters.sumeragi.exec_budget_ms (SumeragiParameter::ExecBudgetMs)",
@@ -6986,7 +7031,7 @@
         "symbol": "apply_budget_ms",
         "kind": "fn",
         "anchor": "pub mod sumeragi {",
-        "expr": "nonzero_ext::nonzero!(1_000_u64)"
+        "expr": "iroha_primitives::nonzero!(1_000_u64)"
       },
       "validity": false,
       "committed_as": "Parameters.sumeragi.apply_budget_ms (SumeragiParameter::ApplyBudgetMs)",
@@ -15297,9 +15342,9 @@
           "due_work_max_lag_ms"
         ],
         "exprs": {
-          "block_cadence_ms": "nonzero_ext::nonzero!(1_000_u64)",
-          "payload_retry_interval_ms": "nonzero_ext::nonzero!(5_000_u64)",
-          "due_work_max_lag_ms": "nonzero_ext::nonzero!(60_000_u64)"
+          "block_cadence_ms": "iroha_primitives::nonzero!(1_000_u64)",
+          "payload_retry_interval_ms": "iroha_primitives::nonzero!(5_000_u64)",
+          "due_work_max_lag_ms": "iroha_primitives::nonzero!(60_000_u64)"
         }
       },
       {
@@ -15328,8 +15373,8 @@
           "key_allowed_algorithms"
         ],
         "exprs": {
-          "epoch_length_blocks": "nonzero_ext::nonzero!(3_600_u64) | nonzero_ext::nonzero!(3_600_u64)",
-          "demotion_window": "nonzero_ext::nonzero!(128_u64)",
+          "epoch_length_blocks": "iroha_primitives::nonzero!(3_600_u64) | iroha_primitives::nonzero!(3_600_u64)",
+          "demotion_window": "iroha_primitives::nonzero!(128_u64)",
           "max_clock_drift_ms": "1_000",
           "key_activation_lead_blocks": "1",
           "key_overlap_grace_blocks": "8",
@@ -15796,7 +15841,7 @@
       },
       {
         "path": "crates/iroha_p2p/src/lib.rs",
-        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md §6, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
+        "reason": "The most host-profile identities one handshake advertises (specs/live_runtime_upgrades.md \u00a76, \"Handshake\"): the fixed capacity of the hello's host-profile set. It sizes the handshake record a peer compares against its committed selection's host profiles; no transaction, block or proof meets it.",
         "symbols": [
           "MAX_HANDSHAKE_HOST_PROFILES"
         ],
@@ -16217,6 +16262,18 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/ivm/src/game_unit_step.rs",
+        "reason": "Per-invocation ceilings of the fixed movement kernel of the game-partition prototype (specs/sumeragi.md, independent-root game-unit transport). step_unit loads one artifact of eight instructions without a loop into a fresh VM with GAS_LIMIT gas; CYCLE_LIMIT is the max_cycles of the artifact's own metadata, so it is part of the kernel hash: InstallGamePartitionV1 accepts only that hash, and AdvanceGameUnitV1 runs only while the partition still pins it. Exhausting either fails the VM (OutOfGas, ExceededMaxCycles) and the advance before any write. Every input takes one of three paths, which the kernel's boundary-input test runs within both ceilings, so no transaction can approach them: they are geometry of one fixed artifact, not a budget a transaction spends. A unit has at most GAME_PARTITION_MAX_WORK advances, each one instruction inside transaction.max_instructions; the spec keeps block-level metering of this direct adapter work open.",
+        "symbols": [
+          "GAS_LIMIT",
+          "CYCLE_LIMIT"
+        ],
+        "exprs": {
+          "GAS_LIMIT": "128",
+          "CYCLE_LIMIT": "16"
+        }
       },
       {
         "reason": "Limits of host helpers that work on data already inside guest memory or a host payload: the ISO 20022 XML reader, the Ed25519 batch geometry and the state scan candidate count (an alias of the ABI constant). Each bounds one syscall's input, which is bounded by guest_memory.* and charged by work_budget.*; M.1 owns the per-syscall inventory.",
@@ -16762,7 +16819,7 @@
               "RESERVED_TRIGGER_METADATA_KEYS"
             ],
             "exprs": {
-              "RESERVED_TRIGGER_METADATA_KEYS": "[ TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY, \"__registered_at_ms\", DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY, DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY, ]"
+              "RESERVED_TRIGGER_METADATA_KEYS": "[ TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY, \"__registered_at_ms\", DATA_TRIGGER_SCOPE_AUTHORIZATION_METADATA_KEY, DATA_TRIGGER_SCOPE_AUTHORIZATION_GRANTEE_METADATA_KEY, progress::REMAINING_KEY, ]"
             }
           },
           {
@@ -19244,6 +19301,26 @@
         ]
       },
       {
+        "path": "crates/iroha_data_model/src/game_partition.rs",
+        "reason": "The game-partition prototype (specs/sumeragi.md, independent-root game-unit transport): a finite, non-monetary native protocol with its own World table, the release addition iroha.game_partition.v1, whose instructions resolve as definition_inactive until a governed change set activates it. A root installs at most 16 worlds; a world registers at most 2 foreign roots and holds at most 64 active units and 256 retained exports, imported receipts and unit identities; a seeded unit has at most 4,096 direct-IVM advances, never replenished and carried unchanged by its export and import. The instruction handlers refuse new work at a full table before they write, GamePartitionStateV1::validate checks every retention and work bound again before each write, and snapshot restore checks them with the world count in the current and predecessor cuts. They bound that product's own State. The 1 MiB ceiling bounds the canonical frame of one import proof and is checked before the source CommitQC is verified; the proof travels in an ImportGameUnitV1 instruction, inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions, like the AMX header and CommitQC ceilings it reuses.",
+        "symbols": [
+          "GAME_PARTITION_MAX_WORLDS",
+          "GAME_PARTITION_MAX_PEERS",
+          "GAME_PARTITION_MAX_UNITS",
+          "GAME_PARTITION_MAX_RECEIPTS",
+          "GAME_PARTITION_MAX_WORK",
+          "GAME_PARTITION_MAX_PROOF_BYTES"
+        ],
+        "exprs": {
+          "GAME_PARTITION_MAX_WORLDS": "16",
+          "GAME_PARTITION_MAX_PEERS": "2",
+          "GAME_PARTITION_MAX_UNITS": "64",
+          "GAME_PARTITION_MAX_RECEIPTS": "256",
+          "GAME_PARTITION_MAX_WORK": "4096",
+          "GAME_PARTITION_MAX_PROOF_BYTES": "1024 * 1024"
+        }
+      },
+      {
         "reason": "Committee-size geometry: the largest first-release voting committee (31), the hard bound of one autonomous lane committee (128), and the lane-custody signer count (the value of the listed transport.max_committee_size, 1,024) and obligation count. They bound a protocol structure, not bytes, counts or work of a transaction. The wire ceiling of a signer set on the transport path is transport.max_committee_size.",
         "files": [
           {
@@ -19482,7 +19559,7 @@
               "ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN"
             ],
             "exprs": {
-              "ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN": "ASSET_DEFINITION_ADDRESS_LEN + ASSET_DEFINITION_ADDRESS_LEN.div_ceil(2)"
+              "ASSET_DEFINITION_ADDRESS_TEXT_MAX_LEN": "crate::base58::max_encoded_len(ASSET_DEFINITION_ADDRESS_LEN)"
             }
           },
           {
@@ -19513,6 +19590,20 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/iroha_data_model/src/bech32.rs",
+        "reason": "The Bech32 and Bech32m codec (BIP-173, BIP-350) that spells contract addresses and checks the checksum of I105 account addresses: the six-character checksum width, the 83-byte ceiling of the human-readable part and the 1,023-byte ceiling of a whole string, the length up to which its BCH checksum is specified. Each bounds one string the codec parses or builds and no amount; a string that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) whatever its own ceiling says.",
+        "symbols": [
+          "CHECKSUM_LEN",
+          "CODE_LENGTH",
+          "MAX_HRP_LEN"
+        ],
+        "exprs": {
+          "CHECKSUM_LEN": "6",
+          "CODE_LENGTH": "1023",
+          "MAX_HRP_LEN": "83"
+        }
       },
       {
         "reason": "Other product shapes in the data model: the confidential memo ciphertext and wire widths, the DA ingest admission windows and pin-intent alias, the FASTPQ source-statement frames (structural bounds, as their definitions state, not admission quotas), fee-evidence record, page and window bounds and the retail catch-up months, the jurisdiction identifier, the oracle reputation score, the QR stream chunk, payload and frame bounds, the SoraNet ticket uses and VPN integer widths, and the Taikai anchor identifier and segment window. A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
@@ -20196,6 +20287,16 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/triggers/progress.rs",
+        "reason": "The native scheduled-work allowance of one Time trigger registration (specs/sumeragi.md, section 4.5): native_progress_attempts is a registration-only integer from 1 to 1,024 that Register<Trigger> validates and copies into the reserved __native_progress_remaining counter; a later metadata write or removal cannot change either. Each actual Time attempt consumes one on success, business rejection or output-limit rollback, and no callback, metadata write or repeat minting restores it. A counter above 1,024 grants no attempt, and snapshot decode and every cold capture of the World state root refuse a declaration outside 1 to 1,024 or a counter above its declaration. Zero remaining stops the autonomous Keepalive carriers of that trigger. It bounds how many autonomous attempts one registration causes over its life, not a size, count or work of one transaction, block or proof: each attempt is one Time invocation within block.max_time_trigger_invocations.",
+        "symbols": [
+          "MAX_ATTEMPTS"
+        ],
+        "exprs": {
+          "MAX_ATTEMPTS": "1_024"
+        }
       },
       {
         "reason": "The VPN product's instruction handler: signed quote, endpoint, server-name, meter-family, route and DNS bounds. A record of this group that travels in a transaction is inside transaction.max_tx_bytes (10 MiB) and transaction.max_instructions whatever its own ceiling says. A ceiling above 10 MiB here therefore never decides the admission of a transaction: it bounds what the product reads from its own files, evidence, requests, queries or served projections, or it cannot be reached.",
@@ -25651,7 +25752,7 @@
         }
       },
       {
-        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof. The one exception is the wire-ID length of an instruction envelope (§5.2): it is the definition text limit by construction, so every wire ID an interface can declare fits, and it is a structural decode rule of an envelope that travels inside transaction.max_tx_bytes, not a separate resource bound.",
+        "reason": "Shapes of the runtime governance records of the live-upgrade foundation (specs/live_runtime_upgrades.md): the JSON ceiling of the committed notice policy (runtime_upgrade_policy_v1), provenance policy (runtime_provenance_policy_v1) and emergency panel (runtime_emergency_panel_v1) parameters, checked before decoding; the text length, reference count, carrier-schema nodes, depth, members and declared length bound, and initial storage bytes a runtime definition descriptor may hold; and the lifetime of an emergency containment endorsement. Change-set admission and containment check them on governance records, and a proposal carries at most one endorsement per trusted release signer the committed provenance policy lists; an instruction or proof is judged by the definitions a selection activates, so they bound no transaction, block or proof. The one exception is the wire-ID length of an instruction envelope (\u00a75.2): it is the definition text limit by construction, so every wire ID an interface can declare fits, and it is a structural decode rule of an envelope that travels inside transaction.max_tx_bytes, not a separate resource bound.",
         "files": [
           {
             "path": "crates/iroha_data_model/src/parameter/runtime_upgrade_policy.rs",
@@ -26829,12 +26930,6 @@
               }
             },
             {
-              "path": "crates/iroha_data_model/src/account/address.rs",
-              "sites": {
-                "bits >= 5": 2
-              }
-            },
-            {
               "path": "crates/iroha_data_model/src/account/controller.rs",
               "sites": {
                 "major <= 0b111": 1
@@ -26844,6 +26939,14 @@
               "path": "crates/iroha_data_model/src/account/i105_json.rs",
               "sites": {
                 "self.bits >= 5": 1
+              }
+            },
+            {
+              "path": "crates/iroha_data_model/src/bech32.rs",
+              "sites": {
+                "(33..=126).contains(&byte)": 1,
+                "self.bits < 8": 1,
+                "self.bits < 5": 1
               }
             },
             {
@@ -29318,6 +29421,31 @@
               "path": "crates/iroha_data_model/src/runtime/definition.rs",
               "sites": {
                 "(0x20..=0x7e).contains(&byte)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Shapes of the game-partition prototype (specs/sumeragi.md, independent-root game-unit transport), each compared before the record is written or the proof is verified. A registered peer names one to four public read endpoints, each an http:// or https:// URL of at most 512 bytes: RegisterGamePartitionPeerV1 checks them before it authenticates the peer, and GamePartitionStateV1::validate checks them again for every retained peer. The signed genesis (G1) and successor (H2) sources a registration carries are at most 4 MiB each before the native prefix verifier decodes them, which alone would admit block.max_executed_block_wire_bytes; the registered peer keeps their hashes, not the sources. An import is refused before encoding and signature work when the core header of its certified block exceeds 8 KiB or its CommitQC 128 KiB (the values of the AMX header and CommitQC ceilings, which the tracker's verify_block applies again), when its result preimage leaves less than 140 KiB of GAME_PARTITION_MAX_PROOF_BYTES for the header, the CommitQC and the rest of the proof (verify_block then caps the preimage at MAX_RESULT_PREIMAGE_BYTES, 64 KiB), or when its write path has more than 256 siblings, the depth of the ordinary-write tree. Each bounds one record or one instruction of that product; the instruction travels in a transaction inside transaction.max_tx_bytes and transaction.max_instructions.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/game_partition.rs",
+              "sites": {
+                "peer.endpoints.len() > 4": 1,
+                "s.len() > 512": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/game_partition.rs",
+              "sites": {
+                "self.endpoints.len() > 4": 1,
+                "s.len() > 512": 1,
+                "self.genesis.len() > 4 * 1024 * 1024": 1,
+                "self.successor.len() > 4 * 1024 * 1024": 1,
+                "proof.block.consensus_header.len() > 8192": 1,
+                "proof.block.commit_qc.len() > 128 * 1024": 1,
+                "proof.block.result_preimage.len() > GAME_PARTITION_MAX_PROOF_BYTES - 140 * 1024": 1,
+                "proof.path.siblings.len() > 256": 1
               }
             }
           ]

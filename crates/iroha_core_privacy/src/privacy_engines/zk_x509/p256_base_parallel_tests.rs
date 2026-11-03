@@ -307,6 +307,10 @@ fn base_tile_direct_cell_errors_and_unwind_clear_the_partial_row_owner() {
 
 #[test]
 #[ignore = "full validated native19 base source parity and allocation/clear A/B; isolated optimized run"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn full_native_base_tiles_match_scalar_and_report_allocation_and_clear_costs() {
     use std::time::{Duration, Instant};
     assert!(!cfg!(debug_assertions), "use an optimized build");

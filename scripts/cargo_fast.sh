@@ -45,6 +45,11 @@ Options:
   --zero-debug            Set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
   --linker MODE           Linker: off (default)|auto|mold|lld|ld.lld|zld|ld64.lld|<path>
                           Explicit modes must pass the native compiler probe
+  --parallel-frontend N   Run rustc's parallel front end (-Zthreads=N, N >= 2) for
+                          this repository's crates under crates/ only, through
+                          scripts/rustc_parallel_frontend.sh. Unstable rustc
+                          option, local builds only: refused for --release and
+                          the release, deploy and apple-release profiles
   --node-set              Check the node leaves in one Cargo invocation:
                           check -p irohad_lib -p iroha_cli_lib -p irohad -p iroha_cli -p iroha_torii -p iroha_kagami --lib --bins
                           Unified features share one iroha_core/iroha_torii artifact per
@@ -63,6 +68,7 @@ Examples:
   scripts/cargo_fast.sh --jobs 6 -- build -p irohad
   scripts/cargo_fast.sh --linker auto -- build -p irohad
   scripts/cargo_fast.sh --stable-local-metadata --incremental --node-set
+  scripts/cargo_fast.sh --parallel-frontend 8 -- build -p irohad
 USAGE
 }
 
@@ -81,6 +87,8 @@ linker_mode="off"
 zero_debug=false
 print_env_only=false
 node_set=false
+parallel_frontend=""
+parallel_frontend_set=false
 cargo_driver="cargo"
 
 declare -a cargo_args
@@ -159,6 +167,16 @@ while [[ $# -gt 0 ]]; do
 		--print-env)
 			print_env_only=true
 			;;
+		--parallel-frontend)
+			shift
+			if [[ $# -eq 0 ]]; then
+				echo "error: missing argument for --parallel-frontend" >&2
+				usage >&2
+				exit 1
+			fi
+			parallel_frontend="$1"
+			parallel_frontend_set=true
+			;;
 		--node-set)
 			node_set=true
 			;;
@@ -206,6 +224,42 @@ fi
 if [[ "${cargo_driver}" == "cargo-zigbuild" && "${cargo_args[0]}" != build ]]; then
 	echo "error: --cargo-zigbuild requires an explicit build command without aliases or prefixes" >&2
 	exit 1
+fi
+
+# The parallel front end is an unstable rustc option: allow it for local
+# development profiles only, never for release, deploy or packaging builds.
+if [[ "${parallel_frontend_set}" == true ]]; then
+	if [[ -z "${parallel_frontend}" ]] || [[ "${parallel_frontend}" == *[!0-9]* ]] \
+		|| ((10#${parallel_frontend} < 2)); then
+		echo "error: --parallel-frontend expects a thread count of at least 2" >&2
+		exit 1
+	fi
+	expect_profile_value=false
+	for cargo_arg in "${cargo_args[@]}"; do
+		if [[ "${cargo_arg}" == "--" ]]; then
+			break
+		fi
+		if [[ "${expect_profile_value}" == true ]]; then
+			profile_name="${cargo_arg}"
+			expect_profile_value=false
+		else
+			case "${cargo_arg}" in
+			--release | -r) profile_name=release ;;
+			--profile)
+				expect_profile_value=true
+				continue
+				;;
+			--profile=*) profile_name="${cargo_arg#--profile=}" ;;
+			*) continue ;;
+			esac
+		fi
+		case "${profile_name}" in
+		release | deploy | apple-release)
+			echo "error: --parallel-frontend is for local builds; refusing the ${profile_name} profile" >&2
+			exit 1
+			;;
+		esac
+	done
 fi
 
 # Some local automation environments export a complete single-worker resource
@@ -556,6 +610,13 @@ if [[ "${sccache_active}" == true ]]; then
 	fi
 fi
 
+# Chain any selected wrapper (for example sccache) behind the front-end wrapper.
+if [[ -n "${parallel_frontend}" ]]; then
+	export CARGO_FAST_INNER_RUSTC_WRAPPER="${RUSTC_WRAPPER:-${CARGO_BUILD_RUSTC_WRAPPER:-}}"
+	export CARGO_FAST_PARALLEL_FRONTEND_THREADS="${parallel_frontend}"
+	export RUSTC_WRAPPER="${SCRIPT_DIR}/rustc_parallel_frontend.sh"
+fi
+
 if [[ "${linker_mode}" != off ]] && select_linker "${linker_mode}"; then
 	linker_flag="-Clinker=${linker_compiler} -Clink-arg=-fuse-ld=${selected_fuse_arg}"
 	if [[ -n "${RUSTFLAGS:-}" ]]; then
@@ -591,6 +652,9 @@ if [[ "${CARGO_BUILD_JOBS:-}" == "1" ]] || [[ "${cargo_serial_jobs}" == true ]];
 	echo "[cargo-fast] warning: one Cargo job serializes compilation; reserve it for constrained or evidence builds" >&2
 fi
 echo "[cargo-fast] sccache=${enabled_sccache}"
+if [[ -n "${parallel_frontend}" ]]; then
+	echo "[cargo-fast] parallel-frontend=${parallel_frontend} threads (crates/ only; inner wrapper=${CARGO_FAST_INNER_RUSTC_WRAPPER:-none})"
+fi
 if [[ -n "${SCCACHE_DIR:-}" ]]; then
 	echo "[cargo-fast] SCCACHE_DIR=${SCCACHE_DIR}"
 fi

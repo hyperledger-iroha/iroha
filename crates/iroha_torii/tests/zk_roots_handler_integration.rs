@@ -5,9 +5,9 @@ use http_body_util::BodyExt as _;
 use iroha_core::state::{State, World, WorldReadOnly};
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_torii::NoritoJson;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::{num::NonZeroUsize, sync::Arc};
 use tower::ServiceExt as _;
 const ACCOUNT_SIGNATORY: &str =
@@ -113,7 +113,7 @@ fn seeded_zk_roots_state(
         DomainId::try_new("zkd", "universal").expect("domain id"),
         "rose".parse().expect("asset definition name"),
     );
-    let asset_alias = "rose#centralbank";
+    let asset_alias = "rose#universal";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
     // Registration, issuance and alias binding execute only under the authenticated
     // signed-genesis source, which also installs the configured roots history length.
@@ -154,7 +154,7 @@ fn seeded_zk_roots_state(
             let mut note = [0u8; 32];
             note[0] = i.saturating_add(1);
             zk_state
-                .push_commitment(note, nonzero!(64_usize))
+                .push_commitment(note, tree_roots_history_len)
                 .expect("seed authenticated commitment root");
         }
         let zk_assets = stx.world_mut_for_testing().zk_assets_mut_for_testing();

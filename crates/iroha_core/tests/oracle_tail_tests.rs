@@ -17,8 +17,8 @@ fn record_twitter_binding_rejects_version_ttl_and_non_provider_revoke() {
         b"user-ttl-negative",
     );
     let attestation = twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     execute_boxed(
         RegisterOracleFeed {
             feed: feed_config.clone(),
@@ -118,8 +118,8 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     );
     let base_attestation =
         twitter_binding_attestation(&feed_config, &uaid, binding_hash.clone(), 5_000);
-    let mut sb = state.block(header(1));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 1));
+    let mut stx = invocation(&mut sb);
     record_twitter_binding_round(
         &mut stx,
         &provider,
@@ -130,8 +130,8 @@ fn record_twitter_binding_rejects_expired_and_duplicates_and_allows_revoke() {
     stx.apply();
     sb.commit_world_overlay_for_testing().expect("commit block");
     // Expired attestation rejected.
-    let mut sb = state.block(header(2));
-    let mut stx = sb.transaction();
+    let mut sb = state.block(header(&state, 2));
+    let mut stx = invocation(&mut sb);
     let mut expired = base_attestation.clone();
     expired.expires_at_ms = expired.observed_at_ms;
     assert!(

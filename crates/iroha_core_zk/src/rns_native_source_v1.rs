@@ -194,9 +194,11 @@ impl CoreZkAmsMkheRnsNativeSourceWriterV1 {
     /// directories, unavailable entropy/platforms or crypto-spool failures.
     pub fn begin(
         directory: impl AsRef<Path>,
-        layout: ZkAmsMkheRnsNativeSourceLayoutV1,
+        layout: &ZkAmsMkheRnsNativeSourceLayoutV1,
         resources: ZkAmsMkheRnsNativeSourceResourcesV1,
     ) -> Result<Self, ZkAmsMkheRnsNativeSourceErrorV1> {
+        // The writer retains its own copy of the validated layout.
+        let layout = *layout;
         layout.validate()?;
         let main_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Main)?;
         let nonce_layout = spool_layout_v1(&layout, ZkAmsMkheRnsNativeSourceArenaV1::Nonce)?;
@@ -825,7 +827,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("private temporary directory");
         let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
             directory.path(),
-            source_layout(),
+            &source_layout(),
             ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
         )
         .expect("source writer");
@@ -863,7 +865,7 @@ mod tests {
         let directory = tempfile::tempdir().expect("private temporary directory");
         let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
             directory.path(),
-            source_layout(),
+            &source_layout(),
             ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
         )
         .expect("source writer");
@@ -894,13 +896,13 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
             directory.path(),
-            source_layout(),
+            &source_layout(),
             ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
         )
         .unwrap();
         let other = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
             directory.path(),
-            source_layout(),
+            &source_layout(),
             ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
         )
         .unwrap();
@@ -926,7 +928,7 @@ mod tests {
             let directory = tempfile::tempdir().unwrap();
             let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
                 directory.path(),
-                source_layout(),
+                &source_layout(),
                 ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
             )
             .unwrap();
@@ -1038,7 +1040,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut writer = CoreZkAmsMkheRnsNativeSourceWriterV1::begin(
             directory.path(),
-            source_layout(),
+            &source_layout(),
             ZkAmsMkheRnsNativeSourceResourcesV1::new_v1(),
         )
         .unwrap();

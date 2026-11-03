@@ -39,3 +39,5 @@ mod gov_zk_ballot_vk_status;
 mod gov_zk_create_rejects_plain_conflict;
 #[path = "../gov_zk_election_admission.rs"]
 mod gov_zk_election_admission;
+#[path = "../common/native_genesis.rs"]
+mod native_genesis;

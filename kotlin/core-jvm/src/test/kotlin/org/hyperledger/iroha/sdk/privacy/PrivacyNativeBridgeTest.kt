@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.privacy
 
 import java.io.File
 import java.security.MessageDigest
+import java.util.Base64
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -195,6 +196,27 @@ class PrivacyNativeBridgeTest {
                 ByteArray(PrivacyNativeBridge.COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES + 1),
             ),
         )
+    }
+
+    @Test
+    fun coreCapabilityManifestPassesNativeValidationAndReachesTheManagedParser() {
+        assertTrue(
+            PrivacyNativeBridge.isNativeAvailable(),
+            "ABI-33 connect_norito_bridge with capability manifest JNI exports is required",
+        )
+        val path = "fixtures/privacy/exact12_capability_manifest_v1.norito.b64"
+        val file = generateSequence(File(".").canonicalFile) { it.parentFile }
+            .map { File(it, path) }
+            .first(File::isFile)
+        val manifest = PrivacyNativeBridge.decodeExact12CapabilityManifestV1(
+            Base64.getDecoder().decode(file.readText().trim()),
+        )
+        val policy = manifest.consensusPolicy
+        assertEquals(2048, policy.currentLimits.retainedRootCount)
+        assertEquals(1024, policy.pendingUpdate!!.nextLimits.retainedRootCount)
+        val note = manifest.rowFor(PrivacyProtocolIdV1.IROHA_IVM_PRIVATE_NOTE_STARK_V1)
+        assertTrue(note.policy!!.pendingUpdate != null)
+        assertEquals(7, note.privacyFeatureMask)
     }
 
     @Test

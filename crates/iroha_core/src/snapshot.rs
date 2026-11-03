@@ -314,7 +314,7 @@ fn serialize_world_through_selection(
     out.push('{');
     let mut first = true;
     for (key, raw) in members {
-        if omitted.iter().any(|member| *member == key) {
+        if omitted.contains(&key) {
             continue;
         }
         if !first {
@@ -5700,5 +5700,76 @@ mod native_snapshot_publication_tests {
             ensure_snapshot_commit_evidence(chain.state(), &checkpoint, &captured.identity)
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod world_through_selection_tests {
+    use super::*;
+    use crate::runtime::catalog::{
+        additions::test_additions::{CELL, LOG, TABLE},
+        test_catalog,
+    };
+
+    #[test]
+    fn a_snapshot_leaves_out_the_world_members_its_selection_does_not_install() {
+        let names = |json: &str| -> Vec<String> {
+            crate::state::deserialize::json_object_members(json)
+                .expect("a World object")
+                .into_iter()
+                .map(|(key, _)| key.to_owned())
+                .collect()
+        };
+        let world = crate::state::World::default();
+        let mut full = String::new();
+        world.json_serialize(&mut full);
+        let mut written = String::new();
+        serialize_world_through_selection(
+            &world,
+            world.runtime_selection.view().get(),
+            &mut written,
+        )
+        .expect("write the baseline World");
+        let release_added: Vec<String> = crate::runtime::release_catalog()
+            .expect("release catalog")
+            .additions
+            .iter()
+            .flat_map(|addition| addition.storage.keys())
+            .map(|field| field.trim_start_matches("world.").to_owned())
+            .collect();
+        assert_eq!(
+            names(&written),
+            names(&full)
+                .into_iter()
+                .filter(|key| !release_added.contains(key))
+                .collect::<Vec<_>>(),
+            "the baseline installs every member but those this release's additions add"
+        );
+
+        test_catalog::with_additions(&[LOG], || {
+            let world = crate::state::World::default();
+            let mut full = String::new();
+            world.json_serialize(&mut full);
+            let mut written = String::new();
+            serialize_world_through_selection(
+                &world,
+                world.runtime_selection.view().get(),
+                &mut written,
+            )
+            .expect("write a World before its addition activates");
+            let added: Vec<&str> = [TABLE, CELL]
+                .iter()
+                .map(|field| field.strip_prefix("world.").expect("World field"))
+                .collect();
+            let expected: Vec<String> = names(&full)
+                .into_iter()
+                .filter(|key| !added.contains(&key.as_str()))
+                .collect();
+            assert_eq!(
+                names(&written),
+                expected,
+                "every other member keeps its canonical order"
+            );
+        });
     }
 }

@@ -1377,28 +1377,26 @@ and process diagnostics remain test/evidence-only. Matching ordinary-build,
 full-proof and resource validation of this API remains required; preceding proof
 results do not qualify this source.
 
-The latest Linux CPU maximum proof is 9,412,944 bytes, under the unchanged
-9,437,184-byte cap, with SHA-256
-`b69426bc8648cf1c492591371bbbfc4e18f1fe48a3d3f11108eb9ec2237ec7c0`.
-Producer self-check, independent replay, a separate fresh verifier, wrong-genesis,
-all 32 nonce-byte substitutions and corruption controls pass. Conservative
-reported RSS is 7,163,871,232 bytes and sampled address space reaches
-8,709,255,168 bytes; the unchanged 12 GiB RSS and enforced hard/soft 32 GiB
-address-space gates pass. Neither observation establishes an exact physical
-peak. Proving takes 1,437.185689 seconds against 300, so qualification remains
-failed; fresh replay takes 7.977963 seconds. Exact receipts, retained proof,
-65 nested phase timers and fresh replay are in
-`dist/zk-remediation/2026-09-30/epoch26-rfc-linux-maximum4`.
-Original failed runs and observer evidence remain preserved separately. These
-results qualify only their measured source and do not transfer to later repairs.
+The latest Linux CPU maximum uses q136 and produces 9,435,984 bytes under the
+unchanged 9,437,184-byte cap. Producer self-check, independent replay,
+wrong-genesis, all 32 nonce-byte substitutions and corruption controls pass.
+Actual native lifecycle certification and final source/executable custody pass.
+Kernel and sampled RSS independently meet 12 GiB, with hard/soft 32 GiB
+`RLIMIT_AS` enforced. Proving takes 1,364.449936 seconds and whole-child execution
+1,375.203277995 seconds against 300, so qualification remains failed. Attribution
+passes at 166 ppm; the separately requested undivided-phase bound fails at
+124,932 ppm against 10,000 ppm. Exact source/image, proof, resource and negative
+evidence is recorded in the [Linux maximum validation](../docs/validation/maximum_x509_intel.md).
+Earlier failed runs remain preserved; this result does not explain their native
+observation failures or qualify a signed release or named performance host.
 
 Retained-query replay reuses original masks and authenticated Merkle cuts while
 checking original roots and allocation capacities. The selected-coordinate
 transform is correct in the current native controls and complete proof, but its
 CPU performance needs repair. The new required 32-byte X509 instance nonce binds
 dynamic MAIN/CA/joint hash contexts and consumes a separate checked RNG prefix.
-Fixed schedule metadata stays unchanged. Its actual native maximum is now
-9,412,944 bytes, with every nonce-byte mutation rejected. Authentic profile/proof/pre-aux values are
+Fixed schedule metadata stays unchanged. The earlier nonce-change candidate
+produced 9,412,944 bytes, with every nonce-byte mutation rejected. Authentic profile/proof/pre-aux values are
 regenerated and independently checked, and the four primary diagnostics pass.
 The merged descriptors enumerate the current 192 endpoint, 17 key/digest,
 20 SHA-union and 108 CA-link alpha phases, retaining the claim-free joint wire

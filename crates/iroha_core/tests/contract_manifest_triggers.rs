@@ -1,5 +1,6 @@
 //! Contract manifest trigger registration tests.
 
+use crate::native_genesis::certified_state;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
@@ -43,8 +44,8 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 fn contract_artifact(entrypoints: &[EntrypointDescriptor]) -> (Vec<u8>, ContractManifest) {
     let meta = ivm::ProgramMetadata {
         version_major: 1,
@@ -156,17 +157,53 @@ fn checked_random_contract_manifest_keypair() -> KeyPair {
 fn contract_manifest_trigger_fixture_uses_checked_randomness() {
     let _key_pair = checked_random_contract_manifest_keypair();
 }
-fn setup_state() -> (State, AccountId, KeyPair) {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
+fn setup_world() -> (World, AccountId, KeyPair) {
     let kp = checked_random_contract_manifest_keypair();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let account_id = AccountId::new(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], core::iter::empty::<AssetDefinition>());
-    let state = State::new_for_testing(world, kura, query_handle);
+    (world, account_id, kp)
+}
+/// Apply the authenticated genesis over the activation authority and its domain.
+fn setup_state() -> (State, AccountId, KeyPair) {
+    let (world, account_id, kp) = setup_world();
+    (certified_state(world), account_id, kp)
+}
+/// A direct lifecycle component State that deliberately applies no signed genesis.
+///
+/// Its only prerequisite is the explicit ordinary signing policy used by account admission.
+/// It carries no root metadata, consensus authority or genesis capability.
+fn component_state_without_genesis() -> (State, AccountId, KeyPair) {
+    let (mut world, account_id, kp) = setup_world();
+    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
+        iroha_crypto::Algorithm::Ed25519,
+    ])
+    .expect("explicit lifecycle component signing algorithm");
+    world
+        .set_parameter_for_testing(
+            policy
+                .into_parameter()
+                .expect("canonical lifecycle component policy"),
+        )
+        .expect("admit the lifecycle component's original policy");
+    let state = State::new_for_testing(
+        world,
+        Kura::blank_kura_for_testing(),
+        LiveQueryStore::start_test(),
+    );
     (state, account_id, kp)
+}
+/// An ordinary block at height two, on the committed genesis when the State has one.
+fn ordinary_header(state: &State) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    )
 }
 fn opaque_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::from_uuid_bytes([
@@ -235,8 +272,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-    let mut block = state.block(header);
+    let mut block = state.block(ordinary_header(&state));
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
@@ -410,8 +446,7 @@ fn activate_rejects_manifest_trigger_with_unauthorized_foreign_authority() {
     );
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-    let mut block = state.block(header);
+    let mut block = state.block(ordinary_header(&state));
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
@@ -525,8 +560,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     let (state, authority, kp) = setup_state();
     let contract_address = contract_address(&authority, 0);
     let contract_subject = contract_address.subject_id();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
+    let mut block = state.block(ordinary_header(&state));
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
@@ -764,11 +798,12 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
 #[allow(clippy::too_many_lines)]
 fn activate_registers_cross_contract_manifest_trigger_callback() {
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
-    let (state, authority, kp) = setup_state();
+    // The callback lookup below proves that an empty World never acquires Global scope,
+    // so this component deliberately starts without signed genesis root metadata.
+    let (state, authority, kp) = component_state_without_genesis();
     let target_address = contract_address(&authority, 0);
     let source_address = contract_address(&authority, 1);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
+    let mut block = state.block(ordinary_header(&state));
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
@@ -1022,8 +1057,7 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
     let source_address = contract_address(&authority, 0);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
+    let mut block = state.block(ordinary_header(&state));
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
@@ -1118,8 +1152,7 @@ fn activate_rejects_unresolved_cross_contract_manifest_trigger_callback() {
 fn activate_registers_kotodama_compiled_manifest_triggers_from_source() {
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
     let (state, authority, kp) = setup_state();
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
+    let mut block = state.block(ordinary_header(&state));
     let mut stx = block.transaction();
     let register_perm: permission::Permission =
         iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode.into();
@@ -1225,7 +1258,7 @@ seiyaku Test {{ permission CanEnactGovernance;
             .is_none()
     );
     // Compiled explicit authorities require a direct capability scoped to that
-    // authority, even when activation takes place in genesis.
+    // authority.
     let exact_scope: permission::Permission = CanRegisterGlobalDataTrigger {
         authority: authority.clone(),
     }

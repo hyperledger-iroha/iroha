@@ -9,8 +9,8 @@ use crate::zk_components;
 use iroha_core::{kura::Kura, query::store::LiveQueryStore, smartcontracts::Execute, state::State};
 use iroha_core_zk::test_utils::native_confidential_fixture_envelope;
 use iroha_data_model::prelude::*;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use zk_components::execute_isi_component;
 fn new_block_ctx() -> (State, iroha_data_model::block::BlockHeader) {
     let world = test_world::world_with_test_accounts();

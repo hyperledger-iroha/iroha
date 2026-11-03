@@ -78,6 +78,9 @@
           "sccp_wallet"
         ],
         "forbidden_packages": [
+          "iroha_deploy",
+          "iroha_contract_deploy",
+          "iroha_wallet",
           "iroha_plonk_oracle"
         ],
         "package": "irohad",

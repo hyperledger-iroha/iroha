@@ -1,12 +1,9 @@
 //! End-to-end regressions for global implicit account receive admission.
 
 use iroha_core::{
-    governance::manifest::LaneManifestRegistry,
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::Execute,
     smartcontracts::ivm::cache::IvmCache,
     state::{State, World, WorldReadOnly},
+    sumeragi::test_chain::TestChainConfig,
     tx::AcceptedTransaction,
 };
 use iroha_crypto::{Algorithm, KeyPair};
@@ -24,7 +21,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
 use mv::storage::StorageReadOnly;
-use std::{num::NonZeroU64, sync::Arc};
+use std::num::NonZeroU64;
 fn balance(state: &State, id: &AssetId) -> Quantity {
     state
         .view()
@@ -33,25 +30,17 @@ fn balance(state: &State, id: &AssetId) -> Quantity {
         .get(id)
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
-fn test_state(world: World) -> State {
-    let selected = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-        Algorithm::Ed25519,
-        Algorithm::Secp256k1,
-    ])
-    .expect("explicit implicit-receive fixture policy");
-    let mut block = world.block();
-    block
-        .set_parameter_for_testing(selected.into_parameter().expect("canonical fixture policy"))
-        .expect("author original policy before State construction");
-    block.commit();
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
-    let nexus = state.nexus_snapshot();
-    state.install_lane_manifests_for_testing(&Arc::new(
-        LaneManifestRegistry::empty().rebind(&nexus.lane_catalog, &nexus.governance),
-    ));
-    state
+/// Apply the authenticated signed genesis over `world`.
+///
+/// The signed genesis authors the ordinary crypto policy and, when selected, the global
+/// account admission policy: only genesis may set that parameter, so it is part of the
+/// signed genesis parameters rather than a later transaction.
+fn test_state(world: World, policy: Option<AccountAdmissionPolicy>) -> State {
+    let mut config = TestChainConfig::new(world, 0);
+    config
+        .genesis_parameters
+        .extend(policy.map(|policy| Parameter::Custom(policy.into_custom_parameter())));
+    crate::native_genesis::certified_state_with(config)
 }
 fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
     let key_pair = KeyPair::try_from_seed(vec![seed_byte; 32], Algorithm::Ed25519)
@@ -59,10 +48,14 @@ fn seeded_account(seed_byte: u8) -> (AccountId, KeyPair) {
     let account_id = AccountId::new(key_pair.public_key().clone());
     (account_id, key_pair)
 }
-fn block_header(height: u64, timestamp_ms: u64) -> BlockHeader {
+/// The ordinary block after the signed genesis (height one).
+///
+/// Committing a fixture block's World overlay does not publish a block, so every fixture
+/// block executes at the height the authenticated consensus schedule admits next.
+fn block_header(state: &State, timestamp_ms: u64) -> BlockHeader {
     BlockHeader::new(
-        NonZeroU64::new(height).expect("height"),
-        None,
+        NonZeroU64::new(2).expect("height"),
+        state.view().latest_block_hash(),
         None,
         timestamp_ms,
         0,
@@ -105,22 +98,8 @@ fn prepare_state(
     let alice_asset = Asset::new(alice_asset_id.clone(), alice_balance);
     let alice_account = Account::new(alice_id.clone()).build(&alice_id);
     let world = World::with_assets([domain], [alice_account], [asset_def], [alice_asset], []);
-    let state = test_state(world);
-    if let Some(policy) = policy {
-        install_global_policy(&state, &alice_id, policy);
-    }
+    let state = test_state(world, policy);
     (state, alice_id, alice_kp, asset_def_id, alice_asset_id)
-}
-fn install_global_policy(state: &State, authority: &AccountId, policy: AccountAdmissionPolicy) {
-    let mut block = state.block(block_header(1, 1_699_999_999_000));
-    let mut stx = block.transaction();
-    SetParameter::new(Parameter::Custom(policy.into_custom_parameter()))
-        .execute(authority, &mut stx)
-        .expect("set global account admission policy");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit policy update");
 }
 #[test]
 fn transfer_to_missing_account_creates_account_by_default() {
@@ -140,7 +119,7 @@ fn transfer_to_missing_account_creates_account_by_default() {
     )])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -194,7 +173,7 @@ fn transfer_to_missing_account_rejected_in_explicit_domain() {
     )])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -240,7 +219,9 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
+    // Alice plus the accounts the signed genesis itself registered.
+    let accounts_before = state.view().world().accounts().iter().count();
+    let mut state_block = state.block(block_header(&state, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -256,7 +237,11 @@ fn multiple_receipts_in_one_tx_create_account_once() {
     assert_eq!(balance(&state, &dest_asset_id), Quantity::from(12_u32));
     assert_eq!(balance(&state, &alice_asset_id), Quantity::from(38_u32));
     let account_count = state.view().world().accounts().iter().count();
-    assert_eq!(account_count, 2, "account should be created once");
+    assert_eq!(
+        account_count,
+        accounts_before + 1,
+        "account should be created once"
+    );
 }
 #[test]
 fn transaction_quota_limits_implicit_accounts() {
@@ -280,7 +265,7 @@ fn transaction_quota_limits_implicit_accounts() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_100_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_100_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -351,7 +336,7 @@ fn block_quota_limits_creations_across_transactions() {
     )])
     .sign(alice_kp.private_key());
     let accepted2 = accept_transaction(&state, tx2);
-    let mut state_block = state.block(block_header(1, 1_700_000_200_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_200_000));
     let mut ivm_cache = IvmCache::new();
     let res1 = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -415,7 +400,7 @@ fn missing_default_role_rejects_in_pipeline() {
     )])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_400_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_400_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -465,7 +450,7 @@ fn implicit_account_can_spend_without_roles() {
     )])
     .sign(alice_kp.private_key());
     let accepted1 = accept_transaction(&state, tx1);
-    let mut block1 = state.block(block_header(1, 1_700_000_500_000));
+    let mut block1 = state.block(block_header(&state, 1_700_000_500_000));
     let mut ivm_cache = IvmCache::new();
     let res1 = iroha_core::tx::execute_component_transaction_for_testing(
         &mut block1,
@@ -492,7 +477,7 @@ fn implicit_account_can_spend_without_roles() {
     )])
     .sign(bob_kp.private_key());
     let accepted2 = accept_transaction(&state, tx2);
-    let mut block2 = state.block(block_header(2, 1_700_000_600_000));
+    let mut block2 = state.block(block_header(&state, 1_700_000_600_000));
     let mut ivm_cache2 = IvmCache::new();
     let res2 = iroha_core::tx::execute_component_transaction_for_testing(
         &mut block2,
@@ -528,7 +513,7 @@ fn multi_receipts_within_transaction_succeed_in_open_domain() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,
@@ -583,7 +568,7 @@ fn tx_cap_rejects_multiple_implicit_creations() {
     ])
     .sign(alice_kp.private_key());
     let accepted = accept_transaction(&state, tx);
-    let mut state_block = state.block(block_header(1, 1_700_000_000_000));
+    let mut state_block = state.block(block_header(&state, 1_700_000_000_000));
     let mut ivm_cache = IvmCache::new();
     let result = iroha_core::tx::execute_component_transaction_for_testing(
         &mut state_block,

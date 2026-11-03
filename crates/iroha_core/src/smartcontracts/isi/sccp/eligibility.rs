@@ -4,6 +4,7 @@
 //! still-published successor. All nested values remain borrowed from their original owners.
 
 use super::{hold, pause_record::RetainedSccpFastPause, reconciliation_store, store};
+use crate::smartcontracts::isi::triggers::set::SetReadOnly as _;
 use crate::state::{WorldBlock, WorldReadOnly, WorldTransaction};
 use iroha_data_model::{
     bridge::SccpNetworkV1,
@@ -11,8 +12,11 @@ use iroha_data_model::{
 };
 use mv::storage::StorageReadOnly as _;
 
-/// The four original facts used by fee eligibility and block cap classification.
+/// Original facts used by fee eligibility and block cap classification.
 pub trait EligibilityRead {
+    /// Earliest scheduled Time output from these exact original trigger incarnations.
+    /// `since_ms` is the authenticated parent's time, never a signer or wall-clock value.
+    fn scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64>;
     /// Original current generation's immutable start time and degraded-height counter.
     fn heartbeat_facts(&self) -> Option<(u64, u32)>;
     /// Earliest original reconciliation deadline; the ordered index is derived from records.
@@ -47,6 +51,11 @@ impl<W: WorldReadOnly + ?Sized> Clone for Current<'_, W> {
     }
 }
 impl<W: WorldReadOnly + ?Sized> EligibilityRead for Current<'_, W> {
+    fn scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64> {
+        self.0
+            .triggers()
+            .next_scheduled_progress_at_ms(since_ms, next_height)
+    }
     fn fast_pause_due(&self) -> bool {
         store::fast_pause_rounds::iter(self.0).any(|(_, round)| round.certify_due)
     }
@@ -100,6 +109,11 @@ pub struct TransactionParent<'a, 'block, 'world>(pub(crate) &'a WorldTransaction
 macro_rules! parent_read {
     ($owner:ty) => {
         impl EligibilityRead for $owner {
+            fn scheduled_progress_at_ms(&self, since_ms: u64, next_height: u64) -> Option<u64> {
+                self.0
+                    .triggers
+                    .scheduled_progress_before_block_ms(since_ms, next_height)
+            }
             fn fast_pause_due(&self) -> bool {
                 if cfg!(all(test, sumeragi_core_mutation = "HC302")) {
                     return self

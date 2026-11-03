@@ -1,3 +1,4 @@
+//! Native CLI publication, custody and canonical artifact controls.
 #![cfg(feature = "cli-orchestrator")]
 #![cfg_attr(feature = "cli-orchestrator", allow(unexpected_cfgs))]
 use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
@@ -71,6 +72,13 @@ struct CanonicalTempDir {
 impl CanonicalTempDir {
     fn path(&self) -> &Path {
         &self.path
+    }
+}
+impl std::ops::Deref for CanonicalTempDir {
+    type Target = Path;
+
+    fn deref(&self) -> &Path {
+        self.path()
     }
 }
 fn test_por_status_page(
@@ -157,14 +165,68 @@ fn manifest_submit_keypair() -> KeyPair {
     )
     .expect("fixture SoraFS CLI manifest authority key")
 }
-fn manifest_submit_account() -> AccountId {
-    AccountId::new(manifest_submit_keypair().public_key().clone())
-}
 fn deterministic_ed25519_authority_and_private_key() -> (String, String) {
     let keypair = manifest_submit_keypair();
     let authority = AccountId::new(keypair.public_key().clone()).to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
     (authority, private_key)
+}
+fn publication_fee_quote(server: &MockServer) -> httpmock::Mock<'_> {
+    server.mock(|when, then| {
+        when.method(POST)
+            .path("/v1/fees/quote")
+            .header_exists("X-Iroha-Account")
+            .header_exists("X-Iroha-Signature");
+        then.respond_with(|request: &httpmock::HttpMockRequest| {
+            let request: iroha_torii_shared::FeeQuoteRequest =
+                from_slice(request.body().as_ref()).expect("exact publication fee draft");
+            let intent = request.payload.fee_payment_intent().clone();
+            let quote = iroha_torii_shared::FeeQuoteResponse {
+                components: intent
+                    .charge_limits()
+                    .iter()
+                    .map(|limit| iroha_torii_shared::FeeQuoteComponent {
+                        kind: limit.kind(),
+                        asset_definition_id: limit.asset_definition_id().clone(),
+                        max_amount: limit.max_amount().clone(),
+                    })
+                    .collect(),
+                intent,
+                observation: iroha_torii_shared::FeeQuoteObservation {
+                    ledger_time_ms: 1_000,
+                    next_block_height: 2,
+                    route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                },
+                capacities: Vec::new(),
+                decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
+                    debit_source: iroha_data_model::nexus::FeeDebitSource::Account(
+                        request.payload.authority().clone(),
+                    ),
+                    program_revision: None,
+                },
+            };
+            quote
+                .validate_for_draft(&request.payload)
+                .expect("valid fixture quote");
+            httpmock::HttpMockResponse::builder()
+                .status(200)
+                .header("Content-Type", "application/json")
+                .body(to_vec(&quote).expect("encode exact publication quote"))
+                .build()
+        });
+    })
+}
+fn deploy_checkpoint_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt")
+        .canonicalize()
+        .expect("canonical independently selected checkpoint path")
+}
+fn deploy_checkpoint() -> iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint {
+    iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+        &fs::read(deploy_checkpoint_path()).expect("read independently selected checkpoint"),
+    )
+    .expect("decode independently selected native checkpoint")
 }
 fn deploy_keypair() -> KeyPair {
     KeyPair::try_from_seed(
@@ -173,92 +235,19 @@ fn deploy_keypair() -> KeyPair {
     )
     .expect("fixture SoraFS CLI deploy authority key")
 }
-fn deploy_account() -> AccountId {
-    AccountId::new(deploy_keypair().public_key().clone())
-}
-/// Torii's fee quote, which the CLI requests before it signs a publication: the payer covers
-/// the draft's own authority intent from its account.
-fn mock_publication_fee_quote<'a>(server: &'a MockServer, payer: &AccountId) -> httpmock::Mock<'a> {
-    let quote = iroha_torii_shared::FeeQuoteResponse {
-        intent: iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        observation: iroha_torii_shared::FeeQuoteObservation {
-            ledger_time_ms: 1,
-            next_block_height: 1,
-            route_dataspace_id: iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-        },
-        components: Vec::new(),
-        capacities: Vec::new(),
-        decision: iroha_torii_shared::FeeQuoteDecision::Accepted {
-            debit_source: iroha_data_model::nexus::FeeDebitSource::Account(payer.clone()),
-            program_revision: None,
-        },
-    };
-    let body = to_vec(&quote).expect("encode publication fee quote");
-    server.mock(|when, then| {
-        when.method(POST).path("/v1/fees/quote");
-        then.status(200)
-            .header("Content-Type", "application/json")
-            .body(body);
-    })
-}
-/// The tracked native finality fixture (`fixtures/sumeragi/native-finality`): a canonical
-/// checkpoint and the chain and network it certifies. Deploy trusts only an independently
-/// selected checkpoint for its configured network and chain.
-struct TrustedFinalityCheckpoint {
-    path: PathBuf,
-    chain_id: String,
-    network_id: String,
-}
-fn trusted_finality_checkpoint() -> TrustedFinalityCheckpoint {
-    // The CLI retains the checkpoint file without following symlinks or parent components.
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../fixtures/sumeragi/native-finality")
-        .canonicalize()
-        .expect("native finality fixture directory");
-    let capture: Value = norito::json::from_str(
-        &fs::read_to_string(directory.join("capture.json")).expect("read checkpoint capture"),
-    )
-    .expect("parse checkpoint capture");
-    let field = |name: &str| {
-        capture
-            .get(name)
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| panic!("checkpoint capture lacks `{name}`"))
-            .to_owned()
-    };
-    TrustedFinalityCheckpoint {
-        path: directory.join("genesis-checkpoint.nrt"),
-        chain_id: field("chain_id"),
-        network_id: field("network_id"),
-    }
-}
-/// Torii refuses publication preparation outright, so qualification fails at once (the
-/// gateway readback is still checked) instead of polling an absent route until its deadline.
-fn mock_publication_preparation_refused(server: &MockServer) -> httpmock::Mock<'_> {
-    server.mock(|when, then| {
-        when.method(POST).path("/v1/sorafs/publish/prepare");
-        then.status(503).body("publication preparation unavailable");
-    })
-}
-fn write_deploy_client_config(
-    dir: &Path,
-    torii_url: &str,
-    finality: &TrustedFinalityCheckpoint,
-) -> (PathBuf, String) {
+fn write_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
     let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
+    let checkpoint = deploy_checkpoint();
+    let chain = checkpoint.chain_id();
+    let network_id = checkpoint.network_id();
     let path = dir.join("client.toml");
-    let TrustedFinalityCheckpoint {
-        chain_id,
-        network_id,
-        ..
-    } = finality;
     fs::write(
         &path,
         format!(
             r#"
-chain = "{chain_id}"
+chain = "{chain}"
 torii_url = "{torii_url}"
 network_id = "{network_id}"
 [account]
@@ -271,20 +260,14 @@ chain_discriminant = 369
     .expect("write deploy client config");
     (path, private_key)
 }
-fn write_profile_deploy_client_config(
-    dir: &Path,
-    torii_url: &str,
-    finality: &TrustedFinalityCheckpoint,
-) -> (PathBuf, String) {
+fn write_profile_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
     let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
+    let checkpoint = deploy_checkpoint();
+    let chain_id = checkpoint.chain_id();
+    let network_id = checkpoint.network_id();
     let path = dir.join("client-profile.toml");
-    let TrustedFinalityCheckpoint {
-        chain_id,
-        network_id,
-        ..
-    } = finality;
     fs::write(
         &path,
         format!(
@@ -1225,7 +1208,7 @@ fn manifest_submit_posts_payload() {
         Some(manifest_car_digest_hex.as_str())
     );
     let server = MockServer::start();
-    let quote = mock_publication_fee_quote(&server, &manifest_submit_account());
+    let fee_quote = publication_fee_quote(&server);
     let mock = server.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
@@ -1249,7 +1232,6 @@ fn manifest_submit_posts_payload() {
         .arg(format!("--response-out={}", response_path.display()))
         .assert()
         .success();
-    quote.assert_calls(1);
     mock.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary_stdout: Value = norito::json::from_str(stdout.trim()).expect("submit summary json");
@@ -1281,6 +1263,7 @@ fn manifest_submit_posts_payload() {
     );
     let response_bytes = fs::read(&response_path).expect("read response body");
     assert_eq!(response_bytes, br#"{"status":"ok"}"#);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn retired_storage_pin_subcommand_does_not_send_http() {
@@ -1346,22 +1329,197 @@ fn storage_prepare_writes_canonical_payload_and_files_manifest() {
     assert_eq!(files.len(), 2);
 }
 #[test]
+fn storage_prepare_composes_large_directory_and_rejects_late_asset_substitution() {
+    let temporary = tempdir().expect("tempdir");
+    let site = temporary.join("site");
+    fs::create_dir_all(site.join("assets")).expect("create assets directory");
+    let mut expected_files: Vec<(Vec<String>, Vec<u8>)> = (0..42)
+        .map(|index| {
+            let bytes = (0..32 * 1024 + index)
+                .map(|offset| (offset as u8).wrapping_mul(17).wrapping_add(index as u8))
+                .collect();
+            (vec!["assets".to_owned(), format!("{index:02}.bin")], bytes)
+        })
+        .collect();
+    expected_files.push((vec!["index.html".to_owned()], b"<html>site</html>".to_vec()));
+    // Creation order must not become the canonical directory or payload order.
+    for (path, bytes) in expected_files.iter().rev() {
+        fs::write(site.join(path.iter().collect::<PathBuf>()), bytes).expect("write asset");
+    }
+    let expected_payload: Vec<u8> = expected_files
+        .iter()
+        .flat_map(|(_, bytes)| bytes.iter().copied())
+        .collect();
+    let expected_inventory = Value::Array(
+        expected_files
+            .iter()
+            .map(|(path, bytes)| {
+                Value::Object(Map::from_iter([
+                    (
+                        "path".into(),
+                        Value::Array(path.iter().cloned().map(Value::from).collect()),
+                    ),
+                    ("size".into(), Value::from(bytes.len() as u64)),
+                ]))
+            })
+            .collect(),
+    );
+    let read_json = |path: &Path| -> Value {
+        from_slice(&fs::read(path).expect("read CLI JSON")).expect("canonical CLI JSON")
+    };
+
+    // Both artifacts come from real CLI processes, never an in-process manifest builder.
+    let (manifest_path, plan_path) = prepare_manifest_artifacts_for_input(&temporary, &site);
+    let car_path = temporary.join("gha_payload.car");
+    let original_manifest = fs::read(&manifest_path).expect("manifest bytes");
+    let original_plan = fs::read(&plan_path).expect("plan bytes");
+    let original_car = fs::read(&car_path).expect("CAR bytes");
+    let manifest: ManifestV1 = decode_from_bytes(&original_manifest).expect("decode manifest");
+    let plan = chunk_fetch_plan_from_json(&read_json(&plan_path)).expect("canonical fetch plan");
+    assert!(plan.chunk_fetch_specs.len() > 1, "fixture must span chunks");
+    assert_eq!(
+        plan.payload_digest,
+        *blake3_hash(&expected_payload).as_bytes()
+    );
+    assert_eq!(manifest.content_length, expected_payload.len() as u64);
+    assert_eq!(manifest.car_size, original_car.len() as u64);
+    assert_eq!(manifest.car_digest, *blake3_hash(&original_car).as_bytes());
+    let pack_summary = read_json(&temporary.join("gha_summary.json"));
+    assert_eq!(pack_summary["input_kind"].as_str(), Some("directory"));
+    assert_eq!(
+        pack_summary["payload_bytes"].as_u64(),
+        Some(manifest.content_length)
+    );
+
+    let payload_out = temporary.join("prepared.payload.bin");
+    let files_out = temporary.join("prepared.files.json");
+    let summary_out = temporary.join("prepared.summary.json");
+    let prepared = sorafs_cli_cmd()
+        .args(["storage", "prepare"])
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", site.display()))
+        .arg(format!("--payload-out={}", payload_out.display()))
+        .arg(format!("--files-out={}", files_out.display()))
+        .arg(format!("--summary-out={}", summary_out.display()))
+        .assert()
+        .success();
+    let prepared_summary: Value =
+        from_slice(&prepared.get_output().stdout).expect("prepared stdout JSON");
+    assert_eq!(prepared_summary, read_json(&summary_out));
+    assert_eq!(prepared_summary["payload_file_count"].as_u64(), Some(43));
+    assert_eq!(
+        prepared_summary["payload_bytes"].as_u64(),
+        Some(manifest.content_length)
+    );
+    assert_eq!(read_json(&files_out), expected_inventory);
+    assert_eq!(
+        fs::read(&payload_out).expect("prepared payload"),
+        expected_payload
+    );
+
+    let verify_summary = temporary.join("verified.summary.json");
+    let verified = sorafs_cli_cmd()
+        .args(["proof", "verify"])
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--payload={}", site.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--summary-out={}", verify_summary.display()))
+        .assert()
+        .success();
+    let verified_summary: Value =
+        from_slice(&verified.get_output().stdout).expect("verified stdout JSON");
+    assert_eq!(verified_summary, read_json(&verify_summary));
+    assert_eq!(
+        verified_summary["payload_digest_hex"].as_str(),
+        Some(blake3_hash(&expected_payload).to_hex().as_str())
+    );
+    assert_eq!(
+        verified_summary["payload_bytes"].as_u64(),
+        Some(manifest.content_length)
+    );
+    assert_eq!(
+        verified_summary["chunk_count"].as_u64(),
+        Some(plan.chunk_fetch_specs.len() as u64)
+    );
+    assert_eq!(
+        verified_summary["manifest_digest_hex"],
+        prepared_summary["manifest_digest_hex"]
+    );
+    assert_eq!(
+        verified_summary["root_cids_hex"],
+        Value::Array(vec![Value::from(hex_encode(&manifest.root_cid))])
+    );
+
+    // Equal-length substitution after the first 32 entries must fail the content
+    // commitment, not merely the file-count or payload-length checks.
+    let (late_path, late_bytes) = &expected_files[41];
+    let mut substituted = late_bytes.clone();
+    substituted[0] ^= 1;
+    fs::write(
+        site.join(late_path.iter().collect::<PathBuf>()),
+        &substituted,
+    )
+    .expect("substitute late asset at unchanged length");
+    let rejected_payload = temporary.join("rejected.payload.bin");
+    let rejected_files = temporary.join("rejected.files.json");
+    let rejected_summary = temporary.join("rejected.summary.json");
+    let refused = sorafs_cli_cmd()
+        .args(["storage", "prepare"])
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--payload={}", site.display()))
+        .arg(format!("--payload-out={}", rejected_payload.display()))
+        .arg(format!("--files-out={}", rejected_files.display()))
+        .arg(format!("--summary-out={}", rejected_summary.display()))
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&refused.get_output().stderr)
+            .contains("payload chunk-plan commitment does not match the canonical manifest")
+    );
+    assert!(refused.get_output().stdout.is_empty());
+    for path in [&rejected_payload, &rejected_files, &rejected_summary] {
+        assert!(
+            !path.exists(),
+            "refused preparation wrote {}",
+            path.display()
+        );
+    }
+    assert_eq!(
+        fs::read(&manifest_path).expect("retained manifest"),
+        original_manifest
+    );
+    assert_eq!(fs::read(&plan_path).expect("retained plan"), original_plan);
+    assert_eq!(fs::read(&car_path).expect("retained CAR"), original_car);
+    assert_eq!(
+        fs::read(&payload_out).expect("original prepared payload"),
+        expected_payload
+    );
+    assert_eq!(read_json(&files_out), expected_inventory);
+    assert_eq!(read_json(&summary_out), prepared_summary);
+    assert_eq!(read_json(&verify_summary), verified_summary);
+}
+#[test]
 fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("site.bin");
     let payload = b"sorafs deploy payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let finality = trusted_finality_checkpoint();
+    let fee_quote = publication_fee_quote(&primary);
+    let preparation = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.status(409)
+            .body("fixture has no finalized publication");
+    });
     let (client_config, private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
+        write_deploy_client_config(tempdir.path(), &primary.base_url());
     let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(r#"{"current_epoch":7}"#);
     });
-    mock_publication_fee_quote(&primary, &deploy_account());
     let discovery = primary.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/storage/peers");
         then.status(200)
@@ -1385,22 +1543,28 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-    let prepare = mock_publication_preparation_refused(&primary);
     let summary_path = tempdir.path().join("deploy.summary.json");
     let out_dir = tempdir.path().join("deploy-out");
     let assert = sorafs_cli_cmd()
         .arg("deploy")
+        .arg(format!(
+            "--finality-checkpoint={}",
+            deploy_checkpoint_path().display()
+        ))
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg(format!("--out-dir={}", out_dir.display()))
         .arg(format!("--summary-out={}", summary_path.display()))
         .assert()
         .failure();
+    assert!(
+        !assert.get_output().stdout.is_empty(),
+        "deploy must reach its bounded receipt: {}",
+        String::from_utf8_lossy(&assert.get_output().stderr)
+    );
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
-    prepare.assert_calls(1);
     gateway.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     assert!(
@@ -1440,8 +1604,7 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .and_then(Value::as_str),
         Some("unverified")
     );
-    // A matching gateway readback is not publication: only finality-qualified provider
-    // completion is, and Torii refused to prepare it.
+    // Gateway readback does not establish finality-qualified provider publication.
     assert!(
         summary
             .get("provider_ingest")
@@ -1449,6 +1612,14 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .and_then(|ingest| ingest.get("error"))
             .and_then(Value::as_str)
             .is_some_and(|error| error.contains("publication preparation rejected"))
+    );
+    assert!(
+        summary
+            .get("provider_ingest")
+            .and_then(Value::as_object)
+            .and_then(|ingest| ingest.get("completion_finalized"))
+            .is_none(),
+        "an unverified preparation has no finalized completion"
     );
     assert_eq!(
         summary.get("publication_verified").and_then(Value::as_bool),
@@ -1469,6 +1640,8 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .and_then(Value::as_bool),
         Some(true)
     );
+    preparation.assert_calls(1);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
@@ -1477,10 +1650,14 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     let payload = b"sorafs deploy known chain payload".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let finality = trusted_finality_checkpoint();
+    let fee_quote = publication_fee_quote(&primary);
+    let preparation = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.status(409)
+            .body("fixture has no finalized publication");
+    });
     let (client_config, _private_key) =
-        write_profile_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
-    mock_publication_fee_quote(&primary, &deploy_account());
+        write_profile_deploy_client_config(tempdir.path(), &primary.base_url());
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
@@ -1493,12 +1670,14 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-    let prepare = mock_publication_preparation_refused(&primary);
     let assert = sorafs_cli_cmd()
         .arg("deploy")
+        .arg(format!(
+            "--finality-checkpoint={}",
+            deploy_checkpoint_path().display()
+        ))
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg("--no-peer-discovery")
         .arg(format!(
             "--out-dir={}",
@@ -1506,12 +1685,18 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
         ))
         .assert()
         .failure();
+    assert!(
+        !assert.get_output().stdout.is_empty(),
+        "deploy must reach its bounded receipt: {}",
+        String::from_utf8_lossy(&assert.get_output().stderr)
+    );
     register.assert_calls(1);
-    prepare.assert_calls(1);
     gateway.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
+    preparation.assert_calls(1);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn deploy_falls_back_to_primary_when_peer_discovery_404() {
@@ -1520,16 +1705,20 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     let payload = b"fallback deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let finality = trusted_finality_checkpoint();
+    let fee_quote = publication_fee_quote(&primary);
+    let preparation = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.status(409)
+            .body("fixture has no finalized publication");
+    });
     let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
+        write_deploy_client_config(tempdir.path(), &primary.base_url());
     let status = primary.mock(|when, then| {
         when.method(GET).path("/status");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(r#"{"current_epoch":8}"#);
     });
-    mock_publication_fee_quote(&primary, &deploy_account());
     let discovery = primary.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/storage/peers");
         then.status(404).body("not found");
@@ -1544,23 +1733,28 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-    let prepare = mock_publication_preparation_refused(&primary);
     let assert = sorafs_cli_cmd()
         .arg("deploy")
+        .arg(format!(
+            "--finality-checkpoint={}",
+            deploy_checkpoint_path().display()
+        ))
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("out").display()
         ))
         .assert()
         .failure();
+    assert!(
+        !assert.get_output().stdout.is_empty(),
+        "deploy must reach its bounded receipt: {}",
+        String::from_utf8_lossy(&assert.get_output().stderr)
+    );
     status.assert_calls(0);
     discovery.assert_calls(1);
     register.assert_calls(1);
-    // Publication falls back to the primary Torii, which is the only provider source left.
-    prepare.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
@@ -1572,6 +1766,9 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .and_then(Value::as_str)
             .is_some()
     );
+    // Publication uses the primary Torii after peer discovery refuses.
+    preparation.assert_calls(1);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
@@ -1580,14 +1777,18 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     let payload = b"fallback transaction deploy".to_vec();
     fs::write(&payload_path, &payload).expect("write payload");
     let primary = MockServer::start();
-    let finality = trusted_finality_checkpoint();
+    let fee_quote = publication_fee_quote(&primary);
+    let preparation = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.status(409)
+            .body("fixture has no finalized publication");
+    });
     let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
+        write_deploy_client_config(tempdir.path(), &primary.base_url());
     let register = primary.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(405).body("method not allowed");
     });
-    mock_publication_fee_quote(&primary, &deploy_account());
     let registry = primary.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/pin");
         then.status(200)
@@ -1612,22 +1813,27 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body(payload.clone());
     });
-    let prepare = mock_publication_preparation_refused(&primary);
     let output = sorafs_cli_cmd()
         .arg("deploy")
+        .arg(format!(
+            "--finality-checkpoint={}",
+            deploy_checkpoint_path().display()
+        ))
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg(format!(
             "--out-dir={}",
             tempdir.path().join("fallback-out").display()
         ))
         .output()
         .expect("command executes");
+    assert!(
+        !output.stdout.is_empty(),
+        "deploy must reach its bounded receipt: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(!output.status.success());
     register.assert_calls(1);
-    // A refused registration is never followed by a publication attempt.
-    prepare.assert_calls(0);
     registry.assert_calls(0);
     transaction.assert_calls(0);
     pipeline.assert_calls(0);
@@ -1650,6 +1856,9 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
             .and_then(Value::as_str)
             .is_some_and(|error| error.contains("generic transaction fallback is not supported"))
     );
+    // A refused registration is never followed by a publication attempt.
+    preparation.assert_calls(0);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
@@ -1657,10 +1866,14 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     let payload_path = tempdir.path().join("payload.bin");
     fs::write(&payload_path, b"abc").expect("write payload");
     let primary = MockServer::start();
-    let finality = trusted_finality_checkpoint();
+    let fee_quote = publication_fee_quote(&primary);
+    let preparation = primary.mock(|when, then| {
+        when.method(POST).path("/v1/sorafs/publish/prepare");
+        then.status(409)
+            .body("fixture has no finalized publication");
+    });
     let (client_config, _private_key) =
-        write_deploy_client_config(tempdir.path(), &primary.base_url(), &finality);
-    mock_publication_fee_quote(&primary, &deploy_account());
+        write_deploy_client_config(tempdir.path(), &primary.base_url());
     primary.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(200)
@@ -1671,12 +1884,14 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         when.method(GET).path_matches(r"^/sorafs/cid/[^/]+$");
         then.status(200).body("xyz");
     });
-    mock_publication_preparation_refused(&primary);
     let output = sorafs_cli_cmd()
         .arg("deploy")
+        .arg(format!(
+            "--finality-checkpoint={}",
+            deploy_checkpoint_path().display()
+        ))
         .arg(format!("--payload={}", payload_path.display()))
         .arg(format!("--client-config={}", client_config.display()))
-        .arg(format!("--finality-checkpoint={}", finality.path.display()))
         .arg("--no-peer-discovery")
         .arg(format!(
             "--out-dir={}",
@@ -1684,6 +1899,11 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         ))
         .output()
         .expect("command executes");
+    assert!(
+        !output.stdout.is_empty(),
+        "deploy must reach its bounded receipt: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
         !output.status.success(),
         "deploy should fail when gateway bytes have the right length but wrong hash"
@@ -1699,6 +1919,8 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
         .expect("gateway check");
     assert_eq!(check.get("length_ok").and_then(Value::as_bool), Some(true));
     assert_eq!(check.get("hash_ok").and_then(Value::as_bool), Some(false));
+    preparation.assert_calls(1);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn manifest_submit_rejects_chunk_digest_mismatch() {
@@ -1775,7 +1997,7 @@ fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
     let server = MockServer::start();
-    mock_publication_fee_quote(&server, &manifest_submit_account());
+    let fee_quote = publication_fee_quote(&server);
     let register_mock = server.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(405).body("method not allowed");
@@ -1817,6 +2039,7 @@ fn manifest_submit_does_not_fallback_or_replay_the_signed_body() {
     registry_mock.assert_calls(0);
     tx_mock.assert_calls(0);
     status_mock.assert_calls(0);
+    fee_quote.assert_calls(1);
 }
 #[test]
 fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
@@ -1825,7 +2048,7 @@ fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
     for status in [307_u16, 308_u16] {
         let server = MockServer::start();
-        mock_publication_fee_quote(&server, &manifest_submit_account());
+        let fee_quote = publication_fee_quote(&server);
         let register_mock = server.mock(|when, then| {
             when.method(POST).path("/v1/sorafs/pin/register");
             then.status(status)
@@ -1848,6 +2071,7 @@ fn manifest_submit_does_not_follow_307_or_308_with_the_signed_body() {
             .output()
             .expect("command executes");
         assert!(!output.status.success(), "HTTP {status} must be terminal");
+        fee_quote.assert_calls(1);
         register_mock.assert_calls(1);
         replay_mock.assert_calls(0);
     }
@@ -2632,6 +2856,80 @@ fn reputation_watch_fetches_events_with_cursor_and_writes_summary() {
     assert_eq!(summary_value.get("count").and_then(Value::as_u64), Some(1));
 }
 #[test]
+fn proof_verify_refuses_oversized_retained_inputs_before_output() {
+    let temporary = tempdir().expect("tempdir");
+    let (manifest, _) = prepare_manifest_artifacts(temporary.path());
+    let car = temporary.join("gha_payload.car");
+    let original_car = fs::read(&car).expect("original CAR");
+    let original_manifest = fs::read(&manifest).expect("original manifest");
+    let summary = temporary.join("oversize.summary.json");
+    for oversized_manifest in [false, true] {
+        let (selected, maximum) = if oversized_manifest {
+            (
+                &manifest,
+                sorafs_manifest::MAX_MANIFEST_ENCODED_BYTES as u64,
+            )
+        } else {
+            (&car, original_car.len() as u64)
+        };
+        fs::OpenOptions::new()
+            .write(true)
+            .open(selected)
+            .expect("open fixture for extent mutation")
+            .set_len(maximum + 1)
+            .expect("make input exceed admitted extent");
+        let output = sorafs_cli_cmd()
+            .args(["proof", "verify"])
+            .arg(format!("--manifest={}", manifest.display()))
+            .arg(format!("--car={}", car.display()))
+            .arg(format!("--summary-out={}", summary.display()))
+            .assert()
+            .failure();
+        assert!(String::from_utf8_lossy(&output.get_output().stderr).contains("maximum is"));
+        assert!(output.get_output().stdout.is_empty());
+        assert!(!summary.exists());
+        fs::write(&manifest, &original_manifest).expect("restore original manifest");
+        fs::write(&car, &original_car).expect("restore original CAR");
+    }
+}
+#[cfg(unix)]
+#[test]
+fn proof_verify_refuses_symlink_inputs_before_output() {
+    let temporary = tempdir().expect("tempdir");
+    let (manifest, _) = prepare_manifest_artifacts(temporary.path());
+    let car = temporary.join("gha_payload.car");
+    let original_car = fs::read(&car).expect("original CAR");
+    let original_manifest = fs::read(&manifest).expect("original manifest");
+    let linked = temporary.join("linked-input");
+    let summary = temporary.join("symlink.summary.json");
+    for linked_manifest in [false, true] {
+        std::os::unix::fs::symlink(if linked_manifest { &manifest } else { &car }, &linked)
+            .expect("create actual symlink");
+        let output = sorafs_cli_cmd()
+            .args(["proof", "verify"])
+            .arg(format!(
+                "--manifest={}",
+                if linked_manifest { &linked } else { &manifest }.display()
+            ))
+            .arg(format!(
+                "--car={}",
+                if linked_manifest { &car } else { &linked }.display()
+            ))
+            .arg(format!("--summary-out={}", summary.display()))
+            .assert()
+            .failure();
+        assert!(String::from_utf8_lossy(&output.get_output().stderr).contains("failed to retain"));
+        assert!(output.get_output().stdout.is_empty());
+        assert!(!summary.exists());
+        assert_eq!(
+            fs::read(&manifest).expect("unchanged manifest"),
+            original_manifest
+        );
+        assert_eq!(fs::read(&car).expect("unchanged CAR"), original_car);
+        fs::remove_file(&linked).expect("remove fixture symlink");
+    }
+}
+#[test]
 fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
     let tempdir = tempdir().expect("tempdir");
     let site_dir = tempdir.path().join("site");
@@ -2665,11 +2963,26 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         .assert()
         .success();
     let verify_summary_path = tempdir.path().join("site.verify.summary.json");
+    let no_layout_summary = tempdir.path().join("no-layout.summary.json");
+    sorafs_cli_cmd()
+        .arg("proof")
+        .arg("verify")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--chunk-plan={}", plan_path.display()))
+        .arg(format!("--summary-out={}", no_layout_summary.display()))
+        .assert()
+        .failure();
+    assert!(
+        !no_layout_summary.exists(),
+        "chunk envelopes cannot supply file paths"
+    );
     let assert = sorafs_cli_cmd()
         .arg("proof")
         .arg("verify")
         .arg(format!("--manifest={}", manifest_path.display()))
         .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--payload={}", site_dir.display()))
         .arg(format!("--chunk-plan={}", plan_path.display()))
         .arg(format!("--summary-out={}", verify_summary_path.display()))
         .assert()
@@ -2693,15 +3006,104 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
             .and_then(Value::as_u64),
         Some(specs.len() as u64)
     );
+    // A valid standalone envelope with the wrong whole-payload commitment
+    // cannot replace the independently reconstructed source plan.
+    let mut changed_plan = plan_value;
+    changed_plan
+        .as_object_mut()
+        .expect("canonical envelope")
+        .insert(
+            "payload_digest_blake3_hex".into(),
+            Value::from("11".repeat(32)),
+        );
+    let changed_plan_path = tempdir.path().join("changed.plan.json");
+    fs::write(
+        &changed_plan_path,
+        to_vec(&changed_plan).expect("changed plan JSON"),
+    )
+    .expect("write changed plan");
+    let rejected_summary = tempdir.path().join("rejected.summary.json");
+    let changed = sorafs_cli_cmd()
+        .arg("proof")
+        .arg("verify")
+        .arg(format!("--manifest={}", manifest_path.display()))
+        .arg(format!("--car={}", car_path.display()))
+        .arg(format!("--payload={}", site_dir.display()))
+        .arg(format!("--chunk-plan={}", changed_plan_path.display()))
+        .arg(format!("--summary-out={}", rejected_summary.display()))
+        .assert()
+        .failure();
+    assert!(
+        String::from_utf8_lossy(&changed.get_output().stderr)
+            .contains("chunk plan does not match the authenticated source payload")
+    );
+    assert!(!rejected_summary.exists());
+    let original_path = assets_dir.join("app.js");
+    let renamed_path = assets_dir.join("other.js");
+    fs::rename(&original_path, &renamed_path).expect("change source path without changing bytes");
+    for change_bytes in [false, true] {
+        if change_bytes {
+            fs::rename(&renamed_path, &original_path).expect("restore source path");
+            let mut bytes = fs::read(&original_path).expect("read original source");
+            bytes[0] ^= 1;
+            fs::write(&original_path, bytes).expect("change source bytes at same length");
+        }
+        sorafs_cli_cmd()
+            .arg("proof")
+            .arg("verify")
+            .arg(format!("--manifest={}", manifest_path.display()))
+            .arg(format!("--car={}", car_path.display()))
+            .arg(format!("--payload={}", site_dir.display()))
+            .arg(format!("--chunk-plan={}", plan_path.display()))
+            .arg(format!("--summary-out={}", rejected_summary.display()))
+            .assert()
+            .failure();
+        assert!(
+            !rejected_summary.exists(),
+            "changed source must not emit accepted output"
+        );
+    }
 }
-fn governance_fixture_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+fn governance_fixture_root() -> CanonicalTempDir {
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
-        .join("fixtures/sorafs_manifest/governance")
+        .join("fixtures/sorafs_manifest/governance/node_v1.to");
+    let bytes = fs::read(source).expect("read governance node payload fixture");
+    let mut node: GovernanceLogNodeV1 =
+        decode_from_bytes(&bytes).expect("decode governance node payload fixture");
+    // A standalone archive starts at its actual root. The shared fixture
+    // directory also contains unrelated negative cases and chained nodes.
+    node.prev_cid = None;
+    node.publisher_peer_id = b"12D3KooWGovernanceDagBuilder".to_vec();
+    let signer = SigningKey::from_bytes(&[0xCD; 32]);
+    node.node_cid = node.recompute_node_cid().expect("derive root node CID");
+    node.publisher_signature = GovernanceLogSignatureV1 {
+        algorithm: GovernanceSignatureAlgorithm::Ed25519,
+        public_key: signer.verifying_key().to_bytes().to_vec(),
+        signature: signer
+            .sign(
+                &node
+                    .signature_payload_bytes()
+                    .expect("root signature payload"),
+            )
+            .to_bytes()
+            .to_vec(),
+    };
+    node.validate().expect("valid isolated root node");
+    node.verify_publisher_signature()
+        .expect("authenticated isolated root node");
+    let root = tempdir().expect("isolated governance fixture");
+    let bytes = to_bytes(&node).expect("encode isolated root node");
+    fs::write(root.join("node_v1.to"), &bytes).expect("write isolated root node");
+    fs::write(
+        root.join("node_v1.to.blake3"),
+        hex_encode(blake3_hash(&bytes).as_bytes()),
+    )
+    .expect("write isolated root sidecar");
+    root
 }
-fn governance_fixture_node_cid_display() -> String {
-    let bytes = fs::read(governance_fixture_root().join("node_v1.to"))
-        .expect("read governance node fixture");
+fn governance_fixture_node_cid_display(root: &Path) -> String {
+    let bytes = fs::read(root.join("node_v1.to")).expect("read governance node fixture");
     let node: GovernanceLogNodeV1 =
         decode_from_bytes(&bytes).expect("decode governance node fixture");
     match std::str::from_utf8(&node.node_cid) {
@@ -2894,7 +3296,7 @@ fn governance_dag_list_and_show_validate_fixture() {
     fs::create_dir(&root).expect("create node archive");
     let node = root.join("node_v1.to");
     fs::copy(governance_fixture_root().join("node_v1.to"), &node).expect("copy fixture node");
-    let node_cid = governance_fixture_node_cid_display();
+    let node_cid = governance_fixture_node_cid_display(&root);
     let list_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")
@@ -3076,7 +3478,7 @@ fn governance_dag_verify_rejects_unexpected_head() {
 #[test]
 fn governance_dag_verify_and_export_fixture_archive() {
     let root = governance_fixture_root();
-    let head_cid = governance_fixture_node_cid_display();
+    let head_cid = governance_fixture_node_cid_display(&root);
     let verify_assert = sorafs_cli_cmd()
         .arg("governance")
         .arg("dag")

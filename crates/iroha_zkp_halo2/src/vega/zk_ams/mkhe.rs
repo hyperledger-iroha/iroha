@@ -28,7 +28,7 @@ use core::cmp::Ordering;
 #[cfg(test)]
 use core::fmt;
 #[cfg(test)]
-use once_cell::sync::Lazy;
+use std::sync::LazyLock;
 use thiserror::Error;
 
 /// Semantic roles of native outer identities, separate from proof transcripts.
@@ -792,13 +792,14 @@ const T256_CENTERED_MAX_BE_V1: [u8; 32] = [
     0x00, 0x00, 0x00, 0x00, 0x7f, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
 ];
 #[cfg(test)]
-static MKHE_AUTH_GENERATOR: Lazy<Result<VegaT256PointV1, ZkAmsMkheErrorV1>> = Lazy::new(|| {
-    derive_t256_generators_v1(AUTH_GENERATOR_LABEL_V1, 1)
-        .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
-        .into_iter()
-        .next()
-        .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
-});
+static MKHE_AUTH_GENERATOR: LazyLock<Result<VegaT256PointV1, ZkAmsMkheErrorV1>> =
+    LazyLock::new(|| {
+        derive_t256_generators_v1(AUTH_GENERATOR_LABEL_V1, 1)
+            .map_err(|_| ZkAmsMkheErrorV1::InvalidProfile)?
+            .into_iter()
+            .next()
+            .ok_or(ZkAmsMkheErrorV1::InvalidProfile)
+    });
 /// Failure at the canonical ZK-AMS multi-key BGV boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
 pub enum ZkAmsMkheErrorV1 {

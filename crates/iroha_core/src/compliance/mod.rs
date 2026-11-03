@@ -1183,7 +1183,7 @@ mod tests {
         let lane_one = LaneId::new(1);
         let dataspace_one = DataSpaceId::new(7);
         let catalog = iroha_data_model::nexus::LaneCatalog::new(
-            nonzero_ext::nonzero!(2_u32),
+            iroha_primitives::nonzero!(2_u32),
             vec![
                 iroha_data_model::nexus::LaneConfig::default(),
                 iroha_data_model::nexus::LaneConfig {

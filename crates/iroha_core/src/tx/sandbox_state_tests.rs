@@ -491,18 +491,19 @@ impl Sandbox {
         repeats: Repeats,
         label: u32,
     ) -> Self {
+        let mut action = Action::new(
+            transfer(src, quantity, dest),
+            repeats,
+            GENESIS_ACCOUNT.id.clone(),
+            TimeEventFilter::new(ExecutionTime::PreCommit),
+        )
+        .expect("sandbox time-trigger action satisfies validation invariants");
+        action.metadata = self.trigger_registration_metadata(false);
         let mut block = self.state.world.triggers.block();
         let mut transaction = block.transaction();
         let trigger = Trigger::new(
             format!("time-{src}-{dest}-{label}").parse().unwrap(),
-            Action::new(
-                transfer(src, quantity, dest),
-                repeats,
-                GENESIS_ACCOUNT.id.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
-            )
-            .expect("sandbox time-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata(false)),
+            action,
         )
         .try_into()
         .unwrap();
@@ -574,24 +575,25 @@ impl Sandbox {
         repeats: Repeats,
         label: u32,
     ) -> Self {
+        let mut action = Action::new(
+            [InstructionBox::from(Transfer::asset_quantity(
+                asset(src),
+                amount,
+                ACCOUNT[dest].id.clone(),
+            ))],
+            repeats,
+            GENESIS_ACCOUNT.id.clone(),
+            AssetEventFilter::new()
+                .for_events(AssetEventSet::Added)
+                .for_asset(asset(src)),
+        )
+        .expect("sandbox data-trigger action satisfies validation invariants");
+        action.metadata = self.trigger_registration_metadata(true);
         let mut block = self.state.world.triggers.block();
         let mut transaction = block.transaction();
         let trigger = Trigger::new(
             format!("data-{src}-{dest}-{label}").parse().unwrap(),
-            Action::new(
-                [InstructionBox::from(Transfer::asset_quantity(
-                    asset(src),
-                    amount,
-                    ACCOUNT[dest].id.clone(),
-                ))],
-                repeats,
-                GENESIS_ACCOUNT.id.clone(),
-                AssetEventFilter::new()
-                    .for_events(AssetEventSet::Added)
-                    .for_asset(asset(src)),
-            )
-            .expect("sandbox data-trigger action satisfies validation invariants")
-            .with_metadata(self.trigger_registration_metadata(true)),
+            action,
         )
         .try_into()
         .unwrap();

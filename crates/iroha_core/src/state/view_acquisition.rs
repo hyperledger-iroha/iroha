@@ -132,7 +132,7 @@ impl<K: mv::Key, V: mv::Value, M: mv::storage::StorageMode<K, V>> StateFieldRead
         self.try_view_retaining(releases).map_err(Into::into)
     }
 }
-impl<V: mv::Value, C: Send + Sync + 'static> StateFieldReader for Cell<V, C> {
+impl<V: mv::CellValue, C: Send + Sync + 'static> StateFieldReader for Cell<V, C> {
     type Releases = ();
     type View<'a>
         = mv::cell::View<'a, V>

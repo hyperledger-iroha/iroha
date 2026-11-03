@@ -9,10 +9,8 @@ license.workspace = true
 
 [dependencies]
 iroha_allocation.workspace = true
-byteorder = "1.5"
 thiserror.workspace = true
 norito_derive = { path = "../norito_derive" }
-crc64fast = "1.1"
 iroha_schema.workspace = true
 simdutf8 = { version = "0.1.5", optional = true }
 rayon = { version = "1.11.0", optional = true }
@@ -233,3 +231,13 @@ required-features = ["json"]
 name = "json_object_key_allocations"
 path = "tests/json_object_key_allocations.rs"
 required-features = ["json"]
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"
+explicit_counter_loop = "allow"
+for_kv_map = "allow"
+question_mark = "allow"
+unnecessary_lazy_evaluations = "allow"
+unnecessary_sort_by = "allow"

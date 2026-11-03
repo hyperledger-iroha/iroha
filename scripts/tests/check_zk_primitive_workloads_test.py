@@ -328,11 +328,13 @@ class ScanChecks(TreeFixture):
             self.assertTrue((ROOT / path).is_file(), path)
             self.assertNotIn(path, self.spec["scan"]["files"])
         watch = {
-            primitive["id"]: primitive["in_use"]
+            primitive["id"]: primitive
             for primitive in self.spec["digest_primitives"]
             if primitive["kind"] == "watch"
         }
-        self.assertFalse(watch["sinsemilla"] or watch["merlin"] or watch["kmac"])
+        self.assertFalse(any(watch[name]["in_use"] for name in ("sinsemilla", "merlin", "kmac")))
+        # Vendored BoringSSL carries RIPEMD-160; no Iroha source may own it.
+        self.assertTrue(all(owner["path"].startswith("vendor/") for owner in watch["ripemd"]["owners"]))
 
 
 class ScannerUnits(unittest.TestCase):
@@ -679,8 +681,8 @@ class RoleChecks(TreeFixture):
                 self.assertNotIn("bytes-array", checker.carrier_forms(("[" + ", ".join(changed) + "]").encode(), needles))
 
     def test_a_moving_role_needs_its_transcript_seed_check(self) -> None:
-        # The execution fork's catalog identity still moves only with its proof
-        # profile; Kaigi and the privacy catalog have already migrated.
+        # The execution catalog identity still binds a proof profile; Kaigi and the catalog have
+        # already migrated.
         moving_role = "execution.catalog-identity-sha384"
         spec = self.mutated()
         del self.role(spec, moving_role)["canonical_native"]["transcript_seed_check"]
@@ -2229,9 +2231,12 @@ class SemanticProfiles(TreeFixture):
         section["role_dispositions"]["zk-ace.identity-digest384"] = {"disposition": "retained", "profiles": ["retained.x"]}
         self.assertReported(self.profile_errors(spec), "the unqualified six-lane digest is retained or frozen")
         spec = self.mutated()
-        # A frozen profile is accepted for the six-lane digest only as its replacement.
-        spec["semantic_profiles"]["role_dispositions"]["zk-ace.identity-digest384"] = {"disposition": "frozen-profile", "profiles": [self.NATIVE]}
+        frozen = {"disposition": "frozen-profile", "profiles": [self.NATIVE]}
+        spec["semantic_profiles"]["role_dispositions"]["zk-ace.identity-digest384"] = dict(frozen)
         self.assertReported(self.profile_errors(spec), "the unqualified six-lane digest is retained or frozen")
+        spec = self.mutated()
+        spec["semantic_profiles"]["role_dispositions"]["zk-ace.identity-digest384"] = {**frozen, "replaces": "x"}
+        self.assertNotIn("the unqualified six-lane digest is retained or frozen", " ".join(self.profile_errors(spec)))
         spec = self.mutated()
         profile = self.profile(spec, self.NATIVE)
         self.parameter(profile, "algorithm")["value"] = "GoldilocksDigest384V1"

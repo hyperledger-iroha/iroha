@@ -12,7 +12,7 @@ fn rewrite_checksum(bytes: &mut [u8]) {
     const HDR: usize = 40;
     assert!(bytes.len() >= HDR);
     let payload = &bytes[HDR..];
-    let mut d = crc64fast::Digest::new();
+    let mut d = core::Crc64Digest::new();
     d.write(payload);
     let crc = d.sum64().to_le_bytes();
     // checksum starts at offset 4+1+1+16+1+8 = 31

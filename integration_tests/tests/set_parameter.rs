@@ -5,8 +5,8 @@ use iroha::data_model::{
     parameter::{BlockParameter, Parameter, Parameters, SmartContractParameter},
     prelude::*,
 };
+use iroha_primitives::nonzero;
 use iroha_test_network::*;
-use nonzero_ext::nonzero;
 #[test]
 fn parameter_update_scenarios() -> Result<()> {
     let builder = NetworkBuilder::new().with_genesis_instruction(SetParameter::new(

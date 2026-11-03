@@ -102,9 +102,14 @@ Key behaviours:
   `ExposedPrivateKey` wrapper just like the Torii Rust client.
 - `proof verify` rebuilds the PoR store, reports the deterministic chunk digest,
   and surfaces the payload/CAR digests so CI can gate registry submission.
-  Supply `--chunk-plan` for directory or multi-file payloads so verification
-  reuses the exact packed chunk boundaries instead of reconstructing a
-  single-file plan from the manifest alone.
+  Supply `--payload=PATH` with the original source directory for multi-file
+  archives. Native bounded acquisition reconstructs the complete file layout;
+  the canonical chunk-fetch envelope alone carries no paths. A supplied
+  `--chunk-plan` must match the reconstructed chunks and whole-payload digest.
+  Manifest and CAR inputs use retained regular-file reads, bounded respectively
+  by the canonical manifest limit and its declared CAR size. Verification still
+  requires the exact root, PoR and complete canonical CAR bytes; changed paths,
+  substituted input, symlinks and excess input bytes fail before success output.
 ## Release authenticity
 
 ```bash

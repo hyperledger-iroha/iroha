@@ -211,7 +211,7 @@ seiyaku ContractStateProbe { import permission "CanEnactGovernance" as CanEnactG
         .compile_source(src)
         .expect("compile contract-state probe program")
 }
-fn contract_probe_call_intent(
+pub(super) fn contract_probe_call_intent(
     artifact: &[u8],
     contract_address: &ContractAddress,
     contract_alias: &iroha_data_model::smart_contract::ContractAlias,
@@ -1155,7 +1155,7 @@ fn signed_consensus_handshake(
 }
 /// Authenticate the original contiguous native chain on every peer and, when
 /// selected, join the exact successful transaction to its certified execution.
-async fn verify_contract_finality_everywhere(
+pub(super) async fn verify_contract_finality_everywhere(
     network: &sandbox::SerializedNetwork,
     height: u64,
     transaction_hash: Option<Hash>,
@@ -1302,7 +1302,7 @@ fn pipeline_status_block_height(payload: &norito::json::Value) -> Option<u64> {
         .get("block_height")
         .and_then(norito::json::Value::as_u64)
 }
-async fn wait_for_tx_applied(
+pub(super) async fn wait_for_tx_applied(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
     tx_hash_hex: &str,
@@ -1561,7 +1561,7 @@ async fn deploy_contract_artifact(
         deployment_block_height,
     ))
 }
-async fn contract_state_json_value(
+pub(super) async fn contract_state_json_value(
     http: &reqwest::Client,
     torii_url: &reqwest::Url,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
@@ -1621,7 +1621,7 @@ async fn contract_view_json_value(
         .ok_or_else(|| eyre!("contract view response is missing result: {response:?}"))
 }
 
-async fn wait_for_contract_applied_height(
+pub(super) async fn wait_for_contract_applied_height(
     peer: &iroha_test_network::NetworkPeer,
     height: u64,
     timeout: Duration,

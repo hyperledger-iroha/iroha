@@ -1,44 +1,84 @@
 #![allow(unsafe_op_in_unsafe_fn)]
+//! CRC-64/XZ checksums for Norito payloads.
+//!
+//! CRC-64/XZ uses the ECMA-182 polynomial in reflected (LSB-first) form with the initial
+//! register and the final XOR set to all ones. [`crc64_fallback`] is the portable
+//! slicing-by-16 reference. [`hardware_crc64`], [`crc64_update`] and [`Crc64Digest`] use the
+//! carry-less multiply kernel (PCLMULQDQ on x86_64, PMULL on aarch64) when the `simd-accel`
+//! feature is enabled, the CPU supports it and the kernel passes a startup parity check
+//! against the reference. Every path returns identical results.
 #[allow(unused_imports)]
 use core::ffi::{c_char, c_int, c_void};
-use crc64fast::Digest;
 #[allow(unused_imports)]
 use std::ffi::{CStr, CString};
 use std::sync::OnceLock;
 #[allow(unused_imports)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-/// CRC64-XZ polynomial (ECMA-182, normal form).
+/// CRC-64/XZ polynomial (ECMA-182) in normal (MSB-first) form.
 const POLY: u64 = 0x42F0_E1EB_A9EA_3693;
-/// Portable CRC64-XZ implementation using the `crc64fast` crate.
-/// Serves as the canonical reference and fallback path.
-pub fn crc64_fallback(data: &[u8]) -> u64 {
-    let mut digest = Digest::new_table();
-    digest.write(data);
-    digest.sum64()
-}
-#[inline]
-#[allow(dead_code)]
-fn crc64_runtime_detect(data: &[u8]) -> u64 {
-    // Use crc64fast's own runtime-selected implementation (including PMULL/CLMUL
-    // when available) to ensure the checksum matches the reference path.
-    let mut digest = Digest::new();
-    digest.write(data);
-    digest.sum64()
-}
-/// Select the fastest available CRC64 implementation for the current target
-/// while preserving identical results to the fallback.
+/// [`POLY`] in reflected (LSB-first) form, as processed by the table and folding kernels.
+const POLY_REFLECTED: u64 = POLY.reverse_bits();
+/// Register value before the first byte; the finished checksum is also XORed with it.
+const INIT: u64 = !0;
+/// Raw register update: consumes `bytes` starting from an unfinished register `state`.
+type UpdateFn = fn(u64, &[u8]) -> u64;
+/// Portable CRC-64/XZ over the slicing-by-16 tables.
 ///
-/// - When compiled with the `simd-accel` feature and supported by the CPU,
-///   uses CLMUL (x86_64) or PMULL (aarch64) accelerated paths.
-/// - Otherwise falls back to the portable slicing-by-8 implementation from
-///   `crc64fast`.
+/// This is the canonical reference: accelerated kernels are selected only when they match it.
+pub fn crc64_fallback(data: &[u8]) -> u64 {
+    !update_table(INIT, data)
+}
+/// Compute CRC-64/XZ with the fastest available implementation.
+///
+/// - With `metal-crc64`/`cuda-crc64`, payloads above the GPU cutoff try the GPU helper first,
+///   and sampled results are re-checked against [`crc64_fallback`].
+/// - With `simd-accel` on a CPU that supports it, uses CLMUL (x86_64) or PMULL (aarch64).
+/// - Otherwise uses the portable slicing-by-16 tables.
+///
+/// The result always equals [`crc64_fallback`].
 pub fn hardware_crc64(data: &[u8]) -> u64 {
     if let Some(gpu) = try_gpu_crc64(data) {
         return gpu;
     }
-    static CRC_IMPL: OnceLock<fn(&[u8]) -> u64> = OnceLock::new();
-    let f = CRC_IMPL.get_or_init(detect_best_impl);
-    f(data)
+    !selected_update()(INIT, data)
+}
+/// Update a running CRC-64/XZ value with `data`.
+///
+/// `crc` is a finished checksum (`0` for empty input), so `crc64_update(crc64_update(0, a), b)`
+/// equals the checksum of `a` followed by `b`.
+pub fn crc64_update(crc: u64, data: &[u8]) -> u64 {
+    !selected_update()(!crc, data)
+}
+/// Streaming CRC-64/XZ.
+///
+/// Writing the input in any split yields the checksum of the concatenated bytes.
+#[derive(Clone, Copy, Debug)]
+pub struct Crc64Digest {
+    state: u64,
+}
+impl Crc64Digest {
+    /// Start a digest over no bytes.
+    pub const fn new() -> Self {
+        Self { state: INIT }
+    }
+    /// Append `bytes` to the digested input.
+    pub fn write(&mut self, bytes: &[u8]) {
+        self.state = selected_update()(self.state, bytes);
+    }
+    /// Return the checksum of every byte written so far.
+    pub const fn sum64(&self) -> u64 {
+        !self.state
+    }
+}
+impl Default for Crc64Digest {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+/// The CPU update kernel chosen once per process by [`detect_best_impl`].
+fn selected_update() -> UpdateFn {
+    static SELECTED: OnceLock<UpdateFn> = OnceLock::new();
+    *SELECTED.get_or_init(detect_best_impl)
 }
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
 pub(super) const GPU_MIN_DEFAULT: usize = 192 * 1024;
@@ -132,14 +172,14 @@ fn try_gpu_crc64(_data: &[u8]) -> Option<u64> {
     None
 }
 #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-fn crc64_pclmul_runtime(data: &[u8]) -> u64 {
+fn update_pclmul_runtime(state: u64, data: &[u8]) -> u64 {
     // SAFETY: selected only after `has_x86_accel` proves the required target features.
-    unsafe { crc64_pclmul(data) }
+    unsafe { simd::update(state, data) }
 }
 #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
-fn crc64_pmull_runtime(data: &[u8]) -> u64 {
+fn update_pmull_runtime(state: u64, data: &[u8]) -> u64 {
     // SAFETY: selected only after `has_aarch64_accel` proves the required target features.
-    unsafe { crc64_pmull(data) }
+    unsafe { simd::update(state, data) }
 }
 #[cfg(any(feature = "metal-crc64", feature = "cuda-crc64"))]
 type GpuFn = unsafe extern "C" fn(*const u8, usize, *mut u64) -> i32;
@@ -518,49 +558,57 @@ pub(super) fn reset_gpu_backend_for_tests() {
     reset_gpu_crc_validation_counter();
 }
 #[cfg(feature = "simd-accel")]
-fn detect_best_impl() -> fn(&[u8]) -> u64 {
+fn detect_best_impl() -> UpdateFn {
     #[cfg(target_arch = "x86_64")]
     {
-        if has_x86_accel() && crc64_candidate_matches_reference(crc64_pclmul_runtime) {
-            return crc64_pclmul_runtime;
+        if has_x86_accel() && crc64_candidate_matches_reference(update_pclmul_runtime) {
+            return update_pclmul_runtime;
         }
     }
     #[cfg(target_arch = "aarch64")]
     {
-        if has_aarch64_accel() && crc64_candidate_matches_reference(crc64_pmull_runtime) {
-            return crc64_pmull_runtime;
+        if has_aarch64_accel() && crc64_candidate_matches_reference(update_pmull_runtime) {
+            return update_pmull_runtime;
         }
     }
-    crc64_runtime_detect
+    update_table
 }
 #[cfg(not(feature = "simd-accel"))]
-fn detect_best_impl() -> fn(&[u8]) -> u64 {
-    crc64_fallback
+fn detect_best_impl() -> UpdateFn {
+    update_table
 }
-#[cfg(feature = "simd-accel")]
-fn crc64_candidate_matches_reference(candidate: fn(&[u8]) -> u64) -> bool {
+#[cfg(all(
+    feature = "simd-accel",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+fn crc64_candidate_matches_reference(candidate: UpdateFn) -> bool {
+    /// Fixed alignment, so the samples deterministically cover kernel heads and tails.
+    #[repr(align(16))]
+    struct Aligned([u8; 8192]);
     // Stack storage: the one-time selection runs inside the first checksum
     // call, which allocation-free frame writers may be the first to make.
-    let mut large = [0u8; 8192];
+    let mut large = Aligned([0u8; 8192]);
     let mut seed = 0x9e37_79b9_7f4a_7c15u64;
-    for byte in &mut large {
+    for byte in &mut large.0 {
         seed ^= seed << 7;
         seed ^= seed >> 9;
         seed ^= seed << 8;
         *byte = seed as u8;
     }
-    for sample in [
+    let samples = [
         &b""[..],
         &b"123456789"[..],
         &b"norito-crc64-simd-startup-check"[..],
-        &large[..],
-        &large[3..],
-    ] {
-        if candidate(sample) != crc64_fallback(sample) {
-            return false;
-        }
-    }
-    true
+        &large.0[..],
+        &large.0[3..],
+        &large.0[..large.0.len() - 5],
+    ];
+    // Streaming digests resume from arbitrary registers, so check a non-initial one too.
+    [INIT, 0x0123_4567_89ab_cdef].into_iter().all(|state| {
+        samples
+            .iter()
+            .all(|sample| candidate(state, sample) == update_table(state, sample))
+    })
 }
 // Metal/CUDA accelerators are loaded dynamically from optional helper
 // libraries (explicit `NORITO_CRC64_GPU_LIB` override or the default
@@ -599,19 +647,19 @@ impl SimdFeatureToggle {
     }
 }
 #[cfg(all(feature = "simd-accel", test, target_arch = "x86_64"))]
-fn detect_best_impl_with(features: SimdFeatureToggle) -> fn(&[u8]) -> u64 {
+fn detect_best_impl_with(features: SimdFeatureToggle) -> UpdateFn {
     if features.pclmul && features.sse2 && features.sse41 {
-        crc64_pclmul_runtime
+        update_pclmul_runtime
     } else {
-        crc64_fallback
+        update_table
     }
 }
 #[cfg(all(feature = "simd-accel", test, target_arch = "aarch64"))]
-fn detect_best_impl_with(features: SimdFeatureToggle) -> fn(&[u8]) -> u64 {
+fn detect_best_impl_with(features: SimdFeatureToggle) -> UpdateFn {
     if features.pmull && features.neon {
-        crc64_pmull_runtime
+        update_pmull_runtime
     } else {
-        crc64_fallback
+        update_table
     }
 }
 #[cfg(all(
@@ -619,9 +667,11 @@ fn detect_best_impl_with(features: SimdFeatureToggle) -> fn(&[u8]) -> u64 {
     test,
     not(any(target_arch = "x86_64", target_arch = "aarch64"))
 ))]
-fn detect_best_impl_with(_features: SimdFeatureToggle) -> fn(&[u8]) -> u64 {
-    crc64_fallback
+fn detect_best_impl_with(_features: SimdFeatureToggle) -> UpdateFn {
+    update_table
 }
+// Carry-less folding constants for the reflected polynomial: `K_n` is `x^n mod P` (checked by
+// `folding_constants_are_powers_of_x_mod_p`) and `MU` is the Barrett quotient `x^128 / P`.
 #[cfg(feature = "simd-accel")]
 const K_127: u64 = 0xdabe_95af_c787_5f40;
 #[cfg(feature = "simd-accel")]
@@ -656,14 +706,18 @@ const K_1023: u64 = 0xd7d8_6b2a_f73d_e740;
 const K_1087: u64 = 0x8757_d71d_4fcc_1000;
 #[cfg(feature = "simd-accel")]
 const MU: u64 = 0x9c3e_466c_1729_63d5;
+/// [`POLY_REFLECTED`] as `(POLY_REFLECTED << 1) | 1`, the operand layout of the kernel's
+/// Barrett reduction.
+#[cfg(feature = "simd-accel")]
+const BARRETT_POLY: u64 = (POLY_REFLECTED << 1) | 1;
 #[cfg(all(
     feature = "simd-accel",
     any(target_arch = "x86_64", target_arch = "aarch64")
 ))]
 mod simd {
     use super::{
-        K_127, K_191, K_255, K_319, K_383, K_447, K_511, K_575, K_639, K_703, K_767, K_831, K_895,
-        K_959, K_1023, K_1087, MU, POLY, crc64_slicing_by_8,
+        BARRETT_POLY, K_127, K_191, K_255, K_319, K_383, K_447, K_511, K_575, K_639, K_703, K_767,
+        K_831, K_895, K_959, K_1023, K_1087, MU, update_table,
     };
     use core::{
         fmt::Debug,
@@ -844,27 +898,28 @@ mod simd {
     unsafe fn make_simd(high: u64, low: u64) -> Simd {
         unsafe { <Simd as SimdOps>::new(high, low) }
     }
-    #[inline]
-    pub(super) unsafe fn crc64_simd(bytes: &[u8]) -> u64 {
-        let mut state = !0u64;
-        state = update(state, bytes);
-        !state
+    /// Raw register update: table head and tail around 128-byte aligned folding blocks.
+    ///
+    /// # Safety
+    /// The CPU must support the features proven by `has_x86_accel` / `has_aarch64_accel`.
+    pub(super) unsafe fn update(state: u64, bytes: &[u8]) -> u64 {
+        // SAFETY: every bit pattern is a valid `Simd` lane.
+        let (head, blocks, tail) = unsafe { bytes.align_to::<[Simd; 8]>() };
+        let Some((first, rest)) = blocks.split_first() else {
+            return update_table(state, bytes);
+        };
+        let state = update_table(state, head);
+        let state = unsafe { update_simd(state, first, rest) };
+        update_table(state, tail)
     }
-    fn update(mut state: u64, bytes: &[u8]) -> u64 {
-        let (head, simd_blocks, tail) = unsafe { bytes.align_to::<[Simd; 8]>() };
-        state = update_scalar(state, head);
-        if let Some((first, rest)) = simd_blocks.split_first() {
-            state = unsafe { update_simd(state, first, rest) };
-            update_scalar(state, tail)
-        } else {
-            update_scalar(state, tail)
-        }
-    }
-    fn update_scalar(state: u64, bytes: &[u8]) -> u64 {
-        let crc = !state;
-        let updated_crc = crc64_slicing_by_8(crc, bytes);
-        !updated_crc
-    }
+    #[cfg_attr(
+        target_arch = "x86_64",
+        target_feature(enable = "pclmulqdq", enable = "sse2", enable = "sse4.1")
+    )]
+    #[cfg_attr(
+        target_arch = "aarch64",
+        target_feature(enable = "aes", enable = "neon")
+    )]
     unsafe fn update_simd(state: u64, first: &[Simd; 8], rest: &[[Simd; 8]]) -> u64 {
         let mut lanes = *first;
         lanes[0] ^= make_simd(0, state);
@@ -888,117 +943,115 @@ mod simd {
             .zip(&coeffs)
             .fold(lanes[7], |acc, (lane, coeff)| acc ^ lane.fold_16(*coeff))
             .fold_8(K_127)
-            .barrett(POLY, MU)
+            .barrett(BARRETT_POLY, MU)
     }
 }
-// Note: helper constants and Barrett reduction helpers removed as they were unused.
-/// Build slicing-by-8 tables for MSB-first CRC64 (ECMA-182) with polynomial POLY.
-fn build_tables() -> [[u64; 256]; 8] {
-    let mut t = [[0u64; 256]; 8];
-    // T0
-    for (b, entry) in t[0].iter_mut().enumerate() {
-        let mut crc = (b as u64) << 56;
-        for _ in 0..8 {
-            if (crc & 0x8000_0000_0000_0000) != 0 {
-                crc = (crc << 1) ^ POLY;
+/// Slicing-by-16 tables for [`POLY_REFLECTED`], built at compile time.
+///
+/// `TABLES[0][b]` is byte `b` shifted through the register; `TABLES[k][b]` is
+/// `TABLES[k - 1][b]` followed by one more zero byte.
+static TABLES: [[u64; 256]; 16] = build_tables();
+const fn build_tables() -> [[u64; 256]; 16] {
+    let mut tables = [[0u64; 256]; 16];
+    let mut byte = 0;
+    while byte < 256 {
+        let mut crc = byte as u64;
+        let mut bit = 0;
+        while bit < 8 {
+            crc = if crc & 1 == 0 {
+                crc >> 1
             } else {
-                crc <<= 1;
-            }
+                (crc >> 1) ^ POLY_REFLECTED
+            };
+            bit += 1;
         }
-        *entry = crc;
+        tables[0][byte] = crc;
+        byte += 1;
     }
-    // T1..T7
-    let t0 = t[0];
-    for i in 1..8 {
-        let prev_table = t[i - 1];
-        for (b, slot) in t[i].iter_mut().enumerate() {
-            let prev = prev_table[b];
-            let idx = (prev >> 56) as u8 as usize;
-            *slot = (prev << 8) ^ t0[idx];
+    let mut k = 1;
+    while k < 16 {
+        let mut byte = 0;
+        while byte < 256 {
+            let prev = tables[k - 1][byte];
+            tables[k][byte] = (prev >> 8) ^ tables[0][(prev & 0xff) as usize];
+            byte += 1;
         }
+        k += 1;
     }
-    t
+    tables
 }
-fn tables() -> &'static [[u64; 256]; 8] {
-    static T: OnceLock<[[u64; 256]; 8]> = OnceLock::new();
-    T.get_or_init(build_tables)
-}
-#[inline(always)]
-fn crc64_slicing_by_8(mut crc: u64, mut data: &[u8]) -> u64 {
-    let t = tables();
-    while data.len() >= 8 {
-        let b0 = data[0] as usize;
-        let b1 = data[1] as usize;
-        let b2 = data[2] as usize;
-        let b3 = data[3] as usize;
-        let b4 = data[4] as usize;
-        let b5 = data[5] as usize;
-        let b6 = data[6] as usize;
-        let b7 = data[7] as usize;
-        let idx = ((crc >> 56) as u8 as usize) ^ b0;
-        crc =
-            t[0][idx] ^ t[1][b1] ^ t[2][b2] ^ t[3][b3] ^ t[4][b4] ^ t[5][b5] ^ t[6][b6] ^ t[7][b7];
-        data = &data[8..];
+/// Raw register update over the portable slicing-by-16 tables.
+fn update_table(mut state: u64, bytes: &[u8]) -> u64 {
+    let (blocks, rest) = bytes.as_chunks::<16>();
+    for block in blocks {
+        // State-independent lookups first, so they overlap the previous block's latency.
+        let s = state.to_le_bytes();
+        state = TABLES[0][usize::from(block[15])]
+            ^ TABLES[1][usize::from(block[14])]
+            ^ TABLES[2][usize::from(block[13])]
+            ^ TABLES[3][usize::from(block[12])]
+            ^ TABLES[4][usize::from(block[11])]
+            ^ TABLES[5][usize::from(block[10])]
+            ^ TABLES[6][usize::from(block[9])]
+            ^ TABLES[7][usize::from(block[8])]
+            ^ TABLES[8][usize::from(block[7] ^ s[7])]
+            ^ TABLES[9][usize::from(block[6] ^ s[6])]
+            ^ TABLES[10][usize::from(block[5] ^ s[5])]
+            ^ TABLES[11][usize::from(block[4] ^ s[4])]
+            ^ TABLES[12][usize::from(block[3] ^ s[3])]
+            ^ TABLES[13][usize::from(block[2] ^ s[2])]
+            ^ TABLES[14][usize::from(block[1] ^ s[1])]
+            ^ TABLES[15][usize::from(block[0] ^ s[0])];
     }
-    for &b in data {
-        let idx = ((crc >> 56) as u8) ^ b;
-        crc = t[0][idx as usize] ^ (crc << 8);
+    for &byte in rest {
+        state = (state >> 8) ^ TABLES[0][usize::from(byte ^ state as u8)];
     }
-    crc
+    state
 }
-/// Update a running CRC64-XZ value with `data`.
-#[inline(always)]
-pub fn crc64_update(crc: u64, data: &[u8]) -> u64 {
-    crc64_slicing_by_8(crc, data)
-}
+/// CRC-64/XZ with x86_64 CLMUL when `simd-accel` is enabled and the CPU supports it.
+///
+/// Uses the portable tables otherwise; the result always equals [`crc64_fallback`].
 pub fn crc64_sse42(data: &[u8]) -> u64 {
-    // Safe default: use portable slicing-by-8.
-    // Optional SIMD acceleration is gated and only compiled when enabled.
     #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
     {
-        if std::is_x86_feature_detected!("pclmulqdq")
-            && std::is_x86_feature_detected!("sse2")
-            && std::is_x86_feature_detected!("sse4.1")
-        {
-            // SAFETY: compiled only when SIMD accel feature is enabled and feature check passes.
+        if has_x86_accel() {
+            // SAFETY: `has_x86_accel` proved the required target features.
             return unsafe { crc64_pclmul(data) };
         }
     }
-    crc64_slicing_by_8(0, data)
+    crc64_fallback(data)
 }
 #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
-/// CRC64 implementation using NEON intrinsics with vectorized polynomial reduction.
+/// CRC-64/XZ with aarch64 PMULL when `simd-accel` is enabled and the CPU supports it.
+///
+/// Uses the portable tables otherwise; the result always equals [`crc64_fallback`].
 pub fn crc64_neon(data: &[u8]) -> u64 {
-    // Safe default: use portable slicing-by-8.
-    // Optional SIMD acceleration is gated and only compiled when enabled.
     #[cfg(feature = "simd-accel")]
     {
-        if std::arch::is_aarch64_feature_detected!("pmull")
-            && std::arch::is_aarch64_feature_detected!("neon")
-        {
-            // SAFETY: compiled only when SIMD accel feature is enabled and feature check passes.
-            unsafe { return crc64_pmull(data) };
+        if has_aarch64_accel() {
+            // SAFETY: `has_aarch64_accel` proved the required target features.
+            return unsafe { crc64_pmull(data) };
         }
     }
-    crc64_slicing_by_8(0, data)
+    crc64_fallback(data)
 }
 #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
-#[target_feature(enable = "pclmulqdq")]
-/// CRC64 implementation using x86 CLMUL intrinsics.
+#[target_feature(enable = "pclmulqdq,sse2,sse4.1")]
+/// CRC-64/XZ using x86_64 CLMUL intrinsics.
 ///
 /// # Safety
-/// The caller must ensure the `pclmulqdq` instruction is supported by the CPU.
+/// The CPU must support `pclmulqdq`, `sse2` and `sse4.1`.
 pub unsafe fn crc64_pclmul(data: &[u8]) -> u64 {
-    unsafe { simd::crc64_simd(data) }
+    !simd::update(INIT, data)
 }
 #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
 #[target_feature(enable = "neon,aes")]
-/// CRC64 implementation using aarch64 PMULL intrinsics.
+/// CRC-64/XZ using aarch64 PMULL intrinsics.
 ///
 /// # Safety
-/// The caller must ensure the `pmull` feature is supported by the CPU.
+/// The CPU must support `neon` and `aes` (PMULL).
 pub unsafe fn crc64_pmull(data: &[u8]) -> u64 {
-    unsafe { simd::crc64_simd(data) }
+    !simd::update(INIT, data)
 }
 #[cfg(test)]
 mod tests {
@@ -1011,7 +1064,7 @@ mod tests {
     static GPU_TEST_LOCK: Mutex<()> = Mutex::new(());
     #[cfg(feature = "simd-accel")]
     fn fallback_ptr() -> usize {
-        crc64_fallback as *const () as usize
+        update_table as *const () as usize
     }
     #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
     #[test]
@@ -1023,7 +1076,7 @@ mod tests {
             ..SimdFeatureToggle::none()
         };
         let ptr = detect_best_impl_with(features) as *const () as usize;
-        assert_eq!(ptr, crc64_pclmul_runtime as *const () as usize);
+        assert_eq!(ptr, update_pclmul_runtime as *const () as usize);
     }
     #[cfg(all(feature = "simd-accel", target_arch = "aarch64"))]
     #[test]
@@ -1034,7 +1087,7 @@ mod tests {
             ..SimdFeatureToggle::none()
         };
         let ptr = detect_best_impl_with(features) as *const () as usize;
-        assert_eq!(ptr, crc64_pmull_runtime as *const () as usize);
+        assert_eq!(ptr, update_pmull_runtime as *const () as usize);
     }
     #[cfg(feature = "simd-accel")]
     #[test]
@@ -1043,12 +1096,12 @@ mod tests {
         assert_eq!(ptr, fallback_ptr());
     }
     #[test]
-    fn runtime_detect_matches_fallback() {
+    fn selected_impl_matches_fallback() {
         let sample = b"norito-crc64-selfcheck";
         assert_eq!(
-            crc64_runtime_detect(sample),
+            !selected_update()(INIT, sample),
             crc64_fallback(sample),
-            "runtime-selected CRC64 must match the fallback implementation"
+            "selected CRC64 kernel must match the fallback implementation"
         );
     }
     #[cfg(all(feature = "simd-accel", target_arch = "x86_64"))]
@@ -1081,6 +1134,144 @@ mod tests {
             let hw = hardware_crc64(data);
             assert_eq!(fallback, hw, "hardware crc mismatch for {data:?}");
         }
+    }
+    /// CRC-64/XZ reference values; `b"123456789"` is the catalogue check value.
+    const KNOWN_VECTORS: &[(&[u8], u64)] = &[
+        (b"", 0),
+        (b"123456789", 0x995d_c9bb_df19_39fa),
+        (b"@", 0x7b1b_8ab9_8fa4_b8f8),
+        (b"1\x97", 0xfeb8_f7a1_ae3b_9bd4),
+        (b"M\"\xdf", 0xc016_0ce8_dd46_74d3),
+        (b"l\xcd\x13\xd7", 0x5c60_a6af_8299_6ea8),
+        (&[0; 32], 0xc95a_f861_7cd5_330c),
+        (&[255; 32], 0xe95d_ce9e_faa0_9acf),
+        (
+            b"\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0A\x0B\x0C\x0D\x0E\x0F\x10\x11\x12\x13\x14\x15\x16\x17\x18\x19\x1A\x1B\x1C\x1D\x1E\x1F",
+            0x7fe5_71a5_8708_4d10,
+        ),
+        (&[0; 1024], 0xc378_6397_2069_270c),
+    ];
+    #[test]
+    fn every_entry_point_matches_known_vectors() {
+        for &(input, expected) in KNOWN_VECTORS {
+            assert_eq!(crc64_fallback(input), expected, "fallback {input:x?}");
+            assert_eq!(hardware_crc64(input), expected, "hardware {input:x?}");
+            assert_eq!(crc64_update(0, input), expected, "update {input:x?}");
+            assert_eq!(crc64_sse42(input), expected, "sse42 {input:x?}");
+            #[cfg(all(target_arch = "aarch64", target_feature = "neon"))]
+            assert_eq!(crc64_neon(input), expected, "neon {input:x?}");
+            let mut digest = Crc64Digest::new();
+            digest.write(input);
+            assert_eq!(digest.sum64(), expected, "digest {input:x?}");
+        }
+    }
+    fn pseudo_random(len: usize, mut seed: u64) -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                (seed >> 24) as u8
+            })
+            .collect()
+    }
+    #[test]
+    fn streaming_and_chained_updates_match_one_shot() {
+        let data = pseudo_random(4099, 0x6e6f_7269_746f_2d63);
+        let expected = crc64_fallback(&data);
+        for split in [0, 1, 15, 16, 17, 127, 128, 129, 1000, 4098, 4099] {
+            let (left, right) = data.split_at(split);
+            let mut digest = Crc64Digest::new();
+            digest.write(left);
+            digest.write(right);
+            assert_eq!(digest.sum64(), expected, "digest split {split}");
+            let chained = crc64_update(crc64_update(0, left), right);
+            assert_eq!(chained, expected, "update split {split}");
+        }
+        let mut digest = Crc64Digest::default();
+        for chunk in data.chunks(7) {
+            digest.write(chunk);
+        }
+        assert_eq!(digest.sum64(), expected);
+    }
+    #[cfg(all(
+        feature = "simd-accel",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    #[test]
+    fn simd_kernel_matches_table_at_every_alignment() {
+        #[cfg(target_arch = "x86_64")]
+        let supported = has_x86_accel();
+        #[cfg(target_arch = "aarch64")]
+        let supported = has_aarch64_accel();
+        if !supported {
+            return;
+        }
+        let data = pseudo_random(1024 + 16, 0x5eed_c0de_1234_5678);
+        for offset in 0..16 {
+            for len in 0..=700 {
+                let input = &data[offset..offset + len];
+                for state in [INIT, 0, 0x0123_4567_89ab_cdef] {
+                    // SAFETY: guarded by the runtime feature check above.
+                    let simd = unsafe { simd::update(state, input) };
+                    assert_eq!(
+                        simd,
+                        update_table(state, input),
+                        "offset {offset} len {len}"
+                    );
+                }
+            }
+        }
+    }
+    #[test]
+    fn table_matches_bitwise_definition() {
+        assert_eq!(POLY_REFLECTED, 0xC96C_5795_D787_0F42);
+        for byte in 0..=255u8 {
+            let mut crc = u64::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 0 {
+                    crc >> 1
+                } else {
+                    (crc >> 1) ^ POLY_REFLECTED
+                };
+            }
+            assert_eq!(TABLES[0][usize::from(byte)], crc, "byte {byte}");
+        }
+    }
+    #[cfg(feature = "simd-accel")]
+    #[test]
+    fn folding_constants_are_powers_of_x_mod_p() {
+        // Reflected representation: bit 63 holds the coefficient of x^0.
+        let x_pow_mod_p = |n: u32| {
+            (0..n).fold(1u64 << 63, |r, _| {
+                if r & 1 == 0 {
+                    r >> 1
+                } else {
+                    (r >> 1) ^ POLY_REFLECTED
+                }
+            })
+        };
+        for (n, k) in [
+            (127, K_127),
+            (191, K_191),
+            (255, K_255),
+            (319, K_319),
+            (383, K_383),
+            (447, K_447),
+            (511, K_511),
+            (575, K_575),
+            (639, K_639),
+            (703, K_703),
+            (767, K_767),
+            (831, K_831),
+            (895, K_895),
+            (959, K_959),
+            (1023, K_1023),
+            (1087, K_1087),
+        ] {
+            assert_eq!(x_pow_mod_p(n), k, "K_{n}");
+        }
+        assert_eq!(BARRETT_POLY, 0x92d8_af2b_af0e_1e85);
     }
     #[test]
     fn gpu_crc_matches_when_available() {

@@ -657,6 +657,8 @@ impl MainTracePolynomialSetV1 {
                     native_policy,
                 )
             },
+            #[cfg(test)]
+            Default::default(),
         )?;
         if retained.is_some() {
             return Err(ZkX509StarkErrorV1::InternalInvariant);
@@ -674,6 +676,7 @@ impl MainTracePolynomialSetV1 {
         assembly_payload: usize,
         sources: &MainTraceReplaySourcesV1<'_, '_>,
         rng: &mut R,
+        #[cfg(test)] observation: aggregate::commitment_observation::ContextV1,
     ) -> Result<(Self, aggregate::StreamingRowCommitmentResultV1), ZkX509StarkErrorV1> {
         layout.validate_exact_full_profile_registration_v1()?;
         check_completion_v1(goldilocks_transform_completion_uncertain_v1())?;
@@ -731,6 +734,13 @@ impl MainTracePolynomialSetV1 {
             assembly_payload,
             (&plan, None),
             |group, columns| {
+                #[cfg_attr(
+                    not(test),
+                    expect(
+                        clippy::infallible_destructuring_match,
+                        reason = "the replay-oracle variant exists only in test builds"
+                    )
+                )]
                 let cache = match &mut set.retained_rfc {
                     RetainedRfcV1::Original(cache) => cache,
                     #[cfg(test)]
@@ -799,6 +809,8 @@ impl MainTracePolynomialSetV1 {
                 }
                 Ok(batch)
             },
+            #[cfg(test)]
+            observation,
         )?;
         set.cut = Some(cut.ok_or(ZkX509StarkErrorV1::InternalInvariant)?);
         set.validate_v1(layout, kind)?;
@@ -820,6 +832,7 @@ impl MainTracePolynomialSetV1 {
             usize,
             core::ops::Range<usize>,
         ) -> Result<Vec<ZeroizingMainTraceColumnV1>, ZkX509StarkErrorV1>,
+        #[cfg(test)] observation: aggregate::commitment_observation::ContextV1,
     ) -> Result<
         (
             aggregate::StreamingRowCommitmentResultV1,
@@ -877,22 +890,42 @@ impl MainTracePolynomialSetV1 {
                         AggregateStarkErrorV1::InvalidLayout
                     })
             },
-            |columns, native, common, selected| {
+            |columns, native, common, selected, #[cfg(test)] coordinates| {
                 #[cfg(test)]
                 let transform_timer = PhaseTimerV1::start_v1(if cut.is_some() {
                     PhaseV1::QueryJoinedTransform
                 } else {
                     PhaseV1::InitialJoinedTransform
                 });
+                #[cfg(test)]
+                let semantic = {
+                    use super::super::main_transform_observation;
+                    let kind = main_transform_observation::kind_v1(kind);
+                    transform_timer.transform_context_v1().enter(
+                        kind,
+                        main_transform_observation::classify_v1(
+                            layout,
+                            kind,
+                            coordinates,
+                            native,
+                            common,
+                            columns.len(),
+                        ),
+                    )
+                };
                 let evaluated = match selected {
                     Some(indices) => evaluator.evaluate_selected_v1(columns, native, common, indices)?
                         .into_iter().map(aggregate::initial_evaluated_column::InitialEvaluatedColumnV1::from_field_v1).collect(),
                     None => evaluator.evaluate_initial_v1(columns, native, common)?,
                 };
                 #[cfg(test)]
+                semantic.complete();
+                #[cfg(test)]
                 transform_timer.complete_v1();
                 Ok(evaluated)
             },
+            #[cfg(test)]
+            observation,
         );
         tracing::debug!(target: "zk_x509::transform", actual = ?evaluator.receipt_v1(),
             "completed MAIN joined commitment transform dispatches");

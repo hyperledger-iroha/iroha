@@ -94,7 +94,10 @@ All of the above share the same validation and consensus pipeline once they beco
 - Clear included transactions from mempool; decrement TTL on remaining transactions and purge expired ones.
 - If the block contains an executor upgrade, the new IVM bytecode becomes active at the defined point (typically next block), and the node updates the executor cache (`IvmCache`).
 - Executor migration is guest-defined: every production upgrade runs the admitted
-  IVM program and accepts only its canonical Norito migration result. Header
+  IVM program and accepts only its canonical Norito migration result: a
+  standard `Result<ExecutorDataModel, ValidationFail>` installs a data model,
+  and `Result<(), ValidationFail>`, the same framing as a validation verdict,
+  keeps the current one. Header
   fields, vector length, bytecode size, and other artifact shape do not select
   host-side migration or permission behavior. The host applies the declared
   executor data model exactly; it has no legacy permission-name purge or

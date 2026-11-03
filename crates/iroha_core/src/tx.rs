@@ -5548,6 +5548,7 @@ pub mod tests {
     use iroha_model_base::{
         topology::DataSpaceId as TestDataSpaceId, topology::LaneId as TestLaneId,
     };
+    use iroha_primitives::nonzero;
     use iroha_primitives::{
         const_vec::ConstVec,
         json::Json,
@@ -5556,7 +5557,6 @@ pub mod tests {
     };
     use iroha_schema::Ident;
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     use std::sync::LazyLock; // for Name::from_str in tests
     use std::{
         borrow::Cow,
@@ -10231,7 +10231,7 @@ pub mod tests {
             smart_contract::manifest::ContractManifest,
             transaction::{Executable, TransactionBuilder},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let fixture = IvmAdmissionFixture::new();
         // Seed block 1 with a correct manifest for the program.
@@ -10341,7 +10341,7 @@ pub mod tests {
     #[test]
     fn validate_ivm_manifest_abi_and_code_hash_match() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let fixture = IvmAdmissionFixture::new();
         let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
@@ -10501,7 +10501,7 @@ pub mod tests {
             smart_contract::manifest::ContractManifest,
             transaction::{Executable, TransactionBuilder},
         };
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let fixture = IvmAdmissionFixture::new();
         // Seed block 1 with a manifest that has the right code_hash but wrong abi_hash.
@@ -10746,7 +10746,7 @@ pub mod tests {
     #[test]
     fn validate_ivm_manifest_lookup_in_state() {
         use iroha_data_model::smart_contract::manifest::ContractManifest;
-        use nonzero_ext::nonzero;
+        use iroha_primitives::nonzero;
         let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
         let fixture = IvmAdmissionFixture::new();
         // Seed block 1: insert a manifest into WSV directly via state tx

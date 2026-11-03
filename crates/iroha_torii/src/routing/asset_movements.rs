@@ -946,13 +946,26 @@ struct MovementFeed {
     folding: Mutex<()>,
     backfilling: AtomicBool,
     capacity: usize,
+    /// How a fold reads one block: `fold_block`, or a panicking stand-in in tests.
+    fold_block: fn(
+        &crate::SharedAppState,
+        &NetworkId,
+        NonZeroUsize,
+        HashOf<BlockHeader>,
+    ) -> Result<FoldedBlock, FoldRefusal>,
 }
 
-/// Clears `backfilling` when the background pass ends, also by panic.
+/// Clears `backfilling` when the background pass ends. Nothing joins that pass, so a panic is
+/// logged here, once, and a later read starts another pass.
 struct Backfilling(&'static MovementFeed);
 
 impl Drop for Backfilling {
     fn drop(&mut self) {
+        if std::thread::panicking() {
+            iroha_logger::error!(
+                "asset movement index background pass panicked; a later read starts another"
+            );
+        }
         self.0.backfilling.store(false, Ordering::Release);
     }
 }
@@ -966,6 +979,7 @@ impl MovementFeed {
             folding: Mutex::new(()),
             backfilling: AtomicBool::new(false),
             capacity,
+            fold_block,
         }
     }
 
@@ -1075,7 +1089,7 @@ impl MovementFeed {
             else {
                 break;
             };
-            match fold_block(app, &network, next, hash) {
+            match (self.fold_block)(app, &network, next, hash) {
                 Ok(block) => {
                     busy_retries = 0;
                     pending.push(block);
@@ -1129,22 +1143,16 @@ impl MovementFeed {
         }
         let app = app.clone();
         let feed = Backfilling(self);
-        let spawned = std::thread::Builder::new()
-            .name("asset-movement-index".to_owned())
-            .spawn(move || {
-                let feed = feed;
-                feed.0.fold_to_tip(&app, true);
-            });
-        if let Err(error) = spawned {
-            iroha_logger::warn!(
-                ?error,
-                "asset movement index could not start its background pass"
-            );
-        }
+        crate::panic_recovery::spawn_blocking_recoverable(move || {
+            let feed = feed;
+            feed.0.fold_to_tip(&app, true);
+        });
     }
 
     /// Fold the short tail for a read, or start the background pass and answer `503` while the
-    /// index is further behind. Emergency Fast mode reads no history.
+    /// index is further behind. Emergency Fast mode reads no history. Folds run on recoverable
+    /// workers, outside the request task's suppression: a panic there keeps what is folded, is
+    /// logged once and leaves a later read free to fold again, instead of signalling node shutdown.
     async fn ensure_current(&'static self, app: &crate::SharedAppState) -> Result<(), Response> {
         if let Err(error) = reject_emergency_fast_unbounded_history(
             app.state.as_ref(),
@@ -1160,7 +1168,15 @@ impl MovementFeed {
         }
         if current && tip - height <= REQUEST_TAIL_BLOCKS {
             let folder = app.clone();
-            let _ = tokio::task::spawn_blocking(move || self.fold_to_tip(&folder, false)).await;
+            let worker = crate::panic_recovery::spawn_blocking_recoverable(move || {
+                self.fold_to_tip(&folder, false);
+            });
+            if let Err(error) = crate::panic_recovery::join_recoverable(worker).await {
+                iroha_logger::error!(
+                    ?error,
+                    "asset movement index keeps what is folded: this read's fold failed; a later read folds again"
+                );
+            }
             let (height, current) = self.position(&app.state);
             if current && height >= tip {
                 return Ok(());

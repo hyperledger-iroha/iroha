@@ -62,24 +62,24 @@ public final class ParliamentApiV1 {
           new TransitionLayout(7, "AdvanceBodyPhase", true, 7),
           new TransitionLayout(8, "RecordAttemptAbsence", true, 8),
           new TransitionLayout(9, "EndorsePublicFinding", true, 9),
-          new TransitionLayout(10, "RecordInvitationResponse", true, 13),
-          new TransitionLayout(11, "FailPublicFindingNoResult", true, 14),
-          new TransitionLayout(12, "RegisterInitialSortition", false, 15));
+          new TransitionLayout(17, "RecordInvitationResponse", true, 20),
+          new TransitionLayout(20, "FailPublicFindingNoResult", true, 23),
+          new TransitionLayout(21, "RegisterInitialSortition", false, 24));
 
   public static final List<AutomaticOutcomeLayout> AUTOMATIC_EXECUTION_OUTCOMES =
       listOf(
-          new AutomaticOutcomeLayout(0, "Enacted", false, "MarkEnacted", 10),
-          new AutomaticOutcomeLayout(1, "Superseded", true, "MarkSuperseded", 11),
+          new AutomaticOutcomeLayout(0, "Enacted", false, "MarkEnacted", 17),
+          new AutomaticOutcomeLayout(1, "Superseded", true, "MarkSuperseded", 18),
           new AutomaticOutcomeLayout(
-              2, "ExecutionFailed", true, "MarkExecutionFailed", 12));
+              2, "ExecutionFailed", true, "MarkExecutionFailed", 19));
 
   public static final List<NoResultKindLayout> NO_RESULT_KINDS =
       listOf(
           new NoResultKindLayout(0, "PublicFindingQuorumUnreachable"),
           new NoResultKindLayout(1, "PublicFindingDeadlineExpired"),
-          new NoResultKindLayout(2, "SortitionRetriesExhausted"),
-          new NoResultKindLayout(3, "ConfirmationJuryCapacityUnavailable"),
-          new NoResultKindLayout(4, "RandomnessRedrawBudgetExhausted"));
+          new NoResultKindLayout(7, "SortitionRetriesExhausted"),
+          new NoResultKindLayout(8, "ConfirmationJuryCapacityUnavailable"),
+          new NoResultKindLayout(9, "RandomnessRedrawBudgetExhausted"));
 
   public static final Map<String, String> CERTIFICATE_RESULT_ROOT_DOMAINS =
       certificateResultRootDomains();

@@ -1599,9 +1599,9 @@ fn walk_query(
                 "SoraFS reserve query component must contain `=`",
             )
         })?;
-        let key = urlencoding::decode(raw_key)
+        let key = crate::percent_encoding::decode(raw_key)
             .map_err(|_| json_error(StatusCode::BAD_REQUEST, "invalid reserve query key"))?;
-        let value = urlencoding::decode(raw_value)
+        let value = crate::percent_encoding::decode(raw_value)
             .map_err(|_| json_error(StatusCode::BAD_REQUEST, "invalid reserve query value"))?;
         visit(key.as_ref(), value.as_ref())
             .map_err(|error| json_error(StatusCode::BAD_REQUEST, error))?;

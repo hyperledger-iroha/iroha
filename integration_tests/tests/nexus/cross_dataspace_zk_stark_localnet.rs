@@ -285,7 +285,10 @@ fn localnet_builder() -> NetworkBuilder {
             lane_ds2.insert("metadata".into(), TomlValue::Table(Table::new()));
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
-            ds_nexus.insert("id".into(), TomlValue::Integer(NEXUS_ID_U64 as i64));
+            ds_nexus.insert(
+                "id".into(),
+                TomlValue::Integer(i64::try_from(NEXUS_ID_U64).expect("data space id fits i64")),
+            );
             ds_nexus.insert(
                 "description".into(),
                 TomlValue::String("main nexus dataspace".to_owned()),
@@ -293,7 +296,10 @@ fn localnet_builder() -> NetworkBuilder {
             ds_nexus.insert("fault_tolerance".into(), TomlValue::Integer(1));
             let mut ds1 = Table::new();
             ds1.insert("alias".into(), TomlValue::String(DS1_ALIAS.to_owned()));
-            ds1.insert("id".into(), TomlValue::Integer(DS1_ID_U64 as i64));
+            ds1.insert(
+                "id".into(),
+                TomlValue::Integer(i64::try_from(DS1_ID_U64).expect("data space id fits i64")),
+            );
             ds1.insert(
                 "manifest_hash".into(),
                 TomlValue::String(DS1_MANIFEST_HASH.to_owned()),
@@ -305,7 +311,10 @@ fn localnet_builder() -> NetworkBuilder {
             ds1.insert("fault_tolerance".into(), TomlValue::Integer(1));
             let mut ds2 = Table::new();
             ds2.insert("alias".into(), TomlValue::String(DS2_ALIAS.to_owned()));
-            ds2.insert("id".into(), TomlValue::Integer(DS2_ID_U64 as i64));
+            ds2.insert(
+                "id".into(),
+                TomlValue::Integer(i64::try_from(DS2_ID_U64).expect("data space id fits i64")),
+            );
             ds2.insert(
                 "manifest_hash".into(),
                 TomlValue::String(DS2_MANIFEST_HASH.to_owned()),
@@ -380,7 +389,10 @@ fn localnet_builder() -> NetworkBuilder {
                     ["nexus", "staking", "slash_sink_account_id"],
                     gas_account_str.clone(),
                 )
-                .write(["nexus", "staking", "max_validators"], TOTAL_PEERS as i64);
+                .write(
+                    ["nexus", "staking", "max_validators"],
+                    i64::try_from(TOTAL_PEERS).expect("peer count fits i64"),
+                );
         })
 }
 fn npos_multilane_genesis_post_topology_transactions(

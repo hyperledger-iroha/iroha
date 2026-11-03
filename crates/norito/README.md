@@ -4,6 +4,12 @@ This crate bundles the Norito serialization core along with optional
 procedural macros. Norito includes a CRC64-XZ integrity checksum with
 portable and hardware-accelerated implementations (x86_64 CLMUL, aarch64 PMULL).
 
+Fixed-width numeric I/O uses stack buffers, `read_exact`, and the standard
+library's `from_le_bytes`/`to_le_bytes`. Payload implementations write numeric
+bytes through `Encoder::write_all`; Norito exposes no general byte-order traits.
+Header validation remains field ordered, and incomplete fields fail with an I/O
+error without allocating from an untrusted declared length.
+
 ## Derive macros
 
 The companion crate `norito_derive` houses Norito's procedural macros and is
@@ -227,27 +233,26 @@ which to derive the byte-slice default.
 ## CRC64-XZ (ECMA-182)
 
 Norito computes a CRC64-XZ checksum of each payload using the ECMA-182
-polynomial `0x42F0_E1EB_A9EA_3693` in reflected form with init/xor all ones via
-the [`crc64fast`](https://crates.io/crates/crc64fast) crate. The
-`norito::hardware_crc64` and `norito::crc64_fallback` APIs are aliases that
-provide the same optimized implementation on all platforms.
+polynomial `0x42F0_E1EB_A9EA_3693` in reflected form with init/xor all ones.
+The implementation lives in `norito::core::simd_crc64`; every entry point
+returns identical values on all platforms.
 
-Parity tests in `crates/norito/tests` ensure the checksum is stable across
-platforms.
-`0x42F0_E1EB_A9EA_3693`.
-
-- Portable paths: bitwise fallback and slicing-by-8 table updates (reflected).
-- x86_64: uses PCLMULQDQ (carry‑less multiply) with Barrett reduction when
-  available, processing 8 bytes per step with a 128→64 reduction. Selected at
-  runtime via `std::arch::is_x86_feature_detected!("pclmulqdq")` and compiled
-  under `target-feature=+pclmulqdq`.
-- aarch64: uses PMULL similarly when available, detected via
-  `std::arch::is_aarch64_feature_detected!("pmull")` and compiled under
-  `target-feature=+aes`.
-- API: `norito::hardware_crc64` chooses the best implementation at runtime;
-  `norito::crc64_fallback` provides the portable reference. For explicit
-  variants, `norito::crc64_sse42` and `norito::crc64_neon` are exported on
-  compatible targets.
+- Portable path: slicing-by-16 table updates over the reflected polynomial,
+  with tables built at compile time. `norito::crc64_fallback` always uses it
+  and is the reference that accelerated paths are checked against.
+- x86_64: with the `simd-accel` feature, folds 128-byte blocks with PCLMULQDQ
+  (carry-less multiply) in eight 16-byte lanes and finishes with a Barrett
+  reduction. It requires `pclmulqdq`, `sse2` and `sse4.1`, detected at runtime.
+- aarch64: the same kernel with PMULL, detected at runtime via
+  `std::arch::is_aarch64_feature_detected!("pmull")`.
+- Selection: the accelerated kernel is used only after a startup parity check
+  against the portable tables (including unaligned heads, tails and a
+  non-initial register); otherwise the tables are used.
+- API: `norito::hardware_crc64` chooses the best implementation at runtime
+  (including the optional GPU helpers), `norito::core::Crc64Digest` is the
+  streaming form, and `norito::core::simd_crc64::crc64_update` extends a
+  finished checksum. For explicit variants, `norito::core::crc64_sse42` and
+  `norito::core::crc64_neon` are exported on compatible targets.
 
 Parity tests in `crates/norito/tests` ensure the accelerated paths exactly
 match the fallback across random windows and known vectors.

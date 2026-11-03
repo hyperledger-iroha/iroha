@@ -186,6 +186,41 @@ fn raw_json_clone_keeps_its_own_charge_after_outer_graph_retirement() {
 }
 
 #[test]
+fn successor_shares_unchanged_leaves_so_predecessor_retirement_refunds_only_its_graph() {
+    let pool = AllocationBudget::new(1 << 20);
+    let current = RetainedStateParameters::try_copy_for_testing(&authored(), &pool).unwrap();
+    let current_bytes = pool.reserved_bytes();
+    // Each decoded leaf owns its text and shared control; measure that exact
+    // charge by retaining the same text into a separate pool.
+    let leaf_bytes: usize = current
+        .get()
+        .custom()
+        .values()
+        .map(|parameter| {
+            let scratch = AllocationBudget::new(1 << 20);
+            let _copy = parameter.payload().try_retain_in(&scratch).unwrap();
+            scratch.reserved_bytes()
+        })
+        .sum();
+    assert!(leaf_bytes > 0 && leaf_bytes < current_bytes);
+    let added = CustomParameter::new("successor_marker".parse().unwrap(), Json::new(1_u32));
+    let next = current
+        .prepare_custom_parameter(&added, &pool)
+        .unwrap()
+        .into_successor(&current, &pool)
+        .unwrap();
+    for parameter in current.get().custom().values() {
+        let shared = next.get().custom().get(parameter.id()).unwrap();
+        assert!(shared.payload().ptr_eq(parameter.payload()));
+    }
+    let both = pool.reserved_bytes();
+    drop(current);
+    assert_eq!(pool.reserved_bytes(), both - (current_bytes - leaf_bytes));
+    drop(next);
+    assert_eq!(pool.reserved_bytes(), 0);
+}
+
+#[test]
 fn equal_value_in_another_version_cannot_accept_a_prepared_successor() {
     let source = authored();
     let pool = AllocationBudget::new(1 << 20);

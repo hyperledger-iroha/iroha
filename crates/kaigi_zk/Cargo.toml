@@ -17,3 +17,9 @@ iroha_pasta = { path = "../iroha_pasta", default-features = false }
 iroha_plonk = { path = "../iroha_plonk", default-features = false }
 ff = "0.14.0"
 zeroize = { workspace = true }
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"
+while_let_loop = "allow"

@@ -157,6 +157,7 @@ fn manifest_submit_rejects_cross_origin_redirect_before_response_output() {
     let (authority, private_key) = deterministic_ed25519_authority_and_private_key();
     let (manifest_path, plan_path) = prepare_manifest_artifacts(tempdir.path());
     let origin = MockServer::start();
+    let fee_quote = publication_fee_quote(&origin);
     let substituted_origin = MockServer::start();
     let substituted_response = substituted_origin.mock(|when, then| {
         when.method(POST).path("/substituted-pin-register");
@@ -165,7 +166,6 @@ fn manifest_submit_rejects_cross_origin_redirect_before_response_output() {
             .body(r#"{"status":"ok"}"#);
     });
     let location = substituted_origin.url("/substituted-pin-register");
-    mock_publication_fee_quote(&origin, &manifest_submit_account());
     let redirect = origin.mock(|when, then| {
         when.method(POST).path("/v1/sorafs/pin/register");
         then.status(307)
@@ -200,6 +200,7 @@ fn manifest_submit_rejects_cross_origin_redirect_before_response_output() {
         !response_path.exists(),
         "a redirected submit must write no response"
     );
+    fee_quote.assert_calls(1);
     redirect.assert_calls(1);
     substituted_response.assert_calls(0);
 }

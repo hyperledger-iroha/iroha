@@ -52,6 +52,36 @@ fn with_paid_begin(
         .unwrap();
 }
 
+// Capture original nested graph addresses and complete canonical schedule bytes.
+fn schedule_identity(value: &schedule::ScheduleOutcome) -> (Vec<usize>, Vec<u8>) {
+    fn epoch_pointers(
+        value: &iroha_data_model::sumeragi::epoch::ValidatorEpochContextV1,
+        out: &mut Vec<usize>,
+    ) {
+        out.push(value.committee.as_ptr() as usize);
+        for member in &value.committee {
+            out.push(
+                member
+                    .validator
+                    .public_key()
+                    .borrowed_parts()
+                    .unwrap()
+                    .1
+                    .as_ptr() as usize,
+            );
+            out.push(member.proof_of_possession.as_ptr() as usize);
+        }
+    }
+    let mut pointers = Vec::new();
+    epoch_pointers(&value.current, &mut pointers);
+    for slot in [&value.next, &value.after_next] {
+        if let schedule::ScheduledSlot::Ready(value) = slot {
+            epoch_pointers(&value.epoch, &mut pointers);
+        }
+    }
+    (pointers, norito::encode_canonical(value).unwrap())
+}
+
 #[test]
 fn ct1_native_first_prepare_rechecks_original_clock_after_execution() {
     with_paid_begin(|worker, block, hash, fee_asset, clock, block_time_ms| {
@@ -169,6 +199,8 @@ fn ct5_post_encoding_clock_advance_rolls_back_actual_begin_and_fees_with_origina
         let lag = view.world().parameters().sumeragi().due_work_max_lag_ms();
         drop(view);
         let mut original_inputs = None;
+        let mut original_schedule = None;
+        let mut original_schedule_bytes = None;
         let result = worker.run_execution_with_finisher(&block, hash, false, |worker| {
             let original = worker.finishing.as_ref().unwrap();
             assert!(
@@ -194,6 +226,11 @@ fn ct5_post_encoding_clock_advance_rolls_back_actual_begin_and_fees_with_origina
                     .external_entrypoints_slice()
                     .as_ptr(),
             );
+            let FinishingPhase::ContextProof { inputs, .. } = &original.phase else {
+                panic!("actual completed execution retains its original schedule inputs");
+            };
+            original_schedule = Some(schedule_identity(&inputs.get().schedule));
+            original_schedule_bytes = Some(inputs.allocation_bytes().unwrap());
             let block_time = original.valid.as_ref().header().creation_time();
             worker.finish_execution_with_encoder(false, |original, budget| {
                 let bytes = encode_result_preimage(original, budget)?;
@@ -240,6 +277,16 @@ fn ct5_post_encoding_clock_advance_rolls_back_actual_begin_and_fees_with_origina
             ),
             "inclusive freshness boundary retries the unchanged original without negative caching"
         );
+        let retried = worker.live.as_ref().unwrap().commitment();
+        assert_eq!(
+            Some(schedule_identity(&retried.get().commitment().schedule)),
+            original_schedule,
+            "finishing rollback must return the same physical schedule and canonical fields"
+        );
+        assert_eq!(
+            Some(retried.allocation_bytes().unwrap()),
+            original_schedule_bytes
+        );
     });
 }
 
@@ -258,6 +305,9 @@ fn ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source() {
         else {
             panic!("actual original Begin must execute at the fresh boundary")
         };
+        let original = worker.live.as_ref().unwrap().commitment();
+        let original_schedule = schedule_identity(&original.get().commitment().schedule);
+        let original_schedule_bytes = original.allocation_bytes().unwrap();
         let source = iroha_sumeragi::testing::prepare_signing_request(
             block.header().instance,
             block.header().epoch,
@@ -304,6 +354,13 @@ fn ct5_cached_native_valid_rechecks_freshness_and_exact_signing_source() {
             matches!(certified, Ok(Some(ExecOutcome::Valid { result: same, .. })) if same == result),
             "certified re-execution preserves the identical ledger-time verdict: {certified:?}"
         );
+        let retried = worker.live.as_ref().unwrap().commitment();
+        assert_eq!(
+            schedule_identity(&retried.get().commitment().schedule),
+            original_schedule,
+            "live rollback must return the same physical schedule and canonical fields"
+        );
+        assert_eq!(retried.allocation_bytes().unwrap(), original_schedule_bytes);
     });
 }
 

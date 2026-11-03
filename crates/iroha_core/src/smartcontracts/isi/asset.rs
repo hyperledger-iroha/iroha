@@ -11615,9 +11615,9 @@ pub mod query {
         use iroha_data_model::query::json::{EqualsCondition, PredicateJson};
         use iroha_model_base::metadata::Metadata;
         use iroha_model_base::topology::DataSpaceId;
+        use iroha_primitives::nonzero;
         use iroha_primitives::{json::Json, numeric::Numeric};
         use iroha_test_samples::{ALICE_ID, BOB_ID};
-        use nonzero_ext::nonzero;
         use norito::json::Value;
         use std::collections::{BTreeMap, BTreeSet};
         fn build_account_in_domain(account_id: &AccountId, _domain_id: &DomainId) -> Account {

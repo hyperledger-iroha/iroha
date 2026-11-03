@@ -5,7 +5,7 @@ use iroha_crypto::{Algorithm, SignatureOf};
 use iroha_data_model::block::{
     builder::BlockBuilder as DataBlockBuilder, consensus::ValidatorIndex,
 };
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::collections::BTreeSet;
 fn checked_block_signature(
     private_key: &iroha_crypto::PrivateKey,

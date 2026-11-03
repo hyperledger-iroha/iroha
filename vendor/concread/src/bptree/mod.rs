@@ -38,8 +38,8 @@ include!("impl.rs");
 /// allocation and does not require the original move-only charge to be cloneable.
 pub struct BptreeMapFamily<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapFamily<K, V, M>,
@@ -47,8 +47,8 @@ where
 
 impl<K, V, M> Clone for BptreeMapFamily<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn clone(&self) -> Self {
@@ -60,8 +60,8 @@ where
 
 impl<K, V, M> BptreeMapFamily<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Match only this actual original map, without locking or allocating.
@@ -79,8 +79,8 @@ where
 /// This immutable comparison grants no mutation or publication authority.
 pub struct BptreeMapPredecessor<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapPredecessor<'a, K, V, M>,
@@ -88,8 +88,8 @@ where
 
 impl<K, V, M> BptreeMapPredecessor<'_, K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Retain only these original root and reader allocations, without copying work.
@@ -109,16 +109,16 @@ where
 /// This identity-only owner allocates nothing and grants no edit/publication rights.
 pub struct BptreeMapRetainedPredecessor<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapRetainedPredecessor<K, V, M>,
 }
 impl<K, V, M> Clone for BptreeMapRetainedPredecessor<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn clone(&self) -> Self {
@@ -129,8 +129,8 @@ where
 }
 impl<K, V, M> Debug for BptreeMapRetainedPredecessor<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,8 +140,8 @@ where
 }
 impl<K, V, M> PartialEq for BptreeMapRetainedPredecessor<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn eq(&self, other: &Self) -> bool {
@@ -150,15 +150,15 @@ where
 }
 impl<K, V, M> Eq for BptreeMapRetainedPredecessor<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
 }
 impl<K, V, M> BptreeMapRetainedPredecessor<K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Compare the same original family and reader; equality is never by value.
@@ -172,8 +172,8 @@ where
 #[must_use = "admit a successor or release the original acquired map writer"]
 pub struct BptreeMapWriterAcquisition<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapWriterAcquisition<'a, K, V, M>,
@@ -184,16 +184,16 @@ where
 #[must_use = "validate or abort the original acquired map writer"]
 pub struct BptreeMapOwnedAcquisition<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapOwnedAcquisition<'a, K, V, M>,
 }
 impl<'a, K, V, M> BptreeMapOwnedAcquisition<'a, K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Keep actual lock custody on stale or poisoned predecessor refusal.
@@ -222,15 +222,14 @@ where
 /// authority. Destruction aborts the unpublished work.
 pub struct BptreeMapOwned<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapOwned<K, V, M>,
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMapOwned<K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMapOwned<K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
@@ -302,9 +301,7 @@ where
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapOwned<K, V, Untracked>
-{
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> BptreeMapOwned<K, V, Untracked> {
     /// Edit this exclusively owned private generation without taking a map lock.
     /// Publication still requires reacquiring its unchanged original predecessor.
     /// A mutation panic makes the private cursor unusable; drop that owner.
@@ -319,8 +316,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMap<K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMap<K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
@@ -468,8 +464,7 @@ where
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMapReadTxn<'_, K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMapReadTxn<'_, K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
@@ -482,8 +477,7 @@ where
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMapWriteTxn<'_, K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMapWriteTxn<'_, K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
@@ -531,8 +525,8 @@ where
 #[must_use = "retain cleanup until every enclosing physical writer has released"]
 pub struct BptreeMapAbandonment<K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     _inner: MapOwned<K, V, M>,
@@ -542,8 +536,8 @@ where
 /// Dropping it abandons the private successor after releasing its locks.
 pub struct BptreeMapPreparedCommit<'a, K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapPreparedCommit<'a, K, V, M>,
@@ -554,8 +548,8 @@ where
 #[must_use = "retain original preparation until aggregate release or publication"]
 pub struct BptreeMapCommitSlot<'a, K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapCommitSlot<'a, K, V, M>,
@@ -563,8 +557,8 @@ where
 
 impl<'a, K, V, M> BptreeMapCommitSlot<'a, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Prepare under caller custody, retaining physical ownership on unwind.
@@ -608,8 +602,8 @@ where
 /// Aggregate owners release every participating map before dropping cleanup.
 pub struct BptreeMapPublished<'a, K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapPublished<'a, K, V, M>,
@@ -620,8 +614,8 @@ where
 /// their charges. This owner grants no mutation or publication authority.
 pub struct BptreeMapCommitRetirement<K, V, M = Untracked>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     _inner: MapCommitRetirement<K, V, M>,
@@ -629,8 +623,8 @@ where
 
 impl<'a, K, V, M> BptreeMapWriteTxn<'a, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Install the original writer in a caller-owned slot without validating yet.
@@ -668,8 +662,8 @@ where
 
 impl<'a, K, V, M> BptreeMapPreparedCommit<'a, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Release preparation's reader lock and return the same held original writer.
@@ -704,8 +698,8 @@ where
 
 impl<K, V, M> BptreeMapPublished<'_, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Unlock this map without invoking any payload or charge destructor.
@@ -718,9 +712,7 @@ where
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMap<K, V>
-{
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> BptreeMap<K, V> {
     /// Initiate a write transaction for the tree, exclusive to this
     /// writer, and concurrently to all existing reads.
     pub fn write(&self) -> BptreeMapWriteTxn<'_, K, V> {
@@ -730,8 +722,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
 
 impl<K, V, M> BptreeMapWriterAcquisition<'_, K, V, M>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     /// Whether this actual acquired writer was already poisoned.
@@ -742,8 +734,8 @@ where
 
 impl<'a, K, V> BptreeMapWriterAcquisition<'a, K, V>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
 {
     /// Construct the original untracked writer; poison panics before construction.
     pub fn write(self) -> BptreeMapWriteTxn<'a, K, V> {
@@ -831,6 +823,37 @@ mod tests {
         let _ = <super::BptreeMapPredecessor<'_, usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<_>>::probe;
         let _ = <super::BptreeMapRetainedPredecessor<usize, usize, Mode<Rc<()>, ()>> as AmbiguousIfSend<_>>::probe;
         let _ = <super::BptreeMapRetainedPredecessor<usize, usize, Mode<Cell<usize>, ()>> as AmbiguousIfSync<_>>::probe;
+    }
+
+    #[test]
+    fn maps_of_thread_local_payloads_stay_on_their_thread() {
+        // Key and value bounds carry no auto traits; only the explicit
+        // `unsafe impl Send/Sync` can make a map or reader cross threads.
+        use std::{cell::Cell, rc::Rc};
+
+        trait AmbiguousIfSend<A> {
+            fn probe() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSend<()> for T {}
+        impl<T: ?Sized + Send> AmbiguousIfSend<u8> for T {}
+        trait AmbiguousIfSync<A> {
+            fn probe() {}
+        }
+        impl<T: ?Sized> AmbiguousIfSync<()> for T {}
+        impl<T: ?Sized + Sync> AmbiguousIfSync<u8> for T {}
+        let _ = <BptreeMap<usize, Rc<usize>> as AmbiguousIfSend<_>>::probe;
+        let _ = <BptreeMap<usize, Rc<usize>> as AmbiguousIfSync<_>>::probe;
+        let _ = <BptreeMap<Rc<usize>, usize> as AmbiguousIfSend<_>>::probe;
+        let _ = <BptreeMap<usize, Cell<usize>> as AmbiguousIfSend<_>>::probe;
+        let _ = <BptreeMap<usize, Cell<usize>> as AmbiguousIfSync<_>>::probe;
+        let _ = <super::BptreeMapReadTxn<'_, usize, Rc<usize>> as AmbiguousIfSend<_>>::probe;
+        let _ = <super::BptreeMapReadTxn<'_, usize, Rc<usize>> as AmbiguousIfSync<_>>::probe;
+
+        let map: BptreeMap<usize, Rc<usize>> = BptreeMap::new();
+        let mut writer = map.write();
+        writer.insert(1, Rc::new(7));
+        writer.commit();
+        assert_eq!(map.read().get(&1).map(|value| **value), Some(7));
     }
 
     #[test]

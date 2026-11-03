@@ -188,6 +188,71 @@ final class PrivacyX509TransactionV1Tests: XCTestCase {
         XCTAssertThrowsError(try plan.sign(rawProof: proof, limits: limits(), authority: wrongAuthority, signingKey: wrongKey))
     }
 
+    func testSignedTransactionByteCountMatchesCanonicalEncoderAcrossLengthTransitions() throws {
+        for count in [0, 1, 127, 128, 16_383, 16_384, 2_097_151, 2_097_152] {
+            let envelope = SingleInstructionSwiftNoritoEncoder.signedEnvelope(
+                transactionPayload: Data(repeating: 1, count: count),
+                signature: Data(repeating: 0, count: 64)
+            )
+            XCTAssertEqual(try Wire.signedTransactionByteCount(payloadBytes: count), envelope.norito.count)
+        }
+        for count in [-1, Wire.maximumTransactionBytes + 1, Int.max] {
+            XCTAssertThrowsError(try Wire.signedTransactionByteCount(payloadBytes: count)) {
+                XCTAssertEqual($0 as? PrivacyX509TransactionErrorV1, .transactionBounds)
+            }
+        }
+    }
+
+    func testSignedTransactionCeilingIncludesSignatureAndVersionedFraming() throws {
+        let row = try nativeRow()
+        var unsigned = try Wire.split(row.unsignedTransactionPayloadNorito, count: 9,
+                                      maximum: Wire.maximumTransactionBytes)
+        unsigned[8] = Data([0])
+        func plan(paddingBytes: Int) throws -> Wire.DirectPlan {
+            var fields = unsigned
+            fields[7] = try CanonicalNorito.encodeCompactMetadata([
+                "padding": .string(String(repeating: "x", count: paddingBytes)),
+            ])
+            return try Wire.prepareDirect(requestArchive: row.submitProofInstructionNorito,
+                                          unsignedPayload: Wire.fields(fields))
+        }
+        // Structural proof bytes exercise transport bounds only, never proof validity.
+        var proof = Data(repeating: 0, count: Wire.maximumProofBytes)
+        proof[proof.startIndex] = 1
+        let baselinePadding = 1_000_000
+        let baselinePayload = try plan(paddingBytes: baselinePadding)
+            .completedPayload(rawProof: proof, limits: limits())
+        let baselineEnvelope = SingleInstructionSwiftNoritoEncoder.signedEnvelope(
+            transactionPayload: baselinePayload, signature: Data(repeating: 0, count: 64)
+        )
+        let exactPadding = baselinePadding + Wire.maximumTransactionBytes - baselineEnvelope.norito.count
+        let exact = try plan(paddingBytes: exactPadding)
+        let key = try SigningKey.ed25519(privateKey: Data(repeating: 0xe7, count: 32))
+        let authority = try Keypair(privateKeyBytes: Data(repeating: 0xe7, count: 32)).accountId()
+        let signed = try exact.sign(rawProof: proof, limits: limits(), authority: authority, signingKey: key)
+        XCTAssertEqual(signed.norito.count, Wire.maximumTransactionBytes)
+
+        let oneOver = try plan(paddingBytes: exactPadding + 1)
+        let payload = try oneOver.completedPayload(rawProof: proof, limits: limits())
+        XCTAssertLessThan(payload.count, Wire.maximumTransactionBytes,
+                          "a payload-only limit would incorrectly admit this transaction")
+        let oversized = SingleInstructionSwiftNoritoEncoder.signedEnvelope(
+            transactionPayload: payload, signature: Data(repeating: 0, count: 64)
+        )
+        XCTAssertEqual(oversized.norito.count, Wire.maximumTransactionBytes + 1)
+        XCTAssertThrowsError(try oneOver.sign(rawProof: proof, limits: limits(),
+                                            authority: authority, signingKey: key)) {
+            XCTAssertEqual($0 as? PrivacyX509TransactionErrorV1, .transactionBounds)
+        }
+        let oversizedPayload = try plan(paddingBytes: 1024 * 1024)
+        XCTAssertThrowsError(try oversizedPayload.completedPayload(rawProof: proof, limits: limits())) {
+            XCTAssertEqual($0 as? PrivacyX509TransactionErrorV1, .transactionBounds)
+        }
+        XCTAssertThrowsError(try plan(paddingBytes: Wire.maximumTransactionBytes)) {
+            XCTAssertEqual($0 as? PrivacyX509TransactionErrorV1, .transactionBounds)
+        }
+    }
+
     func testFixtureRejectsOccurrenceActionAndIndependentInputSubstitutions() throws {
         let row = try nativeRow()
         for index in [0, 1, 2, 3, 4, 5, 6, 7, 8] {

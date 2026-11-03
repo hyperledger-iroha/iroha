@@ -619,7 +619,7 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
             // visit_certified_prefix checks the exact three equal native votes at
             // every non-genesis height before this callback sees the execution.
             if height == boundary_height {
-                frozen_attempt = schedule.boundary.as_ref().unwrap().preparation.clone();
+                frozen_attempt.clone_from(&schedule.boundary.as_ref().unwrap().preparation);
             }
             if [boundary_height + 1, second_boundary_height + 1].contains(&height) {
                 let (expected_epoch, expected_seed, expected_end) = if height == boundary_height + 1
@@ -644,14 +644,16 @@ async fn four_validator_mandatory_npos_epoch_boundary_threshold_beacon_release_g
                     authorization.epoch,
                     (height - 1) / MANDATORY_NPOS_EPOCH_LENGTH_BLOCKS
                 );
-                if height == second_boundary_height + 1 && frozen_attempt.is_some() {
+                if height == second_boundary_height + 1
+                    && let Some(attempt) = frozen_attempt.as_ref()
+                {
                     assert_eq!(
                         authorization.decision,
                         ValidatorEpochDecisionV1::RetainAndCancel
                     );
                     assert_eq!(
                         authorization.transition_id,
-                        frozen_attempt.as_ref().unwrap().transition_id().unwrap()
+                        attempt.transition_id().unwrap()
                     );
                 } else {
                     assert_eq!(authorization.decision, ValidatorEpochDecisionV1::Retain);

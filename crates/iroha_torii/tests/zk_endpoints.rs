@@ -5,11 +5,11 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{ElectionState, State as CoreState, StateReadOnly, World, WorldReadOnly},
+    state::{ElectionState, State as CoreState, StateReadOnly, World},
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::sync::Arc;
 use tower::ServiceExt as _; // for Router::oneshot
 const ACCOUNT_SIGNATORY: &str =
@@ -28,15 +28,19 @@ fn zk_vote_tally_app(state: Arc<CoreState>) -> Router {
     )
 }
 fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u64, String) {
-    // Seed the test-only World before signed genesis execution. This exercises
-    // retained readback without substituting for private ballot or tally proof
-    // admission.
-    let mut state = CoreState::new_for_testing(
-        World::default(),
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    // Seed the retained row after signed genesis: State construction refuses a malformed
+    // election, and the corrupt rows here exercise the read path's own refusal. This
+    // substitutes for neither private ballot nor tally proof admission.
+    let genesis_signer =
+        iroha_crypto::KeyPair::try_from_seed(vec![0xA9; 32], iroha_crypto::Algorithm::Ed25519)
+            .expect("deterministic fixture genesis signer");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
+    config.genesis_key = genesis_signer;
+    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original election query genesis");
+    let state = chain.state().clone();
+    let signed_genesis = chain.genesis();
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut transaction = block.transaction();
     transaction
@@ -46,17 +50,7 @@ fn state_with_tally_read_fixture(election: ElectionState) -> (Arc<CoreState>, u6
     transaction.apply();
     block
         .commit_world_overlay_for_testing()
-        .expect("seed pre-genesis election read fixture");
-    let genesis_signer =
-        iroha_crypto::KeyPair::try_from_seed(vec![0xA9; 32], iroha_crypto::Algorithm::Ed25519)
-            .expect("deterministic fixture genesis signer");
-    let mut config =
-        iroha_core::sumeragi::test_chain::TestChainConfig::new(std::mem::take(&mut state.world), 1);
-    config.genesis_key = genesis_signer;
-    let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
-        .expect("original election query genesis");
-    let state = chain.state().clone();
-    let signed_genesis = chain.genesis();
+        .expect("seed election read fixture");
     let view = state.view();
     let height = u64::try_from(view.height()).expect("fixture height fits u64");
     assert_eq!(height, 1);
@@ -82,8 +76,7 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
         "rose".parse().expect("asset definition name"),
     );
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
-    // Registration executes only under the authenticated signed-genesis source.
-    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::default(), 1);
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1);
     config.genesis_instructions = vec![
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new(owner)).into(),
@@ -96,11 +89,11 @@ fn state_with_registered_asset_definition() -> (Arc<CoreState>, String) {
         .into(),
     ];
     let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
-        .expect("signed genesis registers the asset definition");
+        .expect("original registered-asset genesis");
     (chain.state().clone(), asset_definition_id.to_string())
 }
 #[tokio::test]
-async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_state() {
+async fn zk_roots_endpoint_returns_404_for_registered_asset_without_shielded_state() {
     let (state, asset_id) = state_with_registered_asset_definition();
     let app = Router::new().route(
         "/v1/zk/roots",
@@ -123,32 +116,8 @@ async fn zk_roots_endpoint_returns_200_for_registered_asset_without_shielded_sta
         .body(axum::body::Body::from(body))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::OK);
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let v: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
-    // Basic shape keys
-    assert!(v.get("latest").is_some());
-    assert!(v.get("roots").is_some());
-    assert!(v.get("evaluated_block_height").is_some());
-    assert!(v.get("evaluated_block_hash").is_some());
-    assert_eq!(v.get("latest").and_then(|value| value.as_str()), Some(""));
-    assert_eq!(
-        v.get("roots")
-            .and_then(|value| value.as_array())
-            .map(std::vec::Vec::len),
-        Some(0)
-    );
-    assert_eq!(
-        v.get("evaluated_block_height")
-            .and_then(norito::json::native::Value::as_u64),
-        Some(1)
-    );
-    assert_eq!(
-        v.get("evaluated_block_hash")
-            .and_then(|value| value.as_str())
-            .map(str::len),
-        Some(64)
-    );
+    // Only an asset with a persisted confidential tree profile has roots to report.
+    assert_eq!(resp.status(), http::StatusCode::NOT_FOUND);
 }
 #[tokio::test]
 async fn zk_roots_endpoint_returns_404_for_missing_asset() {

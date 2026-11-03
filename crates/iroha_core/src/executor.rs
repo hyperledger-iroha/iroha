@@ -9203,7 +9203,7 @@ impl Executor {
             Self::Initial => Ok(()),
             Self::UserProvided(loaded_executor) => {
                 let curr_block = latest_block.copied().unwrap_or_else(|| {
-                    BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0)
+                    BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0)
                 });
                 let context = ExecutorContext {
                     authority: authority.clone(),
@@ -9413,20 +9413,10 @@ where
         gas_used,
     })
 }
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::executor::MigrationResultPayload")]
-#[derive(Debug, Decode, Encode)]
-enum MigrationResultPayload {
-    Ok(ExecutorDataModel),
-    Err(ValidationFail),
-}
-#[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_core::executor::MigrationUnitPayload")]
-#[derive(Debug, Decode, Encode)]
-enum MigrationUnitPayload {
-    Ok(()),
-    Err(ValidationFail),
-}
+/// A migrate entrypoint answers with the same standard `Result` framing as a
+/// validation verdict: `Result<ExecutorDataModel, ValidationFail>` installs a
+/// data model and `Result<(), ValidationFail>` keeps the current one, so the
+/// canonical default executor's single `Ok(())` verdict serves every entrypoint.
 fn run_executor_migration(
     executor: &LoadedExecutor,
     context: &ExecutorContext,
@@ -9461,30 +9451,40 @@ fn run_executor_migration(
     })?;
     let ret_ptr = ivm.register(10);
     let payload = executor_output_payload(&ivm, ret_ptr, "migration result")?;
-    let mut slice = payload;
-    if let Ok(verdict) = MigrationResultPayload::decode(&mut slice)
-        && slice.is_empty()
-    {
-        return match verdict {
-            MigrationResultPayload::Ok(model) => Ok(Some(model)),
-            MigrationResultPayload::Err(fail) => {
-                Err(validate_executor_rejection_origin(fail).into())
-            }
-        };
+    if let Some(model) = decode_migration_data_model(payload) {
+        return Ok(Some(model));
     }
+    // An `Ok` without a data model cannot decode above; both shapes share `Err`.
     let mut slice_unit = payload;
-    if let Ok(verdict) = MigrationUnitPayload::decode(&mut slice_unit)
+    if let Ok(verdict) = <Result<(), ValidationFail>>::decode(&mut slice_unit)
         && slice_unit.is_empty()
     {
         return match verdict {
-            MigrationUnitPayload::Ok(()) => Ok(None),
-            MigrationUnitPayload::Err(fail) => Err(validate_executor_rejection_origin(fail).into()),
+            Ok(()) => Ok(None),
+            Err(fail) => Err(validate_executor_rejection_origin(fail).into()),
         };
     }
     Err(ValidationFail::InternalError(
         "executor migrate entrypoint returned an undecodable or non-canonical result".to_owned(),
     )
     .into())
+}
+/// Decode exactly one `Ok(ExecutorDataModel)` in standard `Result` framing: the
+/// `Ok` tag byte, then one length-prefixed data model and nothing after it.
+///
+/// Norito's generic `Result` reader needs a slice decoder that
+/// `ExecutorDataModel` does not provide, so this reads the same framing directly.
+fn decode_migration_data_model(payload: &[u8]) -> Option<ExecutorDataModel> {
+    let (&0, framed) = payload.split_first()? else {
+        return None;
+    };
+    let (len, header) = norito::core::read_len_dyn_slice(framed).ok()?;
+    let mut field = framed.get(header..)?;
+    if field.len() != len {
+        return None;
+    }
+    let model = ExecutorDataModel::decode(&mut field).ok()?;
+    field.is_empty().then_some(model)
 }
 /// Only the native execution boundary may certify a runtime fault origin.
 fn validate_executor_rejection_origin(fail: ValidationFail) -> ValidationFail {
@@ -9569,7 +9569,7 @@ fn dispatch_instruction_with_ivm(
             }
         })?;
     let curr_block = latest_block.map_or_else(
-        || BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0),
+        || BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0),
         |b| b.header(),
     );
     let context = ExecutorContext {

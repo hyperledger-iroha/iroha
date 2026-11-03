@@ -1,11 +1,11 @@
 //! Tests covering confidential policy gating for transparent asset instructions.
 
+use crate::native_genesis::{certified_state, certified_state_with};
 use iroha_config::parameters::defaults;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, StateTransaction, World, WorldReadOnly},
+    sumeragi::test_chain::TestChainConfig,
     tx::ValidationFail,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
@@ -14,15 +14,13 @@ use iroha_data_model::{
         AssetDefinition, AssetId,
         definition::{AssetConfidentialPolicy, ConfidentialPolicyMode},
     },
-    isi::{
-        InstructionBox, Mint, Register, Transfer, error::InstructionExecutionError,
-        zk::RegisterZkAsset,
-    },
+    isi::{InstructionBox, Mint, Transfer, error::InstructionExecutionError, zk::RegisterZkAsset},
+    permission::Permission,
     prelude::*,
 };
+use iroha_executor_data_model::permission::asset_definition::CanManageAssetDefinitionConfidentialPolicy;
 use iroha_model_base::domain::DomainId;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::num::NonZeroU64;
 fn checked_random_confidential_policy_keypair() -> KeyPair {
     KeyPair::try_random().expect("generate checked confidential policy keypair")
@@ -43,13 +41,29 @@ fn init_state() -> (
     State,
     iroha_data_model::block::BlockHeader,
     AccountId,
-    DomainId,
+    AccountId,
     AssetDefinitionId,
 ) {
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query);
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    init_state_with(|_| {})
+}
+/// Apply the authenticated genesis over the universal owner and recipient accounts and the
+/// owner's explicit domain-owned asset definition, with its first-release hybrid ledger.
+///
+/// Live domain registration requires an SNS lease, which is not a confidential policy gate,
+/// so the accounts, domain and definition are part of the genesis World. `RegisterZkAsset` is
+/// an administrative instruction that only the signed genesis may seed (later changes need a
+/// governed lifecycle), so the genesis authority holds the exact confidential-policy grant for
+/// this definition and registers its ledger. The returned header is the first ordinary block
+/// after genesis.
+fn init_state_with(
+    configure: impl FnOnce(&mut TestChainConfig),
+) -> (
+    State,
+    iroha_data_model::block::BlockHeader,
+    AccountId,
+    AccountId,
+    AssetDefinitionId,
+) {
     let domain_id: DomainId = DomainId::try_new("zkdomain", "universal").expect("domain id");
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -57,7 +71,56 @@ fn init_state() -> (
             "shielded".parse().unwrap(),
         );
     let owner = checked_random_confidential_policy_account_id();
-    (state, header, owner, domain_id, asset_def_id)
+    let recipient = checked_random_confidential_policy_account_id();
+    let world = World::with(
+        [Domain::new(domain_id.clone()).build(&owner)],
+        [
+            Account::new(owner.clone()).build(&owner),
+            Account::new(recipient.clone()).build(&recipient),
+        ],
+        [AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "shielded".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            Some(domain_id),
+        )
+        .build(&owner)],
+    );
+    let mut config = TestChainConfig::new(world, 0);
+    let genesis_account = AccountId::new(config.genesis_key.public_key().clone());
+    let policy_grant: Permission = CanManageAssetDefinitionConfidentialPolicy {
+        asset_definition: asset_def_id.clone(),
+    }
+    .into();
+    let mut genesis_permissions = config
+        .world
+        .account_permissions_mut_for_testing()
+        .view()
+        .get(&genesis_account)
+        .cloned()
+        .unwrap_or_default();
+    genesis_permissions.insert(policy_grant);
+    config
+        .world
+        .account_permissions_mut_for_testing()
+        .insert(genesis_account, genesis_permissions);
+    config
+        .genesis_instructions
+        .push(RegisterZkAsset::new(asset_def_id.clone(), None).into());
+    configure(&mut config);
+    let state = certified_state_with(config);
+    let header = ordinary_header(&state, 2);
+    (state, header, owner, recipient, asset_def_id)
+}
+/// An ordinary fixture block on the current committed tip of the authenticated chain.
+fn ordinary_header(state: &State, height: u64) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        NonZeroU64::new(height).expect("non-zero height"),
+        state.view().latest_block_hash(),
+        None,
+        height,
+        0,
+    )
 }
 fn set_confidential_policy_mode(
     state_transaction: &mut StateTransaction<'_, '_>,
@@ -74,35 +137,12 @@ fn set_confidential_policy_mode(
 }
 #[test]
 fn transparent_mint_rejected_for_shielded_only_policy() {
-    let (state, header, owner, domain_id, asset_def_id) = init_state();
+    // The authenticated genesis seeds the universal account, the explicit domain-owned
+    // asset definition and its first-release hybrid ledger.
+    let (state, header, owner, _recipient, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    // Seed the universal account and explicit domain-owned asset definition.
-    for instr in [
-        Register::account(Account::new(owner.clone())).into(),
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "shielded".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .expect("setup instruction should succeed");
-    }
-    // Register the first-release hybrid ledger, then emulate a completed
-    // governance transition to ShieldedOnly.
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register zk asset");
+    // Emulate a completed governance transition to ShieldedOnly.
     {
         let asset_def = stx
             .world
@@ -121,7 +161,7 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
     let result = stx.world.executor().clone().execute_instruction(
         &mut stx,
         &owner,
-        InstructionBox::from(mint),
+        &InstructionBox::from(mint),
     );
     let err = result.expect_err("mint expected to fail");
     match err {
@@ -136,35 +176,12 @@ fn transparent_mint_rejected_for_shielded_only_policy() {
 }
 #[test]
 fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
-    let (state, header, owner, domain_id, asset_def_id) = init_state();
+    // The authenticated genesis seeds both universal accounts, the explicit domain-owned
+    // asset definition and its first-release hybrid ledger, so transparent mint succeeds.
+    let (state, header, owner, recipient, asset_def_id) = init_state();
     let mut block = state.block(header);
-    let mut stx = block.transaction();
-    let recipient = checked_random_confidential_policy_account_id();
-    for instr in [
-        Register::account(Account::new(owner.clone())).into(),
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(Account::new(recipient.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "shielded".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .expect("setup instruction should succeed");
-    }
-    // Start in convertible mode so transparent mint succeeds.
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register convertible zk asset");
+    // The transfer executes under one explicit retained invocation, as a signed call does.
+    let mut stx = block.transaction_for_fastpq_testing(Hash::new(b"confidential-policy-transfer"));
     let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
     stx.world
         .executor()
@@ -172,7 +189,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
         .execute_instruction(
             &mut stx,
             &owner,
-            InstructionBox::from(Mint::asset_quantity(25_u32, asset_id.clone())),
+            &InstructionBox::from(Mint::asset_quantity(25_u32, asset_id.clone())),
         )
         .expect("initial mint should succeed");
     // Flip policy to ShieldedOnly to emulate a governance transition becoming effective.
@@ -193,7 +210,7 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
     let result = stx.world.executor().clone().execute_instruction(
         &mut stx,
         &owner,
-        InstructionBox::from(transfer),
+        &InstructionBox::from(transfer),
     );
     let err = result.expect_err("transfer expected to fail");
     match err {
@@ -208,38 +225,16 @@ fn transparent_transfer_rejected_after_policy_switch_to_shielded_only() {
 }
 #[test]
 fn schedule_shielded_only_requires_window() {
-    let (state, header, owner, domain_id, asset_def_id) = init_state();
+    // The authenticated genesis registers the confidential asset state.
+    let (state, header, owner, _recipient, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    for instr in [
-        Register::account(Account::new(owner.clone())).into(),
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "shielded".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .expect("setup instruction should succeed");
-    }
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register confidential asset state");
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let header2 = ordinary_header(&state, 3);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -264,34 +259,10 @@ fn schedule_shielded_only_requires_window() {
 }
 #[test]
 fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non_zero() {
-    let (state, header, owner, domain_id, asset_def_id) = init_state();
+    // The authenticated genesis registers the confidential asset state.
+    let (state, header, owner, _recipient, asset_def_id) = init_state();
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let recipient = checked_random_confidential_policy_account_id();
-    for instr in [
-        Register::account(Account::new(owner.clone())).into(),
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::account(Account::new(recipient.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "shielded".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .expect("setup instruction should succeed");
-    }
-    let reg = iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None);
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register confidential asset state");
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     let asset_id = AssetId::new(asset_def_id.clone(), owner.clone());
     stx.world
@@ -300,14 +271,14 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
         .execute_instruction(
             &mut stx,
             &owner,
-            InstructionBox::from(Mint::asset_quantity(10_u32, asset_id.clone())),
+            &InstructionBox::from(Mint::asset_quantity(10_u32, asset_id.clone())),
         )
         .expect("mint should succeed");
     stx.apply();
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let header2 = ordinary_header(&state, 3);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let delay = defaults::confidential::POLICY_TRANSITION_DELAY_BLOCKS;
@@ -347,13 +318,7 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
     block2
         .commit_empty_block_for_testing()
         .expect("commit scheduling block");
-    let header3 = iroha_data_model::block::BlockHeader::new(
-        NonZeroU64::new(effective_height).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    );
+    let header3 = ordinary_header(&state, effective_height);
     let mut block3 = state.block(header3);
     let stx3 = block3.transaction();
     stx3.apply();
@@ -378,44 +343,21 @@ fn shielded_transition_abort_retains_active_confidential_mode_when_supply_is_non
 }
 #[test]
 fn policy_transition_reaches_shielded_only_on_schedule() {
-    let (mut state, header, owner, domain_id, asset_def_id) = init_state();
-    let mut zk_cfg = state.installed_zk().clone();
+    // The policy test configuration is installed before the genesis policies are signed.
+    let mut zk_cfg = certified_state(World::new()).installed_zk().clone();
     zk_cfg.policy_transition_delay_blocks = 1;
     zk_cfg.policy_transition_window_blocks = 1;
-    state
-        .set_zk(zk_cfg)
-        .expect("empty state accepts policy test configuration");
+    let (state, header, owner, _recipient, asset_def_id) =
+        init_state_with(|config| config.zk = Some(zk_cfg));
+    // The authenticated genesis registers the confidential asset state.
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    for instr in [
-        Register::account(Account::new(owner.clone())).into(),
-        Register::domain(Domain::new(domain_id.clone())).into(),
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_def_id.clone(),
-            "shielded".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            Some(domain_id.clone()),
-        ))
-        .into(),
-    ] {
-        stx.world
-            .executor()
-            .clone()
-            .execute_instruction(&mut stx, &owner, instr)
-            .expect("setup instruction should succeed");
-    }
-    let reg = RegisterZkAsset::new(asset_def_id.clone(), None);
-    stx.world
-        .executor()
-        .clone()
-        .execute_instruction(&mut stx, &owner, InstructionBox::from(reg))
-        .expect("register confidential asset state");
     set_confidential_policy_mode(&mut stx, &asset_def_id, ConfidentialPolicyMode::Convertible);
     stx.apply();
     block
         .commit_empty_block_for_testing()
         .expect("commit setup block");
-    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    let header2 = ordinary_header(&state, 3);
     let mut block2 = state.block(header2);
     let mut stx2 = block2.transaction();
     let effective_height = stx2.block_height() + 2;
@@ -433,10 +375,7 @@ fn policy_transition_reaches_shielded_only_on_schedule() {
     block2
         .commit_empty_block_for_testing()
         .expect("commit scheduling block");
-    let transition_height =
-        NonZeroU64::new(effective_height).expect("effective height must be non-zero");
-    let header_transition =
-        iroha_data_model::block::BlockHeader::new(transition_height, None, None, 0, 0);
+    let header_transition = ordinary_header(&state, effective_height);
     let block_transition = state.block(header_transition);
     block_transition
         .commit_world_overlay_for_testing()

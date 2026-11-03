@@ -19,8 +19,10 @@ mod authority_originals;
 mod bridge_attestation;
 mod canonical_history;
 mod certified_originals_auth;
+mod error_chain;
 mod finality_interval;
 mod game;
+mod game_partitions;
 mod history_producer;
 #[cfg(feature = "app_api")]
 mod identifier_resolution;
@@ -39,6 +41,7 @@ mod native_projection_response;
 mod nft_market;
 mod operator_auth;
 mod operator_signatures;
+mod percent_encoding;
 pub mod privacy_issuance_api;
 mod private_dataspaces;
 mod private_root_export;
@@ -5282,7 +5285,7 @@ fn is_canonical_proof_record_path(path: &str) -> bool {
     if encoded_id.contains('/') {
         return false;
     }
-    let Ok(decoded_id) = urlencoding::decode(encoded_id) else {
+    let Ok(decoded_id) = crate::percent_encoding::decode(encoded_id) else {
         return false;
     };
     let Ok(id) = decoded_id.parse::<iroha_data_model::proof::ProofId>() else {
@@ -5303,7 +5306,8 @@ fn is_canonical_proof_record_path(path: &str) -> bool {
     let canonical = id.to_string();
     // URL path_segments and Torii's existing component encoder differ only in
     // whether data colons are escaped. Both retain the same exact ProofId.
-    canonical.replace('/', "%2F") == encoded_id || urlencoding::encode(&canonical) == encoded_id
+    canonical.replace('/', "%2F") == encoded_id
+        || crate::percent_encoding::encode(&canonical) == encoded_id
 }
 fn has_dot_segment(path: &str) -> bool {
     path.split('/').any(|segment| {
@@ -8781,11 +8785,15 @@ async fn handler_account_transactions_query(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountTransactions(account_id),
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
         query,
     )
     .await
 }
 /// Shared ingress for committed account transactions and movements.
+///
+/// `endpoint_label` names the route the caller used in its address telemetry; the GET and POST
+/// routes of one collection execute the same target.
 #[cfg(feature = "app_api")]
 async fn account_history_collection_read(
     app: &SharedAppState,
@@ -8793,10 +8801,10 @@ async fn account_history_collection_read(
     remote_ip: std::net::IpAddr,
     caller: Option<&AccountId>,
     target: routing::collection_sources::CollectionTarget,
+    endpoint_label: &'static str,
     query: iroha_torii_shared::list_query::ListQuery,
 ) -> Result<Response, Error> {
     let account_literal = target.scope();
-    let endpoint_label = target.endpoint();
     let limits = crate::routing::app_query_limits();
     if !limits::is_allowed_by_cidr(headers, Some(remote_ip), &app.api_rate_limit_bypass_nets) {
         let enforce =
@@ -9194,6 +9202,7 @@ async fn handler_account_transactions_get(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountTransactions(account_id),
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
         query,
     )
     .await
@@ -9222,6 +9231,7 @@ async fn handler_account_history_get(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountHistory(account_id),
+        routing::ENDPOINT_ACCOUNTS_HISTORY,
         list_query_from_query_string(uri.query())?,
     )
     .await
@@ -9241,6 +9251,7 @@ async fn handler_account_history_query(
         remote.ip(),
         caller.caller(),
         routing::collection_sources::CollectionTarget::AccountHistory(account_id),
+        routing::ENDPOINT_ACCOUNTS_HISTORY,
         list_query_from_json(body)?,
     )
     .await
@@ -19884,7 +19895,7 @@ fn torii_read_path_arg_encoded(
     label: &str,
 ) -> Result<String, Response> {
     torii_proxy_path_arg(request, index, label)
-        .map(|value| urlencoding::encode(&value).into_owned())
+        .map(|value| crate::percent_encoding::encode(&value).into_owned())
 }
 #[cfg(feature = "app_api")]
 #[expect(
@@ -37633,6 +37644,8 @@ impl Torii {
             BRIDGE_FINALITY => public_get(handler_bridge_finality_proof);
             BRIDGE_FINALITY_INTERVAL => public_get(handler_bridge_finality_interval);
             PRIVATE_DATASPACE_RECORD_PROOF => public_get(private_dataspaces::record_proof);
+            GAME_PARTITION_STATE => public_get(game_partitions::snapshot);
+            GAME_PARTITION_EXPORT_PROOF => public_get(game_partitions::export_proof);
             SNS_DATASPACE_LEASE => public_get(sns_lease::handler);
             PRIVATE_ROOT_REGISTRATION => private_root_owner_get(private_root_export::registration);
             PRIVATE_ROOT_ANCHOR => private_root_owner_get(private_root_export::anchor);
@@ -42188,6 +42201,25 @@ ingress,
             &mut workers,
         )
         .expect("prepared test enrollment service must retain its worker handle");
+        // `start` subscribes the Connect relay after preparing the router; do the same here so
+        // a fixture that asked for P2P observes the attached relay policy.
+        #[cfg(feature = "connect")]
+        if self.connect_enabled
+            && let Some(network) = self.p2p.clone()
+        {
+            let connect_bus = self.connect_bus.clone();
+            let shutdown = shutdown_signal.clone();
+            workers.push(ToriiCriticalWorker {
+                name: "connect_network",
+                task: tokio::spawn(async move {
+                    connect_bus
+                        .attach_network(network, shutdown)
+                        .await
+                        .await
+                        .unwrap_or(ToriiCriticalWorkerExit::UnexpectedExit)
+                }),
+            });
+        }
         Ok(TestApiRouterRuntime {
             router,
             shutdown_signal,
@@ -43666,7 +43698,9 @@ fn build_gc_runtime(
     Some(runtime)
 }
 /// Torii errors.
-#[derive(thiserror::Error, displaydoc::Display, pretty_error_debug::Debug)]
+///
+/// `Debug` prints the message followed by its chain of causes.
+#[derive(thiserror::Error, displaydoc::Display)]
 pub enum Error {
     /// Failed to process query
     Query(#[from] iroha_data_model::ValidationFail),
@@ -43806,6 +43840,13 @@ pub enum Error {
     /// Torii server terminated with an error
     FailedExit,
 }
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        error_chain::write_error_chain(self, f)
+    }
+}
+
 fn validation_fail_message(fail: &iroha_data_model::ValidationFail) -> String {
     use iroha_data_model::{
         ValidationFail as V, isi::error::InstructionExecutionError as I,

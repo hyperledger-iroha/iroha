@@ -133,10 +133,11 @@ fn initial_readonly_full_masked_roots_frontiers_rows_match_original_cpu() {
                         &[],
                         None,
                         |group, column| Ok(coefficients(group, column)),
-                        |columns, native, common, selected| {
+                        |columns, native, common, selected, _coordinates| {
                             assert!(selected.is_none());
                             initial.evaluate_initial_v1(columns, native, common)
                         },
+                        Default::default(),
                     )
                     .unwrap();
                 assert_eq!(
@@ -159,13 +160,14 @@ fn initial_readonly_full_masked_roots_frontiers_rows_match_original_cpu() {
                         &indices,
                         Some(&cut),
                         |group, column| Ok(coefficients(group, column)),
-                        |columns, native, common, selected| {
+                        |columns, native, common, selected, _coordinates| {
                             replay
                                 .evaluate_selected_v1(columns, native, common, selected.unwrap())
                                 .map(|columns| {
                                     columns.into_iter().map(Evaluated::from_field_v1).collect()
                                 })
                         },
+                        Default::default(),
                     )
                     .unwrap();
                 assert!(replacement_cut.is_none());
@@ -291,10 +293,11 @@ fn initial_readonly_pending_batch_clears_after_source_error_and_unwind() {
                         }
                         Ok(coefficients(group, column))
                     },
-                    |columns, native, common, selected| {
+                    |columns, native, common, selected, _coordinates| {
                         assert!(selected.is_none());
                         initial.evaluate_initial_v1(columns, native, common)
                     },
+                    Default::default(),
                 )
             }))
         });
@@ -334,7 +337,7 @@ fn initial_readonly_coalescer_refuses_bad_outputs_before_next_source_callback() 
                     source_calls += 1;
                     Ok(coefficients(group, column))
                 },
-                |columns, _, _, selected| {
+                |columns, _, _, selected, _coordinates| {
                     assert!(selected.is_none());
                     Ok(columns
                         .iter()
@@ -361,6 +364,7 @@ fn initial_readonly_coalescer_refuses_bad_outputs_before_next_source_callback() 
                         })
                         .collect::<Vec<_>>())
                 },
+                Default::default(),
             )
         });
         assert_eq!(source_calls, 8, "mutation={mutation}");

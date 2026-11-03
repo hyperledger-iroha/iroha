@@ -46,6 +46,37 @@ class PublicContractSchemaTests(unittest.TestCase):
         self.assertEqual(SPEC.read_bytes(), (ROOT / 'crates/iroha_torii/assets/openapi/torii.json').read_bytes())
         self.assertEqual(SPEC.read_bytes(), (ROOT / 'artifacts/openapi/versions/current/torii.json').read_bytes())
 
+    def core_manifest(self):
+        return json.loads((ROOT / 'fixtures/privacy/exact12_capability_manifest_v1.json').read_text())
+
+    def test_capability_manifest_schema_accepts_what_core_serializes(self):
+        errors = self.validator('PrivacyExact12CapabilityManifestV1').iter_errors(self.core_manifest())
+        self.assertEqual([], [f'{list(e.absolute_path)}: {e.message[:120]}' for e in errors])
+
+    def test_capability_manifest_schema_refuses_layouts_core_does_not_serialize(self):
+        validator = self.validator('PrivacyExact12CapabilityManifestV1')
+        current = lambda m: m['consensus_policy']['current_limits']
+        pending = lambda m: m['protocols'][1]['policy']['pending_update']
+        note_pending = lambda m: m['protocols'][10]['policy']['pending_update']
+        profile = lambda m: m['protocols'][0]['compiled_profile']['value']
+        def assign(select, key, value):
+            return lambda m: select(m).__setitem__(key, value(m) if callable(value) else value)
+        mutations = {
+            'contract inside consensus limits': assign(current, 'private_settlement', {}),
+            'drain inside a protocol update': assign(pending, 'private_settlement_drain_blocks', None),
+            'drain inside the private-note update': assign(note_pending, 'private_settlement_drain_blocks', None),
+            'unknown limit field': assign(current, 'unknown_limit', 1),
+            'missing limit': lambda m: current(m).pop('retained_root_count'),
+            'flat manifest digest': assign(lambda m: m, 'manifest_digest', lambda m: m['manifest_digest'][0]),
+            'flat profile digest': assign(profile, 'parameter_id', lambda m: profile(m)['parameter_id'][0]),
+            'flat feature mask': assign(lambda m: m['protocols'][0], 'privacy_feature_mask', 0),
+            'another row feature mask': assign(lambda m: m['protocols'][0], 'privacy_feature_mask', [1]),
+        }
+        for name, mutate in mutations.items():
+            manifest = self.core_manifest()
+            mutate(manifest)
+            self.assertFalse(validator.is_valid(manifest), name)
+
     def test_ram_execute_cannot_claim_a_plaintext_opening(self):
         payload = dict(program_id='example', program_digest='a' * 64,
                        backend='bfv-programmed-v1', verification_mode='signed',

@@ -15,9 +15,9 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::topology::is_valid_committee_size;
 use iroha_primitives::addr::socket_addr;
+use iroha_primitives::nonzero;
 use iroha_test_network::{BlockHeight, Network, NetworkBuilder, NetworkPeer, once_blocks_sync};
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use relay::P2pRelay;
@@ -62,6 +62,7 @@ mod relay {
     use iroha_test_network::{Network, fslock_ports::AllocatedPort};
     use std::{
         collections::HashMap,
+        fmt::Write as _,
         iter::once,
         net::TcpListener as StdTcpListener,
         sync::{
@@ -115,14 +116,13 @@ mod relay {
                     (id.clone(), relay_peer)
                 })
                 .collect();
-            let mut table = ascii_table::AsciiTable::default();
-            table.set_max_width(ascii_table::Width::Fixed(30 * (1 + real_topology.len())));
-            table.column(0).set_header("From");
-            for (i, id) in real_topology.iter().enumerate() {
-                table
-                    .column(i + 1)
-                    .set_header(format!("To {}", id.address()));
-            }
+            let headers: Vec<String> = once("From".to_owned())
+                .chain(
+                    real_topology
+                        .iter()
+                        .map(|peer| format!("To {}", peer.address())),
+                )
+                .collect();
             let rows: Vec<Vec<String>> = real_topology
                 .iter()
                 .map(|peer| {
@@ -143,13 +143,7 @@ mod relay {
                         .collect::<Vec<_>>()
                 })
                 .collect();
-            let mut table_buf = Vec::new();
-            table
-                .writeln(&mut table_buf, &rows)
-                .expect("writing ascii table should succeed");
-            let table_formatted = String::from_utf8(table_buf)
-                .unwrap_or_else(|_| "<table render failed>".to_string());
-            iroha_logger::debug!("TCP relay table:\n{table_formatted}");
+            iroha_logger::debug!("TCP relay table:\n{}", render_table(&headers, &rows));
             Self {
                 peers,
                 tasks: <_>::default(),
@@ -363,6 +357,53 @@ mod relay {
             }
             Ok(())
         }
+    }
+
+    /// Render `rows` under `headers` as a plain-text table for debug logs.
+    ///
+    /// Each column is as wide as its widest cell; a row with fewer cells than
+    /// there are headers leaves the rest blank.
+    fn render_table(headers: &[String], rows: &[Vec<String>]) -> String {
+        let widths: Vec<usize> = (0..headers.len())
+            .map(|column| {
+                once(&headers[column])
+                    .chain(rows.iter().filter_map(|row| row.get(column)))
+                    .map(|cell| cell.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .collect();
+        let mut table = String::new();
+        let mut write_row = |cells: &[String]| {
+            for (column, width) in widths.iter().enumerate() {
+                let cell = cells.get(column).map_or("", String::as_str);
+                write!(table, "| {cell:<width$} ").expect("writing to a String cannot fail");
+            }
+            table.push_str("|\n");
+        };
+        write_row(headers);
+        let rule: Vec<String> = widths.iter().map(|width| "-".repeat(*width)).collect();
+        write_row(&rule);
+        for row in rows {
+            write_row(row);
+        }
+        table
+    }
+
+    #[test]
+    fn render_table_pads_each_column_to_its_widest_cell() {
+        let headers = ["From".to_owned(), "To b".to_owned()];
+        let rows = vec![
+            vec!["a".to_owned(), String::new()],
+            vec!["peer-long".to_owned()],
+        ];
+        assert_eq!(
+            render_table(&headers, &rows),
+            "| From      | To b |\n\
+             | --------- | ---- |\n\
+             | a         |      |\n\
+             | peer-long |      |\n"
+        );
     }
 }
 #[derive(Default)]

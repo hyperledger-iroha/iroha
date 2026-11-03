@@ -864,8 +864,8 @@ mod prefetch_tests {
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::name::Name;
     use iroha_model_base::topology::DataSpaceId;
+    use iroha_primitives::nonzero;
     use iroha_test_samples::ALICE_ID;
-    use nonzero_ext::nonzero;
     #[test]
     fn parse_account_key_variants() {
         let alice = (*ALICE_ID).clone();
@@ -2642,8 +2642,8 @@ fn default_test_execution_context(
 
 mod pending {
     use super::*;
+    use iroha_primitives::nonzero;
     use iroha_primitives::time::TimeSource;
-    use nonzero_ext::nonzero;
     /// First stage in the life-cycle of a [`Block`].
     /// In the beginning the block is assumed to be verified and to contain only accepted transactions.
     /// Additionally the block must retain events emitted during the execution of on-chain logic during
@@ -4739,6 +4739,40 @@ pub(crate) mod valid {
                     )));
                 }
             };
+            // Lane expansion changes the execution header's input and context roots. Bind
+            // retained schedule custody to that exact header before acquiring World, while
+            // native authority and rejection events keep the authenticated original header.
+            // A retry authenticates the original wire again and lends this same expanded graph.
+            let continuation = (|| {
+                let generation = state.state_view_generation();
+                if !crate::state::is_stable_state_view_generation(source.generation, generation) {
+                    return Err(BlockValidationError::NativeSourceChanged {
+                        authenticated_generation: source.generation,
+                        observed_generation: generation,
+                    });
+                }
+                let view = state.query_view();
+                successor_context
+                    .prepare_continuation(
+                        &view,
+                        &block.header(),
+                        source.pulse.as_ref(),
+                        source.expected_context,
+                    )
+                    .map_err(BlockValidationError::from)?;
+                let observed = state.state_view_generation();
+                if !crate::state::is_stable_state_view_generation(source.generation, observed) {
+                    return Err(BlockValidationError::NativeSourceChanged {
+                        authenticated_generation: source.generation,
+                        observed_generation: observed,
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(error) = continuation {
+                return WithEvents::new(Err((Box::new(block), Box::new(error))))
+                    .with_authenticated_rejection(source.header(), state, source.generation);
+            }
             let (_, time_source) = TimeSource::new_mock(block.header().creation_time());
             let authenticated_header = source.header();
             Self::validate_with_profile(
@@ -5875,7 +5909,14 @@ pub(crate) mod valid {
             if keepalives != 0 {
                 let time_ms = u64::try_from(block.header().creation_time().as_millis())
                     .map_err(|_| Self::execution_context_error("Keepalive block time overflow"))?;
-                match keepalive::due_from(&parent, block.header().height().get(), time_ms) {
+                match keepalive::due_from(
+                    &parent,
+                    state_block
+                        .native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
+                    block.header().height().get(),
+                    time_ms,
+                ) {
                     Ok(true) => {}
                     Ok(false) => {
                         return Err(Self::execution_context_error("KeepaliveNotDue"));
@@ -7178,7 +7219,7 @@ pub(crate) mod valid {
         ) -> Self {
             let merkle_root = MerkleTree::<TransactionEntrypoint>::default().root();
             let mut header =
-                BlockHeader::new(nonzero_ext::nonzero!(2_u64), None, merkle_root, 0, 0);
+                BlockHeader::new(iroha_primitives::nonzero!(2_u64), None, merkle_root, 0, 0);
             f(&mut header);
             if header.confidential_features().is_none() {
                 header.set_confidential_features(Some(EMPTY_CONFIDENTIAL_FEATURE_DIGEST));
@@ -7325,8 +7366,8 @@ pub(crate) mod valid {
         use iroha_schema::Ident;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
 
+        use iroha_primitives::nonzero;
         use mv::storage::StorageReadOnly;
-        use nonzero_ext::nonzero;
         use std::{
             borrow::Cow,
             collections::{BTreeMap, BTreeSet},
@@ -9849,9 +9890,9 @@ pub(crate) mod tests {
     use iroha_model_base::metadata::Metadata;
     use iroha_model_base::{name::Name, state_path::StatePath};
     use iroha_primitives::json::Json;
+    use iroha_primitives::nonzero;
     use iroha_primitives::time::TimeSource;
     use iroha_test_samples::gen_account_in;
-    use nonzero_ext::nonzero;
     use std::{borrow::Cow, num::NonZeroU64};
     include!("block/native_amx_and_dag_tests.rs");
     fn accept_transaction_at_mock_time(
@@ -10423,12 +10464,23 @@ pub(crate) mod tests {
         assert_eq!(state_block.gas_used_in_block, expected_gas);
     }
     fn add_pipeline_metadata_trigger(
-        world: &mut World,
+        state: &State,
         authority: &AccountId,
         trigger_id: &str,
         key: Name,
         filter: PipelineEventFilterBox,
     ) {
+        let header = state
+            .view()
+            .latest_block()
+            .expect("original fixture parent read")
+            .expect("retained signed genesis")
+            .header();
+        let height = header.height().get();
+        // This isolated setup authors only World state. Actual callback execution
+        // below still acquires its original recorder through the block producer.
+        let mut block = state.block(header);
+        let mut transaction = block.transaction_for_callback_testing();
         let mut action = crate::smartcontracts::triggers::specialized::SpecializedAction::new(
             vec![InstructionBox::from(SetKeyValue::account(
                 authority.clone(),
@@ -10440,17 +10492,15 @@ pub(crate) mod tests {
             filter,
         )
         .expect("test pipeline-trigger action satisfies its authority invariant");
-        // These component actions become active after original genesis. They cannot
-        // consume their one-shot invocation during genesis execution itself.
         action.metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse()
                 .expect("valid trigger lifecycle metadata key"),
-            Json::from(1_u64),
+            Json::from(height),
         );
-        let mut trigger_block = world.triggers.block();
-        let mut trigger_transaction = trigger_block.transaction();
-        trigger_transaction
+        transaction
+            .world
+            .triggers
             .add_pipeline_trigger(
                 crate::smartcontracts::triggers::specialized::SpecializedTrigger::new(
                     trigger_id.parse().expect("trigger id"),
@@ -10458,8 +10508,10 @@ pub(crate) mod tests {
                 ),
             )
             .expect("add pipeline trigger");
-        trigger_transaction.apply();
-        trigger_block.commit();
+        transaction.apply();
+        block
+            .commit_world_overlay_for_testing()
+            .expect("retain fixture triggers without replacing signed history");
     }
     pub(super) fn previous_block_at_height(height: u64) -> SignedBlock {
         let leader = crate::block::checked_keypair_with_algorithm(Algorithm::BlsNormal);
@@ -11368,13 +11420,15 @@ seiyaku DynamicTarget { permission CanWriteCounters;
             "__registered_at_ms".parse().expect("registered-time key"),
             Json::new(0_u64),
         );
+        let time_executable: Executable = vec![InstructionBox::from(Log::new(
+            Level::INFO,
+            "sequential heartbeat".to_owned(),
+        ))]
+        .into();
         let time_trigger = Trigger::new(
             time_trigger_id.clone(),
             Action::new(
-                vec![InstructionBox::from(Log::new(
-                    Level::INFO,
-                    "sequential heartbeat".to_owned(),
-                ))],
+                time_executable,
                 Repeats::Exactly(1),
                 authority.clone(),
                 TimeEventFilter::new(ExecutionTime::PreCommit),
@@ -11538,7 +11592,7 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         let domain_id = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = Domain::new(domain_id).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
-        let mut world = World::with([domain], [account], []);
+        let world = World::with([domain], [account], []);
         let block_key = Name::from_str("sealed_only_block_pipeline_trigger").expect("metadata key");
         let wrong_block_height_key =
             Name::from_str("sealed_only_wrong_height_block_pipeline_trigger")
@@ -11553,44 +11607,6 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         )
         .with_instructions([Log::new(Level::INFO, "dummy".to_owned())])
         .sign(keypair.private_key());
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_block_approved",
-            block_key.clone(),
-            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_wrong_height_block_approved",
-            wrong_block_height_key.clone(),
-            PipelineEventFilterBox::from(
-                BlockEventFilter::new()
-                    .for_height(nonzero!(9999_u64))
-                    .for_status(BlockStatus::Approved),
-            ),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_dummy_tx_approved",
-            tx_key.clone(),
-            PipelineEventFilterBox::from(
-                TransactionEventFilter::new()
-                    .for_hash(dummy_signed.hash())
-                    .for_status(TransactionStatus::Approved),
-            ),
-        );
-        add_pipeline_metadata_trigger(
-            &mut world,
-            &authority,
-            "sealed_only_any_tx_approved",
-            any_tx_key.clone(),
-            PipelineEventFilterBox::from(
-                TransactionEventFilter::new().for_status(TransactionStatus::Approved),
-            ),
-        );
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain_and_network_id_for_testing(
@@ -11602,6 +11618,44 @@ seiyaku DynamicTarget { permission CanWriteCounters;
         );
         let native_chain = component_chain(state);
         let state = native_chain.state();
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_block_approved",
+            block_key.clone(),
+            PipelineEventFilterBox::from(BlockEventFilter::new().for_status(BlockStatus::Approved)),
+        );
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_wrong_height_block_approved",
+            wrong_block_height_key.clone(),
+            PipelineEventFilterBox::from(
+                BlockEventFilter::new()
+                    .for_height(nonzero!(9999_u64))
+                    .for_status(BlockStatus::Approved),
+            ),
+        );
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_dummy_tx_approved",
+            tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new()
+                    .for_hash(dummy_signed.hash())
+                    .for_status(TransactionStatus::Approved),
+            ),
+        );
+        add_pipeline_metadata_trigger(
+            state,
+            &authority,
+            "sealed_only_any_tx_approved",
+            any_tx_key.clone(),
+            PipelineEventFilterBox::from(
+                TransactionEventFilter::new().for_status(TransactionStatus::Approved),
+            ),
+        );
         let metadata_key = Name::from_str("sealed_only_commitment_marker").expect("metadata key");
         let (commitment_entrypoint, _reveal_entrypoint) =
             sealed_set_key_entrypoints(state.network_id, &authority, &keypair, 3, 4, metadata_key);

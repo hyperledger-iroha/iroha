@@ -28,8 +28,8 @@ use super::{
     },
 };
 use core::{fmt, ops::Range};
-use once_cell::sync::Lazy;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use thiserror::Error;
 /// Exact number of public T256 scalars in the released Figure 9 relation.
 pub const VEGA_MDL_FIGURE9_PUBLIC_INPUTS_V1: usize = 14;
@@ -58,8 +58,8 @@ struct Figure9CanonicalProfile {
     topology: Figure9McTopology,
 }
 
-static FIGURE9_CANONICAL_PROFILE: Lazy<Result<Figure9CanonicalProfile, CircuitError>> =
-    Lazy::new(build_canonical_profile);
+static FIGURE9_CANONICAL_PROFILE: LazyLock<Result<Figure9CanonicalProfile, CircuitError>> =
+    LazyLock::new(build_canonical_profile);
 const ISSUER_X_INDEX: usize = 0;
 const ISSUER_Y_INDEX: usize = 1;
 const DEVICE_DIGEST_WORD_START: usize = 2;

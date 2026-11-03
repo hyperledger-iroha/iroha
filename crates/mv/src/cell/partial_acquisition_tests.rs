@@ -76,7 +76,7 @@ struct Probe<C: Send + Sync + 'static> {
     observed: Arc<Observed>,
 }
 
-fn physically_released<T: Value, C: Send + Sync + 'static>(cell: &EbrCell<T, C>) -> bool {
+fn physically_released<T: CellValue, C: Send + Sync + 'static>(cell: &EbrCell<T, C>) -> bool {
     // Poison is set when the original mutex guard is released. For a healthy
     // writer use an actual nonblocking acquisition with a refused charge, so
     // this wake performs no payload clone or allocation and cannot deadlock.

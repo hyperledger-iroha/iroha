@@ -27,10 +27,10 @@ fn block_identity_binds_original_owner_predecessor_and_mode_without_reading_valu
     assert_ne!(identity, target.block().publication_identity());
 }
 
-fn detach<V: Value>(block: Block<'_, V>) -> Detached<V, ()> {
+fn detach<V: CellValue>(block: Block<'_, V>) -> Detached<V, ()> {
     block.try_detach(|_| Ok::<_, ()>(())).unwrap()
 }
-fn prepare<'a, V: Value, A>(
+fn prepare<'a, V: CellValue, A>(
     journal: Detached<V, A>,
     target: &'a Cell<V>,
 ) -> PreparedPublication<'a, V, A, ()> {

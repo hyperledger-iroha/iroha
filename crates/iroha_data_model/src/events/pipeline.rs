@@ -257,7 +257,7 @@ impl_json_via_norito_bytes!(
 mod getter_tests {
     use super::*;
     use iroha_crypto::Hash;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     #[test]
     fn transaction_event_filter_block_height_getter_works() {
         let h = HashOf::from_untyped_unchecked(Hash::prehashed([0u8; Hash::LENGTH]));
@@ -428,7 +428,7 @@ mod tests {
     use super::{super::EventFilter, *};
     use crate::{ValidationFail, transaction::error::TransactionRejectionReason::*};
     use iroha_crypto::Hash;
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     use std::vec::Vec;
     impl BlockHeader {
         fn dummy(height: NonZeroU64) -> Self {

@@ -12,8 +12,8 @@ use iroha_data_model::{
         json::PredicateJson,
     },
 };
+use iroha_primitives::nonzero;
 use iroha_telemetry::metrics;
-use nonzero_ext::nonzero;
 use norito::json::Value;
 use std::{collections::BTreeSet, num::NonZeroUsize};
 const EMERGENCY_FAST_MAX_EXPLICIT_BLOCK_HEIGHTS: usize = 256;

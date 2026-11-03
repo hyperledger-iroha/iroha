@@ -234,7 +234,9 @@ struct RetainedStorage<K: Key, V: Value, M: StorageMode<K, V> = concread::bptree
     target: fn(&World) -> &Storage<K, V, M>,
 }
 
-impl<K: Key, V: Value, M: WorldStorageMode<K, V>> RetainedWorldField for RetainedStorage<K, V, M>
+// Retained journals cross threads (`RetainedWorldField: Send + Sync`).
+impl<K: Key + Send + Sync, V: Value + Send + Sync, M: WorldStorageMode<K, V>> RetainedWorldField
+    for RetainedStorage<K, V, M>
 where
     M::Charge: Send + Sync + 'static,
 {
@@ -261,7 +263,7 @@ where
     }
 }
 
-impl<'a, K: Key, V: Value, M: WorldStorageMode<K, V>> CaptureWorldField
+impl<'a, K: Key + Send + Sync, V: Value + Send + Sync, M: WorldStorageMode<K, V>> CaptureWorldField
     for StorageBlock<'a, K, V, M>
 where
     M::Charge: Send + Sync + 'static,
@@ -277,7 +279,7 @@ where
     }
 }
 
-impl<K: Key, V: Value, M: WorldStorageMode<K, V>> WorldCaptureSlot
+impl<K: Key + Send + Sync, V: Value + Send + Sync, M: WorldStorageMode<K, V>> WorldCaptureSlot
     for StorageCaptureSlot<'_, K, V, (), M>
 where
     M::Charge: Send + Sync + 'static,
@@ -305,14 +307,14 @@ where
     }
 }
 
-struct RetainedCell<V: Value, C: Send + Sync + 'static> {
+struct RetainedCell<V: mv::CellValue, C: Send + Sync + 'static> {
     name: &'static str,
     // Empty only while the same box is held by its private prepared owner.
     journal: Option<mv::cell::Detached<V, (), C>>,
     target: fn(&World) -> &Cell<V, C>,
 }
 
-impl<V: Value, C: Send + Sync + 'static> RetainedWorldField for RetainedCell<V, C> {
+impl<V: mv::CellValue, C: Send + Sync + 'static> RetainedWorldField for RetainedCell<V, C> {
     fn summary(&self) -> FieldSummary {
         let journal = self.journal.as_ref().expect("retained original journal");
         FieldSummary {
@@ -336,7 +338,7 @@ impl<V: Value, C: Send + Sync + 'static> RetainedWorldField for RetainedCell<V, 
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> CaptureWorldField for CellBlock<'a, V, C> {
+impl<'a, V: mv::CellValue, C: Send + Sync + 'static> CaptureWorldField for CellBlock<'a, V, C> {
     type Target = Cell<V, C>;
     type Retained = RetainedCell<V, C>;
     type Capture = CellCaptureSlot<'a, V, (), C>;
@@ -348,7 +350,9 @@ impl<'a, V: Value, C: Send + Sync + 'static> CaptureWorldField for CellBlock<'a,
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> WorldCaptureSlot for CellCaptureSlot<'_, V, (), C> {
+impl<V: mv::CellValue, C: Send + Sync + 'static> WorldCaptureSlot
+    for CellCaptureSlot<'_, V, (), C>
+{
     type Target = Cell<V, C>;
     type Retained = RetainedCell<V, C>;
     fn capture(&mut self) -> Result<(), CaptureError<Infallible>> {

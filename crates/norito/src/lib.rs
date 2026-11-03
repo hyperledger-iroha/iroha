@@ -12,9 +12,9 @@
 //!   (`COMPACT_LEN` varints when enabled; u64 otherwise).
 //!
 //! Checksum: payloads carry a CRC64-XZ checksum (ECMA polynomial `0x42F0E1EBA9EA3693`, reflected
-//! with init/xor all ones) computed using the `crc64fast` crate. [`hardware_crc64`] enables the
-//! SIMD-accelerated path when available, while [`crc64_fallback`] forces the portable table
-//! implementation.
+//! with init/xor all ones) computed by [`core::simd_crc64`](crate::core::simd_crc64).
+//! [`hardware_crc64`] enables the SIMD-accelerated path when available, while
+//! [`crc64_fallback`] forces the portable table implementation.
 //!
 //! V1 layout selection
 //! - Header-framed decoders (`deserialize_stream`, `decode_from_bytes`,
@@ -10014,18 +10014,25 @@ fn catch_decode_panic<T>(
     let _guard = DecodePanicGuard::enter();
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(decode)) {
         Ok(result) => result,
-        Err(payload) => {
-            if crate::debug_trace_enabled() {
-                let message = payload
-                    .downcast_ref::<&str>()
-                    .copied()
-                    .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-                    .unwrap_or("<non-string panic>");
-                eprintln!("norito.decode suppressed panic while decoding {type_name}: {message}");
-            }
-            Err(Error::decode_panic(type_name))
-        }
+        Err(payload) => Err(suppressed_decode_panic(type_name, &*payload)),
     }
+}
+/// Convert a panic suppressed while decoding `type_name` into a decode error.
+///
+/// Out of line and non-generic, so every decode instantiation shares this
+/// cold path instead of carrying its own copy.
+#[cold]
+#[inline(never)]
+fn suppressed_decode_panic(type_name: &'static str, payload: &(dyn std::any::Any + Send)) -> Error {
+    if crate::debug_trace_enabled() {
+        let message = payload
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+            .unwrap_or("<non-string panic>");
+        eprintln!("norito.decode suppressed panic while decoding {type_name}: {message}");
+    }
+    Error::decode_panic(type_name)
 }
 /// Returns true when a Norito decode is running under panic suppression.
 #[must_use]

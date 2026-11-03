@@ -103,7 +103,7 @@ use super::{
     lanes,
     network_topology::Topology,
     payload::{self, Assembly},
-    schedule::{self, NativeExecutionInputs},
+    schedule::{self, CompletedExecution, CompletedResult},
 };
 use crate::{
     EventsSender,
@@ -839,10 +839,10 @@ impl std::ops::Deref for ScheduledAuthority {
 )]
 enum FinishingPhase {
     ContextProof {
-        inputs: iroha_allocation::RetainedPayload<NativeExecutionInputs>,
+        inputs: CompletedExecution,
         refusal: Option<NativeLaneStateProofError>,
     },
-    Ready(iroha_allocation::RetainedPayload<CertifiedResultV1>),
+    Ready(CompletedResult),
     /// A one-shot deterministic transition failed or unwound; only recovery may release it.
     Consuming,
 }
@@ -900,7 +900,7 @@ struct Live<'s> {
     /// Complete original canonical epoch result and its exact source-bound allocation ledger.
     /// Retained for custody through the same Live lifetime and field drop order, even when
     /// shipping execution no longer reads its value after encoding the original preimage.
-    _commitment: iroha_allocation::RetainedPayload<CertifiedResultV1>,
+    _commitment: CompletedResult,
     applied_config: AppliedConfig,
     committee: Vec<PeerId>,
     events: Vec<EventBox>,
@@ -1025,9 +1025,13 @@ struct SignatureDecodeAttempt {
     /// Completed leg graphs and decoder controls from this exact original proposal.
     amx_legs: Option<super::amx::NativeAmxLegPreparations>,
     /// Original captured UID binding rows and decoder prefixes survive overlay rollback.
-    /// TODO: retain the unfinished execution's other actual resources; their rollback
-    /// can still wake this job's original shared-pool refusal before external release.
     uid_bindings: Option<crate::state::asset_uid::binding_custody::retry::BindingPreparations>,
+    /// State-pool credits this job's refused attempt kept from its own refunds, its
+    /// rollback included. The job's next attempt spends them first; dropping them
+    /// returns them to the pool.
+    /// TODO: an attempt's refunds made on other threads, such as deferred
+    /// reclamation, still return to the shared pool and can wake its refusal.
+    rollback_credits: Option<iroha_allocation::RetainedAttemptCredits>,
     parent_service: super::certified_chain::ParentServicePreparation,
     /// Original parent receipt and signed genesis survive pristine overlay retries.
     successor_context: super::certified_chain::SuccessorContextPreparation,
@@ -1716,11 +1720,65 @@ impl<'s> Worker<'s> {
     }
 
     /// The callback receives the sole completed original, before any proof scratch allocation.
+    ///
+    /// The attempt runs in one block-start credit scope of the State pool: the worker
+    /// thread's refunds to that pool stay with the attempt and pay for its later
+    /// reservations. A refusal that waits on that pool keeps them with its job, and the
+    /// job's next attempt starts from them, so its own rollback cannot satisfy the
+    /// refusal's release wait; only another owner's release can. Other outcomes return
+    /// them to the pool.
     #[expect(
         clippy::result_large_err,
         reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
     )]
     fn run_execution_with_finisher(
+        &mut self,
+        block: &AvailableBody,
+        block_hash: Hash32,
+        certified: bool,
+        finish: impl FnOnce(&mut Self) -> Result<Option<Hash32>, PublicationError>,
+    ) -> Result<Option<Hash32>, PublicationError> {
+        let pool = self.state.ivm_execution_budget();
+        let retained = self
+            .job_decode(block_hash)
+            .and_then(|attempt| attempt.rollback_credits.take());
+        let (outcome, credits) = pool.with_attempt_credits(retained, || {
+            self.run_attempt_with_finisher(block, block_hash, certified, finish)
+        });
+        if let Err(PublicationError::Deferred(reason)) = &outcome
+            && reason
+                .release_wait()
+                .is_some_and(|wait| pool.is_source_of(wait))
+            // SPEC: §13.4 HC983 returns the attempt's credits to the pool before the
+            // refusal reaches the scheduler, so its own rollback wakes its retry again.
+            && !cfg!(all(test, sumeragi_core_mutation = "HC983"))
+            && let Some(attempt) = self.job_decode(block_hash)
+        {
+            attempt.rollback_credits = credits;
+        }
+        // Other outcomes return the attempt's credits to the pool here.
+        outcome
+    }
+
+    /// Original decode custody of the job executing `block_hash`, before or after validation.
+    fn job_decode(&mut self, block_hash: Hash32) -> Option<&mut SignatureDecodeAttempt> {
+        if let Some(original) = self
+            .finishing
+            .as_mut()
+            .filter(|original| original.block_hash == block_hash)
+        {
+            return Some(&mut original.signature_decode);
+        }
+        self.signature_decode
+            .as_mut()
+            .filter(|attempt| attempt.block_hash == block_hash)
+    }
+
+    #[expect(
+        clippy::result_large_err,
+        reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
+    )]
+    fn run_attempt_with_finisher(
         &mut self,
         block: &AvailableBody,
         block_hash: Hash32,
@@ -1809,6 +1867,7 @@ impl<'s> Worker<'s> {
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
+                rollback_credits: None,
                 successor_context:
                     crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,
@@ -1944,6 +2003,9 @@ impl<'s> Worker<'s> {
             Some(
                 crate::smartcontracts::isi::sccp::keepalive::ProgressClock::capture(
                     original_view.world(),
+                    original_view
+                        .native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
                     height,
                     time_ms,
                 )
@@ -2637,8 +2699,6 @@ impl<'s> Worker<'s> {
     fn rollback_stale_finishing(&mut self) -> Result<(), PublicationError> {
         let original = self.finishing.take().expect("stale completed original");
         let mut decoder = original.signature_decode;
-        // The abandoned execution consumed its schedule capture; re-execution prepares anew.
-        decoder.successor_context.retire_consumed_continuation();
         let returned = decoder
             .retain_validation_return(original.valid.into(), &self.state.ivm_execution_budget());
         self.signature_decode = Some(decoder);
@@ -2666,8 +2726,6 @@ impl<'s> Worker<'s> {
             unreachable!()
         };
         let mut decoder = original.signature_decode;
-        // The abandoned execution consumed its schedule capture; re-execution prepares anew.
-        decoder.successor_context.retire_consumed_continuation();
         let returned =
             decoder.retain_validation_return(valid.into(), &self.state.ivm_execution_budget());
         self.signature_decode = Some(decoder);

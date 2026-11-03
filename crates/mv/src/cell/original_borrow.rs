@@ -10,7 +10,7 @@ use std::convert::Infallible;
 /// collector. Both writers remain excluded until this owner drops. Callers must
 /// bound work before acquiring it and release it before awaiting external work.
 /// References cannot outlive this guard. It issues no publication permission.
-pub struct CommittedCellBorrow<'a, V: Value, C: Send + Sync + 'static = Untracked> {
+pub struct CommittedCellBorrow<'a, V: CellValue, C: Send + Sync + 'static = Untracked> {
     source: &'a Cell<V, C>,
     original: CapturedPublication,
     current: Option<ReleaseGuard<'a, EbrCellWriterAcquisition<'a, V, C>>>,
@@ -19,11 +19,11 @@ pub struct CommittedCellBorrow<'a, V: Value, C: Send + Sync + 'static = Untracke
 
 /// Retained original publication after all physical observation guards release.
 /// No payload or publication authority is owned by this identity-only token.
-pub struct CommittedCellObservation<'a, V: Value, C: Send + Sync + 'static = Untracked> {
+pub struct CommittedCellObservation<'a, V: CellValue, C: Send + Sync + 'static = Untracked> {
     source: &'a Cell<V, C>,
     original: CapturedPublication,
 }
-impl<V: Value, C: Send + Sync + 'static> CommittedCellObservation<'_, V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> CommittedCellObservation<'_, V, C> {
     /// Recheck the exact original Cell without a value read, clone or collector pin.
     ///
     /// # Errors
@@ -35,7 +35,7 @@ impl<V: Value, C: Send + Sync + 'static> CommittedCellObservation<'_, V, C> {
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> CommittedCellBorrow<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> CommittedCellBorrow<'a, V, C> {
     /// Retain the original identity while releasing both actual observation writers.
     /// The returned token permits only a future source check, never publication.
     ///
@@ -83,7 +83,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> CommittedCellBorrow<'a, V, C> {
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> Drop for CommittedCellBorrow<'_, V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Drop for CommittedCellBorrow<'_, V, C> {
     fn drop(&mut self) {
         // Release every physical guard before waking any original waiter. No
         // arbitrary cleanup, callback or collector runs under another data lock.
@@ -96,7 +96,7 @@ impl<V: Value, C: Send + Sync + 'static> Drop for CommittedCellBorrow<'_, V, C> 
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> Cell<V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> Cell<V, C> {
     /// Borrow the original non-Copy committed pair without clone, pin or successor.
     ///
     /// Native Cell order is undo then current. Acquiring either source is strictly

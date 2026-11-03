@@ -487,6 +487,20 @@ fn prepare_wrapper_callback(
 
 #[test]
 fn compiled_fee_wrapper_preserves_nested_pool_authorities_and_actual_output() {
+    // The wrapper calls the pool contract, which pays through reward custody. These nested
+    // IVM frames exceed the default 2 MiB test-thread stack in debug builds, so the case runs
+    // on a dedicated thread, like the other nested-contract fee tests.
+    let worker = std::thread::Builder::new()
+        .name("fee-wrapper-nested-pool".to_owned())
+        .stack_size(32 * 1024 * 1024)
+        .spawn(nested_pool_authorities_and_actual_output_case)
+        .expect("spawn the nested-contract test thread");
+    if let Err(panic) = worker.join() {
+        std::panic::resume_unwind(panic);
+    }
+}
+
+fn nested_pool_authorities_and_actual_output_case() {
     for production_pool in [false, true] {
         with_wrapper_block(|block, deployer| {
             let fixture = install_wrapper_fixture(block, deployer, production_pool);

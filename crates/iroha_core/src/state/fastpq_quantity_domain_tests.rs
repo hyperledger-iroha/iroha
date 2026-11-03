@@ -6,9 +6,9 @@ use iroha_data_model::{
     fastpq::{FastpqQuantityUnits, transfer_asset_scales},
     isi::{Mint, Transfer},
 };
+use iroha_primitives::nonzero;
 use iroha_primitives::{bigint::BigInt, numeric::Numeric};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, gen_account_in};
-use nonzero_ext::nonzero;
 
 /// Bind the original recorder to this empty carrier before component effects.
 #[expect(

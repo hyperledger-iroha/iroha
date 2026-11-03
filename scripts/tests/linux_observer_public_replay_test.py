@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0,str(Path(__file__).resolve().parent))
 import zk_resource_harness as harness
 import resource_observation_contract as contracts
 import linux_owned_process_evidence_test as evidence_tests
@@ -26,9 +27,8 @@ class IndependentReplayTests(unittest.TestCase):
     def reanchor(self,run,report):
         """Bind the deliberately changed test bytes without claiming independent execution."""
         (run/'report.json').write_bytes(harness.control.canonical(report))
-        with harness._EvidenceDirectory(run) as directory:
-            snapshot=harness._EvidenceSnapshot(directory,DESCRIPTOR)
-        self.assertEqual(snapshot.reasons,[])
+        with harness._EvidenceDirectory(run) as directory, harness._EvidenceSnapshot(directory,DESCRIPTOR) as snapshot:
+            self.assertEqual(snapshot.reasons,[])
         manifest={'schema':harness.MANIFEST_SCHEMA,'context':report['context'],
             'verdict':report['verdict'],'classification':'measured',
             'files':[snapshot.bindings[key] for key in sorted(snapshot.bindings)]}
@@ -42,7 +42,9 @@ class IndependentReplayTests(unittest.TestCase):
         report['context'].update(context)
         record=json.loads((run/'child/record.json').read_bytes())
         record['identity'].update(context)
-        record['process'].update(pid=process['pid'],cpu_user_ns=100_000_000,cpu_system_ns=100_000_000)
+        record['process'].update(pid=process['pid'],cpu_user_ns=100_000_000,cpu_system_ns=100_000_000,
+                                 peak_rss_bytes=process['peak_rss_bytes'],
+                                 peak_rss_bytes_at_begin=process['peak_rss_bytes'])
         (run/'child/context.json').write_bytes(harness.control.canonical(report['context']))
         (run/'child/record.json').write_bytes(harness.control.canonical(record))
         report['process'].update(process)
@@ -59,7 +61,7 @@ class IndependentReplayTests(unittest.TestCase):
         self.assertEqual(verified['report']['verdict'],'accepted')
         return run,pin,report
 
-    def semantic_refusal(self,run,pin,expected=EXPECTED):
+    def semantic_refusal(self,run,pin,expected=EXPECTED,reason='linux_owned_evidence_invalid'):
         """Join exact captured inner semantic refusal to the public rejected summary."""
         actual=harness.judge_records;captured=[]
         def judge(*args,**kwargs):
@@ -76,7 +78,7 @@ class IndependentReplayTests(unittest.TestCase):
         self.assertEqual(kwargs['snapshot'].reasons,[])
         self.assertIs(kwargs['required_linux'],True)
         self.assertEqual(kwargs['expected_delivery'],expected)
-        self.assertIn('linux_owned_evidence_invalid',result[2])
+        self.assertIn(reason,result[2])
 
     def test_owned_positive_and_stricter_replay_both_use_external_pins(self):
         """Both independent original/consumer judgments retain the same authority."""
@@ -127,6 +129,35 @@ class IndependentReplayTests(unittest.TestCase):
         report['process']['sampled']['linux_owned']['admission'].update(bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
         pin=self.reanchor(run,report)
         self.semantic_refusal(run,pin)
+
+    def test_coordinated_wait4_outer_and_emitter_rss_cannot_understate_initial_capture(self):
+        """Coordinated kernel summaries cannot hide a larger independently bounded sample."""
+        run,_,report=self.fixture()
+        report['requirements']['max_peak_rss_bytes']=1
+        report['process']['peak_rss_bytes']=1
+        path=run/harness.linux_evidence.PATHS['lifecycle']
+        lifecycle=json.loads(path.read_bytes());lifecycle['wait4']['peak_rss_bytes']=1
+        raw=harness.control.canonical(lifecycle);path.write_bytes(raw)
+        report['process']['sampled']['linux_owned']['lifecycle'].update(
+            bytes=len(raw),sha256=hashlib.sha256(raw).hexdigest())
+        child=json.loads((run/'child/record.json').read_bytes())
+        child['process'].update(peak_rss_bytes=1,peak_rss_bytes_at_begin=1)
+        (run/'child/record.json').write_bytes(harness.control.canonical(child))
+        entries,orphans,reasons=harness.collect_records(DESCRIPTOR,run,report['context'],report['process'],
+            report['requirements'],required_linux=True,expected_delivery=EXPECTED)
+        self.assertEqual(reasons,['sampled_peak_rss_exceeds_bound'])
+        self.assertEqual(entries[0]['findings'],[])
+        report.update(records=entries,orphans=orphans)
+        self.semantic_refusal(run,self.reanchor(run,report),reason='sampled_peak_rss_exceeds_bound')
+        # Different page-table and high-water metrics remain exact; neither is
+        # rewritten to the other. At the larger sample's inclusive bound both
+        # independent measurements pass the real Linux replay contract.
+        report['requirements']['max_peak_rss_bytes']=4096
+        pin=self.reanchor(run,report)
+        verified=harness.read_pinned_run(run,pin,expected_observation_contract=contracts.LINUX,
+                                        expected_delivery=EXPECTED)
+        self.assertEqual(verified['report']['process']['peak_rss_bytes'],1)
+        self.assertEqual(verified['report']['requirements']['max_peak_rss_bytes'],4096)
 
 
 if __name__=='__main__':unittest.main()

@@ -438,7 +438,10 @@ fn invalid_names_and_shared_source_links_fail_without_mutation() {
         fs::read(source.path().join("original")).unwrap(),
         b"original bytes"
     );
-    assert!(destination.entries(10).unwrap().is_empty());
+    assert_eq!(
+        destination.entries(10).unwrap(),
+        Vec::<std::ffi::OsString>::new()
+    );
 }
 
 #[test]
@@ -548,7 +551,10 @@ fn changed_source_identity_and_parent_are_refused_before_move() {
             fs::read(source.path().join("original")).unwrap(),
             b"replacement"
         );
-        assert!(destination.entries(10).unwrap().is_empty());
+        assert_eq!(
+            destination.entries(10).unwrap(),
+            Vec::<std::ffi::OsString>::new()
+        );
     }
 }
 

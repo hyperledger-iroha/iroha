@@ -7,8 +7,8 @@ use crate::{
     state::{State, World},
 };
 use iroha_data_model::{isi::Log, transaction::TransactionBuilder};
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
-use nonzero_ext::nonzero;
 
 fn asset() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(

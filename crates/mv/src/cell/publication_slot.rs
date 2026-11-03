@@ -6,7 +6,7 @@ use super::*;
     clippy::large_enum_variant,
     reason = "publication phases retain original writers and retirement inline without allocating while sibling writers are held"
 )]
-enum Phase<'a, V: Value, C: Send + Sync + 'static> {
+enum Phase<'a, V: CellValue, C: Send + Sync + 'static> {
     Attached(Block<'a, V, C>),
     Frozen(DetachedPublicationSlot<'a, V, (), (), C>),
     Published {
@@ -19,11 +19,11 @@ enum Phase<'a, V: Value, C: Send + Sync + 'static> {
 /// Only an owned Block or its original frozen journal creates this slot.
 /// Construction performs no physical acquisition, validation or allocation.
 #[must_use = "prepare and publish, or jointly release the original slot"]
-pub struct BlockPublicationSlot<'a, V: Value, C: Send + Sync + 'static = Untracked> {
+pub struct BlockPublicationSlot<'a, V: CellValue, C: Send + Sync + 'static = Untracked> {
     phase: Phase<'a, V, C>,
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> Block<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> Block<'a, V, C> {
     /// Move the original Block into its caller's aggregate publication owner.
     /// Install every sibling slot before invoking preparation on any slot.
     pub fn publication_slot(self) -> BlockPublicationSlot<'a, V, C> {
@@ -33,7 +33,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> Block<'a, V, C> {
     }
 }
 
-impl<'a, V: Value, C: Send + Sync + 'static> BlockPublicationSlot<'a, V, C> {
+impl<'a, V: CellValue, C: Send + Sync + 'static> BlockPublicationSlot<'a, V, C> {
     /// Install the exact original frozen pair in the existing publication slot.
     /// The first preparation checks its actual source and predecessor; equal
     /// values in another Cell cannot substitute for that authority.
@@ -44,7 +44,7 @@ impl<'a, V: Value, C: Send + Sync + 'static> BlockPublicationSlot<'a, V, C> {
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> crate::FrozenBlockPublication
+impl<V: CellValue, C: Send + Sync + 'static> crate::FrozenBlockPublication
     for BlockPublicationSlot<'_, V, C>
 {
     type Frozen = Detached<V, (), C>;
@@ -66,7 +66,7 @@ impl<V: Value, C: Send + Sync + 'static> crate::FrozenBlockPublication
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> crate::BlockPublication
+impl<V: CellValue, C: Send + Sync + 'static> crate::BlockPublication
     for BlockPublicationSlot<'_, V, C>
 {
     fn prepare_publication(&mut self) {
@@ -96,7 +96,9 @@ impl<V: Value, C: Send + Sync + 'static> crate::BlockPublication
     }
 }
 
-impl<V: Value, C: Send + Sync + 'static> crate::BlockRetirement for BlockPublicationSlot<'_, V, C> {
+impl<V: CellValue, C: Send + Sync + 'static> crate::BlockRetirement
+    for BlockPublicationSlot<'_, V, C>
+{
     fn release_writers(&mut self) {
         match &mut self.phase {
             Phase::Attached(block) => crate::BlockRetirement::release_writers(block),

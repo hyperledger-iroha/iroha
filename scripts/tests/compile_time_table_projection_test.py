@@ -18,7 +18,7 @@ KOTODAMA_MANIFEST = (
 )
 ISO_MANIFEST = ROOT / "crates/ivm/src/assets/iso20022_schema_v1/manifest.json"
 REGISTRY_PROVIDER_SHA256 = (
-    "271d94e13fd7e983489121d0b1cae601e04ce60dcb2f3a0dd44e5bdb1fc452f2"
+    "f1a0db847140ebf8097d4d32a9e4db082b42a97bf90f64ae72b1d433fa77e7ba"
 )
 
 
@@ -425,26 +425,36 @@ class CompileTimeTableProjectionTests(unittest.TestCase):
         provider = provider_path.read_text(encoding="utf-8")
         start = provider.index("pub(super) const ALL:")
         end = provider.index("\n];", start) + 3
+        inventory = provider[start:end]
         rows: list[tuple[str, str, str, str]] = []
         for match in re.finditer(
             r"(built_in_wire_id|governance_wire_id)!\(\s*(.*?)\s*=>\s*"
-            r'"((?:\\.|[^"\\])*)"(?:\s*,\s*'
-            r"(register|register_with_id|register_with_id_slice))?\s*\)",
-            provider[start:end],
+            r'"((?:\\.|[^"\\])*)"(?:\s*,\s*(register))?(?:\s*,\s*(tolerant))?\s*\)',
+            inventory,
             re.DOTALL,
         ):
             scope = "governance" if match.group(1) == "governance_wire_id" else "base"
             type_name = re.sub(r"\s+", "", match.group(2))
-            mode = match.group(4) or "register_slice"
+            mode = "register" if match.group(4) else "register_slice"
+            # A tolerant registration is an instruction a release adds after the frozen baseline.
+            if match.group(5):
+                mode += "_tolerant"
             rows.append((scope, type_name, mode, match.group(3)))
-        self.assertEqual(len(rows), 395)
+        # Every registration parses into exactly one row.
+        self.assertEqual(
+            len(rows),
+            inventory.count("built_in_wire_id!(") + inventory.count("governance_wire_id!("),
+        )
+        self.assertEqual(len(rows), 417)
         self.assertEqual(len({row[1] for row in rows}), len(rows))
         self.assertEqual(len({row[3] for row in rows}), len(rows))
         self.assertEqual(
             collections.Counter(row[2] for row in rows),
             {
-                "register_slice": 359,
+                "register_slice": 374,
                 "register": 36,
+                "register_tolerant": 6,
+                "register_slice_tolerant": 1,
             },
         )
         self.assertIn(

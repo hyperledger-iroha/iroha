@@ -1,13 +1,13 @@
 use crate::normalize_path;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use blake3::hash as blake3_hash;
-use data_encoding::BASE32_NOPAD;
 use hex::{decode as hex_decode, encode as hex_encode};
 use iroha_crypto::{Algorithm, KeyPair, PrivateKey, Signature};
 use iroha_data_model::{
     ipfs::IpfsPath,
     soradns::{RAD_VERSION_V1, ResolverAttestationDocumentV1, ResolverDirectoryRecordV1},
 };
+use iroha_primitives::base32::encode_lower as encode_base32_lower;
 use iroha_primitives::soradns::{
     GatewayHostBindings, GatewayHostError, GatewayHostProfile, canonical_gateway_suffix,
     derive_gateway_hosts, derive_gateway_hosts_with_profile, pretty_gateway_suffix,
@@ -131,7 +131,7 @@ pub fn manifest_cid_and_digest_from_path(
             source,
         })?;
     let root_bytes = manifest_root_bytes(&manifest, path)?;
-    let encoded = BASE32_NOPAD.encode(&root_bytes).to_ascii_lowercase();
+    let encoded = encode_base32_lower(&root_bytes);
     let manifest_cid = format!("b{encoded}");
     let manifest_digest_hex = blake3_hash(&data).to_hex().to_string();
     Ok(ManifestCidDigest {
@@ -1088,9 +1088,6 @@ fn parse_route_binding(value: &str) -> BTreeMap<String, String> {
     }
     components
 }
-fn encode_base32_lower(bytes: &[u8]) -> String {
-    BASE32_NOPAD.encode(bytes).to_lowercase()
-}
 fn manifest_content_cid(path: &Path) -> Result<String, GatewayBindingVerifyError> {
     let data = fs::read(path).map_err(|source| GatewayBindingVerifyError::ManifestIo {
         path: path.to_path_buf(),
@@ -1102,7 +1099,7 @@ fn manifest_content_cid(path: &Path) -> Result<String, GatewayBindingVerifyError
             source,
         })?;
     let root_bytes = manifest_root_bytes(&value, path)?;
-    let encoded = BASE32_NOPAD.encode(&root_bytes).to_lowercase();
+    let encoded = encode_base32_lower(&root_bytes);
     Ok(format!("b{encoded}"))
 }
 fn manifest_root_bytes(
@@ -3434,7 +3431,7 @@ mod tests {
         let binding_path = temp.path().join("binding.json");
         let manifest_path = temp.path().join("manifest.json");
         let manifest_root = vec![0xAA, 0xBB, 0xCC, 0xDD];
-        let expected_cid = format!("b{}", BASE32_NOPAD.encode(&manifest_root).to_lowercase());
+        let expected_cid = "bvk54zxi";
         fs::write(
             &manifest_path,
             json::to_string(&norito::json!({ "root_cid": manifest_root }))
@@ -3523,8 +3520,7 @@ mod tests {
                 .expect("encode manifest JSON"),
         )
         .expect("write manifest");
-        let binding_root = vec![0xAA, 0xBB, 0xCC];
-        let binding_cid = format!("b{}", BASE32_NOPAD.encode(&binding_root).to_lowercase());
+        let binding_cid = "bvk54y";
         let proof_payload = norito::json!({
             "alias": "docs.sora",
             "manifest": binding_cid
@@ -3684,8 +3680,7 @@ mod tests {
             .expect("write manifest");
         let info =
             super::manifest_cid_and_digest_from_path(&manifest_path).expect("derive metadata");
-        let root = hex::decode("0123456789abcdef").expect("root hex");
-        let expected_cid = format!("b{}", BASE32_NOPAD.encode(&root).to_ascii_lowercase());
+        let expected_cid = "baerukz4jvpg66";
         assert_eq!(info.manifest_cid, expected_cid);
         let expected_digest = blake3_hash(&fs::read(&manifest_path).expect("read manifest"))
             .to_hex()

@@ -11,7 +11,6 @@ use iroha_data_model::{
     domain::Domain,
 };
 use iroha_model_base::domain::DomainId;
-use iroha_torii_shared::ErrorEnvelope;
 use tokio::sync::{Mutex, MutexGuard};
 use tower::ServiceExt as _;
 async fn attachments_smoke_lock() -> MutexGuard<'static, ()> {
@@ -43,10 +42,19 @@ fn request_with_headers(
     builder.body(axum::body::Body::from(body.to_vec())).unwrap()
 }
 fn assert_error_message(body: &[u8], expected_code: &str, expected_message: &str) {
-    let envelope: ErrorEnvelope = norito::decode_from_bytes(body).expect("error envelope payload");
-    assert_eq!(envelope.code(), expected_code);
+    // A request without an `Accept` header receives the default JSON envelope.
+    let envelope: norito::json::Value =
+        norito::json::from_slice(body).expect("JSON error envelope");
+    assert_eq!(
+        envelope.get("code").and_then(norito::json::Value::as_str),
+        Some(expected_code),
+        "unexpected error envelope: {envelope:?}"
+    );
     assert!(
-        envelope.message().contains(expected_message),
+        envelope
+            .get("message")
+            .and_then(norito::json::Value::as_str)
+            .is_some_and(|message| message.contains(expected_message)),
         "unexpected error envelope: {envelope:?}"
     );
 }

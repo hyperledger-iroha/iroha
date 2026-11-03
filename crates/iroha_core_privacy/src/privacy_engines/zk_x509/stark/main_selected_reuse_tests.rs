@@ -323,6 +323,14 @@ fn reused_selected_scratch_sixteen_worker_cost_preserves_full_masks_and_all_quer
     selected_scratch_cost_with_workers_v1(&[16]);
 }
 
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "reported timing means and ratios tolerate binary64 rounding"
+)]
 fn selected_scratch_cost_with_workers_v1(worker_counts: &[usize]) {
     use std::time::{Duration, Instant};
 
@@ -342,7 +350,7 @@ fn selected_scratch_cost_with_workers_v1(worker_counts: &[usize]) {
                         .collect(),
                 );
                 let mask = Column::from_vec_v1(
-                    (0..MASK_DEGREE + 1)
+                    (0..=MASK_DEGREE)
                         .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                         .collect(),
                 );

@@ -2200,8 +2200,9 @@ mod tests {
         assert!(decode < decoded_take);
         let generator = constructor.find("amount_generator()?").expect("generator");
         assert!(decoded_take < generator);
-        assert!(constructor.contains("&amount_generator()? * amount_scalar.expose_ref()"));
-        assert!(constructor.contains("&ED25519_BASEPOINT_POINT * mask.expose_ref()"));
+        assert!(constructor.contains("amount_generator()? * amount_scalar.expose_ref()"));
+        assert!(constructor.contains("ED25519_BASEPOINT_POINT * mask.expose_ref()"));
+        assert!(!constructor.contains("* *mask"));
         assert!(constructor.contains("Zeroizing::new(&*amount_component + &*mask_component)"));
         let compare = constructor
             .find("commitment.compress().to_bytes()")
@@ -2760,7 +2761,14 @@ mod tests {
             .split_once("fn challenge_products(")
             .expect("WIP prover boundary")
             .0;
-        for owner in ["d_l", "d_r", "r", "s", "delta", "eta"] {
+        for owner in [
+            "d_l",
+            "d_r",
+            "response_randomness",
+            "scalar_mask",
+            "delta",
+            "eta",
+        ] {
             assert!(prove_wip.contains(&format!("let {owner} = random_nonzero_scalar(rng)?;")));
         }
         assert!(!prove_wip.contains("Zeroizing::new(random_nonzero_scalar(rng)?)"));

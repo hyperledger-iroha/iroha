@@ -139,7 +139,7 @@ impl TieredSnapshotPayload {
         key_handle: impl Fn(K) -> TieredKeyHandle,
     ) where
         K: Key,
-        V: Value + json::JsonSerialize + MeasuredBytes,
+        V: Value + json::JsonSerialize + MeasuredBytes + Send + Sync,
         M: mv::storage::StorageMode<K, V>,
     {
         if self.complete {
@@ -5771,8 +5771,8 @@ mod tests {
         proof::{ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId},
     };
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::Quantity;
-    use nonzero_ext::nonzero;
     #[cfg(unix)]
     use std::os::unix::fs::MetadataExt;
     use std::{fs, num::NonZeroU32};

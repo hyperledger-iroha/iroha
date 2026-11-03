@@ -13,10 +13,7 @@ use iroha::{
     },
 };
 use iroha_data_model::{
-    nexus::{
-        PrivateSettlementPhaseCertificateV1, PrivateSettlementPrepareBarrierV1,
-        PrivateSettlementSidecarAvailabilityV1,
-    },
+    nexus::PrivateSettlementSidecarAvailabilityV1,
     parameter::system::ConsensusMode,
     sumeragi_finality::{
         SignedGenesisPinsV1, SumeragiFinalityVerifier, authenticate_signed_genesis_v1,
@@ -268,35 +265,6 @@ impl PreparedSdkFlow {
             .as_ref()
             .and_then(|round| round.transcript.clone())
             .ok_or_else(|| eyre!("original availability checkpoint absent"))
-    }
-    pub(super) fn availability_manifest(
-        &self,
-        materials: &[PrivateSettlementProvisionalLegMaterialV1],
-    ) -> Result<AtomicPrivateSettlementV1> {
-        let certificates: Vec<PrivateSettlementSidecarAvailabilityV1> = self.round(0)?;
-        ensure!(certificates.len() == materials.len());
-        let mut manifest = materials[0].manifest.clone();
-        for (ordinal, certificate) in certificates.iter().enumerate() {
-            ensure!(certificate.body == materials[ordinal].availability_body);
-            manifest.legs[ordinal].availability_certificate_digest = certificate.digest()?;
-        }
-        manifest.validate()?;
-        Ok(manifest)
-    }
-    pub(super) fn barrier(
-        &self,
-        manifest: AtomicPrivateSettlementV1,
-        materials: &[PrivateSettlementProvisionalLegMaterialV1],
-    ) -> Result<PrivateSettlementPrepareBarrierV1> {
-        SdkClient::build_private_settlement_prepare_barrier_v1(
-            manifest,
-            &materials
-                .iter()
-                .map(|m| m.committee_authority.clone())
-                .collect::<Vec<_>>(),
-            materials.iter().map(|m| m.delta.clone()).collect(),
-            self.round::<Vec<PrivateSettlementPhaseCertificateV1>>(1)?,
-        )
     }
     pub(super) fn finish(
         &self,

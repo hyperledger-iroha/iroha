@@ -1097,6 +1097,30 @@ pub struct Failure {
     /// Push failure reason
     pub err: Error,
 }
+/// Outcome of [`Queue::admit_gossip_with_state`] for one inbound gossip input.
+#[derive(Debug)]
+pub(crate) enum GossipAdmission {
+    /// No local plan resolved; nothing was admitted.
+    Unrouted(RoutingResolveError),
+    /// The local plan differs from the advertised plan; nothing was admitted.
+    PlanMismatch(RoutingPlan),
+    /// Queue admission ran on the local plan with this result.
+    Pushed(Result<RoutingDecision, Failure>),
+}
+/// A resolved local routing plan and, when the installed router derived it from the
+/// admission view rather than its state-free probe, that router.
+struct LocalRoutingPlan {
+    plan: RoutingPlan,
+    view_router: Option<Arc<dyn LaneRouter>>,
+}
+/// When a successful admission republishes the queue's TEU backlog gauges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TeuBacklogPublication {
+    /// Right after this admission is enqueued.
+    AfterAdmission,
+    /// Once after the caller's whole batch, through [`Queue::publish_teu_backlog_with_state`].
+    AfterBatch,
+}
 /// Exact detached owners retained by the operation which owns the outer guards.
 ///
 /// Each operation supplies a fresh slot for its one possible manifest publication
@@ -1208,6 +1232,17 @@ impl EagerAdmissionStateAccess<'_, '_> {
         self
     }
 }
+// Shared native progress is independent of installing SCCP. Its scheduled-time
+// exemption still needs the exact committed parent, never the fee horizon or wall time.
+fn exemption_needs_committed_time(
+    world: &impl WorldReadOnly,
+    payload: &TransactionPayload,
+) -> bool {
+    crate::smartcontracts::isi::sccp::keepalive::is_standalone(&payload.instructions)
+        || (crate::smartcontracts::isi::sccp::store::parameters::get(world).is_some()
+            && crate::smartcontracts::isi::sccp::admission::exempt_shape(payload).is_some())
+}
+
 impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
     fn execution_budget(&self) -> iroha_allocation::AllocationBudget {
         self.view.execution_budget()
@@ -1260,7 +1295,9 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         // they are not fee-exempt. Ordinary inputs acquire no SCCP history.
         let pause_needs_time = matches!(transaction.instructions(), Executable::Instructions(instructions)
             if instructions.iter().any(|instruction| instruction.as_any().is::<iroha_data_model::isi::sccp::EndorseSccpFastPauseV1>()));
-        let pause_time = if pause_needs_time {
+        let pause_time = if pause_needs_time
+            || crate::smartcontracts::isi::sccp::keepalive::count(transaction.instructions()) != 0
+        {
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(self.view).map_err(
                 |error| Error::AdmissionInvariant {
                     reason: error.to_string(),
@@ -1282,6 +1319,7 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         let keepalive = crate::smartcontracts::isi::sccp::keepalive::admit(
             self.view.world(),
             transaction.payload(),
+            pause_time,
             self.next_block_height,
             u64::try_from(queue.time_source.get_unix_time().as_millis()).unwrap_or(u64::MAX),
         )
@@ -1351,12 +1389,10 @@ impl QueueAdmissionStateAccess for EagerAdmissionStateAccess<'_, '_> {
         tx: &AcceptedTransaction<'static>,
         route_dataspace_id: Option<DataSpaceId>,
     ) -> Result<Option<FeeAdmissionReservation>, Error> {
-        // Only SCCP exemption candidates consume original committed time. Every
-        // ordinary signed input still reaches the exact Nexus fee quote below.
+        // Shared progress and SCCP exemption candidates consume original committed
+        // time. Ordinary signed inputs still reach the exact Nexus fee quote below.
         let needs_sccp_time = tx.external().is_some_and(|transaction| {
-            crate::smartcontracts::isi::sccp::store::parameters::get(self.view.world()).is_some()
-                && crate::smartcontracts::isi::sccp::admission::exempt_shape(transaction.payload())
-                    .is_some()
+            exemption_needs_committed_time(self.view.world(), transaction.payload())
         });
         let sccp_committed_time_ms = if needs_sccp_time {
             crate::smartcontracts::isi::sccp::hold::committed_time_ms(self.view).map_err(
@@ -1408,7 +1444,8 @@ impl Queue {
     /// Retain a fresh, still-due Keepalive or retire this authority's obsolete pending source.
     /// The normal removal owner releases its pending index, routing and fee reservations.
     /// # Errors
-    /// Preserves unavailable due-work observations; no missing Parliament result is false.
+    /// Preserves unavailable clock policy. A carrier with unestablished due eligibility
+    /// is locally retired so it cannot block a fresh, independently eligible signature.
     pub fn has_fresh_pending_keepalive(
         &self,
         view: &StateView<'_>,
@@ -1438,7 +1475,14 @@ impl Queue {
         let clock =
             keepalive::clock_parameters(view.world()).map_err(|_| keepalive::DueWorkUnavailable)?;
         let stale = keepalive::needs_fresh_carrier(candidate, wall_ms, clock.due_work_max_lag_ms);
-        let retain = !stale && keepalive::due(view.world(), next_height, candidate)?;
+        let retain = !stale
+            && keepalive::due(
+                view.world(),
+                view.native_execution_tip()
+                    .map(|tip| tip.creation_time_ms()),
+                next_height,
+                candidate,
+            ) == Ok(true);
         drop(queued);
         if !retain {
             self.remove_pending_hash_locked(hash, None);
@@ -1472,7 +1516,13 @@ impl Queue {
             };
             signed.payload().creation_time_ms <= wall_ms
                 && !keepalive::needs_fresh_carrier(candidate, wall_ms, clock.due_work_max_lag_ms)
-                && keepalive::due(view.world(), height, candidate) == Ok(true)
+                && keepalive::due(
+                    view.world(),
+                    view.native_execution_tip()
+                        .map(|tip| tip.creation_time_ms()),
+                    height,
+                    candidate,
+                ) == Ok(true)
         })
     }
 
@@ -1673,7 +1723,14 @@ impl Queue {
                                 });
                             }
                         };
-                    self.admit_in_view(tx, plan, &view, retired, SubmissionOrigin::Remote)?;
+                    self.admit_in_view(
+                        tx,
+                        plan,
+                        &view,
+                        retired,
+                        SubmissionOrigin::Remote,
+                        TeuBacklogPublication::AfterAdmission,
+                    )?;
                     accepted += 1;
                 }
                 Ok(accepted)
@@ -3142,17 +3199,20 @@ impl Queue {
             return Ok(None);
         };
         let observation_time_ms = self.nexus_fee_admission_observation_time_ms(tx);
-        let quote = quote_external_nexus_fee_admission(
-            world,
-            nexus,
-            pipeline,
-            zk_gas,
-            transaction,
-            observation_time_ms,
-            sccp_committed_time_ms,
-            next_block_height,
-            route_dataspace_id,
-        )
+        // Every policy step of one quote reads the same immutable root metadata of `world`.
+        let quote = crate::sumeragi::lanes::routing::with_reused_root_scope_reads(|| {
+            quote_external_nexus_fee_admission(
+                world,
+                nexus,
+                pipeline,
+                zk_gas,
+                transaction,
+                observation_time_ms,
+                sccp_committed_time_ms,
+                next_block_height,
+                route_dataspace_id,
+            )
+        })
         .map_err(Self::map_nexus_fee_admission_error)?;
         quote
             .map(|quote| {
@@ -3401,8 +3461,6 @@ impl Queue {
         }
         let (window, more) = self.pending_order.lock().next_window(max_scan.get());
         let mut sccp_budget = SccpExemptBlockBudgetV1::new(state_view.world());
-        let sccp_exists =
-            crate::smartcontracts::isi::sccp::store::parameters::get(state_view.world()).is_some();
         let mut sccp_committed_time_ms = None;
         let mut pending = Vec::with_capacity(window.len());
         for (incarnation, hash) in window {
@@ -3418,13 +3476,10 @@ impl Queue {
             // Ordinary work and sealed commitments cannot claim this exemption.
             // Acquire its exact original time only when a live candidate can;
             // failure retains the whole original window for the same-source retry.
-            let needs_sccp_time = sccp_exists
-                && Self::sccp_signed_transaction(tx.as_accepted().entrypoint()).is_some_and(
-                    |signed| {
-                        crate::smartcontracts::isi::sccp::admission::exempt_shape(signed.payload())
-                            .is_some()
-                    },
-                );
+            let needs_sccp_time = Self::sccp_signed_transaction(tx.as_accepted().entrypoint())
+                .is_some_and(|signed| {
+                    exemption_needs_committed_time(state_view.world(), signed.payload())
+                });
             let class = if cfg!(all(test, sumeragi_core_mutation = "HC346")) || needs_sccp_time {
                 let committed_time_ms = if let Some(original) = sccp_committed_time_ms {
                     original
@@ -3662,6 +3717,10 @@ impl Queue {
         Ok(())
     }
     /// Resolve a full routing plan for an inbound gossip transaction with the current state.
+    ///
+    /// Gossip admission routes inside [`Self::admit_gossip_with_state`]; fixtures use this to
+    /// observe the same local plan.
+    #[cfg(test)]
     pub(crate) fn route_plan_for_gossip_with_state(
         &self,
         tx: &AcceptedTransaction<'_>,
@@ -3786,61 +3845,135 @@ impl Queue {
             .ivm_execution_budget()
             .with_deferred_refund_notifications(|_| {
                 let _lifecycle_guard = state.lock_lane_lifecycle_work_admission();
-                self.sync_nexus_routing_with_state(state, &mut retired_state)?;
-                let state_view = state.view();
-                self.sync_nexus_routing_with_view(&state_view, &mut retired_view)?;
-                let hash = tx.hash_as_entrypoint();
-                if let Some(tracked) = self.txs.get(&hash).map(|entry| entry.value().clone()) {
-                    // The identity lookup matched the canonical hash. Byte-identical canonical frames
-                    // are exactly the same entrypoint, including its exact signed identity.
-                    if tracked.as_accepted().entrypoint_bytes() != tx.entrypoint_bytes() {
-                        return Err(RoutingResolveError::StaleRoutingPlan);
-                    }
-                    let resident = {
-                        let _guard = self.push_remove_lock.lock();
-                        self.queued_routing_owner_locked(hash, &tracked)
-                    };
-                    let result = match resident {
-                        Ok(true) => self.fresh_queued_routing_plan(
-                            &tracked,
-                            &state_view,
-                            state_view.nexus(),
-                            state_view_height_for_routing(&state_view),
-                        ),
-                        Ok(false) => return Err(RoutingResolveError::StaleRoutingPlan),
-                        Err(error) => Err(error),
-                    };
-                    if let Err(error) = result.as_ref()
-                        && !matches!(
-                            error,
-                            RoutingResolveError::OrdinaryRouteUnavailable { .. }
-                                | RoutingResolveError::Deferred(_)
-                        )
-                    {
-                        self.mark_accepted_work_validation_fault(
-                            hash,
-                            "queued_route_lookup",
-                            error,
-                            None,
-                        );
-                    }
-                    if self.admission_faulted() {
-                        return Err(RoutingResolveError::StaleRoutingPlan);
-                    }
-                    return result;
-                }
-                let plan = {
-                    let router = self.router.read();
-                    match router.try_route_plan_without_state(tx)? {
-                        Some(plan) => plan,
-                        None => router.try_route_plan_with_view(tx, &state_view)?,
-                    }
-                };
-                resolve_routing_plan_for_queue_admission(
-                    plan,
+                let state_view =
+                    self.synced_routing_view(state, &mut retired_state, &mut retired_view)?;
+                self.local_routing_plan_in_view(tx, &state_view)
+                    .map(|local| local.plan)
+            })
+    }
+    /// Align routing with `state`, then acquire one committed view and align routing with it.
+    ///
+    /// Callers hold the lane-lifecycle admission fence for as long as they use the view.
+    fn synced_routing_view<'state>(
+        &self,
+        state: &'state State,
+        retired_state: &mut QueuePrivacyRetirements,
+        retired_view: &mut QueuePrivacyRetirements,
+    ) -> Result<StateView<'state>, RoutingResolveError> {
+        self.sync_nexus_routing_with_state(state, retired_state)?;
+        let state_view = state.view();
+        self.sync_nexus_routing_with_view(&state_view, retired_view)?;
+        Ok(state_view)
+    }
+    /// Derive the resolved local plan of `tx` from a view that routing was aligned with.
+    ///
+    /// A resident input keeps its queued route. Callers hold the lane-lifecycle admission fence.
+    fn local_routing_plan_in_view(
+        &self,
+        tx: &AcceptedTransaction<'_>,
+        state_view: &StateView<'_>,
+    ) -> Result<LocalRoutingPlan, RoutingResolveError> {
+        let hash = tx.hash_as_entrypoint();
+        if let Some(tracked) = self.txs.get(&hash).map(|entry| entry.value().clone()) {
+            // The identity lookup matched the canonical hash. Byte-identical canonical frames
+            // are exactly the same entrypoint, including its exact signed identity.
+            if tracked.as_accepted().entrypoint_bytes() != tx.entrypoint_bytes() {
+                return Err(RoutingResolveError::StaleRoutingPlan);
+            }
+            let resident = {
+                let _guard = self.push_remove_lock.lock();
+                self.queued_routing_owner_locked(hash, &tracked)
+            };
+            let result = match resident {
+                Ok(true) => self.fresh_queued_routing_plan(
+                    &tracked,
+                    state_view,
                     state_view.nexus(),
-                    state_view_height_for_routing(&state_view),
+                    state_view_height_for_routing(state_view),
+                ),
+                Ok(false) => return Err(RoutingResolveError::StaleRoutingPlan),
+                Err(error) => Err(error),
+            };
+            if let Err(error) = result.as_ref()
+                && !matches!(
+                    error,
+                    RoutingResolveError::OrdinaryRouteUnavailable { .. }
+                        | RoutingResolveError::Deferred(_)
                 )
+            {
+                self.mark_accepted_work_validation_fault(hash, "queued_route_lookup", error, None);
+            }
+            if self.admission_faulted() {
+                return Err(RoutingResolveError::StaleRoutingPlan);
+            }
+            return result.map(|plan| LocalRoutingPlan {
+                plan,
+                view_router: None,
+            });
+        }
+        let router = Arc::clone(&*self.router.read());
+        let (plan, view_router) = match router.try_route_plan_without_state(tx)? {
+            Some(plan) => (plan, None),
+            None => (
+                router.try_route_plan_with_view(tx, state_view)?,
+                Some(router),
+            ),
+        };
+        let plan = resolve_routing_plan_for_queue_admission(
+            plan,
+            state_view.nexus(),
+            state_view_height_for_routing(state_view),
+        )?;
+        Ok(LocalRoutingPlan { plan, view_router })
+    }
+    /// Route one inbound gossip input and, when its local plan equals `advertised`, admit it.
+    ///
+    /// This is [`Self::route_plan_with_state`] followed by
+    /// [`Self::push_with_lane_with_state_and_routing_plan`] inside one lane-lifecycle fence.
+    /// The push therefore validates against the routing view itself rather than a second
+    /// view, and it skips re-deriving a plan that this view's installed router derived.
+    /// Every other routing and admission check runs exactly as in that sequence. The TEU
+    /// backlog gauges are left to the caller's one [`Self::publish_teu_backlog_with_state`]
+    /// per gossip batch.
+    pub(crate) fn admit_gossip_with_state(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        state: &State,
+        advertised: &RoutingPlan,
+    ) -> GossipAdmission {
+        let mut retired_state = QueuePrivacyRetirements::default();
+        let mut retired_view = QueuePrivacyRetirements::default();
+        let mut retired = QueuePrivacyRetirements::default();
+        state
+            .ivm_execution_budget()
+            .with_deferred_refund_notifications(|_| {
+                let _lifecycle = state.lock_lane_lifecycle_work_admission();
+                let view =
+                    match self.synced_routing_view(state, &mut retired_state, &mut retired_view) {
+                        Ok(view) => view,
+                        Err(error) => return GossipAdmission::Unrouted(error),
+                    };
+                let local = match self.local_routing_plan_in_view(&tx, &view) {
+                    Ok(local) => local,
+                    Err(error) => return GossipAdmission::Unrouted(error),
+                };
+                if local.plan != *advertised {
+                    return GossipAdmission::PlanMismatch(local.plan);
+                }
+                if matches!(tx.entrypoint(), TransactionEntrypoint::AnonymousBallot(_)) {
+                    return GossipAdmission::Pushed(Err(Failure {
+                        tx: Box::new(tx),
+                        err: Error::Deferred(crate::tx::anonymous_ballot_unavailable()),
+                    }));
+                }
+                GossipAdmission::Pushed(self.push_in_fenced_view(
+                    tx,
+                    &view,
+                    Some(local),
+                    &mut retired,
+                    SubmissionOrigin::Remote,
+                    TeuBacklogPublication::AfterBatch,
+                ))
             })
     }
     /// Resolve the complete routing plan for an exact unsigned payload.
@@ -3984,7 +4117,14 @@ impl Queue {
                 });
             }
         };
-        self.admit_in_view(tx, plan, state_view, &mut retired, SubmissionOrigin::Remote)
+        self.admit_in_view(
+            tx,
+            plan,
+            state_view,
+            &mut retired,
+            SubmissionOrigin::Remote,
+            TeuBacklogPublication::AfterAdmission,
+        )
     }
     fn push_with_lane_internal_with_state_and_routing(
         &self,
@@ -4005,38 +4145,70 @@ impl Queue {
                 }
                 let _lifecycle = state.lock_lane_lifecycle_work_admission();
                 let view = state.view();
-                if let Err(err) = self.check_startup_admission() {
-                    return Err(Failure {
-                        tx: Box::new(tx),
-                        err,
-                    });
-                }
-                if let Err(original) = self.sync_nexus_routing_with_view(&view, &mut retired) {
-                    return Err(Failure {
-                        tx: Box::new(tx),
-                        err: Error::Deferred(original),
-                    });
-                }
-                let plan = routing_plan.map_or_else(
-                    || {
-                        self.router
-                            .read()
-                            .try_route_plan_with_view(&tx, &view)
-                            .and_then(|plan| Self::resolve_view_routing_plan(plan, &view))
-                    },
-                    |plan| self.resolve_precomputed_routing_plan_with_view(&tx, &view, plan),
-                );
-                let plan = match plan {
-                    Ok(plan) => plan,
-                    Err(error) => {
-                        return Err(Failure {
-                            tx: Box::new(tx),
-                            err: error.into(),
-                        });
-                    }
-                };
-                self.admit_in_view(tx, plan, &view, &mut retired, origin)
+                let routing_plan = routing_plan.map(|plan| LocalRoutingPlan {
+                    plan,
+                    view_router: None,
+                });
+                self.push_in_fenced_view(
+                    tx,
+                    &view,
+                    routing_plan,
+                    &mut retired,
+                    origin,
+                    TeuBacklogPublication::AfterAdmission,
+                )
             })
+    }
+    /// Admit `tx` against `view`, validating any supplied plan against the current router.
+    ///
+    /// A plan that the installed router derived from this same view is that validation's
+    /// own result, so only such a plan is not derived again. Callers hold the lane-lifecycle
+    /// admission fence and acquired `view` under it.
+    fn push_in_fenced_view(
+        &self,
+        tx: AcceptedTransaction<'static>,
+        view: &StateView<'_>,
+        routing_plan: Option<LocalRoutingPlan>,
+        retired: &mut QueuePrivacyRetirements,
+        origin: SubmissionOrigin,
+        teu_backlog: TeuBacklogPublication,
+    ) -> Result<RoutingDecision, Failure> {
+        if let Err(err) = self.check_startup_admission() {
+            return Err(Failure {
+                tx: Box::new(tx),
+                err,
+            });
+        }
+        if let Err(original) = self.sync_nexus_routing_with_view(view, retired) {
+            return Err(Failure {
+                tx: Box::new(tx),
+                err: Error::Deferred(original),
+            });
+        }
+        let plan = match routing_plan {
+            Some(LocalRoutingPlan {
+                plan,
+                view_router: Some(router),
+            }) if Arc::ptr_eq(&router, &*self.router.read()) => Ok(plan),
+            Some(LocalRoutingPlan { plan, .. }) => {
+                self.resolve_precomputed_routing_plan_with_view(&tx, view, plan)
+            }
+            None => self
+                .router
+                .read()
+                .try_route_plan_with_view(&tx, view)
+                .and_then(|plan| Self::resolve_view_routing_plan(plan, view)),
+        };
+        let plan = match plan {
+            Ok(plan) => plan,
+            Err(error) => {
+                return Err(Failure {
+                    tx: Box::new(tx),
+                    err: error.into(),
+                });
+            }
+        };
+        self.admit_in_view(tx, plan, view, retired, origin, teu_backlog)
     }
     fn admit_in_view(
         &self,
@@ -4045,6 +4217,7 @@ impl Queue {
         view: &StateView<'_>,
         retired: &mut QueuePrivacyRetirements,
         origin: SubmissionOrigin,
+        teu_backlog: TeuBacklogPublication,
     ) -> Result<RoutingDecision, Failure> {
         // Preacceptance belongs to the original signed security domain. It cannot
         // authorize another State's queue, fee reservations, indexes or gossip.
@@ -4104,6 +4277,12 @@ impl Queue {
         match self.enqueue_prepared_admissions(vec![prepared], telemetry, &view.execution_budget())
         {
             Ok(notifications) => {
+                #[cfg(feature = "telemetry")]
+                if teu_backlog == TeuBacklogPublication::AfterAdmission {
+                    self.publish_teu_backlog_metrics(telemetry);
+                }
+                #[cfg(not(feature = "telemetry"))]
+                let _ = teu_backlog;
                 self.publish_admission_notifications(&notifications);
                 Ok(route)
             }
@@ -4729,8 +4908,7 @@ impl Queue {
                 });
                 drop(guard);
             }
-            #[cfg(feature = "telemetry")]
-            self.publish_teu_backlog_metrics(telemetry);
+            // The admitting caller republishes the TEU backlog gauges after this enqueue.
             self.publish_backpressure_state(self.active_len(), telemetry);
             Ok(notifications)
         })
@@ -5279,6 +5457,14 @@ impl Queue {
             [info.lane_id],
             [(info.lane_id, info.dataspace_id)],
         );
+    }
+    /// Republish the TEU backlog gauges once after a batch of admissions that deferred them
+    /// ([`TeuBacklogPublication::AfterBatch`]). Admission decisions never read these gauges.
+    pub(crate) fn publish_teu_backlog_with_state(&self, state: &State) {
+        #[cfg(feature = "telemetry")]
+        self.publish_teu_backlog_metrics(Some(&state.telemetry));
+        #[cfg(not(feature = "telemetry"))]
+        let _ = state;
     }
     #[cfg(feature = "telemetry")]
     fn publish_teu_backlog_metrics(&self, telemetry: Option<&crate::telemetry::StateTelemetry>) {
@@ -5863,12 +6049,12 @@ pub mod tests {
     use iroha_model_base::name::Name;
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use iroha_primitives::json::Json;
+    use iroha_primitives::nonzero;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
     use mv::storage::StorageReadOnly;
-    use nonzero_ext::nonzero;
     use std::{
         borrow::Cow,
         collections::{BTreeMap, BTreeSet},
@@ -10485,6 +10671,7 @@ pub mod tests {
     include!("queue/queue_metadata_and_admission_tests.rs");
     include!("queue/instruction_and_state_routing_tests.rs");
     include!("queue/routing_batch_admission_tests.rs");
+    include!("queue/gossip_admission_tests.rs");
     include!("queue/config_factory_test_support.rs");
     /// Author the exact four zero rates selected by routing-only component fixtures.
     fn zero_rate_routing_fees() -> iroha_data_model::block::consensus::RootFeePolicy {

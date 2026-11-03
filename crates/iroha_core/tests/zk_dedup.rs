@@ -9,7 +9,7 @@ use iroha_core::{
 };
 use iroha_core_zk::native_pipa_r::BACKEND as NATIVE_BACKEND;
 use iroha_data_model::{block::BlockHeader, proof::ProofBox};
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 fn open_verify_proof(vk_hash: [u8; 32]) -> ProofBox {
     iroha_core_zk::test_utils::native_framing_fixture_envelope(
         iroha_core_zk::confidential_v2::CONFIDENTIAL_TRANSFER_V2_CIRCUIT_ID,

@@ -7,11 +7,61 @@
 //! Traversal is bit-reversed; a compact gather or an in-place permutation
 //! restores the caller's strictly increasing global-row order.
 //! Low-degree common22 selections evaluate requested points by Horner with the full masking tail.
+//! Complete measured full batches may use runtime-admitted AVX2 windows; other
+//! shapes and hosts retain the same scalar field operations and recursion.
 
 use super::*;
+use crate::privacy_engines::transparent_stark::dif_output::DifOutputV1;
 
 const PARALLEL_VALUES_V1: usize = 1 << 14;
 const PAIRS_PER_TASK_V1: usize = 1 << 10;
+
+/// Optional implementation selected once for a fully admitted CPU batch.
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) enum FullPrefixBackendV1 {
+    /// The original scalar loop is always available.
+    #[default]
+    Scalar,
+    /// Actual runtime support for the optional four-field implementation.
+    #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+    Avx2(crate::privacy_engines::transparent_stark::goldilocks_avx2::Native),
+}
+
+impl FullPrefixBackendV1 {
+    /// Admit actual CPU support; this is not a runtime policy or override.
+    pub(super) fn detect_v1() -> Self {
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if let Some(native) =
+            crate::privacy_engines::transparent_stark::goldilocks_avx2::Native::admit()
+        {
+            return Self::Avx2(native);
+        }
+        Self::Scalar
+    }
+
+    /// Report the actual admitted implementation to an explicit test control.
+    #[cfg(test)]
+    pub(super) fn is_native_v1(self) -> bool {
+        match self {
+            Self::Scalar => false,
+            #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+            Self::Avx2(_) => true,
+        }
+    }
+}
+
+/// Only measured complete masked public shapes admit the native full route.
+/// Other valid lengths keep every coefficient and the original scalar loop.
+pub(super) fn measured_full_prefix_v1(
+    native_log: u8,
+    common_log: u8,
+    mut lengths: impl ExactSizeIterator<Item = usize>,
+) -> bool {
+    common_log == 22
+        && matches!(native_log, 5 | 8 | 15 | 16 | 18 | 19)
+        && lengths.len() == aggregate::MASKED_TRACE_LDE_COLUMN_BATCH_V1
+        && lengths.all(|length| length == (1usize << native_log) + MASK_DEGREE + 1)
+}
 
 /// Select only the measured public geometry; coefficient contents never select
 /// a backend. Larger polynomials, selections and other domains retain the FFT.
@@ -173,7 +223,14 @@ fn evaluate_prefix_scheduled_with_v1<const INNER_PARALLEL: bool, const PRUNE_ZER
     } else {
         rows
     };
-    prune_v1::<INNER_PARALLEL, false>(&mut scratch, 0, &output, root, prefix);
+    prune_v1::<INNER_PARALLEL, false, ()>(
+        &mut scratch,
+        0,
+        &output,
+        root,
+        prefix,
+        FullPrefixBackendV1::Scalar,
+    );
     for (destination, &row) in output.iter_mut().zip(selected) {
         *destination = scratch[reversed(row)];
     }
@@ -190,17 +247,85 @@ pub(super) fn evaluate_full_v1(
     coefficients: &[F],
     native_log: u8,
     common_log: u8,
+    backend: FullPrefixBackendV1,
 ) -> Result<Column, AggregateStarkErrorV1> {
-    evaluate_full_with_v1(coefficients, native_log, common_log, |_| Ok(()), |_| Ok(()))
+    evaluate_full_owner_v1::<()>(
+        coefficients,
+        native_log,
+        common_log,
+        backend,
+        |_| Ok(()),
+        |_| Ok(()),
+    )
+    .map(|(column, _)| column)
 }
 
-fn evaluate_full_with_v1(
+#[cfg(test)]
+fn evaluate_full_scalar_v1(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+) -> Result<Column, AggregateStarkErrorV1> {
+    evaluate_full_v1(
+        coefficients,
+        native_log,
+        common_log,
+        FullPrefixBackendV1::Scalar,
+    )
+}
+
+#[cfg(test)]
+fn evaluate_full_scalar_with_v1(
     coefficients: &[F],
     native_log: u8,
     common_log: u8,
     after_scale: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
     after_transform: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
 ) -> Result<Column, AggregateStarkErrorV1> {
+    evaluate_full_owner_v1::<()>(
+        coefficients,
+        native_log,
+        common_log,
+        FullPrefixBackendV1::Scalar,
+        after_scale,
+        after_transform,
+    )
+    .map(|(column, _)| column)
+}
+
+#[cfg(test)]
+pub(super) fn evaluate_full_counted_with_v1(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+    backend: FullPrefixBackendV1,
+    after_scale: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
+    after_transform: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
+) -> Result<
+    (
+        Column,
+        crate::privacy_engines::transparent_stark::dif_test_counts::Counts,
+    ),
+    AggregateStarkErrorV1,
+> {
+    evaluate_full_owner_v1::<crate::privacy_engines::transparent_stark::dif_test_counts::Counts>(
+        coefficients,
+        native_log,
+        common_log,
+        backend,
+        after_scale,
+        after_transform,
+    )
+}
+
+fn evaluate_full_owner_v1<O: DifOutputV1>(
+    coefficients: &[F],
+    native_log: u8,
+    common_log: u8,
+    backend: FullPrefixBackendV1,
+    after_scale: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
+    after_transform: impl FnOnce(&[F]) -> Result<(), AggregateStarkErrorV1>,
+) -> Result<(Column, O), AggregateStarkErrorV1> {
     use crate::privacy_engines::transparent_stark::TransparentStarkErrorV1;
 
     // Preserve the original dense helper's refusal order and aggregate mapping.
@@ -246,7 +371,7 @@ fn evaluate_full_with_v1(
     // Keep inner parallelism enabled. Do not reuse the selected-row schedule's
     // separately measured coarse choice. The owner limits full-prefix dispatch
     // to complete eight-column batches; smaller batches keep dense evaluation.
-    prune_v1::<true, true>(&mut values, 0, &[], root, coefficients.len());
+    let outcome = prune_v1::<true, true, O>(&mut values, 0, &[], root, coefficients.len(), backend);
     // DIF leaves outputs bit-reversed. The same public involution used by the
     // dense FFT restores canonical rows in place without another allocation.
     let mut reversed = 0usize;
@@ -262,25 +387,32 @@ fn evaluate_full_with_v1(
         }
     }
     after_transform(&values)?;
-    Ok(Column::from_vec_v1(values.into_vec()))
+    Ok((Column::from_vec_v1(values.into_vec()), outcome))
 }
 
 /// Infallible public-geometry recursion over disjoint slices of the same scratch.
-fn prune_v1<const INNER_PARALLEL: bool, const ALL_OUTPUTS: bool>(
+#[cfg_attr(
+    not(any(test, all(feature = "simd", target_arch = "x86_64"))),
+    expect(
+        clippy::only_used_in_recursion,
+        reason = "only the x86-64 AVX2 dispatch reads the backend; other targets pass it through the recursion"
+    )
+)]
+fn prune_v1<const INNER_PARALLEL: bool, const ALL_OUTPUTS: bool, O: DifOutputV1>(
     values: &mut [F],
     offset: usize,
     destinations: &[F],
     root: F,
     nonzero_prefix_bound: usize,
-) {
+    backend: FullPrefixBackendV1,
+) -> O {
     debug_assert!(nonzero_prefix_bound > 0 && nonzero_prefix_bound <= values.len());
     if (!ALL_OUTPUTS && destinations.is_empty()) || values.len() == 1 {
-        return;
+        return O::default();
     }
     let half = values.len() / 2;
-    // Monomorphization preserves the original selected slice/partition path.
-    // Full-output callers pass an empty public slice and need both children;
-    // no runtime destination tag or field value selects the recursion.
+    // Full output and selected output remain separate monomorphizations. The
+    // selected route neither calls native arithmetic nor changes its partition.
     let split = if ALL_OUTPUTS {
         0
     } else {
@@ -292,19 +424,30 @@ fn prune_v1<const INNER_PARALLEL: bool, const ALL_OUTPUTS: bool>(
     let even_needed = ALL_OUTPUTS || !even_destinations.is_empty();
     let odd_needed = ALL_OUTPUTS || !odd_destinations.is_empty();
     let (even, odd) = values.split_at_mut(half);
-    // The caller initialized every cell after this public prefix to zero.
-    // At j >= min(prefix, half), both input cells are zero, so either child
-    // remains zero there. No coefficient value is inspected to select work.
-    // The bound includes the complete masking tail, even across native_rows.
+    // Every cell beyond this public bound began at zero. Preserve the complete
+    // masking suffix and both zero children without inspecting witness values.
     let pairs = nonzero_prefix_bound.min(half);
     let apply = |first: usize, even: &mut [F], odd: &mut [F]| {
+        #[cfg(all(feature = "simd", target_arch = "x86_64"))]
+        if ALL_OUTPUTS && even.len() >= 4 {
+            if let FullPrefixBackendV1::Avx2(native) = backend {
+                #[cfg(test)]
+                if O::OBSERVED {
+                    return O::from_counts(native.apply_counted(even, odd, root, first));
+                }
+                native.apply(even, odd, root, first);
+                return O::default();
+            }
+        }
         let mut twiddle = if odd_needed {
             root.pow(first as u128)
         } else {
             F::ONE
         };
+        #[cfg(test)]
+        let mut outcome = O::default();
         for (even, odd) in even.iter_mut().zip(odd) {
-            // Read both original cells before either side can be overwritten.
+            // The original scalar fallback reads both cells before either write.
             let left = *even;
             let right = *odd;
             if even_needed {
@@ -314,69 +457,127 @@ fn prune_v1<const INNER_PARALLEL: bool, const ALL_OUTPUTS: bool>(
                 *odd = left.sub(right).mul(twiddle);
                 twiddle = twiddle.mul(root);
             }
+            #[cfg(test)]
+            if O::OBSERVED && ALL_OUTPUTS && backend.is_native_v1() {
+                outcome.record_scalar();
+            }
+        }
+        #[cfg(test)]
+        {
+            outcome
+        }
+        #[cfg(not(test))]
+        {
+            O::default()
         }
     };
-    if pairs >= PARALLEL_VALUES_V1 / 2 && rayon::current_num_threads() > 1 {
-        if INNER_PARALLEL {
-            even[..pairs]
-                .par_chunks_mut(PAIRS_PER_TASK_V1)
-                .zip(odd[..pairs].par_chunks_mut(PAIRS_PER_TASK_V1))
-                .enumerate()
-                .for_each(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd));
+    let mut windows = || {
+        // Only explicit controls collect actual loop counts. Ordinary tests and
+        // production retain for_each, with no counter or atomic in any window.
+        #[cfg(test)]
+        if O::OBSERVED {
+            return if pairs >= PARALLEL_VALUES_V1 / 2 && rayon::current_num_threads() > 1 {
+                if INNER_PARALLEL {
+                    even[..pairs]
+                        .par_chunks_mut(PAIRS_PER_TASK_V1)
+                        .zip(odd[..pairs].par_chunks_mut(PAIRS_PER_TASK_V1))
+                        .enumerate()
+                        .map(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd))
+                        .reduce(O::default, O::plus)
+                } else {
+                    even[..pairs]
+                        .chunks_mut(PAIRS_PER_TASK_V1)
+                        .zip(odd[..pairs].chunks_mut(PAIRS_PER_TASK_V1))
+                        .enumerate()
+                        .map(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd))
+                        .fold(O::default(), O::plus)
+                }
+            } else {
+                apply(0, &mut even[..pairs], &mut odd[..pairs])
+            };
+        }
+        if pairs >= PARALLEL_VALUES_V1 / 2 && rayon::current_num_threads() > 1 {
+            if INNER_PARALLEL {
+                even[..pairs]
+                    .par_chunks_mut(PAIRS_PER_TASK_V1)
+                    .zip(odd[..pairs].par_chunks_mut(PAIRS_PER_TASK_V1))
+                    .enumerate()
+                    .for_each(|(chunk, (even, odd))| {
+                        apply(chunk * PAIRS_PER_TASK_V1, even, odd);
+                    });
+            } else {
+                even[..pairs]
+                    .chunks_mut(PAIRS_PER_TASK_V1)
+                    .zip(odd[..pairs].chunks_mut(PAIRS_PER_TASK_V1))
+                    .enumerate()
+                    .for_each(|(chunk, (even, odd))| {
+                        apply(chunk * PAIRS_PER_TASK_V1, even, odd);
+                    });
+            }
         } else {
-            // Preserve every original public window and root.pow(first). This
-            // isolates scheduling without silently removing arithmetic work.
-            even[..pairs]
-                .chunks_mut(PAIRS_PER_TASK_V1)
-                .zip(odd[..pairs].chunks_mut(PAIRS_PER_TASK_V1))
-                .enumerate()
-                .for_each(|(chunk, (even, odd))| apply(chunk * PAIRS_PER_TASK_V1, even, odd));
+            apply(0, &mut even[..pairs], &mut odd[..pairs]);
         }
-    } else {
-        apply(0, &mut even[..pairs], &mut odd[..pairs]);
-    }
+        O::default()
+    };
+    let _outcome = windows();
     let child_root = root.mul(root);
-    if INNER_PARALLEL && even_needed && odd_needed && pairs >= PARALLEL_VALUES_V1 / 2 {
-        rayon::join(
-            || {
-                prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
-                    even,
-                    offset,
-                    even_destinations,
-                    child_root,
-                    pairs,
-                )
-            },
-            || {
-                prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
-                    odd,
-                    offset + half,
-                    odd_destinations,
-                    child_root,
-                    pairs,
-                )
-            },
-        );
-    } else {
-        if even_needed {
-            prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
-                even,
-                offset,
-                even_destinations,
-                child_root,
-                pairs,
-            );
-        }
-        if odd_needed {
-            prune_v1::<INNER_PARALLEL, ALL_OUTPUTS>(
-                odd,
-                offset + half,
-                odd_destinations,
-                child_root,
-                pairs,
-            );
-        }
+    let (_left, _right) =
+        if INNER_PARALLEL && even_needed && odd_needed && pairs >= PARALLEL_VALUES_V1 / 2 {
+            rayon::join(
+                || {
+                    prune_v1::<INNER_PARALLEL, ALL_OUTPUTS, O>(
+                        even,
+                        offset,
+                        even_destinations,
+                        child_root,
+                        pairs,
+                        backend,
+                    )
+                },
+                || {
+                    prune_v1::<INNER_PARALLEL, ALL_OUTPUTS, O>(
+                        odd,
+                        offset + half,
+                        odd_destinations,
+                        child_root,
+                        pairs,
+                        backend,
+                    )
+                },
+            )
+        } else {
+            (
+                if even_needed {
+                    prune_v1::<INNER_PARALLEL, ALL_OUTPUTS, O>(
+                        even,
+                        offset,
+                        even_destinations,
+                        child_root,
+                        pairs,
+                        backend,
+                    )
+                } else {
+                    O::default()
+                },
+                if odd_needed {
+                    prune_v1::<INNER_PARALLEL, ALL_OUTPUTS, O>(
+                        odd,
+                        offset + half,
+                        odd_destinations,
+                        child_root,
+                        pairs,
+                        backend,
+                    )
+                } else {
+                    O::default()
+                },
+            )
+        };
+    #[cfg(test)]
+    if O::OBSERVED {
+        return _outcome.plus(_left).plus(_right);
     }
+    O::default()
 }
 
 #[cfg(test)]

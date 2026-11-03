@@ -113,21 +113,20 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
                 }
             }),
         );
-    // Prepare a sidecar for height=1
-    let mut fingerprint = [0u8; 32];
-    fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
-    // A recovery sidecar is served only for the exact persisted canonical block at its height.
+    // A sidecar is exposed only for the canonical block it names, so persist a real signed block.
     let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
         iroha_core::sumeragi::test_chain::TestChainConfig::new(
-            iroha_core::state::World::new(),
+            iroha_core::state::World::default(),
             1_000,
         ),
     )
-    .expect("original signed genesis");
+    .expect("original signed recovery fixture genesis");
     let genesis = chain.committed(1).block().clone();
     let block_hash = genesis.hash();
-    kura.store_block(genesis)
-        .expect("persist the canonical genesis block");
+    kura.store_block(genesis).expect("store canonical block");
+    // Prepare a sidecar for height=1
+    let mut fingerprint = [0u8; 32];
+    fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);
     let block_hash_str = block_hash.to_string();
     let sidecar = PipelineRecoverySidecar::new(
         1,

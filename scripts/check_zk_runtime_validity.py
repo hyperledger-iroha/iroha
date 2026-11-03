@@ -126,6 +126,7 @@ RUST_CRATES = (
     "iroha_genesis",
     "iroha_js_host",
     "iroha_kagami",
+    "iroha_managed_ipc",
     "iroha_p2p",
     "iroha_plonk",
     "iroha_plonk_gadgets",

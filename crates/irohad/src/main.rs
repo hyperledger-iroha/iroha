@@ -42,6 +42,7 @@ pub mod runtime_provider_registry;
 #[cfg(unix)]
 #[path = "sccp_keeper.rs"]
 mod sccp_keeper;
+mod game_partition;
 mod sccp_staking_policy;
 /// Embedded Soracloud runtime-manager reconciliation.
 #[path = "soracloud_runtime.rs"]
@@ -810,7 +811,7 @@ use ivm::IVM;
 use ivm::set_banner_enabled;
 /// Detect if the current terminal supports ANSI colors.
 pub fn is_coloring_supported() -> bool {
-    supports_color::on(supports_color::Stream::Stdout).is_some()
+    iroha_config_base::terminal::supports_color(iroha_config_base::terminal::TerminalStream::Stdout)
 }
 fn default_terminal_colors_str() -> clap::builder::OsStr {
     is_coloring_supported().to_string().into()
@@ -891,12 +892,13 @@ pub struct StartupArgs {
     /// Norito JSON object instead of the `Ready`/`Pending` line.
     #[arg(long, requires = "check_config")]
     pub json: bool,
-    /// Inspect the stopped node's Kura store and newest snapshot read-only with this build's
-    /// decoders, print the result as one Norito JSON object and exit nonzero on failure.
+    /// Inspect the stopped node's Kura store read-only with this build's decoders, print its
+    /// durable tip as one Norito JSON object and exit nonzero when a block cannot be read.
     ///
     /// Takes the Kura store-root lock, so it refuses a store a running node owns. It never
     /// mutates the store and never opens runtime-only secrets (the configuration is parsed as for
-    /// `--check-config`).
+    /// `--check-config`). Whether this build restores the node's snapshot and reproduces its
+    /// blocks is `--check-replay`'s check.
     #[arg(long, conflicts_with = "check_config")]
     pub check_storage: bool,
     /// Replay a copy of the stopped node's store with this build, print the result as one Norito
@@ -1033,7 +1035,7 @@ pub enum MainError {
     IrohaStart,
     /// A supervised node subsystem failed while the daemon was running.
     IrohaRun,
-    /// `--check-storage` could not read the store or its snapshot restore dry run failed.
+    /// `--check-storage` could not read the store.
     CheckStorage,
     /// `--check-replay` could not replay the store, or a replayed block diverged or lacked its body.
     CheckReplay,
@@ -1663,21 +1665,40 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn nonempty_kura_requires_its_original_signed_genesis_body() {
+        use iroha_data_model::block::SharedSignedBlock;
         let chain = native_snapshot_count_fixture(1);
         let count = iroha_core::kura::BlockCount(1);
-        let stored = read_stored_genesis_block(
-            chain.kura(),
-            count,
-            &chain.state().view().execution_budget(),
-        )
-        .expect("read native signed genesis")
-        .expect("nonempty chain has genesis");
+        let budget = chain.state().view().execution_budget();
+        let stored = read_stored_genesis_block(chain.kura(), count, &budget)
+            .expect("read native signed genesis")
+            .expect("nonempty chain has genesis");
         assert_eq!(stored.hash(), chain.genesis().hash());
+        // Genesis execution published its graph into Kura, which the State serves as the
+        // canonical body. The certified receipt instead authenticates a separate decode of
+        // the durable frame, so it is equal in value but is not the retained graph.
+        let genesis_height = std::num::NonZeroUsize::MIN;
+        let executed = chain
+            .state()
+            .block_by_height(genesis_height)
+            .expect("read the executed genesis body")
+            .expect("the executed genesis body is retained");
         assert!(
-            iroha_data_model::block::SharedSignedBlock::ptr_eq(&stored, chain.committed(1).block(),),
+            SharedSignedBlock::ptr_eq(&stored, &executed),
             "startup must retain the original executed genesis graph"
         );
+        assert_eq!(chain.committed(1).block().as_ref(), stored.as_ref());
         assert!(stored.belongs_to(&chain.state().ivm_execution_budget()));
+        // Without the retained graph, startup decodes the same durable genesis frame.
+        drop((stored, executed));
+        chain
+            .kura()
+            .forget_cached_block_for_testing(genesis_height)
+            .expect("forget the retained genesis graph");
+        let cold = read_stored_genesis_block(chain.kura(), count, &budget)
+            .expect("read the durable native signed genesis")
+            .expect("the durable genesis frame remains");
+        assert_eq!(cold.as_ref(), chain.committed(1).block().as_ref());
+        assert!(cold.belongs_to(&chain.state().ivm_execution_budget()));
         let missing = Kura::blank_kura_for_testing();
         assert!(
             read_stored_genesis_block(&missing, count, &chain.state().view().execution_budget())
@@ -3190,7 +3211,7 @@ impl Iroha {
                 telemetry_profile.metrics_enabled(),
             )
             .change_context(StartError::StartTorii)
-            .attach("register authoritative Kura resource telemetry before serving diagnostics")?;
+            .attach("register authoritative Kura resource and IVM telemetry before serving diagnostics")?;
             supervisor.monitor(child);
             telemetry
         };
@@ -4437,6 +4458,14 @@ impl Iroha {
             for child in children {
                 supervisor.monitor(child);
             }
+        }
+        // Native game-unit delivery uses committed peer pins and the existing validator
+        // identity. No operator relay key, journal or external scheduler is involved.
+        if !emergency_fast {
+            supervisor.monitor(game_partition::start(
+                Arc::clone(&state), Arc::clone(&queue),
+                config.common.key_pair.clone(), supervisor.shutdown_signal(),
+            ));
         }
         // The SCCP keeper is a supervised task of its own and never aborts the node: its
         // public RPC delays neither block production nor any other task.
@@ -5753,9 +5782,35 @@ fn fastpq_metal_overrides_from_config(
         debug_enum: config.metal_debug_enum,
     }
 }
+/// Apply IVM native worker stack sizes and publish the applied settings to telemetry.
+fn apply_ivm_stack_sizes(scheduler_bytes: usize, prover_bytes: usize) -> ivm::StackSizeOutcome {
+    let outcome = ivm::apply_stack_sizes(scheduler_bytes, prover_bytes);
+    iroha_telemetry::metrics::record_stack_limits(ivm_stack_settings_snapshot(outcome));
+    outcome
+}
+/// Telemetry record of applied native stack sizes and the fixed V1 guest stack policy.
+fn ivm_stack_settings_snapshot(
+    outcome: ivm::StackSizeOutcome,
+) -> iroha_telemetry::metrics::StackSettingsSnapshot {
+    let guest_policy = ivm::IvmStackPolicy::V1;
+    iroha_telemetry::metrics::StackSettingsSnapshot {
+        requested_scheduler_bytes: outcome.requested_scheduler_bytes as u64,
+        requested_prover_bytes: outcome.requested_prover_bytes as u64,
+        requested_guest_bytes: guest_policy.maximum_stack_bytes(),
+        scheduler_bytes: outcome.scheduler_bytes as u64,
+        prover_bytes: outcome.prover_bytes as u64,
+        guest_bytes: guest_policy.maximum_stack_bytes(),
+        scheduler_clamped: outcome.scheduler_clamped,
+        prover_clamped: outcome.prover_clamped,
+        guest_clamped: false,
+        pool_fallback_total: 0,
+        budget_hit_total: 0,
+        gas_to_stack_multiplier: guest_policy.bytes_per_gas(),
+    }
+}
 /// Apply concurrency settings (IVM scheduler + Rayon) derived from configuration.
 fn apply_concurrency_config(concurrency: &iroha_config::parameters::actual::Concurrency) {
-    let stack_outcome = ivm::apply_stack_sizes(
+    let stack_outcome = apply_ivm_stack_sizes(
         concurrency.scheduler_stack_bytes,
         concurrency.prover_stack_bytes,
     );
@@ -6014,7 +6069,7 @@ fn read_config_and_genesis_with_filesystem_space(
             // Fast constructs one inert State VM for structural completeness. Cap
             // that VM at one minimum-stack worker and leave the global Rayon pool
             // uninitialized; no contract or proof route is available in this mode.
-            let _ = ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
+            let _ = apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES, ivm::MIN_STACK_BYTES);
             ivm::set_scheduler_thread_limits(Some(1), Some(1));
             println!("{}", scheduler_banner_line(1));
         } else {
@@ -8329,7 +8384,7 @@ fn run_main_with_config_guard(
     }
     // Concurrency configuration: set global Rayon pool and IVM scheduler limits.
     let min = if config.concurrency.scheduler_min_threads == 0 {
-        // auto (physical cores) — defer to IVM internals
+        // auto (available parallelism) — defer to IVM internals
         0
     } else {
         config.concurrency.scheduler_min_threads
@@ -8465,7 +8520,7 @@ fn run_main_with_config_guard(
 fn adopt_managed_listeners(
     startup: &StartupArgs,
     config: &Config,
-) -> ReportResult<Option<iroha_deploy::managed::RuntimeListeners>, MainError> {
+) -> ReportResult<Option<iroha_managed_ipc::RuntimeListeners>, MainError> {
     match (
         &startup.managed_listeners,
         startup.managed_listener_deadline_ns,
@@ -8482,7 +8537,7 @@ fn adopt_managed_listeners(
                 iroha_primitives::addr::SocketAddr::Host(_) => Err(Report::new(MainError::Config)
                     .attach("managed listeners require exact numeric socket addresses")),
             };
-            iroha_deploy::managed::adopt_runtime_listeners(
+            iroha_managed_ipc::adopt_runtime_listeners(
                 directory,
                 numeric(config.network.address.value())?,
                 numeric(config.torii.address.value())?,
@@ -9588,6 +9643,25 @@ mod tests {
     const GOVERNANCE_DAG_CHECKPOINT_STORE_HANDLE: &str =
         "sealed:governance-dag:producer-checkpoint";
     const GOVERNANCE_DAG_CHECKPOINT_STORE_POLICY_DIGEST: [u8; 32] = [0xA6; 32];
+    /// Serialize tests that touch process-wide state (the global metrics handle,
+    /// the instruction registry and native storage owners).
+    ///
+    /// A failing test must not block the others, so a poisoned lock is recovered.
+    fn serial_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    #[test]
+    fn serial_test_guard_recovers_after_a_panicking_holder() {
+        let panicked = std::thread::spawn(|| {
+            let _serial = serial_test_guard();
+            panic!("holder panics while serialized");
+        })
+        .join();
+        assert!(panicked.is_err());
+        drop(serial_test_guard());
+    }
     #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn optional_telemetry_exit_does_not_stop_supervisor() {
@@ -10270,7 +10344,7 @@ mod tests {
                 .contains("if!args.startup.check_config&&!args.startup.check_storage{ifconfig.kura.init_mode==InitMode::Fast{")
         );
         assert!(compact_source.contains(
-            "let_=ivm::apply_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
+            "let_=apply_ivm_stack_sizes(ivm::MIN_STACK_BYTES,ivm::MIN_STACK_BYTES);ivm::set_scheduler_thread_limits(Some(1),Some(1));println!(\"{}\",scheduler_banner_line(1));}else{apply_concurrency_config(&config.concurrency);}}"
         ));
         assert!(compact_source.contains(
             "apply_norito_config(&config);ifconfig.kura.init_mode==InitMode::Fast{norito::core::hw::set_gpu_compression_allowed(false);}"
@@ -10878,6 +10952,54 @@ mod tests {
             assert_eq!(scheduler_banner_line(0), "Using 1 core");
         }
     }
+    mod ivm_stack_telemetry {
+        use super::*;
+        #[test]
+        fn snapshot_reports_outcome_and_fixed_guest_policy() {
+            let snapshot = ivm_stack_settings_snapshot(ivm::StackSizeOutcome {
+                requested_scheduler_bytes: 1,
+                requested_prover_bytes: usize::MAX,
+                scheduler_bytes: ivm::MIN_STACK_BYTES,
+                prover_bytes: ivm::MAX_STACK_BYTES,
+                scheduler_clamped: true,
+                prover_clamped: true,
+            });
+            let guest_policy = ivm::IvmStackPolicy::V1;
+            assert_eq!(snapshot.requested_scheduler_bytes, 1);
+            assert_eq!(snapshot.requested_prover_bytes, u64::MAX);
+            assert_eq!(snapshot.scheduler_bytes, ivm::MIN_STACK_BYTES as u64);
+            assert_eq!(snapshot.prover_bytes, ivm::MAX_STACK_BYTES as u64);
+            assert!(snapshot.scheduler_clamped && snapshot.prover_clamped);
+            assert!(!snapshot.guest_clamped, "guest stack geometry is fixed");
+            assert_eq!(
+                snapshot.requested_guest_bytes,
+                guest_policy.maximum_stack_bytes()
+            );
+            assert_eq!(snapshot.guest_bytes, guest_policy.maximum_stack_bytes());
+            assert_eq!(
+                snapshot.gas_to_stack_multiplier,
+                guest_policy.bytes_per_gas()
+            );
+            assert_eq!(snapshot.pool_fallback_total, 0);
+            assert_eq!(snapshot.budget_hit_total, 0);
+        }
+        #[test]
+        fn applying_stack_sizes_publishes_the_snapshot() {
+            // Default sizes keep the process-wide worker stacks unchanged for other tests.
+            let defaults = iroha_config::parameters::actual::Concurrency::from_defaults();
+            let outcome =
+                apply_ivm_stack_sizes(defaults.scheduler_stack_bytes, defaults.prover_stack_bytes);
+            let expected = ivm_stack_settings_snapshot(outcome);
+            let published = iroha_telemetry::metrics::stack_settings_snapshot();
+            assert_eq!(published.scheduler_bytes, expected.scheduler_bytes);
+            assert_eq!(published.prover_bytes, expected.prover_bytes);
+            assert_eq!(published.guest_bytes, expected.guest_bytes);
+            assert_eq!(
+                published.gas_to_stack_multiplier,
+                expected.gas_to_stack_multiplier
+            );
+        }
+    }
     mod replay_startup_config {
         use super::*;
         #[test]
@@ -11088,11 +11210,10 @@ mod tests {
     }
     #[cfg(feature = "telemetry")]
     mod metrics_bootstrap {
-        use serial_test::serial;
         use std::sync::Arc;
         #[test]
-        #[serial]
         fn init_global_metrics_handle_is_idempotent() {
+            let _serial = super::serial_test_guard();
             let first = super::init_global_metrics_handle(false);
             let second = super::init_global_metrics_handle(false);
             assert!(Arc::ptr_eq(&first, &second));
@@ -12591,7 +12712,21 @@ mod tests {
     mod config_integration {
         #[allow(unused_imports)]
         use super::*;
-        use assertables::assert_contains;
+        /// Assert that `container.contains(containee)` holds, reporting both on failure.
+        macro_rules! assert_contains {
+            ($container:expr, $containee:expr $(,)?) => {
+                match (&$container, &$containee) {
+                    (container, containee) => assert!(
+                        container.contains(*containee),
+                        "assertion failed: `{}` does not contain `{}`\n container: {:?}\n containee: {:?}",
+                        stringify!($container),
+                        stringify!($containee),
+                        container,
+                        containee,
+                    ),
+                }
+            };
+        }
         use iroha_crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove};
         use iroha_genesis::GenesisBuilder;
         use iroha_model_base::chain::ChainId;

@@ -1,11 +1,12 @@
 //! Immutable plain casts and explicit authority-bound conviction updates.
 
+use crate::native_genesis::{certified_state, certified_state_with};
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{World, WorldReadOnly},
+    sumeragi::test_chain::TestChainConfig,
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
@@ -16,43 +17,38 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_model_base::domain::DomainId;
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 #[test]
 fn plain_ballot_is_immutable_and_conviction_updates_extend_only() {
-    // Minimal state
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
+    // Minimal state. The authenticated genesis authors the ordinary signing policy used
+    // by the funding helper's account admission.
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let mut world = World::with([domain], [alice_account], []);
-    // Explicit prerequisite for this isolated component, not signed-genesis authority.
-    // The funding helper still executes ordinary account admission without defaults.
-    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-        iroha_crypto::Algorithm::Ed25519,
-    ])
-    .expect("explicit governance component signing algorithm");
-    world
-        .set_parameter_for_testing(
-            policy
-                .into_parameter()
-                .expect("canonical governance component policy"),
-        )
-        .expect("admit the governance component's original policy");
-    let mut state = State::new_for_testing(world, kura, query_handle);
-    let mut gov_cfg = state.gov.clone();
+    let world = World::with([domain], [alice_account], []);
+    // The governance policy is installed before the authenticated genesis signs it.
+    let mut gov_cfg = certified_state(World::default()).gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.min_bond_amount = 0_u64.into();
     gov_cfg.conviction_step_blocks = 1;
     gov_cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
     gov_cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
-    state.set_gov(gov_cfg);
-    // Build a signed block header at H=1
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let mut config = TestChainConfig::new(world, 0);
+    config.governance = Some(gov_cfg);
+    let state = certified_state_with(config);
+    // The first ordinary block after the authenticated genesis is H=2.
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
+    // The ballots execute under one explicit retained invocation, as a signed call does.
+    let mut stx = sblock.transaction_for_fastpq_testing(Hash::new(b"gov-plain-revote"));
     let rid = "rid-revote".to_string();
     let ballot_perm: Permission = CanSubmitGovernanceBallot {
         referendum_id: rid.clone(),
@@ -71,10 +67,10 @@ fn plain_ballot_is_immutable_and_conviction_updates_extend_only() {
     stx.world.governance_referenda_mut().insert(
         rid.clone(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 1,
+            h_start: 2,
             // Keep the shortest update valid for the inclusive referendum
             // window so the monotonic-lock check is the rejecting contract.
-            h_end: 11,
+            h_end: 12,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
             plain_context,
@@ -179,7 +175,8 @@ fn plain_ballot_is_immutable_and_conviction_updates_extend_only() {
     assert_eq!(retained.owner, *ALICE_ID);
     assert_eq!(retained.direction, 0);
     assert_eq!(retained.amount, 120_u64.into());
-    assert_eq!(retained.expiry_height, 401);
+    // The H=2 extension of 400 blocks locks through H=402.
+    assert_eq!(retained.expiry_height, 402);
     let mismatched_owner = UpdatePlainConviction {
         referendum_id: rid.clone(),
         owner: BOB_ID.clone(),

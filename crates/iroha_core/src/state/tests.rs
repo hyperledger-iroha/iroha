@@ -87,6 +87,7 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId, topology::ShardId};
+use iroha_primitives::nonzero;
 use iroha_primitives::{
     const_vec::ConstVec,
     json::Json,
@@ -98,7 +99,6 @@ use iroha_test_samples::{
     ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
 };
 use ivm::{IVM, encoding, pointer_abi::PointerType};
-use nonzero_ext::nonzero;
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
@@ -921,19 +921,24 @@ state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block
 }
 state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     use iroha_data_model::privacy::PrivacyProtocolIdV1;
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     let (world, _, _) = world_with_privacy_updates(99, 399);
     let original_policy = *world.privacy_consensus_policy.view().get();
     let_row! { protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { original_protocol_policy = *world .privacy_protocol_policies .view() .get(&protocol_policy_key) .expect("scheduled protocol_policy") };
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
-    let_row! { error = catch_unwind(AssertUnwindSafe(|| { let _block = state.block(header); })) .expect_err("missed protocol schedule must abort block construction") };
-    let_row! { panic_text = error .downcast_ref::<String>() .map(String::as_str) .or_else(|| error.downcast_ref::<&str>().copied()) .unwrap_or("") };
-    assert!(
-        panic_text.contains("privacy protocol policy schedule is invalid")
-            && panic_text.contains("effective height 399 is not after committed height 399"),
-        "{panic_text}"
+    // The fallible constructor retains the planner's policy refusal after
+    // discarding the overlay containing the earlier due consensus-policy write.
+    let error = match state.try_block(header) {
+        Err(StateBlockStartError::Policy(error)) => error,
+        Err(error) => panic!("expected a missed protocol policy schedule, got {error:?}"),
+        Ok(_) => panic!("missed protocol schedule must abort block construction"),
+    };
+    assert_eq!(
+        error,
+        "privacy policy VeRangeTransparentRangeV1 is invalid: \
+         privacy protocol policy schedule is invalid: \
+         privacy policy effective height 399 is not after committed height 399"
     );
     assert_eq!(
         state.world.privacy_consensus_policy.view().get(),

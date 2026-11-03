@@ -48,7 +48,17 @@ fn absent_heights_and_subquorum_certificates_fail_closed() {
         assert!(build_bundle(&view, height).is_err());
     }
     let mut invalid = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1_000)).unwrap();
-    invalid.commit_with(None, Vec::new(), Signers::BelowQuorum);
+    let proposal = invalid.proposal(None, Vec::new());
+    let mut pending = invalid
+        .begin_proposal(proposal, iroha_sumeragi::types::ControlWitness::default())
+        .expect("the original proposal executes");
+    // Publication verifies the certificate quorum before anything becomes durable.
+    let refusal = pending
+        .publish(Signers::BelowQuorum)
+        .expect_err("a sub-quorum certificate cannot publish its block");
+    assert!(refusal.contains("TooFewSigners"), "{refusal}");
+    drop(pending);
+    assert_eq!(invalid.height(), 1);
     assert!(build_proof(&invalid.state().view(), 2).is_err());
 }
 

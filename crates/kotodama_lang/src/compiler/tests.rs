@@ -7668,12 +7668,14 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
         let emitted = compile(&format!("{call};"))
             .into_iter()
             // Pointer publication, `Blob` to `NoritoBytes` pointer normalization,
-            // checked `int` narrowing and its trap are compiler-owned plumbing,
-            // not ledger operations.
+            // the heap table that carries more arguments than registers, checked
+            // `int` narrowing and its trap are compiler-owned plumbing, not ledger
+            // operations.
             .filter(|syscall| {
                 !baseline.contains(syscall)
                     && *syscall != syscalls::SYSCALL_INPUT_PUBLISH_TLV
                     && *syscall != syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
+                    && *syscall != syscalls::SYSCALL_ALLOC
                     && *syscall != syscalls::SYSCALL_ABORT
                     && !syscalls::is_numeric_v1_syscall(*syscall)
             })

@@ -158,6 +158,19 @@ unchanged `release` or `deploy` profiles and exact source metadata. Linker
 selection is explicit (`--linker auto` or `--linker <path>`) because a linker
 that is faster on one platform can be slower on another.
 
+`--parallel-frontend N` runs rustc's parallel front end (`-Zthreads=N`) for the
+repository's own crates under `crates/`, whose single-threaded type and borrow
+checking dominate local builds (about 25–35% faster for `iroha_torii` with
+`N = 8` on a busy machine). Dependencies and build-script probes compile
+unchanged, and Cargo reuses the same artifacts with or without it. It relies on
+an unstable rustc option enabled only for those rustc processes, so it is a
+local-development accelerator: the helper refuses it for `--release` and the
+`release`, `deploy` and `apple-release` profiles.
+
+```bash
+scripts/cargo_fast.sh --parallel-frontend 8 --stable-local-metadata --incremental -- build -p irohad
+```
+
 ### Targeted Test Commands
 
 ```bash

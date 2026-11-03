@@ -17,7 +17,7 @@ use iroha_data_model::{
     isi::InstructionBox,
     parameter::{
         CustomParameter, CustomParameterId, Parameter, SmartContractParameter,
-        TransactionParameter, system::IVM_HEAP_MAX_BYTES,
+        system::IVM_HEAP_MAX_BYTES,
     },
     prelude::*,
     transaction::IvmBytecode,
@@ -26,7 +26,7 @@ use iroha_executor_data_model::permission::{
     account::CanUnregisterAccount, asset_definition::CanUnregisterAssetDefinition,
 };
 use iroha_model_base::domain::DomainId;
-use std::num::{NonZeroU16, NonZeroU64};
+use std::num::NonZeroU64;
 
 /// Creation time of the benchmark genesis, in milliseconds.
 pub const GENESIS_TIME_MS: u64 = 1_000;
@@ -72,19 +72,11 @@ pub fn start_chain(
             })
             .collect(),
     );
-    {
-        // The signed genesis parameter snapshot never carries transaction or executor
-        // limits, so the initial World supplies them.
-        let mut block = world.block();
-        for parameter in world_parameters() {
-            block
-                .set_parameter_for_testing(parameter)
-                .expect("valid fixture parameters");
-        }
-        block.commit();
-    }
+    // Genesis signs one authoritative parameter snapshot that replaces the initial
+    // World's parameters, so every benchmark limit is authored there. The workload
+    // fits the default transaction limits.
     let mut config = TestChainConfig::new(world, GENESIS_TIME_MS);
-    config.genesis_parameters.push(gas_limit_parameter());
+    config.genesis_parameters.extend(genesis_parameters());
     if let Some(executor) = canonical_executor() {
         config
             .genesis_instructions
@@ -94,17 +86,29 @@ pub fn start_chain(
     {
         let view = chain.state().view();
         let installed = view.world().parameters().parameters().collect::<Vec<_>>();
-        for parameter in world_parameters()
-            .into_iter()
-            .chain([gas_limit_parameter()])
-        {
+        for parameter in genesis_parameters() {
             assert!(
-                installed.contains(&parameter),
-                "the benchmark chain runs with {parameter}"
+                installed
+                    .iter()
+                    .any(|candidate| same_parameter_value(candidate, &parameter)),
+                "the benchmark chain runs with {parameter:?}"
             );
         }
     }
     chain
+}
+
+/// Whether `installed` carries `expected`'s value; custom payloads compare by decoded value,
+/// so a canonical JSON spelling of the same number still matches.
+fn same_parameter_value(installed: &Parameter, expected: &Parameter) -> bool {
+    match (installed, expected) {
+        (Parameter::Custom(installed), Parameter::Custom(expected)) => {
+            installed.id() == expected.id()
+                && installed.payload().try_into_any_norito::<u64>().ok()
+                    == expected.payload().try_into_any_norito::<u64>().ok()
+        }
+        _ => installed == expected,
+    }
 }
 
 /// The per-block IVM gas allowance, signed by the benchmark genesis.
@@ -119,16 +123,11 @@ fn gas_limit_parameter() -> Parameter {
     ))
 }
 
-/// Transaction and executor limits of the benchmark World, lifted as far as their types allow
-/// (the executor heap stays within the ABI heap window).
-fn world_parameters() -> [Parameter; 8] {
+/// Parameters the benchmark genesis signs: the block gas allowance and executor limits
+/// lifted as far as their types allow (the executor heap stays within the ABI heap window).
+fn genesis_parameters() -> [Parameter; 3] {
     [
-        Parameter::Transaction(TransactionParameter::MaxSignatures(NonZeroU64::MAX)),
-        Parameter::Transaction(TransactionParameter::MaxInstructions(NonZeroU64::MAX)),
-        Parameter::Transaction(TransactionParameter::IvmBytecodeSize(NonZeroU64::MAX)),
-        Parameter::Transaction(TransactionParameter::MaxTxBytes(NonZeroU64::MAX)),
-        Parameter::Transaction(TransactionParameter::MaxDecompressedBytes(NonZeroU64::MAX)),
-        Parameter::Transaction(TransactionParameter::MaxMetadataDepth(NonZeroU16::MAX)),
+        gas_limit_parameter(),
         Parameter::Executor(SmartContractParameter::Fuel(NonZeroU64::MAX)),
         Parameter::Executor(SmartContractParameter::Memory(
             NonZeroU64::new(IVM_HEAP_MAX_BYTES).expect("ABI heap window is non-zero"),

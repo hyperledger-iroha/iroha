@@ -3,7 +3,7 @@
 use super::*;
 use std::time::{Duration, Instant};
 
-fn bytes<V: Value>() -> usize {
+fn bytes<V: CellValue>() -> usize {
     CellInitialization::<V>::allocation_layouts()
         .into_iter()
         .map(|layout| layout.size())

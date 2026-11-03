@@ -285,9 +285,11 @@ fn reusable_residue_scratch_is_bounded_by_public_tasks_within_original_runtime_r
         core::mem::size_of::<ShaWordFoldPowersV1>(),
         core::mem::size_of::<usize>()
     );
-    assert!(
-        main_resources::MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
-            + main_resources::MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
-            < main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
-    );
+    const {
+        assert!(
+            main_resources::MAIN_COMPOSITION_RESIDUE_SCRATCH_BYTES_V1
+                + main_resources::MAIN_COMPOSITION_SHA_FOLD_BYTES_V1
+                < main_resources::MAIN_PROVER_RUNTIME_RESERVE_BYTES_V1
+        );
+    }
 }

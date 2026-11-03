@@ -445,7 +445,7 @@ fn exact_lock_creation_and_open_never_change_missing_or_existing_custody() {
         store.open_existing_lock("journal.lock").unwrap_err().kind(),
         io::ErrorKind::NotFound
     );
-    assert!(store.entries(0).unwrap().is_empty());
+    assert_eq!(store.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
     let mut first = store.create_lock("journal.lock").unwrap();
     first.write_all(b"retained").unwrap();
     first.sync_all().unwrap();
@@ -482,13 +482,13 @@ fn consuming_empty_directory_removal_preserves_parent_and_refuses_descendants() 
     pending.remove_empty().unwrap();
     assert!(store.open_child("pending").is_err());
     parent.revalidate().unwrap();
-    assert!(store.entries(0).unwrap().is_empty());
+    assert_eq!(store.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
 }
 
 #[test]
 fn retained_directory_listing_is_bounded_and_does_not_follow_children() {
     let (_temporary, store) = store();
-    assert!(store.entries(0).unwrap().is_empty());
+    assert_eq!(store.entries(0).unwrap(), Vec::<std::ffi::OsString>::new());
     store
         .write_atomic("zeta", b"one", PublishMode::CreateNew)
         .unwrap();
@@ -518,7 +518,10 @@ fn project_directory_listing_preserves_reader_access_and_enforces_entry_bound() 
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
     }
     let project = OwnerDirectory::open(&path).unwrap();
-    assert!(project.entries(0).unwrap().is_empty());
+    assert_eq!(
+        project.entries(0).unwrap(),
+        Vec::<std::ffi::OsString>::new()
+    );
     project
         .write_atomic("zeta.ko", b"source", PublishMode::CreateNew)
         .unwrap();
@@ -1425,7 +1428,7 @@ fn selected_regular_file_keeps_native_identity_bounds_and_independent_read_offse
     fs::write(&empty, []).unwrap();
     let empty = SelectedRegularFile::capture(&empty).unwrap();
     assert!(empty.is_empty().unwrap());
-    assert!(empty.read(0).unwrap().is_empty());
+    assert_eq!(empty.read(0).unwrap(), Vec::<u8>::new());
 }
 
 #[cfg(unix)]
@@ -1612,7 +1615,10 @@ fn retained_private_publication_refuses_replaced_parent_and_restores_original_re
     let replacement = PrivateDirectory::open_or_create(parent.path()).unwrap();
     let refused = parent.publish_private_child("new", &[("record", b"new bytes")]);
     assert!(matches!(refused, Err(error) if error.kind() == io::ErrorKind::Other));
-    assert!(replacement.entries(0).unwrap().is_empty());
+    assert_eq!(
+        replacement.entries(0).unwrap(),
+        Vec::<std::ffi::OsString>::new()
+    );
     drop(replacement);
     fs::remove_dir(parent.path()).unwrap();
     fs::rename(displaced, parent.path()).unwrap();
@@ -1898,7 +1904,10 @@ fn separate_staging_native_failures_preserve_exact_publication_and_cleanup_bound
         let expected: &[u8] = if failure < 5 { b"before" } else { b"after" };
         assert_eq!(destination.read("record", 6).unwrap().as_slice(), expected);
         // Publication observation and both sync refusals occur after the original temp has become the destination.
-        assert!(staging.entries(0).unwrap().is_empty());
+        assert_eq!(
+            staging.entries(0).unwrap(),
+            Vec::<std::ffi::OsString>::new()
+        );
     }
 }
 
@@ -1952,7 +1961,10 @@ fn separate_staging_refuses_either_original_directory_substitution_before_public
         fs::rename(&displaced, selected.path()).unwrap();
         destination.revalidate().unwrap();
         staging.revalidate().unwrap();
-        assert!(staging.entries(0).unwrap().is_empty());
+        assert_eq!(
+            staging.entries(0).unwrap(),
+            Vec::<std::ffi::OsString>::new()
+        );
         let lock = staging.create_lock("lock").unwrap();
         lock.try_lock().unwrap();
         assert_eq!(

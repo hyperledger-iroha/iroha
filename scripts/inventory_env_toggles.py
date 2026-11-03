@@ -5,7 +5,9 @@ Inventory environment-variable toggles across Rust sources.
 The script scans `.rs` files under the repository root for common environment
 lookup patterns (`env::var*`, `env!`, `option_env!`) and emits a deterministic
 inventory. Use the JSON output for tooling/CI checks and the Markdown output for
-human review of production vs test/dev usage.
+human review of production vs test/dev usage. The reports name each reference by
+path and source line text, so an edit that only moves a reference leaves them
+unchanged; run the script without report paths to list current line numbers.
 
 No dependencies or environment settings are required. Scope analysis recognizes
 explicit cfg attributes conservatively; it is not a Rust compiler or a module
@@ -17,7 +19,6 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import datetime as dt
 import json
 import re
 import sys
@@ -379,7 +380,6 @@ def build_summary(refs: Sequence[EnvReference]) -> Dict[str, Dict[str, object]]:
             "paths": [
                 {
                     "path": str(ref.path),
-                    "line": ref.line,
                     "scope": ref.scope,
                     "context": ref.context,
                 }
@@ -391,9 +391,7 @@ def build_summary(refs: Sequence[EnvReference]) -> Dict[str, Dict[str, object]]:
 
 def write_json(output: Path, refs: Sequence[EnvReference]) -> None:
     data = {
-        "generated_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "command": "python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md",
-        "root": REPO_ROOT.name,
         "total_refs": len(refs),
         "unique_vars": len({ref.name for ref in refs}),
         "variables": build_summary(refs),
@@ -422,9 +420,7 @@ def write_markdown(output: Path, refs: Sequence[EnvReference]) -> None:
         lines.append(f"## {name} ({counts_str})")
         lines.append("")
         for entry in data["paths"]:
-            lines.append(
-                f"- {entry['scope']}: {entry['path']}:{entry['line']} — `{entry['context']}`"
-            )
+            lines.append(f"- {entry['scope']}: {entry['path']} — `{entry['context']}`")
         lines.append("")
 
     output.parent.mkdir(parents=True, exist_ok=True)

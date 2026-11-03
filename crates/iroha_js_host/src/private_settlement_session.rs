@@ -22,12 +22,15 @@ use std::{
 use tokio::sync::Semaphore;
 
 /// Complete source descriptor limit, checked natively before its first retained copy.
-#[napi(js_name = "privateSettlementDescriptorMaxBytes")]
+// napi registers a const under its Rust identifier and ignores `js_name`.
+#[allow(non_upper_case_globals)]
+#[napi]
 #[expect(
     clippy::cast_possible_truncation,
     reason = "the assertion below keeps the native descriptor limit within u32"
 )]
-pub const DESCRIPTOR_MAX_BYTES: u32 = NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES as u32;
+pub const privateSettlementDescriptorMaxBytes: u32 =
+    NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES as u32;
 const _: () = assert!(NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES <= u32::MAX as usize);
 
 /// Canonical native local observation defaults. These never change committed validity.
@@ -533,9 +536,9 @@ mod tests {
     }
     #[test]
     fn create_host_checks_limits_before_binding_the_current_runtime() {
-        let descriptor = f64::from(DESCRIPTOR_MAX_BYTES);
+        let descriptor = f64::from(privateSettlementDescriptorMaxBytes);
         assert_eq!(
-            usize::try_from(DESCRIPTOR_MAX_BYTES).unwrap(),
+            usize::try_from(privateSettlementDescriptorMaxBytes).unwrap(),
             NATIVE_PRIVATE_SETTLEMENT_DESCRIPTOR_MAX_BYTES
         );
         for limits in [

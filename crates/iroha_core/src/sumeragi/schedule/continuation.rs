@@ -15,6 +15,7 @@ use iroha_allocation::{AllocationBudget, ChargedShared, PrepaidSharedError, Reta
 use iroha_data_model::{
     block::{BlockHeader, consensus::SumeragiRootScope},
     consensus::{FinalizedGlobalThresholdBeaconPulseV1, GlobalThresholdBeaconPulseContextV1},
+    sumeragi_finality::CertifiedResultV1,
 };
 use parking_lot::Mutex;
 
@@ -51,7 +52,6 @@ enum Value {
     Pending,
     Available(RetainedPayload<NativeExecutionInputs>),
     Lent,
-    Consumed,
 }
 
 fn invalid(reason: &'static str) -> ExecutionAttemptError<ScheduleError> {
@@ -182,7 +182,7 @@ impl ContinuationPreparation {
                 .require(state, header, root_scope, &pulse)?;
             match contents.value {
                 Value::Available(_) => return Ok(()),
-                Value::Lent | Value::Consumed => return Err(invariant()),
+                Value::Lent => return Err(invariant()),
                 Value::Pending => {}
             }
             // Install the shell before this admission. Refusal retains that successful owner
@@ -199,19 +199,6 @@ impl ContinuationPreparation {
             contents.value = Value::Available(value);
             Ok(())
         })
-    }
-
-    /// Retire a capture consumed by a completed execution that a local freshness rollback
-    /// abandoned. The graph left with that execution, so the re-execution prepares a fresh
-    /// capture; an available or lent graph stays with its bank.
-    pub(crate) fn retire_consumed(&mut self) {
-        if self
-            .bank
-            .as_ref()
-            .is_some_and(|bank| matches!(bank.contents.lock().value, Value::Consumed))
-        {
-            self.bank = None;
-        }
     }
 
     /// Lend the sole prepared graph after the caller's independent successor authentication and
@@ -289,16 +276,32 @@ impl ContinuationLease {
         self
     }
 
-    /// Successful validation transfers this original graph to the existing finishing owner.
-    /// That owner retains it across proof/encoding refusals and does not reexecute World.
-    pub(crate) fn into_inputs(mut self) -> RetainedPayload<NativeExecutionInputs> {
-        let bank = self.bank.clone();
-        bank.pool.with_deferred_refund_notifications(|_| {
-            let mut contents = bank.contents.lock();
-            debug_assert!(matches!(contents.value, Value::Lent));
-            contents.value = Value::Consumed;
-        });
-        self.value.take().expect("live original continuation lease")
+    pub(crate) fn retained(&self) -> &RetainedPayload<NativeExecutionInputs> {
+        self.value
+            .as_ref()
+            .expect("live original continuation lease")
+    }
+
+    /// Move the original funded fields into the result while keeping their rollback lease.
+    ///
+    /// # Safety
+    /// The mapping must preserve the complete original schedule and beacon allocations,
+    /// adding only fixed-size result fields covered by no separate allocation ledger.
+    #[allow(
+        unsafe_code,
+        reason = "the result preserves the original graph and its ledger"
+    )]
+    pub(crate) unsafe fn map_result(
+        mut self,
+        map: impl FnOnce(NativeExecutionInputs) -> CertifiedResultV1,
+    ) -> ContinuationResultLease {
+        let value = self.value.take().expect("live original continuation lease");
+        // SAFETY: the caller preserves every original funded allocation in the result.
+        let value = unsafe { value.map_payload(map) };
+        ContinuationResultLease {
+            value: Some(value),
+            bank: self.bank.clone(),
+        }
     }
 }
 impl Drop for ContinuationLease {
@@ -345,6 +348,46 @@ impl Drop for ContinuationLease {
                 })
             };
             contents.value = Value::Available(value);
+        });
+    }
+}
+
+/// The same ordinary graph remains lent through result encoding and live execution.
+/// Dropping a stale completed result returns its original fields to the preparation bank.
+pub(crate) struct ContinuationResultLease {
+    value: Option<RetainedPayload<CertifiedResultV1>>,
+    bank: ChargedShared<Bank>,
+}
+impl ContinuationResultLease {
+    pub(crate) fn retained(&self) -> &RetainedPayload<CertifiedResultV1> {
+        self.value.as_ref().expect("live original result lease")
+    }
+}
+impl Drop for ContinuationResultLease {
+    #[allow(
+        unsafe_code,
+        reason = "remove only fixed result wrappers while returning the original funded fields"
+    )]
+    fn drop(&mut self) {
+        let Some(value) = self.value.take() else {
+            return;
+        };
+        // SAFETY: X, height, execution and native-lane proof are fixed-size fields. The
+        // original schedule and beacon move unchanged with their complete allocation ledger.
+        let value = unsafe {
+            value.map_payload(|value| {
+                let (_, result) = value.into_parts();
+                NativeExecutionInputs {
+                    schedule: result.schedule,
+                    beacon: result.beacon,
+                }
+            })
+        };
+        // The existing lease restores pristine fixed fields under the same original-pool
+        // refund scope. Its Bank owner outlives the worker's decoder during ordinary drop.
+        drop(ContinuationLease {
+            value: Some(value),
+            bank: self.bank.clone(),
         });
     }
 }

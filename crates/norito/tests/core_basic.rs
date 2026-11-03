@@ -1,9 +1,8 @@
 //! Core Norito functionality tests.
-use byteorder::{ByteOrder, LittleEndian};
 use iroha_schema::IntoSchema;
 use norito::core::*;
 fn crc64_test(data: &[u8]) -> u64 {
-    let mut digest = crc64fast::Digest::new();
+    let mut digest = Crc64Digest::new();
     digest.write(data);
     digest.sum64()
 }
@@ -76,11 +75,100 @@ fn header_serialization() {
     assert_eq!(bytes[5], VERSION_MINOR);
     assert_eq!(&bytes[6..22], &norito::schema::identity::frame_hash::<u8>());
     assert_eq!(bytes[22], 0);
-    let len = LittleEndian::read_u64(&bytes[23..31]);
+    let len = u64::from_le_bytes(bytes[23..31].try_into().unwrap());
     assert_eq!(len, 1);
-    let checksum = LittleEndian::read_u64(&bytes[31..39]);
+    let checksum = u64::from_le_bytes(bytes[31..39].try_into().unwrap());
     assert_eq!(checksum, crc64_test(&bytes[Header::SIZE..]));
 }
+
+#[test]
+fn header_read_rejects_every_truncated_field() {
+    let bytes = to_bytes(&10_u8).unwrap();
+    for end in 0..Header::SIZE {
+        assert!(
+            matches!(Header::read(&bytes[..end]), Err(Error::Io(error))
+                if error.kind() == std::io::ErrorKind::UnexpectedEof),
+            "truncated header at byte {end}"
+        );
+    }
+}
+
+#[test]
+fn header_read_preserves_early_validation() {
+    // A bad prefix is rejected before asking the reader for the next field.
+    assert!(matches!(
+        Header::read(&b"FAIL"[..]),
+        Err(Error::InvalidMagic)
+    ));
+    let mut bytes = to_bytes(&10_u8).unwrap();
+    bytes[4] = VERSION_MAJOR.wrapping_add(1);
+    assert!(matches!(
+        Header::read(&bytes[..5]),
+        Err(Error::UnsupportedVersion { .. })
+    ));
+    bytes[4] = VERSION_MAJOR;
+    bytes[5] = VERSION_MINOR.wrapping_add(1);
+    assert!(matches!(
+        Header::read(&bytes[..6]),
+        Err(Error::UnsupportedMinorVersion { .. })
+    ));
+    bytes[5] = VERSION_MINOR;
+    bytes[22] = u8::MAX;
+    assert!(matches!(
+        Header::read(&bytes[..23]),
+        Err(Error::UnsupportedCompression { found: u8::MAX, .. })
+    ));
+}
+
+struct InterruptedByteReader<'a> {
+    remaining: &'a [u8],
+    interrupt: bool,
+}
+
+impl std::io::Read for InterruptedByteReader<'_> {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        self.interrupt = !self.interrupt;
+        if self.interrupt {
+            return Err(std::io::ErrorKind::Interrupted.into());
+        }
+        let end = out.len().min(1);
+        std::io::Read::read(&mut self.remaining, &mut out[..end])
+    }
+}
+
+#[test]
+fn header_read_retries_short_interrupted_reads_and_stops_at_payload() {
+    let mut bytes = to_bytes(&10_u8).unwrap();
+    bytes[23..31].copy_from_slice(&0x0123_4567_89ab_cdef_u64.to_le_bytes());
+    bytes[31..39].copy_from_slice(&0xfedc_ba98_7654_3210_u64.to_le_bytes());
+    let mut reader = InterruptedByteReader {
+        remaining: &bytes,
+        interrupt: false,
+    };
+    let header = Header::read(&mut reader).unwrap();
+    assert_eq!(header.length, 0x0123_4567_89ab_cdef);
+    assert_eq!(header.checksum, 0xfedc_ba98_7654_3210);
+    assert_eq!(reader.remaining, &bytes[Header::SIZE..]);
+}
+
+#[test]
+fn fixed_length_prefix_preserves_golden_bytes_and_short_write_errors() {
+    let value = 0x0123_4567_89ab_cdef_u64;
+    let expected = [
+        8, 0, 0, 0, 0, 0, 0, 0, 0xef, 0xcd, 0xab, 0x89, 0x67, 0x45, 0x23, 1,
+    ];
+    let mut out = Vec::new();
+    write_fixed_len_prefixed(&mut Encoder::for_buffer(&mut out), &value).unwrap();
+    assert_eq!(out, expected);
+    for length in 0..expected.len() {
+        let mut short = vec![0; length];
+        let result = write_fixed_len_prefixed(&mut Encoder::new(&mut short.as_mut_slice()), &value);
+        assert!(matches!(result, Err(Error::Io(error))
+            if error.kind() == std::io::ErrorKind::WriteZero));
+        assert_eq!(short, expected[..length]);
+    }
+}
+
 #[test]
 fn checksum_validation() {
     let value: u32 = 5;

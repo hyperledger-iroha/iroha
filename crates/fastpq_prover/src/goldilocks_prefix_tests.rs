@@ -7,7 +7,7 @@ use super::*;
 use GoldilocksTransformErrorV1 as Error;
 
 /// Validate domain, complete input prefixes, and the complete public power table.
-pub(crate) fn validate_prefixes_v1(
+pub fn validate_prefixes_v1(
     prefixes: &[&[u64]],
     rows: usize,
     root: u64,
@@ -50,9 +50,13 @@ pub(crate) fn validate_prefixes_v1(
 /// Test-only CPU diagonal, matching privacy's current unsigned Goldilocks fold.
 /// Both benchmark arms use this exact helper; the oracle uses u128 remainder.
 #[inline]
-pub(crate) fn prefix_product_v1(left: u64, right: u64) -> u64 {
+pub fn prefix_product_v1(left: u64, right: u64) -> u64 {
     const EPSILON: u64 = 0xffff_ffff;
     let value = u128::from(left) * u128::from(right);
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "the Goldilocks reducer deliberately extracts the product's low 64 bits"
+    )]
     let low = value as u64;
     let high = (value >> 64) as u64;
     let (low, borrowed) = low.overflowing_sub(high >> 32);
@@ -76,7 +80,7 @@ pub(crate) fn prefix_product_v1(left: u64, right: u64) -> u64 {
 
 /// Borrow native prefixes and prepare common-domain output without a full host input.
 /// The CPU outcome leaves all inputs unchanged for the original CPU fallback.
-pub(crate) fn prepare_prefixes_v1(
+pub fn prepare_prefixes_v1(
     prefixes: &[&[u64]],
     rows: usize,
     root: u64,
@@ -179,7 +183,7 @@ fn native_prefix_product_matches_independent_remainder_boundaries_and_samples() 
         0,
         1,
         7,
-        u32::MAX as u64,
+        u64::from(u32::MAX),
         1 << 32,
         FIELD_MODULUS - 2,
         FIELD_MODULUS - 1,
@@ -188,7 +192,7 @@ fn native_prefix_product_matches_independent_remainder_boundaries_and_samples() 
             0,
             1,
             7,
-            u32::MAX as u64,
+            u64::from(u32::MAX),
             1 << 32,
             FIELD_MODULUS - 2,
             FIELD_MODULUS - 1,
@@ -198,9 +202,13 @@ fn native_prefix_product_matches_independent_remainder_boundaries_and_samples() 
     }
     let mut state = 19_u64;
     for _ in 0..10000 {
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
         let left = state % FIELD_MODULUS;
-        state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        state = state
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(1);
         let right = state % FIELD_MODULUS;
         assert_eq!(prefix_product_v1(left, right), mul_mod_v1(left, right));
     }

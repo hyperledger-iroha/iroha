@@ -22,7 +22,7 @@ fn folded_columns_v1(log: u8, width: usize) -> ZeroizingBaseColumnsV1 {
         (0..width)
             .map(|column| {
                 let coefficients = ZeroizingMainTraceColumnV1(
-                    (0..rows + MASK_DEGREE + 1)
+                    (0..=(rows + MASK_DEGREE))
                         .map(|index| {
                             F(GOLDILOCKS_MODULUS_V1
                                 - 1
@@ -238,6 +238,10 @@ fn forward_transaction_refusals_preserve_all_sixteen_originals_and_uncertainty_p
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore = "isolated real Metal quotient forward words8/prepared8/prepared16 full-cycle A/B; run fresh with first mode0/1/2"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn native19_forward_prepared_grouping_preserves_all_outputs_and_reports_full_costs() {
     use crate::privacy_engines::zk_x509::prover_observation::ObservationV1;
     use fastpq_prover::goldilocks_transform::goldilocks_transform_completion_uncertain_v1;

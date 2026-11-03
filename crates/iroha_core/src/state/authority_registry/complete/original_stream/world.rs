@@ -31,7 +31,7 @@ impl<K: Key + Encode, V: Value + Encode, M: mv::storage::StorageMode<K, V>> Appe
         output.storage(id, self, expected, mode, bare)
     }
 }
-impl<V: Value + Encode, C: Send + Sync + 'static> AppendNative for CellField<'_, V, C> {
+impl<V: mv::CellValue + Encode, C: Send + Sync + 'static> AppendNative for CellField<'_, V, C> {
     type Target = mv::cell::Cell<V, C>;
     fn append(
         &self,

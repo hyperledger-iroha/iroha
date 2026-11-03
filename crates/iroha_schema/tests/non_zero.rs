@@ -1,6 +1,5 @@
 //! Schema coverage for core `NonZero*` integers.
 use core::any::TypeId;
-use impls::impls;
 use iroha_schema::{IntoSchema, MetaMap, Metadata, UnnamedFieldsMeta};
 macro_rules! check_non_zero {
     ($($ty:ty => $inner:ty),* $(,)?) => {

@@ -1,5 +1,4 @@
 //! Architecture-dependent schema tests.
-use impls::impls;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 #[test]

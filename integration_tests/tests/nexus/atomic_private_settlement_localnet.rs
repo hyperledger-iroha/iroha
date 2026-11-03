@@ -75,9 +75,10 @@ use iroha::{
             IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             IvmPrivateNoteLimitsV1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
             PrivacyCapabilityRowV1, PrivacyCommitmentV1, PrivacyCompiledProfileResultV1,
-            PrivacyConsensusLimitsV1, PrivacyConsensusPolicyV1, PrivacyEncryptedOutputV1,
-            PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyProtocolIdV1,
-            PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, PrivacyRecipientIdV1, PrivacyRootV1,
+            PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+            PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
+            PrivacyRecipientIdV1, PrivacyRootV1, PrivateSettlementPolicyUpdateV1,
+            PrivateSettlementPolicyV1,
         },
         query::block::prelude::FindBlocks,
         sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy},
@@ -165,16 +166,21 @@ fn approve_all_audit_material(_: PrivateSettlementAuditEvaluationV1<'_>) -> bool
     true
 }
 
-fn private_settlement_consensus_limits() -> PrivacyConsensusLimitsV1 {
-    let mut limits = PrivacyConsensusPolicyV1::taira_default().current_limits;
-    let settlement = &mut limits.private_settlement;
-    settlement.max_participants = 16;
-    settlement.max_expiry_blocks = MAX_EXPIRY_BLOCKS;
-    settlement.audit_timeout_blocks = 1_024;
-    settlement.prepare_timeout_blocks = 1_024;
-    settlement.commit_timeout_blocks = 1_024;
-    settlement.sidecar_retention_blocks = SIDECAR_RETENTION_BLOCKS;
-    limits
+fn private_settlement_genesis_policy() -> PrivateSettlementPolicyV1 {
+    let mut policy = PrivateSettlementPolicyV1::protocol_default();
+    let mut next_limits = policy.current_limits;
+    next_limits.max_participants = 16;
+    next_limits.max_expiry_blocks = MAX_EXPIRY_BLOCKS;
+    next_limits.audit_timeout_blocks = 1_024;
+    next_limits.prepare_timeout_blocks = 1_024;
+    next_limits.commit_timeout_blocks = 1_024;
+    next_limits.sidecar_retention_blocks = SIDECAR_RETENTION_BLOCKS;
+    policy.pending_update = Some(PrivateSettlementPolicyUpdateV1 {
+        scheduled_at_height: GENESIS_HEIGHT,
+        effective_at_height: PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
+        next_limits,
+    });
+    policy
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -548,13 +554,15 @@ fn genesis_post_topology(
         );
     }
     // The native relation uses compiled defaults without protocol registration.
-    // Genesis commits the fixture's payment limits for the first ordinary block;
-    // node-local sidecar custody settings never select payment validity.
+    // Genesis schedules the fixture's payment limits in the committed
+    // private-settlement policy for the first ordinary block; node-local sidecar
+    // custody settings never select payment validity.
     universal.push(
-        SchedulePrivacyConsensusPolicyUpdateV1::new(
-            PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
-            private_settlement_consensus_limits(),
-        )
+        SetParameter::new(Parameter::Custom(
+            private_settlement_genesis_policy()
+                .to_custom_parameter()
+                .expect("canonical signed private-settlement policy"),
+        ))
         .into(),
     );
     // Retain actual governance permission, fee funding, participant lane policy,
@@ -666,7 +674,10 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
             let lanes = (0..shape.lane_count())
                 .map(|lane| {
                     let mut table = Table::new();
-                    table.insert("index".into(), TomlValue::Integer(lane as i64));
+                    table.insert(
+                        "index".into(),
+                        TomlValue::Integer(i64::try_from(lane).expect("lane index fits i64")),
+                    );
                     table.insert(
                         "alias".into(),
                         TomlValue::String(if lane == 0 {
@@ -709,7 +720,12 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                             participant_dataspace_alias(dataspace - 1)
                         }),
                     );
-                    table.insert("id".into(), TomlValue::Integer(dataspace as i64));
+                    table.insert(
+                        "id".into(),
+                        TomlValue::Integer(
+                            i64::try_from(dataspace).expect("data space index fits i64"),
+                        ),
+                    );
                     table.insert("fault_tolerance".into(), TomlValue::Integer(1));
                     table.insert(
                         "description".into(),
@@ -751,7 +767,10 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     validator_worker_threads,
                 )
                 .write(["pipeline", "workers"], validator_worker_threads)
-                .write(["nexus", "lane_count"], shape.lane_count() as i64)
+                .write(
+                    ["nexus", "lane_count"],
+                    i64::try_from(shape.lane_count()).expect("lane count fits i64"),
+                )
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
                     TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
@@ -769,7 +788,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 )
                 .write(
                     ["nexus", "staking", "max_validators"],
-                    VALIDATORS_PER_LANE as i64,
+                    i64::try_from(VALIDATORS_PER_LANE).expect("validator count fits i64"),
                 )
                 .write(
                     ["nexus", "atomic_private_settlement", "sidecar_max_records"],
@@ -1949,7 +1968,7 @@ fn prepare_leg_with_private_data_and_rngs(
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
     private_data: &PrivateSettlementLegPrivateData,
-    output_rng: &mut (impl rand::TryCryptoRng),
+    output_rng: &mut impl rand::TryCryptoRng,
     capsule_rng: &mut impl rand::rand_core::TryCryptoRng,
 ) -> Result<PreparedLeg> {
     let witness_timing = SmokeDiagnosticSpanV1::start(
@@ -2454,7 +2473,7 @@ fn wait_for_identical_receipt(
             if receipts.windows(2).all(|pair| pair[0] == pair[1]) {
                 return Ok(receipts.remove(0));
             }
-            last = "all peers finalized, but their receipts differ".to_owned();
+            "all peers finalized, but their receipts differ".clone_into(&mut last);
         } else {
             last = not_finalized.join("; ");
         }
@@ -2688,7 +2707,7 @@ impl SmokeDiagnosticSpanV1 {
                 // Relaxed order is sufficient for uniqueness, not clock ordering.
                 let span = context
                     .next_span
-                    .fetch_update(
+                    .try_update(
                         std::sync::atomic::Ordering::Relaxed,
                         std::sync::atomic::Ordering::Relaxed,
                         |next| next.checked_add(1),
@@ -3206,11 +3225,11 @@ fn smoke_diagnostic_early_error_keeps_payload_and_closes_span() {
     let _scope = SmokeDiagnosticScopeV1::start();
     let error = Box::new(23_u8);
     let original = std::ptr::from_ref(error.as_ref());
-    let result: std::result::Result<(), Box<u8>> = (|| {
+    let result: std::result::Result<(), Box<u8>> = {
         let _span =
             SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalizationSubmission, None);
         Err(error)
-    })();
+    };
     assert_eq!(std::ptr::from_ref(result.unwrap_err().as_ref()), original);
     SMOKE_DIAGNOSTIC_CONTEXT_V1
         .with(|cell| assert!(cell.borrow().as_ref().unwrap().active.is_empty()));
@@ -4744,12 +4763,23 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .map(|peer| GenesisTopologyEntry::new(peer, vec![1]))
         .collect::<Vec<_>>();
     let transactions = genesis_post_topology(shape, &topology, &committee_validator_entries);
-    let expected_privacy = SchedulePrivacyConsensusPolicyUpdateV1::new(
-        PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT,
-        private_settlement_consensus_limits(),
+    let expected_privacy = private_settlement_genesis_policy();
+    expected_privacy
+        .validate_at_committed_height(GENESIS_HEIGHT)
+        .unwrap();
+    assert_eq!(
+        expected_privacy.current_limits,
+        PrivateSettlementPolicyV1::protocol_default().current_limits
     );
-    expected_privacy.next_limits.validate().unwrap();
-    let private_limits = expected_privacy.next_limits.private_settlement;
+    let pending = expected_privacy
+        .pending_update
+        .expect("initial private payment schedule");
+    assert_eq!(pending.scheduled_at_height, GENESIS_HEIGHT);
+    assert_eq!(
+        pending.effective_at_height,
+        PRIVATE_SETTLEMENT_FIRST_AUTHORITY_HEIGHT
+    );
+    let private_limits = pending.next_limits;
     assert_eq!(private_limits.max_participants, 16);
     assert_eq!(private_limits.max_expiry_blocks, MAX_EXPIRY_BLOCKS);
     assert_eq!(private_limits.audit_timeout_blocks, 1_024);
@@ -4763,14 +4793,19 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         .iter()
         .flatten()
         .filter_map(|instruction| {
-            instruction
-                .as_any()
-                .downcast_ref::<SchedulePrivacyConsensusPolicyUpdateV1>()
+            let set = instruction.as_any().downcast_ref::<SetParameter>()?;
+            let Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            (custom.id() == PrivateSettlementPolicyV1::parameter_id()).then(|| {
+                PrivateSettlementPolicyV1::from_custom_parameter(custom)
+                    .expect("canonical signed private-settlement policy")
+            })
         })
         .collect::<Vec<_>>();
     assert_eq!(
         privacy_updates,
-        [&expected_privacy],
+        [expected_privacy],
         "signed genesis selects exactly one complete payment policy for height two"
     );
     let governance_permission = Permission::from(CanEnactGovernance);
@@ -4791,9 +4826,12 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
         transactions.iter().flatten().all(|instruction| {
             !instruction
                 .as_any()
-                .is::<SchedulePrivacyProtocolLimitsUpdateV1>()
+                .is::<SchedulePrivacyConsensusPolicyUpdateV1>()
+                && !instruction
+                    .as_any()
+                    .is::<SchedulePrivacyProtocolLimitsUpdateV1>()
         }),
-        "native defaults need no ordinary protocol-policy update in genesis"
+        "native resource defaults need no ordinary privacy-policy update in genesis"
     );
     // Building the real signed topology pre-executes every normalized genesis
     // transaction through Initial. This catches admission failures and rollback
@@ -4831,12 +4869,14 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
                     panic!("genesis is an instruction batch");
                 };
                 for instruction in instructions.iter() {
-                    if let Some(policy) = instruction
-                        .as_any()
-                        .downcast_ref::<SchedulePrivacyConsensusPolicyUpdateV1>()
+                    if let Some(set) = instruction.as_any().downcast_ref::<SetParameter>()
+                        && let Parameter::Custom(custom) = set.inner()
+                        && custom.id() == PrivateSettlementPolicyV1::parameter_id()
                     {
+                        let policy = PrivateSettlementPolicyV1::from_custom_parameter(custom)
+                            .expect("canonical original signed private-settlement policy");
                         assert!(
-                            signed_privacy.replace(policy.clone()).is_none(),
+                            signed_privacy.replace(policy).is_none(),
                             "normalized signed genesis must retain exactly one payment policy"
                         );
                     }

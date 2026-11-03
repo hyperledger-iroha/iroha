@@ -9,6 +9,7 @@ use iroha_data_model::taikai::{
     CEK_ROTATION_RECEIPT_VERSION_V1, CekRotationReceiptV1, TaikaiEventId, TaikaiRenditionId,
     TaikaiSegmentEnvelopeV1, TaikaiStreamId,
 };
+use iroha_fs::FileMetadata;
 use iroha_telemetry::metrics::Metrics;
 use norito::{
     decode_from_bytes, json,
@@ -20,7 +21,6 @@ use sorafs_car::platform_no_follow_flag;
 use sorafs_car::taikai::{
     validate_distinct_artifact_paths, validate_track_metadata, verify_taikai_car,
 };
-use iroha_fs::FileMetadata;
 use sorafs_car::{ensure_output_parent_dir, set_no_follow_flag};
 #[cfg(unix)]
 use std::os::unix::fs::OpenOptionsExt;

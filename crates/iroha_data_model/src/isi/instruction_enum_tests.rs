@@ -810,7 +810,9 @@ fn default_registry_roundtrip_selected_instructions() {
         Revoke::account_role(role_id.clone(), account_id.clone()).into(),
         // SetParameter
         SetParameter::new(Parameter::Transaction(
-            crate::parameter::TransactionParameter::MaxInstructions(nonzero_ext::nonzero!(10_u64)),
+            crate::parameter::TransactionParameter::MaxInstructions(iroha_primitives::nonzero!(
+                10_u64
+            )),
         ))
         .into(),
         // Log

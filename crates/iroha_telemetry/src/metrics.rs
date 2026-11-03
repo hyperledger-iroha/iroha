@@ -2288,24 +2288,6 @@ fields {
                         448.0, 512.0,
                     ],
     );
-    /// Merkle root computations using GPU acceleration (cumulative)
-    pub merkle_root_gpu_total: int_counter();
-    /// Merkle root computations using CPU (cumulative)
-    pub merkle_root_cpu_total: int_counter();
-    /// IVM memory commit duration (milliseconds), labelled by commit path.
-    pub ivm_memory_commit_ms: histogram_vec_with_buckets(
-        prometheus::exponential_buckets(0.1, 2.0, 16).expect("inputs are valid"),
-                    &["path"],
-    );
-    /// IVM memory commit dirty chunk count, labelled by commit path.
-    pub ivm_memory_commit_dirty_chunks: histogram_vec_with_buckets(
-        prometheus::exponential_buckets(1.0, 2.0, 20).expect("inputs are valid"),
-                    &["path"],
-    );
-    /// IVM completed in-place canonical Merkle node refreshes (excluding construction and copies).
-    pub ivm_merkle_rebuild_total: int_counter();
-    /// IVM Merkle cache incremental leaf updates.
-    pub ivm_merkle_incremental_leaf_updates_total: int_counter();
     /// Number of DAG vertices (transactions) in the latest validated block
     pub pipeline_dag_vertices: gauge();
     /// Number of DAG edges (conflicts) in the latest validated block
@@ -3672,9 +3654,7 @@ construct {
         ivm_cache_memory_peak_bytes ivm_cache_memory_unmeasured_owners
         ivm_execution_memory_reserved_bytes ivm_execution_memory_peak_bytes
         ivm_execution_memory_limit_bytes ivm_register_max_index ivm_register_unique_count
-        merkle_root_gpu_total merkle_root_cpu_total ivm_memory_commit_ms
-        ivm_memory_commit_dirty_chunks ivm_merkle_rebuild_total
-        ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
+        pipeline_dag_vertices pipeline_dag_edges
         pipeline_conflict_rate_bps pipeline_access_set_source_total pipeline_comp_count
         pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
         pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
@@ -4023,9 +4003,7 @@ initialize (metrics) {
         ivm_cache_memory_unclassified_retained_bytes ivm_cache_memory_peak_bytes
         ivm_cache_memory_unmeasured_owners ivm_execution_memory_reserved_bytes
         ivm_execution_memory_peak_bytes ivm_execution_memory_limit_bytes ivm_register_max_index
-        ivm_register_unique_count merkle_root_gpu_total merkle_root_cpu_total ivm_memory_commit_ms
-        ivm_memory_commit_dirty_chunks ivm_merkle_rebuild_total
-        ivm_merkle_incremental_leaf_updates_total pipeline_dag_vertices pipeline_dag_edges
+        ivm_register_unique_count pipeline_dag_vertices pipeline_dag_edges
         pipeline_conflict_rate_bps pipeline_access_set_source_total pipeline_comp_count
         pipeline_comp_max pipeline_comp_hist_bucket pipeline_peak_layer_width
         pipeline_layer_avg_width pipeline_layer_median_width nexus_config_diff_total
@@ -4207,12 +4185,12 @@ epilogue {
 }
 const METRIC_CATALOG_V2: &str = include_str!("metrics/catalog_v2.tsv");
 const METRIC_CATALOG_V2_HEADER: &str = "# iroha-telemetry-metric-catalog-v2";
-const METRIC_CATALOG_V2_ROWS: usize = 658;
-const METRIC_CATALOG_V2_REGISTERED: usize = 625;
-const METRIC_CATALOG_V2_BYTES: usize = 89_511;
+const METRIC_CATALOG_V2_ROWS: usize = 652;
+const METRIC_CATALOG_V2_REGISTERED: usize = 619;
+const METRIC_CATALOG_V2_BYTES: usize = 88_768;
 #[cfg(test)]
 const METRIC_CATALOG_V2_BLAKE3: &str =
-    "0c305bc81afcb9164602121144d76176d94524836dc8e81cec818e568b81e594";
+    "53fc42ab9842fbe75d509c0c40e026272b67f6f079be536e783f82ca9b22a5c6";
 
 #[derive(Clone, Copy)]
 struct MetricSpec {

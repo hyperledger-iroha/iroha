@@ -824,6 +824,10 @@
     "pattern": "ExecutionProof|^SettleGameSessionV1$",
     "reason": "RaceV1 execution-proof profile, verification and settlement. The other game instructions manage sessions, inputs and payouts without a proof."
    },
+   "game_partition": {
+    "scope": "out",
+    "reason": "Native independent-root game units execute directly in IVM. Imports authenticate Sumeragi-certified source blocks and write-set membership through the native AMX tracker (crates/iroha_core/src/smartcontracts/isi/game_partition.rs), not a ZK or FHE relation."
+   },
    "governance": {
     "scope": "partial",
     "pattern": "Ballot|Conviction|Parliament",
@@ -7428,6 +7432,10 @@
    "pattern": "zk|proof|privacy|private|kaigi|ram-?lfe|fhe|witness|/wg/|confidential|settlement|ballot|vote|tally|parliament|identifier|decrypt|ciphertext|shield|nullifier|axt|verif|credential|x509|attest",
    "out_of_scope_prefixes": [
     {
+     "prefix": "/v1/game-partitions/",
+     "reason": "Native game-unit discovery and export proofs carry Sumeragi-certified records and write-set membership, not a ZK or FHE relation (registry.modules.game_partition)."
+    },
+    {
      "prefix": "/v1/sorafs/",
      "reason": "SoraFS storage, moderation ballots, PoR/PDP/PoP and reserve proofs; owned by the SoraFS closure (registry.modules.sorafs)."
     },
@@ -12023,6 +12031,30 @@
     ],
     "test_evidence": "default",
     "operations": []
+   },
+   {
+    "id": "settlement.pool_activation",
+    "selector": "catalog_membership",
+    "chooses_guarantee": false,
+    "what": "Atomic private settlement has no node enable or activation prerequisite. Committed policy must admit the native IVM private-note protocol with limits covering its maximum input and output counts. Node configuration holds only the custody limits of a local sidecar store, which do not reach admission.",
+    "site": {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_admitted_v1("},
+    "guards": [
+     {"path": "crates/iroha_core/src/state.rs", "symbol": "fn ensure_private_settlement_continuation_v1("}
+    ],
+    "operations": ["private_settlement::RegisterAtomicPrivateSettlementPrepareV1", "private_settlement::FinalizeAtomicPrivateSettlementV1"],
+    "rejection_tests": [
+     {
+      "path": "crates/iroha_core/src/private_settlement/global_state.rs",
+      "test": "state_transaction_applies_all_legs_only_at_atomic_commit_boundaries",
+      "reaches": [
+       {"path": "crates/iroha_core/src/state.rs", "symbol": "pub(crate) fn apply_private_settlement_prepare_locks_v1("}
+      ]
+     }
+    ],
+    "test_evidence": "default",
+    "references": [
+     {"inventory": "runtime_validity", "key": "entries/cfg.nexus.settlement_activation"}
+    ]
    }
   ],
   "selector_census": {

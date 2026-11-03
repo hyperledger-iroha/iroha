@@ -192,19 +192,22 @@ fn exact_original_world_shell_allocator_refusal_and_release_in_both_modes() {
         // Restore only the initial ceiling for the final reuse. Every actual field
         // writer must be available after physical refusal, abort and wrong-pool refusal.
         source.set_limit_bytes(original_limit);
-        drop(world.try_block(&source).unwrap());
+        // The final reuse also retains the parameter cell's value. A clone shares the
+        // original graph allocation, which the World charged to this source, without
+        // charging it again; it lets the graph's own charge be observed after the cell
+        // generations retire.
+        let parameters = {
+            let block = world.try_block(&source).unwrap();
+            block.parameters.get().clone()
+        };
         assert_eq!(source.reserved_bytes(), baseline);
         let retirement_pin = crossbeam_epoch::pin();
         drop(world);
         retirement_pin.flush();
-        assert_eq!(
-            source.reserved_bytes(),
-            world_cell_generation_bytes(),
-            "all seven funded current/undo pairs retain their original charges while pinned"
-        );
+        let pinned = source.reserved_bytes();
         drop(retirement_pin);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        while source.reserved_bytes() != 0 {
+        while pinned.checked_sub(source.reserved_bytes()) != Some(world_cell_generation_bytes()) {
             assert!(
                 std::time::Instant::now() < deadline,
                 "original World EBR charges did not retire"
@@ -212,21 +215,33 @@ fn exact_original_world_shell_allocator_refusal_and_release_in_both_modes() {
             crossbeam_epoch::pin().flush();
             std::thread::yield_now();
         }
+        let parameter_graph = source.reserved_bytes();
+        assert!(
+            parameter_graph > 0,
+            "the parameter graph stays charged while a retained owner shares it"
+        );
+        drop(parameters);
         assert_eq!(source.reserved_bytes(), 0);
+        assert_eq!(
+            pinned,
+            world_cell_generation_bytes() + parameter_graph,
+            "all eight funded current/undo pairs and the parameter graph they own retain their original charges while pinned"
+        );
         assert_eq!(foreign.reserved_bytes(), 0);
     }
 }
 
-// These are the seven funded Cell types of the initial World; the integration
+// These are the eight funded Cell types of the initial World; the integration
 // boundary does not expose their private fields or treat their values as charges.
 fn world_cell_generation_bytes() -> usize {
     use iroha_allocation::AllocationCharge;
     use iroha_core::{
         smartcontracts::isi::sccp::anchor_record::RetainedSccpAnchors,
-        sumeragi::amx::RetainedNativeAmx,
+        state::RetainedStateParameters, sumeragi::amx::RetainedNativeAmx,
     };
     use mv::cell::Cell;
     [
+        Cell::<RetainedStateParameters, AllocationCharge>::allocation_layouts(),
         Cell::<RetainedNativeAmx, AllocationCharge>::allocation_layouts(),
         Cell::<u64, AllocationCharge>::allocation_layouts(), // Musubi shortfall releases.
         Cell::<u64, AllocationCharge>::allocation_layouts(), // SCCP current committee.

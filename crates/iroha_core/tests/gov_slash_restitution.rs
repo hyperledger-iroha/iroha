@@ -2,12 +2,14 @@
 
 //!
 //! Verifies manual slashing/restitution of governance bonds updates locks, ledgers, and balances.
+use crate::native_genesis::{certified_state, certified_state_with};
+use iroha_config::parameters::actual::Governance;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World, WorldReadOnly},
+    sumeragi::test_chain::TestChainConfig,
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     Registrable,
     account::AccountId,
@@ -24,8 +26,33 @@ use iroha_model_base::domain::DomainId;
 use iroha_primitives::numeric::Quantity;
 use iroha_test_samples::{ALICE_ID, BOB_ID, gen_account_in};
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
+/// Direct governance movements execute under one explicit retained invocation, as a signed
+/// call does.
+fn governance_call() -> Hash {
+    Hash::new(b"gov-slash-restitution-component")
+}
+/// An ordinary fixture block after the authenticated genesis at height one.
+fn ordinary_header(state: &State, height: u64) -> BlockHeader {
+    BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("non-zero height"),
+        state.view().latest_block_hash(),
+        None,
+        height,
+        0,
+    )
+}
 fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
+    setup_state_with(def_id, receiver_id, |_| {})
+}
+/// Apply the authenticated genesis with the plain-voting policy fixed before signing.
+///
+/// The genesis also authors the ordinary signing policy used by the funding helper's account
+/// admission.
+fn setup_state_with(
+    def_id: &AssetDefinitionId,
+    receiver_id: &AccountId,
+    configure: impl FnOnce(&mut Governance),
+) -> State {
     let alice_id = ALICE_ID.clone();
     let escrow_id = BOB_ID.clone();
     let wonderland: iroha_model_base::domain::DomainId =
@@ -61,17 +88,16 @@ fn setup_state(def_id: &AssetDefinitionId, receiver_id: &AccountId) -> State {
         [alice_asset, escrow_asset, receiver_asset],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let mut state = State::new_for_testing(world, kura, query_handle);
-    let mut gov_cfg = state.gov.clone();
+    let mut gov_cfg = certified_state(World::default()).gov.clone();
     gov_cfg.plain_voting_enabled = true;
     gov_cfg.voting_asset_id = def_id.clone();
     gov_cfg.min_bond_amount = 10_u64.into();
     gov_cfg.bond_escrow_account = escrow_id.clone();
     gov_cfg.slash_receiver_account = receiver_id.clone();
-    state.set_gov(gov_cfg);
-    state
+    configure(&mut gov_cfg);
+    let mut config = TestChainConfig::new(world, 0);
+    config.governance = Some(gov_cfg);
+    certified_state_with(config)
 }
 fn grant_governance_perms(
     tx: &mut iroha_core::state::StateTransaction<'_, '_>,
@@ -108,8 +134,8 @@ fn seed_plain_referendum(
     tx.world.governance_referenda_mut().insert(
         referendum_id.to_string(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 1,
-            h_end: 5,
+            h_start: 2,
+            h_end: 6,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
             plain_context,
@@ -155,8 +181,6 @@ fn lock_slash_restitute(
 }
 #[test]
 fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
-    // Direct retained-custody movements share the execution witness recorder.
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let (receiver_id, _) = gen_account_in("wonderland");
     let def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
@@ -164,11 +188,14 @@ fn manual_slash_and_restitution_move_bonds_and_record_ledger() {
             "xor".parse().unwrap(),
         );
     let state = setup_state(&def_id, &receiver_id);
+    // Direct retained-custody movements share the execution witness recorder;
+    // the State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let alice_id = ALICE_ID.clone();
     let referendum_id = "rid-slash";
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
+    // The first ordinary block after the authenticated genesis.
+    let mut sblock = state.block(ordinary_header(&state, 2));
+    let mut stx = sblock.transaction_for_fastpq_testing(governance_call());
     grant_governance_perms(&mut stx, referendum_id, &alice_id);
     seed_plain_referendum(&mut stx, referendum_id);
     lock_slash_restitute(&mut stx, referendum_id, &alice_id);
@@ -216,16 +243,19 @@ fn frozen_units_reject_fractional_slash_and_accept_majority_and_full_restitution
     use iroha_data_model::isi::governance::{
         CastPlainBallot, RestituteGovernanceLock, SlashGovernanceLock,
     };
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let (receiver, _) = gen_account_in("wonderland");
     let definition = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal").unwrap(),
         "slash".parse().unwrap(),
     );
     let state = setup_state(&definition, &receiver);
+    // The State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let id = "frozen-slash-units";
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut tx = block.transaction();
+    // The first ordinary block after the authenticated genesis.
+    let ballot_height = 2;
+    let mut block = state.block(ordinary_header(&state, ballot_height));
+    let mut tx = block.transaction_for_fastpq_testing(governance_call());
     grant_governance_perms(&mut tx, id, &ALICE_ID);
     seed_plain_referendum(&mut tx, id);
     CastPlainBallot {
@@ -285,7 +315,10 @@ fn frozen_units_reject_fractional_slash_and_accept_majority_and_full_restitution
             .unwrap();
         let restored: iroha_core::state::GovernanceLocksForReferendum =
             norito::decode_canonical(&norito::encode_canonical(locks).unwrap()).unwrap();
-        assert!(iroha_core::state::plain_governance_tally(record, Some(&restored), 1).is_ok());
+        assert!(
+            iroha_core::state::plain_governance_tally(record, Some(&restored), ballot_height)
+                .is_ok()
+        );
         assert_eq!(balance(&tx, &BOB_ID), remaining.into());
         assert_eq!(balance(&tx, &receiver), total_slashed.into());
     }
@@ -312,8 +345,12 @@ fn frozen_units_reject_fractional_slash_and_accept_majority_and_full_restitution
     assert_eq!(balance(&tx, &receiver), 0_u64.into());
     let record = tx.world.governance_referenda().get(id).unwrap();
     assert_eq!(
-        iroha_core::state::plain_governance_tally(record, tx.world.governance_locks().get(id), 1)
-            .unwrap(),
+        iroha_core::state::plain_governance_tally(
+            record,
+            tx.world.governance_locks().get(id),
+            ballot_height
+        )
+        .unwrap(),
         [9, 0, 0]
     );
 }
@@ -328,7 +365,6 @@ fn restitution_rechecks_aggregate_capacity_and_preserves_closed_decision() {
             governance::{CastPlainBallot, RestituteGovernanceLock, SlashGovernanceLock},
         },
     };
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let (receiver, _) = gen_account_in("wonderland");
     let (second, _) = gen_account_in("wonderland");
     let (third, _) = gen_account_in("wonderland");
@@ -336,14 +372,17 @@ fn restitution_rechecks_aggregate_capacity_and_preserves_closed_decision() {
         DomainId::try_new("wonderland", "universal").unwrap(),
         "capacity".parse().unwrap(),
     );
-    let mut state = setup_state(&definition, &receiver);
-    let mut governance = state.gov.clone();
-    governance.conviction_step_blocks = 1;
-    governance.max_conviction = u64::MAX;
-    state.set_gov(governance);
+    let state = setup_state_with(&definition, &receiver, |governance| {
+        governance.conviction_step_blocks = 1;
+        governance.max_conviction = u64::MAX;
+    });
+    // The State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let id = "restitution-capacity";
     let bond = Quantity::from(1_u128 << 126);
-    let duration = u64::MAX - 2;
+    // The first ordinary block after genesis is H=2; its ballots lock through u64::MAX - 1.
+    let ballot_height = 2;
+    let duration = u64::MAX - 1 - ballot_height;
     let ballot = |owner: &AccountId| CastPlainBallot {
         referendum_id: id.into(),
         direction: 0,
@@ -371,8 +410,8 @@ fn restitution_rechecks_aggregate_capacity_and_preserves_closed_decision() {
     };
     let weight;
     {
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut tx = block.transaction();
+        let mut block = state.block(ordinary_header(&state, ballot_height));
+        let mut tx = block.transaction_for_fastpq_testing(governance_call());
         grant_governance_perms(&mut tx, id, &ALICE_ID);
         seed_plain_referendum(&mut tx, id);
         Mint::asset_quantity(
@@ -447,7 +486,7 @@ fn restitution_rechecks_aggregate_capacity_and_preserves_closed_decision() {
             plain_governance_tally(
                 tx.world.governance_referenda().get(id).unwrap(),
                 tx.world.governance_locks().get(id),
-                1
+                ballot_height
             )
             .unwrap(),
             [weight * 2, 0, 0]
@@ -457,21 +496,23 @@ fn restitution_rechecks_aggregate_capacity_and_preserves_closed_decision() {
         tx.apply();
         block.commit_world_overlay_for_testing().unwrap();
     }
-    let mut block = state.block(BlockHeader::new(nonzero!(6_u64), None, None, 0, 0));
-    let mut tx = block.transaction();
+    // The referendum window ends at H=6, so H=7 starts with the real closing transition.
+    let close_height = 7;
+    let mut block = state.block(ordinary_header(&state, close_height));
+    let mut tx = block.transaction_for_fastpq_testing(governance_call());
     let closed = tx.world.governance_referenda().get(id).unwrap().clone();
     assert!(matches!(
         closed.plain_result,
         PlainVotingResultV1::Decided(_)
     ));
     assert_eq!(
-        plain_governance_tally(&closed, tx.world.governance_locks().get(id), 6).unwrap(),
+        plain_governance_tally(&closed, tx.world.governance_locks().get(id), close_height).unwrap(),
         [weight, 0, 0]
     );
     restitution.execute(&ALICE_ID, &mut tx).unwrap();
     assert_eq!(*tx.world.governance_referenda().get(id).unwrap(), closed);
     assert_eq!(
-        plain_governance_tally(&closed, tx.world.governance_locks().get(id), 6).unwrap(),
+        plain_governance_tally(&closed, tx.world.governance_locks().get(id), close_height).unwrap(),
         [weight, 0, 0]
     );
     assert_eq!(balance(&tx, &BOB_ID), bond.try_add(&bond).unwrap());

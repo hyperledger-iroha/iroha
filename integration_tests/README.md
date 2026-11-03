@@ -106,6 +106,10 @@ This crate hosts cross-component tests for Iroha.
 - For WSL or memory-constrained VMs, first size WSL memory/swap/host disk headroom appropriately; use `scripts/run_full_tests.sh --wsl-safe --target-dir /tmp/iroha-wsl-tests` only when you still need a conservative local run. This mode runs non-integration workspace tests one package at a time, sets `CARGO_INCREMENTAL=0`, serializes network tests, writes resource snapshots to `<target-dir>/run_full_tests_resources.log`, and refuses to start the next Cargo step when `MemAvailable` is below `4096` MiB unless overridden with `--min-available-mib`.
 - For faster local full runs, `scripts/run_full_tests.sh --fast` routes all cargo calls through `scripts/cargo_fast.sh`; add `--fast-zero-debug` and `--no-incremental` when you want the more aggressive local-throughput mode.
 
+### Native Tides two-partition acceptance
+
+`IROHA_TEST_REQUIRE_NETWORK=1 cargo test --locked -p integration_tests --test core_api tides_native_two_partition:: -- --nocapture --test-threads=1` deploys genuine compiled Kotodama/IVM to four validator processes. One coordinator holds two logical area namespaces; this is not independent consensus roots or parallel partition execution. Finite native time schedules advance movement, combat and worker economics while no player writes or execution prover runs. One validator is stopped before the scheduled atomic unit transfer, then cold-restarted from its existing storage. The test checks both areas, exact work-budget debits, conservation, rejected-transfer rollback and replay rejection on every peer, and verifies native consensus finality against signed genesis. Use same-candidate prebuilt `iroha3d` and `iroha` via `TEST_NETWORK_BIN_IROHAD` and `TEST_NETWORK_BIN_IROHA`, with `IROHA_TEST_SKIP_BUILD=1`. Skipped network startup fails this scenario. The application's finite work counter is a prototype liability bound, not a qualified native fee settlement path, a complete RTS kernel or a live-XOR launch claim.
+
 ### Autonomous two-bank AMX acceptance
 
 The ignored `core_api` tests in `native_amx_network` require twelve actual
@@ -629,3 +633,55 @@ binding covers those openings; cold children never regenerate hybrid keys from f
 The original-note component test reopens and validates those same openings in a separate process,
 retains identical reservation bytes, and refuses a valid opening for another authority context
 before publishing any wallet state.
+
+### Independent-root Tides unit transport
+
+`tides_independent_roots::tides_independent_roots_native_restart` in `core_api`
+starts eight actual validators: two separate four-validator global-root networks.
+It installs an immutable common world/kernel and authenticates each peer from its
+signed genesis and actual H2. A pinned, bounded IVM artifact advances a unit;
+export removes it irreversibly and commits an ordinary-write receipt. Native
+destination validators fetch and verify that receipt, then pay ordinary fees to
+import it with their existing validator identities. There is no relay wallet,
+operator journal, player keeper or execution prover.
+
+After installing finite schedules, the test issues no player writes while one
+destination validator is stopped before export and restarted after import. It
+checks exact HP/position/work conservation and all eight native finality views.
+Post-observation duplicate delivery and a complete destination restart test the
+persisted inbox. This is independent-root movement and transfer evidence, not a
+full combat benchmark, execution-proof qualification or production native fee
+escrow. The earlier four-validator combat test has one State and is reported
+separately.
+
+The unit prototype deliberately does not claim unconditional delivery liveness:
+there is no certified destination slot reservation yet. A full 64-unit destination
+or permanently exhausted 256-receipt table refuses import, leaving the source
+irreversibly exported rather than duplicating it. The restart fixture provides
+available capacity. Production needs reservation and retention protocols, foreign
+committee handoff, and native fee funding before this can serve an open world.
+
+Native Time matches overdue occurrences by trigger ID, not global chronological
+order. The four-validator fixture therefore uses explicit pre/transfer/post IDs:
+nine pre-advances per area, then transfer, then 47 post-advances per area. This
+keeps the source guard at 4 HP and source unit at 98 HP at transfer; the destination
+ends at 95 HP after killing its guard and completing a 60-second logical hold.
+The independent-root source similarly orders eight moves before export. Its
+destination grants 64 attempts for 16 successful advances, preserving the finite
+24-step work allowance through temporary pre-import refusals. These fixtures do
+not qualify a production chronological multi-area dispatcher or its output quotas.
+
+Time progress currently reuses the internal SCCP Keepalive duty, its enabled
+configuration and node-local generated Ed25519 credential. The consensus keys
+are BLS-normal and cannot replace that credential without changing Keepalive's
+authenticated signer policy. Unit-import delivery separately uses the existing
+validator key and ordinary fees. No Tides execution proof is supplied; the
+validator binary's unrelated background FastPQ worker may still be active.
+
+The independent-root test requires `IROHA_TEST_NETWORK_PARALLELISM=2`,
+`IROHA_TEST_SERIALIZE_NETWORKS` unset, an isolated `IROHA_TEST_NETWORK_PERMIT_DIR`
+and `--test-threads=1`. Each `NetworkBuilder::build()` takes its own file permit;
+the scenario's in-process serial guard does not replace those two permits. Wrong
+settings fail immediately rather than hanging on the second root. The separate
+four-validator fixture needs one permit and logs the SHA-256 of its exact compiled
+and deployed artifact for comparison with the component benchmark.

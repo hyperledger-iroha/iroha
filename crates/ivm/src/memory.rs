@@ -11,6 +11,7 @@
 //! * **Stack** – starts at `0x0030_0000`; ABI V1 derives a deterministic
 //!   64&nbsp;KiB–4&nbsp;MiB active limit from the invocation gas budget.
 use crate::{
+    branch_hint::{likely, unlikely},
     byte_merkle_tree::ByteMerkleTree,
     error::{Perm, VMError},
     execution_memory::{ExecutionBuffer, ExecutionMemoryLease, ExecutionMemoryPlan},
@@ -18,13 +19,13 @@ use crate::{
         DiagnosticInitialMemoryState, DiagnosticMemoryAccessKind, DiagnosticMemoryAccessRecorder,
     },
     merkle_utils::compute_memory_leaf_digest,
+    metrics::MemoryCommitPath,
     stack_policy::IvmStackPolicy,
 };
 use iroha_allocation::AllocationBudget;
 use iroha_crypto::{
     CompactMerkleProof, Hash, HashOf, MerkleProof, MerkleTree, MerkleTreeCommitment,
 };
-use likely_stable::{likely, unlikely};
 use parking_lot::Mutex;
 use std::{
     convert::TryInto,
@@ -335,44 +336,22 @@ impl Memory {
         // Heuristic: if more than half the leaves are dirty, prefer a full
         // accelerated leaf recompute when available.
         let total_leaves = self.tree.leaf_count();
-        let large_update = self.dirty_chunks.len() >= total_leaves.div_ceil(2);
-        let dirty_count = self.dirty_chunks.len() as f64;
-        let mut commit_path = "incremental";
-        if large_update && self.tree.recompute_all_leaves_accel(&self.data) {
-            self.root = self.tree.root_hash();
-            self.dirty_chunks.clear();
-            self.dirty = false;
-            commit_path = "accel";
-            let metrics = iroha_telemetry::metrics::global_or_default();
-            metrics
-                .ivm_memory_commit_ms
-                .with_label_values(&[commit_path])
-                .observe(started_at.elapsed().as_secs_f64() * 1_000.0);
-            metrics
-                .ivm_memory_commit_dirty_chunks
-                .with_label_values(&[commit_path])
-                .observe(dirty_count);
-            return;
-        }
-        if large_update {
+        let dirty_chunks = self.dirty_chunks.len();
+        let large_update = dirty_chunks >= total_leaves.div_ceil(2);
+        let commit_path = if large_update && self.tree.recompute_all_leaves_accel(&self.data) {
+            MemoryCommitPath::Accel
+        } else if large_update {
             self.tree.recompute_all_leaves_parallel(&self.data);
-            commit_path = "full_rebuild";
+            MemoryCommitPath::FullRebuild
         } else {
             self.tree
                 .update_dirty_leaves_from_bytes(&self.data, &self.dirty_chunks);
-        }
+            MemoryCommitPath::Incremental
+        };
         self.root = self.tree.root_hash();
         self.dirty_chunks.clear();
         self.dirty = false;
-        let metrics = iroha_telemetry::metrics::global_or_default();
-        metrics
-            .ivm_memory_commit_ms
-            .with_label_values(&[commit_path])
-            .observe(started_at.elapsed().as_secs_f64() * 1_000.0);
-        metrics
-            .ivm_memory_commit_dirty_chunks
-            .with_label_values(&[commit_path])
-            .observe(dirty_count);
+        crate::metrics::record_memory_commit(commit_path, started_at.elapsed(), dirty_chunks);
     }
     /// Commit pending writes by hashing only the dirty chunks if the memory has
     /// been modified since the last commit.

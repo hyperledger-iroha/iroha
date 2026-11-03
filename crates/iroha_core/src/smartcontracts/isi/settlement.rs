@@ -1454,9 +1454,9 @@ mod tests {
     };
     use iroha_model_base::domain::DomainId;
     use iroha_model_base::metadata::Metadata;
+    use iroha_primitives::nonzero;
     use iroha_primitives::numeric::{Numeric, NumericSpec, Quantity};
     use iroha_test_samples::{ALICE_ID, BOB_ID, CARPENTER_ID, SAMPLE_GENESIS_ACCOUNT_ID};
-    use nonzero_ext::nonzero;
     use std::collections::BTreeSet;
     fn quantity(value: &str) -> Quantity {
         value

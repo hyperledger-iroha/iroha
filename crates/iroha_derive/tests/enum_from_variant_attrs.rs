@@ -1,5 +1,6 @@
 //! Compile-test exercising the `FromVariant` derive attributes.
-use impls::impls;
+//!
+//! Included by `container_enum_from_variant.rs`, which defines `impls!`.
 struct Variant1;
 struct Variant2;
 struct Variant3;

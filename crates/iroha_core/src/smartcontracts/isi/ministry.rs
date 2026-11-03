@@ -71,7 +71,7 @@ mod tests {
         prelude::AccountId,
         transaction::SignedTransaction,
     };
-    use nonzero_ext::nonzero;
+    use iroha_primitives::nonzero;
     fn sample_proposal(proposal_id: &str) -> AgendaProposalV1 {
         AgendaProposalV1 {
             version: AGENDA_PROPOSAL_VERSION_V1,

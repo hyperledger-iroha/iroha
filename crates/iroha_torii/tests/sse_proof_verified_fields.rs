@@ -42,7 +42,10 @@ fn proof_verified_filter_uri() -> String {
     let filter = iroha_torii::filter::FilterExpr::from_json_value(filter_value)
         .expect("valid filter")
         .to_string();
-    format!("/v1/events/sse?filter={}", urlencoding::encode(&filter))
+    format!(
+        "/v1/events/sse?filter={}",
+        iroha_torii::test_utils::percent_encode(&filter)
+    )
 }
 /// Emit a non-matching and matching proof verification event into the broadcast channel.
 fn emit_sample_proof_events(events: &iroha_core::EventsSender) {

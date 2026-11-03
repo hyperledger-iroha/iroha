@@ -1,9 +1,6 @@
-use crate::{Outcome, RunArgs, tui};
+use crate::{Outcome, RunArgs, terminal_style::Style, tui};
 use clap::{Args as ClapArgs, Subcommand};
-use color_eyre::{
-    eyre::{Result, eyre},
-    owo_colors::OwoColorize,
-};
+use color_eyre::eyre::{Result, eyre};
 use iroha_data_model::{account::NewAccount, asset::AssetId, domain::Domain};
 use iroha_fs::FileMetadata;
 use iroha_genesis::RawGenesisTransaction;
@@ -497,7 +494,7 @@ impl<'map> NoritoToRustDecoder<'map> {
             writeln!(
                 output,
                 "{}:\n{}",
-                type_name.as_str().italic().cyan(),
+                Style::CyanItalic.apply(type_name),
                 formatted
             )
             .map_err(|error| eyre!(error))?;
@@ -505,8 +502,8 @@ impl<'map> NoritoToRustDecoder<'map> {
         }
         match matches {
             0 => writeln!(output, "No compatible types found"),
-            1 => writeln!(output, "{} compatible type found", "1".bold()),
-            n => writeln!(output, "{} compatible types found", n.to_string().bold()),
+            1 => writeln!(output, "{} compatible type found", Style::Bold.apply(1)),
+            n => writeln!(output, "{} compatible types found", Style::Bold.apply(n)),
         }
         .map_err(|error| eyre!(error))?;
         Ok(output.finish())
@@ -576,8 +573,8 @@ fn list_types<W: io::Write>(map: &ConverterMap, writer: &mut W) -> Result<()> {
     }
     match map.len() {
         0 => writeln!(writer, "No type is supported"),
-        1 => writeln!(writer, "{} type is supported", "1".bold()),
-        n => writeln!(writer, "{} types are supported", n.to_string().bold()),
+        1 => writeln!(writer, "{} type is supported", Style::Bold.apply(1)),
+        n => writeln!(writer, "{} types are supported", Style::Bold.apply(n)),
     }
     .map_err(Into::into)
 }

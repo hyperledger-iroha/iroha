@@ -54,7 +54,7 @@ macro_rules! built_in_wire_id_with_scope {
     not(test),
     allow(
         unused_macro_rules,
-        reason = "the only instruction added after the frozen baseline is a governance one; the first other addition uses the tolerant forms"
+        reason = "each form serves the payload shape of a future registration; the slice-tolerant form has no user yet"
     )
 )]
 macro_rules! built_in_wire_id {
@@ -137,6 +137,13 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(asset_fi_context::AssertAssetFiTransferReceiptV1 => "iroha.asset.fi.transfer_receipt.assert.v1"),
     built_in_wire_id!(retail_daily_limit::BindRetailIdentityV1 => "iroha.asset.retail_day.identity.bind.v1"),
     built_in_wire_id!(retail_daily_limit::RetailMonetaryMovementV1 => "iroha.asset.retail_day.monetary_movement.v1"),
+    // Added after the frozen baseline by the `iroha.game_partition.v1` addition.
+    built_in_wire_id!(crate::isi::game_partition::InstallGamePartitionV1 => "iroha.game_partition.install.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::game_partition::RegisterGamePartitionPeerV1 => "iroha.game_partition.register_peer.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::game_partition::SeedGameUnitV1 => "iroha.game_partition.seed.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::game_partition::AdvanceGameUnitV1 => "iroha.game_partition.advance.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::game_partition::ExportGameUnitV1 => "iroha.game_partition.export.v1", register, tolerant),
+    built_in_wire_id!(crate::isi::game_partition::ImportGameUnitV1 => "iroha.game_partition.import.v1", register, tolerant),
     built_in_wire_id!(crate::isi::sumeragi_amx::RegisterAmxDataspaceV1 => "iroha.sumeragi.amx.register_dataspace.v1", register),
     built_in_wire_id!(crate::isi::private_dataspace::RegisterPrivateDataspace => "iroha.private_dataspace.register.v1", register),
     built_in_wire_id!(crate::isi::private_dataspace::AnchorPrivateDataspace => "iroha.private_dataspace.anchor.v1", register),

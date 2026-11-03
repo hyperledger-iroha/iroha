@@ -15,8 +15,6 @@ use iroha_crypto::{HashOf, MerkleProof, MerkleTree};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
 use std::ops::{Deref, DerefMut};
-#[cfg(test)]
-use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One fixed leaf backing. Cold nested VMs keep their prepaid execution charge
 /// attached to these digests through idle retention and cache eviction.
@@ -90,19 +88,11 @@ pub struct ByteMerkleTree {
     leaves: Mutex<MerkleLeaves>,
     nodes: Mutex<CanonicalNodes>,
 }
-// Test-only observation counters; production exposes the same events via telemetry.
-#[cfg(test)]
-static MERKLE_REBUILDS: AtomicU64 = AtomicU64::new(0);
-#[cfg(test)]
-static MERKLE_INCREMENTAL_LEAF_UPDATES: AtomicU64 = AtomicU64::new(0);
 /// Return cumulative completed canonical-node refreshes and incremental leaf updates.
 /// Initial construction and independent template copies do not increment these counters.
 #[cfg(test)]
 pub fn merkle_update_counters() -> (u64, u64) {
-    (
-        MERKLE_REBUILDS.load(Ordering::Relaxed),
-        MERKLE_INCREMENTAL_LEAF_UPDATES.load(Ordering::Relaxed),
-    )
+    crate::metrics::merkle_update_totals()
 }
 impl ByteMerkleTree {
     /// Fixed independent leaf and canonical-node backing demand.
@@ -184,11 +174,7 @@ impl ByteMerkleTree {
         if nodes.is_current() || !nodes.refresh(&self.leaves.lock()) {
             return;
         }
-        #[cfg(test)]
-        MERKLE_REBUILDS.fetch_add(1, Ordering::Relaxed);
-        iroha_telemetry::metrics::global_or_default()
-            .ivm_merkle_rebuild_total
-            .inc();
+        crate::metrics::record_merkle_rebuild();
     }
 
     #[cfg(any(all(target_os = "macos", feature = "metal"), feature = "cuda"))]
@@ -518,12 +504,7 @@ impl ByteMerkleTree {
         }
         if nodes.is_current() {
             nodes.update_marked_leaf_digests(&leaves, dirty.words());
-            let updated = dirty.len() as u64;
-            #[cfg(test)]
-            MERKLE_INCREMENTAL_LEAF_UPDATES.fetch_add(updated, Ordering::Relaxed);
-            iroha_telemetry::metrics::global_or_default()
-                .ivm_merkle_incremental_leaf_updates_total
-                .inc_by(updated);
+            crate::metrics::record_merkle_incremental_leaf_updates(dirty.len() as u64);
         }
     }
     /// Return both the Merkle root and the authentication path for `index`.
@@ -563,8 +544,7 @@ impl ByteMerkleTree {
         if let Some(root) = policy.try_metal(leaves_count, || {
             crate::vector::metal_root_from_bytes_auto(data, chunk)
         }) {
-            let metrics = iroha_telemetry::metrics::global_or_default();
-            metrics.merkle_root_gpu_total.inc();
+            crate::metrics::record_merkle_root(crate::metrics::MerkleRootBackend::Gpu);
             return Ok(root);
         }
         #[cfg(feature = "cuda")]
@@ -575,8 +555,7 @@ impl ByteMerkleTree {
                 None
             }
         }) {
-            let metrics = iroha_telemetry::metrics::global_or_default();
-            metrics.merkle_root_gpu_total.inc();
+            crate::metrics::record_merkle_root(crate::metrics::MerkleRootBackend::Gpu);
             return Ok(root);
         }
         // CPU fallback
@@ -587,8 +566,7 @@ impl ByteMerkleTree {
                 ),
                 _ => VMError::MemoryOutOfBounds,
             })?;
-        let metrics = iroha_telemetry::metrics::global_or_default();
-        metrics.merkle_root_cpu_total.inc();
+        crate::metrics::record_merkle_root(crate::metrics::MerkleRootBackend::Cpu);
         Ok(*canonical.root().expect("non-empty").as_ref())
     }
 }

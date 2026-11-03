@@ -66,10 +66,11 @@ impl DeepRelation for Tagged<'_> {
     }
 }
 
-/// A sealed wrapper that declares another geometry than its arithmetic owner.
+/// A sealed wrapper that can diverge from its arithmetic owner's declaration.
 struct Misdeclared<'a> {
     relation: &'a CompactTransferAir,
     schema: FixedAirSchema,
+    statement: Option<&'a [u8]>,
 }
 
 impl FixedAir for Misdeclared<'_> {
@@ -77,7 +78,8 @@ impl FixedAir for Misdeclared<'_> {
         self.schema
     }
     fn statement_bytes(&self) -> &[u8] {
-        self.relation.statement_bytes()
+        self.statement
+            .unwrap_or_else(|| self.relation.statement_bytes())
     }
     fn evaluate(&self, point: u64, current: &[u64], next: &[u64]) -> Result<Vec<u64>> {
         self.relation.evaluate(point, current, next)
@@ -727,6 +729,7 @@ fn sealed_view_reports_the_relation_geometry_and_the_engine_refuses_a_misdeclare
         let relation = Misdeclared {
             relation: &air,
             schema: changed,
+            statement: None,
         };
         // The view carries the wrapper's own declaration; it does not replace
         // it with the engine's constants.
@@ -746,7 +749,53 @@ fn sealed_view_reports_the_relation_geometry_and_the_engine_refuses_a_misdeclare
             ProducerPlan::new(&relation, ProducerLimits::default()).is_err(),
             "{field}"
         );
+        assert!(
+            crate::backend::deep_binding::Context::preflight_relation(&relation).is_err(),
+            "{field}"
+        );
+        assert!(
+            crate::backend::deep_binding::Context::for_relation(&relation).is_err(),
+            "{field}"
+        );
     }
+}
+
+#[test]
+fn transcript_context_uses_outer_view_identity_and_rejects_statement_drift() {
+    use crate::backend::deep_binding::{BindingError, Context, Oracle};
+    use fastpq_isi::keccak256::Sha3Digest256V1 as Digest;
+
+    let air = CompactTransferAir::new(&statement(), Some(b"typed context statement")).unwrap();
+    let tagged = Tagged {
+        relation: &air,
+        identity: "fastpq:q77:typed-context-test:v1",
+    };
+    let view = SealedView::new(&tagged);
+    assert_eq!(view.schema().identity, tagged.identity);
+    assert_eq!(view.statement_bytes(), air.statement_bytes());
+    Context::preflight_relation(&tagged).unwrap();
+    let root = |context: Context| {
+        context
+            .hash_parent(Oracle::Row, 1, 0, Digest::default(), Digest::default())
+            .unwrap()
+    };
+    let tagged_root = root(Context::for_relation(&tagged).unwrap());
+    assert_ne!(tagged_root, root(Context::for_relation(&air).unwrap()));
+    assert_eq!(tagged_root, root(Context::for_relation(&tagged).unwrap()));
+
+    let mismatch = Misdeclared {
+        relation: &air,
+        schema: air.schema(),
+        statement: Some(b"different complete statement"),
+    };
+    assert!(matches!(
+        Context::preflight_relation(&mismatch),
+        Err(BindingError::Context)
+    ));
+    assert!(matches!(
+        Context::for_relation(&mismatch),
+        Err(BindingError::Context)
+    ));
 }
 
 #[test]

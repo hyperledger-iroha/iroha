@@ -2,9 +2,10 @@
 //!
 //! - `iroha3d --check-config --json` prints [`ConfigCompatibilityV1`]: the values peers and the
 //!   signed genesis bind, computed from the real rendered configuration.
-//! - `iroha3d --check-storage` prints [`StorageCheckReportV1`]: the stopped node's Kura tip, the
-//!   Kura hash at the newest snapshot's height and a snapshot-restore dry run, all read with this
-//!   build's decoders.
+//! - `iroha3d --check-storage` prints [`StorageCheckReportV1`]: the stopped node's durable Kura
+//!   tip, after every retained block decoded with this build's decoder. Whether this build
+//!   restores the node's snapshot and reproduces its blocks is `--check-replay`'s check
+//!   ([`crate::replay_check`]).
 //!
 //! Neither probe opens runtime-only secrets (runtime signer and beacon
 //! credential), binds a socket or mutates node storage. Both parse the configuration, which reads
@@ -15,33 +16,20 @@ use crate::{
     Config, GenesisBlock, MainError, build_consensus_config_caps,
     build_signed_genesis_consensus_config_caps, consensus_caps_from_genesis,
     freeze_lane_compliance_for_startup_replay, freeze_lane_manifests_for_startup_replay,
-    snapshot_mode_allows_restore,
 };
 use error_stack::{Report, ResultExt as _};
 use iroha_config::kura::InitMode;
-use iroha_core::{
-    kura::{BlockCount, BlockIndex, BlockStore, Kura},
-    query::store::LiveQueryStore,
-    snapshot::{TryReadError, try_read_snapshot_with_limits},
-};
+use iroha_core::kura::{BlockIndex, BlockStore, Kura};
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::sumeragi::PROTOCOL_VERSION;
 use iroha_data_model::{
     NetworkId,
     block::{BlockHeader, consensus::MAX_EXECUTED_BLOCK_WIRE_BYTES, decode_framed_signed_block},
 };
-use iroha_futures::supervisor::ShutdownSignal;
 use norito::derive::{JsonDeserialize, JsonSerialize};
 use std::{io::ErrorKind, num::NonZeroUsize, path::Path, sync::Arc};
 
 type ReportResult<T, C> = core::result::Result<T, Report<C>>;
-/// Height and tip hash of a restored snapshot, or `None` when there is nothing to restore.
-type RestoredSnapshotV1 = Option<(u64, Option<HashOf<BlockHeader>>)>;
-
-/// `snapshot_restore_dry_run` value of a restore that succeeded or had nothing to restore.
-pub const DRY_RUN_OK: &str = "ok";
-/// `snapshot_restore_dry_run` value of a restore this build cannot perform.
-pub const DRY_RUN_ERROR: &str = "error";
 
 /// Native node and effective local configuration derived from an executed signed genesis.
 ///
@@ -118,22 +106,6 @@ pub struct StorageCheckReportV1 {
     pub tip_height: u64,
     /// Hash of the durable tip block.
     pub tip_hash: Option<String>,
-    /// Height of the newest snapshot this build restored, when one exists.
-    pub snapshot_height: Option<u64>,
-    /// Kura's block hash at `snapshot_height`, which commits to the whole prefix.
-    pub prefix_hash_at_snapshot_height: Option<String>,
-    /// [`DRY_RUN_OK`] or [`DRY_RUN_ERROR`].
-    pub snapshot_restore_dry_run: String,
-    /// Why the dry run failed, when it did.
-    pub snapshot_restore_error: Option<String>,
-}
-
-impl StorageCheckReportV1 {
-    /// Whether the store opened and the snapshot restore dry run succeeded.
-    #[must_use]
-    pub fn is_ok(&self) -> bool {
-        self.snapshot_restore_dry_run == DRY_RUN_OK
-    }
 }
 
 fn hex_hash(hash: impl Into<Hash>) -> String {
@@ -250,29 +222,28 @@ struct KuraTipV1 {
     hash: Option<HashOf<BlockHeader>>,
 }
 
-/// Inspect the stopped node's store read-only and rehearse its snapshot restore.
+/// Inspect the stopped node's store read-only.
 ///
 /// Kura is opened in emergency-Fast mode, which takes the exclusive store-root lock (refusing a
 /// store a running node owns), validates the durable commit marker and maps the hash journal
 /// read-only without repairing, creating or publishing anything. Every retained block body up to
 /// the tip is then decoded with this build's decoder and checked against the hash journal and its
-/// parent. The newest snapshot is checked using a scratch Kura in a temporary directory; the real
-/// store is only read. A positive-height snapshot reports that native execution replay is required.
+/// parent.
+///
+/// A snapshot is authenticated only by its certified successor and the certified chain below it,
+/// which a read-only store cannot be restored against, so `--check-replay` checks snapshot
+/// restore on a copy of the store.
 ///
 /// # Errors
 ///
-/// A description when the Kura store cannot be opened or a stored block cannot be decoded. A
-/// failed snapshot restore is reported in the result instead.
+/// A description when the Kura store cannot be opened or a stored block cannot be decoded.
 pub fn check_storage(config: &Config) -> Result<StorageCheckReportV1, String> {
     let store_root = config.kura.store_dir.resolve_relative_path();
-    let (kura, tip) = match std::fs::symlink_metadata(&store_root) {
-        Err(error) if error.kind() == ErrorKind::NotFound => (
-            None,
-            KuraTipV1 {
-                height: 0,
-                hash: None,
-            },
-        ),
+    let tip = match std::fs::symlink_metadata(&store_root) {
+        Err(error) if error.kind() == ErrorKind::NotFound => KuraTipV1 {
+            height: 0,
+            hash: None,
+        },
         Err(error) => {
             return Err(format!(
                 "cannot inspect Kura store {}: {error}",
@@ -283,50 +254,13 @@ pub fn check_storage(config: &Config) -> Result<StorageCheckReportV1, String> {
             let kura = open_kura_read_only(config)?;
             let tip = durable_tip(&kura)?;
             verify_retained_bodies(&store_root, &kura, tip.height)?;
-            (Some(kura), tip)
+            tip
         }
     };
-    let mut report = StorageCheckReportV1 {
+    Ok(StorageCheckReportV1 {
         tip_height: tip.height,
         tip_hash: tip.hash.map(hex_hash),
-        snapshot_height: None,
-        prefix_hash_at_snapshot_height: None,
-        snapshot_restore_dry_run: DRY_RUN_OK.to_owned(),
-        snapshot_restore_error: None,
-    };
-    let outcome =
-        snapshot_restore_dry_run(config, tip.height, kura.as_deref()).and_then(|restored| {
-            let Some((height, snapshot_tip)) = restored else {
-                return Ok(None);
-            };
-            let kura_hash =
-                NonZeroUsize::new(usize::try_from(height).map_err(|error| error.to_string())?)
-                    .and_then(|height| kura.as_ref()?.get_durable_block_hash(height));
-            if height > 0 && kura_hash.is_none() {
-                return Err(format!(
-                    "Kura has no durable block at snapshot height {height}"
-                ));
-            }
-            if kura_hash != snapshot_tip {
-                return Err(format!(
-                    "the snapshot's block hash at height {height} differs from Kura's"
-                ));
-            }
-            Ok(Some((height, kura_hash)))
-        });
-    match outcome {
-        Ok(Some((height, hash))) => {
-            report.snapshot_height = Some(height);
-            report.prefix_hash_at_snapshot_height = hash.map(hex_hash);
-        }
-        Ok(None) => {}
-        Err(error) => {
-            DRY_RUN_ERROR.clone_into(&mut report.snapshot_restore_dry_run);
-            report.snapshot_restore_error = Some(error);
-        }
-    }
-    drop(kura);
-    Ok(report)
+    })
 }
 
 /// Open the existing store in emergency-Fast mode: lock, marker check, read-only journals.
@@ -429,144 +363,18 @@ fn verify_retained_bodies(store_root: &Path, kura: &Kura, tip_height: u64) -> Re
     Ok(())
 }
 
-/// Restore the newest snapshot into a scratch Kura, exactly as startup would decode it, and
-/// reconcile its retained block hashes with the real Kura as a Strict startup does
-/// ([`reconcile_restored_hashes`]).
-///
-/// Returns the snapshot's height and tip hash, or `None` when restore is disabled or no snapshot
-/// exists (the node would replay Kura from genesis).
-///
-/// Positive-height snapshots fail with `NativeExecutionReplayRequired`: a signed World export
-/// does not authenticate its full state against the native witnessed-write commitment.
-fn snapshot_restore_dry_run(
-    config: &Config,
-    tip_height: u64,
-    kura: Option<&Kura>,
-) -> Result<RestoredSnapshotV1, String> {
-    if !snapshot_mode_allows_restore(config.snapshot.mode) {
-        return Ok(None);
-    }
-    let mut scratch_config = config.kura.clone();
-    scratch_config.init_mode = InitMode::Strict;
-    // The scratch store holds no blocks and lives in a temporary directory; the node's disk
-    // budget governs the real store only.
-    scratch_config.max_disk_usage_bytes = iroha_config::base::util::Bytes(0);
-    let scratch = Kura::new_temporary_with_configured_lane_catalog(
-        &scratch_config,
-        &config.nexus.lane_config,
-        &config.nexus.configured_lane_catalog,
-    )
-    .map_err(|error| format!("cannot create the scratch Kura: {error}"))?;
-    let lane_manifests = freeze_lane_manifests_for_startup_replay(&config.nexus)
-        .map_err(|error| format!("lane manifest registry is not ready: {error}"))?;
-    let live_query_store =
-        LiveQueryStore::from_config(config.live_query_store, ShutdownSignal::new())
-            .into_inert_handle();
-    let verification_key = config
-        .snapshot
-        .verification_public_key
-        .as_ref()
-        .unwrap_or_else(|| config.common.key_pair.public_key());
-    // Mirror startup: restored State owners retain this configured execution pool.
-    let execution_budget =
-        iroha_allocation::AllocationBudget::new(config.pipeline.ivm_execution_max_bytes);
-    let read_buffer_budget =
-        iroha_allocation::AllocationBudget::new(config.snapshot.max_read_buffer_bytes.get());
-    // Supply the real durable height for bounds checking. This never grants a positive-height
-    // snapshot authority to replace native certified execution replay.
-    let block_count = BlockCount(usize::try_from(tip_height).map_err(|error| error.to_string())?);
-    let restored = try_read_snapshot_with_limits(
-        &execution_budget,
-        config.snapshot.store_dir.resolve_relative_path(),
-        &scratch,
-        &lane_manifests,
-        &config.nexus,
-        || live_query_store.clone(),
-        block_count,
-        config.snapshot.merkle_chunk_size_bytes,
-        config.snapshot.max_payload_bytes,
-        config.snapshot.resources,
-        verification_key,
-        &config.common.chain,
-        &NetworkId::from_genesis_hash(config.genesis.expected_hash),
-        &config.zk,
-        #[cfg(feature = "telemetry")]
-        iroha_core::telemetry::StateTelemetry::default(),
-        &read_buffer_budget,
-    );
-    match restored {
-        Ok(state) => {
-            let height =
-                u64::try_from(state.committed_height()).map_err(|error| error.to_string())?;
-            {
-                let view = state
-                    .try_view()
-                    .map_err(|error| format!("the restored snapshot state is invalid: {error}"))?;
-                reconcile_restored_hashes(
-                    view.block_hashes().iter().copied(),
-                    tip_height,
-                    |height| kura.and_then(|kura| kura.get_durable_block_hash(height)),
-                )?;
-            }
-            Ok(Some((height, state.latest_block_hash_fast())))
-        }
-        Err(TryReadError::NotFound) => Ok(None),
-        Err(error) => Err(format!("snapshot restore failed: {error}")),
-    }
-}
-
-/// Compare every block hash a restored snapshot retains with Kura's durable hash at the same
-/// height. A mismatch, a missing retained hash, or a snapshot above Kura's durable tip fails.
-fn reconcile_restored_hashes(
-    snapshot_hashes: impl Iterator<Item = HashOf<BlockHeader>>,
-    kura_height: u64,
-    kura_hash: impl Fn(NonZeroUsize) -> Option<HashOf<BlockHeader>>,
-) -> Result<(), String> {
-    for (height, snapshot_hash) in (1_usize..).zip(snapshot_hashes) {
-        if u64::try_from(height).map_or(true, |height| height > kura_height) {
-            return Err(format!(
-                "snapshot height {height} exceeds Kura's durable height {kura_height}"
-            ));
-        }
-        let height_nz = NonZeroUsize::new(height).expect("heights start at 1");
-        match kura_hash(height_nz) {
-            Some(kura_hash) if kura_hash == snapshot_hash => {}
-            Some(_) => {
-                return Err(format!(
-                    "the snapshot's block hash at height {height} differs from Kura's"
-                ));
-            }
-            None => {
-                return Err(format!(
-                    "Kura has no durable block at height {height}, which the snapshot retains"
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Run `--check-storage`: print the report as Norito JSON and fail when the dry run failed.
+/// Run `--check-storage`: print the report as Norito JSON.
 ///
 /// # Errors
 ///
-/// [`MainError::CheckStorage`] when the store cannot be read or the restore dry run failed (the
-/// report is printed first in the latter case).
+/// [`MainError::CheckStorage`] when the store cannot be read.
 pub fn run_check_storage(config: &Config) -> ReportResult<(), MainError> {
     let report = check_storage(config)
         .map_err(|error| Report::new(MainError::CheckStorage).attach(error))?;
     let json = norito::json::to_json(&report)
         .map_err(|error| Report::new(MainError::CheckStorage).attach(error.to_string()))?;
     println!("{json}");
-    if report.is_ok() {
-        Ok(())
-    } else {
-        Err(Report::new(MainError::CheckStorage).attach(
-            report
-                .snapshot_restore_error
-                .unwrap_or_else(|| "snapshot restore dry run failed".to_owned()),
-        ))
-    }
+    Ok(())
 }
 
 #[cfg(test)]

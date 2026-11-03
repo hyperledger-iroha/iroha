@@ -8,7 +8,7 @@
 use super::*;
 use std::{
     io,
-    os::windows::{ffi::OsStrExt as _, io::AsRawHandle as _, process::CommandExt as _},
+    os::windows::{ffi::OsStrExt as _, io::AsRawHandle as _},
     pin::Pin,
     sync::{Arc, Mutex},
     task::{Context, Poll},
@@ -18,14 +18,7 @@ use tokio::{
     net::windows::named_pipe::{ClientOptions, NamedPipeClient, NamedPipeServer, ServerOptions},
     runtime::{Builder, Runtime},
 };
-use windows_sys::Win32::System::{
-    Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId},
-    Threading::{CREATE_NEW_PROCESS_GROUP, CREATE_NO_WINDOW},
-};
-
-pub(crate) fn detach(command: &mut Command) {
-    command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
-}
+use windows_sys::Win32::System::Pipes::{GetNamedPipeClientProcessId, GetNamedPipeServerProcessId};
 
 fn address(directory: &PrivateDirectory) -> Result<String> {
     directory.revalidate()?;
@@ -80,14 +73,19 @@ fn authenticate_peer(handle: std::os::windows::io::RawHandle, client: bool) -> R
     peer_process_id(handle, client).map(|_| ())
 }
 
-pub(crate) struct Listener {
+/// One current-user named pipe endpoint bound to a private directory.
+pub struct Listener {
     address: String,
     runtime: Arc<Runtime>,
     pending: Mutex<NamedPipeServer>,
 }
 
 impl Listener {
-    pub(crate) fn bind(directory: &PrivateDirectory) -> Result<Self> {
+    /// Create this directory's first pipe instance, refusing another live owner.
+    ///
+    /// # Errors
+    /// Unsafe custody or a native pipe failure.
+    pub fn bind(directory: &PrivateDirectory) -> Result<Self> {
         let runtime = Arc::new(runtime()?);
         let address = address(directory)?;
         let pending = {
@@ -101,7 +99,11 @@ impl Listener {
         })
     }
 
-    pub(crate) fn accept(&self) -> Result<Option<Connection>> {
+    /// Poll for one connection from this user; a refused peer yields `None`.
+    ///
+    /// # Errors
+    /// The listener itself failed.
+    pub fn accept(&self) -> Result<Option<Connection>> {
         let mut pending = self
             .pending
             .lock()
@@ -185,7 +187,8 @@ impl AsyncWrite for PipeStream {
     }
 }
 
-pub(crate) struct Connection {
+/// One authenticated pipe stream on a control endpoint, with its absolute I/O deadline.
+pub struct Connection {
     stream: PipeStream,
     runtime: Arc<Runtime>,
     deadline: Option<Instant>,
@@ -196,11 +199,19 @@ impl Connection {
         self.deadline.unwrap_or_else(|| Instant::now() + IO_TIMEOUT)
     }
 
-    pub(crate) fn receive(&mut self) -> Result<ControlRequest> {
+    /// Read one framed request.
+    ///
+    /// # Errors
+    /// A stream failure, an expired deadline or an invalid frame.
+    pub fn receive(&mut self) -> Result<ControlRequest> {
         self.receive_reply()
     }
 
-    pub(crate) fn reply<T: JsonSerialize>(&mut self, status: &T) -> Result<()> {
+    /// Write one framed reply.
+    ///
+    /// # Errors
+    /// A stream failure, an expired deadline or an oversized frame.
+    pub fn reply<T: JsonSerialize>(&mut self, status: &T) -> Result<()> {
         let deadline = self.io_deadline();
         remaining_io(deadline)?;
         let bytes = encode(status)?;
@@ -252,7 +263,7 @@ impl Connection {
     }
 }
 
-pub(crate) fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> Result<Connection> {
+pub fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> Result<Connection> {
     let deadline = deadline.min(Instant::now() + IO_TIMEOUT);
     remaining_io(deadline)?;
     let runtime = Arc::new(runtime()?);
@@ -286,27 +297,7 @@ pub(crate) fn connect_until(directory: &PrivateDirectory, deadline: Instant) -> 
 
 include!("transport_handoff_windows.rs");
 
-pub(crate) fn request_as<T: JsonDeserialize>(
-    directory: &PrivateDirectory,
-    request: &ControlRequest,
-) -> Result<T> {
-    request_observed_as(directory, request).map_err(RequestFailure::into_error)
-}
-
-pub(crate) fn request_observed_as<T: JsonDeserialize>(
-    directory: &PrivateDirectory,
-    request: &ControlRequest,
-) -> std::result::Result<T, RequestFailure> {
-    let deadline = Instant::now()
-        + if request.action == ControlAction::Down {
-            STOP_OBSERVATION_MAXIMUM
-        } else {
-            IO_TIMEOUT
-        };
-    request_observed_with_deadline(directory, request, deadline)
-}
-
-pub(crate) fn request_observed_with_deadline<T: JsonDeserialize>(
+pub(super) fn request_observed_with_deadline<T: JsonDeserialize>(
     directory: &PrivateDirectory,
     request: &ControlRequest,
     deadline: Instant,
@@ -372,10 +363,13 @@ async fn write_async(stream: &mut (impl AsyncWrite + Unpin), bytes: &[u8]) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{process::Stdio, time::Instant};
+    use std::{
+        process::{Command, Stdio},
+        time::Instant,
+    };
     use tokio::net::windows::named_pipe::NamedPipeClient;
 
-    const CHILD: &str = "managed::transport::native::tests::abandoned_pipe_client_child";
+    const CHILD: &str = "transport::native::tests::abandoned_pipe_client_child";
     const CHILD_DIRECTORY: &str = "IROHA_TEST_ABANDONED_PIPE_DIRECTORY";
 
     #[test]

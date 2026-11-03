@@ -1409,7 +1409,7 @@ fn append_fixed_leakage_memo_field(
     capacity: usize,
 ) -> Result<()> {
     ensure!(
-        !value.is_empty() && value.len() <= capacity && capacity <= usize::from(u16::MAX),
+        !value.is_empty() && value.len() <= capacity && u16::try_from(capacity).is_ok(),
         "leakage memo field is empty or exceeds its fixed capacity"
     );
     output.extend_from_slice(tag);
@@ -1814,6 +1814,13 @@ fn elapsed_ms(started: Instant) -> f64 {
 
 /// Resolve the kernel-owned executable path, never a process display string.
 #[cfg_attr(target_os = "macos", allow(unsafe_code))]
+#[cfg_attr(
+    any(target_os = "linux", target_os = "macos"),
+    expect(
+        clippy::needless_return,
+        reason = "each platform block returns explicitly because the blocks for other targets follow it"
+    )
+)]
 fn executable_for_pid(pid: u32) -> Result<PathBuf> {
     ensure!(
         pid > 0 && i32::try_from(pid).is_ok(),
@@ -2030,6 +2037,11 @@ fn executable_identity_self_child() {
 }
 
 /// Parse the portable ps CPU clock without accepting signed or nonfinite values.
+#[expect(
+    clippy::cast_precision_loss,
+    clippy::suboptimal_flops,
+    reason = "ps reports small whole time units; this diagnostic total tolerates binary64 rounding"
+)]
 fn parse_ps_cpu_time(value: &str) -> Result<f64> {
     let decimal_integer = |part: &str| -> Result<u64> {
         ensure!(
@@ -5020,7 +5032,7 @@ impl FaultContinuousObserverV1 {
                     finalization_allowed,
                 )?;
                 ensure!(
-                    phase_index.map_or(true, |expected| expected == current),
+                    phase_index.is_none_or(|expected| expected == current),
                     "continuous APS observer phase indexes diverged"
                 );
                 phase_index = Some(current);
@@ -7934,7 +7946,7 @@ impl TransparentControlAtomicityObserver {
                 Ok(handle) => handle,
                 Err(error) => {
                     stop.store(true, Ordering::Relaxed);
-                    for handle in handles.drain(..) {
+                    for handle in handles {
                         let _ = handle.join();
                     }
                     return Err(error.into());
@@ -8076,7 +8088,7 @@ fn authenticated_native_history(
             network.network_id(),
             height,
             deadline,
-            |at| Ok(client.get_sumeragi_finality_proof(at, root_scope)?),
+            |at| client.get_sumeragi_finality_proof(at, root_scope),
         )
     })();
     if SmokeDiagnosticScopeV1::capture().is_some() {
@@ -10167,7 +10179,7 @@ fn smoke_registration_snapshot_fixture() -> (FaultStateSnapshotV1, FaultStateSna
             .collect(),
     };
     let mut registered = before.clone();
-    registered.label = "smoke-registered-fixture".to_owned();
+    "smoke-registered-fixture".clone_into(&mut registered.label);
     for observation in &mut registered.validators {
         set_smoke_registration_count(observation, "replicated_staged_locks", 28);
         observation.replicated_staged_lock_commitment = "8".repeat(64);

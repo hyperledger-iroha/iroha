@@ -1,11 +1,13 @@
 //! Plain ballot conviction factor test.
 
+use crate::native_genesis::{certified_state, certified_state_with};
+use iroha_config::parameters::actual::Governance;
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
     state::{State, World},
+    sumeragi::test_chain::TestChainConfig,
 };
+use iroha_crypto::Hash;
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
@@ -17,39 +19,46 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::governance::CanSubmitGovernanceBallot;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::ALICE_ID;
-use nonzero_ext::nonzero;
+/// Apply the authenticated genesis over `world` with a governance policy fixed before signing.
+///
+/// The genesis also authors the ordinary signing policy used by the funding helper's account
+/// admission.
+fn governed_state(world: World, configure: impl FnOnce(&mut Governance)) -> State {
+    let mut governance = certified_state(World::default()).gov.clone();
+    configure(&mut governance);
+    let mut config = TestChainConfig::new(world, 0);
+    config.governance = Some(governance);
+    certified_state_with(config)
+}
+/// An ordinary fixture block after the authenticated genesis at height one.
+fn ordinary_header(state: &State, height: u64) -> BlockHeader {
+    BlockHeader::new(
+        std::num::NonZeroU64::new(height).expect("non-zero height"),
+        state.view().latest_block_hash(),
+        None,
+        height,
+        0,
+    )
+}
+/// Direct ballots execute under one explicit retained invocation, as a signed call does.
+fn ballot_call() -> Hash {
+    Hash::new(b"gov-plain-conviction-ballot")
+}
 #[test]
 fn plain_ballot_conviction_applies() {
     // Build minimal state/transaction
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
-    let mut world = World::with([domain], [account], []);
-    // Explicit prerequisite for this isolated component, not signed-genesis authority.
-    // The funding helper still executes ordinary account admission without defaults.
-    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-        iroha_crypto::Algorithm::Ed25519,
-    ])
-    .expect("explicit governance component signing algorithm");
-    world
-        .set_parameter_for_testing(
-            policy
-                .into_parameter()
-                .expect("canonical governance component policy"),
-        )
-        .expect("admit the governance component's original policy");
-    let mut state = State::new_for_testing(world, kura, query_handle);
-    let mut gov_cfg = state.gov.clone();
-    gov_cfg.plain_voting_enabled = true;
-    gov_cfg.min_bond_amount = 0_u64.into();
-    gov_cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
-    gov_cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
-    state.set_gov(gov_cfg);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut sblock = state.block(header);
-    let mut stx = sblock.transaction();
+    let state = governed_state(World::with([domain], [account], []), |gov_cfg| {
+        gov_cfg.plain_voting_enabled = true;
+        gov_cfg.min_bond_amount = 0_u64.into();
+        gov_cfg.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+        gov_cfg.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+    });
+    // The first ordinary block after the authenticated genesis.
+    let mut sblock = state.block(ordinary_header(&state, 2));
+    let mut stx = sblock.transaction_for_fastpq_testing(ballot_call());
     iroha_core::query::standalone_plain_test_fixture::fund_voter(
         &mut stx,
         &iroha_test_samples::ALICE_ID,
@@ -60,8 +69,8 @@ fn plain_ballot_conviction_applies() {
     stx.world.governance_referenda_mut().insert(
         "ref-conviction".to_string(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 1,
-            h_end: 200,
+            h_start: 2,
+            h_end: 201,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
             plain_context,
@@ -111,34 +120,19 @@ fn plain_ballot_conviction_applies() {
     );
 }
 
+/// The fractional referendum fixtures start at H=2, the first ordinary block after genesis.
 fn funded_fractional_state() -> State {
-    let mut world = World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []);
-    // Explicit prerequisite for this isolated component, not signed-genesis authority.
-    // The funding helper still executes ordinary account admission without defaults.
-    let policy = iroha_data_model::crypto_admission_policy::CryptoAdmissionPolicyV1::new(vec![
-        iroha_crypto::Algorithm::Ed25519,
-    ])
-    .expect("explicit governance component signing algorithm");
-    world
-        .set_parameter_for_testing(
-            policy
-                .into_parameter()
-                .expect("canonical governance component policy"),
-        )
-        .expect("admit the governance component's original policy");
-    let mut state = State::new_for_testing(
-        world,
-        Kura::blank_kura_for_testing(),
-        LiveQueryStore::start_test(),
-    );
-    let mut governance = state.gov.clone();
-    governance.plain_voting_enabled = true;
-    governance.min_bond_amount = 0_u64.into();
-    governance.min_turnout = 1;
-    governance.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
-    governance.slash_receiver_account = iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
-    state.set_gov(governance);
-    state
+    governed_state(
+        World::with([], [Account::new(ALICE_ID.clone()).build(&ALICE_ID)], []),
+        |governance| {
+            governance.plain_voting_enabled = true;
+            governance.min_bond_amount = 0_u64.into();
+            governance.min_turnout = 1;
+            governance.bond_escrow_account = iroha_test_samples::CARPENTER_ID.clone();
+            governance.slash_receiver_account =
+                iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID.clone();
+        },
+    )
 }
 
 #[test]
@@ -146,8 +140,8 @@ fn funded_public_lock_and_custody_reject_retired_json_fields() {
     use iroha_core::state::{GovernanceLockCustody, GovernanceLockRecord, WorldReadOnly};
     use mv::storage::StorageReadOnly;
     let state = funded_fractional_state();
-    let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-    let mut tx = block.transaction();
+    let mut block = state.block(ordinary_header(&state, 2));
+    let mut tx = block.transaction_for_fastpq_testing(ballot_call());
     let id = "strict-public-bond";
     seed_fractional_referendum(&mut tx, id);
     fractional_ballot(id, "1.25", 200)
@@ -174,8 +168,8 @@ fn seed_fractional_referendum(tx: &mut iroha_core::state::StateTransaction<'_, '
     tx.world.governance_referenda_mut().insert(
         id.into(),
         iroha_core::state::GovernanceReferendumRecord {
-            h_start: 1,
-            h_end: 201,
+            h_start: 2,
+            h_end: 202,
             status: iroha_core::state::GovernanceReferendumStatus::Open,
             mode: iroha_core::state::GovernanceReferendumMode::Plain,
             plain_context: context,
@@ -229,14 +223,15 @@ fn numeric_balance(
 fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
     use iroha_core::state::WorldReadOnly;
     use mv::storage::StorageReadOnly;
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let mut state = funded_fractional_state();
+    // The State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let id = "frozen-fractional";
     let asset = state.gov.voting_asset_id.clone();
     let escrow = state.gov.bond_escrow_account.clone();
     {
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut tx = block.transaction();
+        let mut block = state.block(ordinary_header(&state, 2));
+        let mut tx = block.transaction_for_fastpq_testing(ballot_call());
         seed_fractional_referendum(&mut tx, id);
         fractional_ballot(id, "1.25", 200)
             .execute(&ALICE_ID, &mut tx)
@@ -293,8 +288,8 @@ fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
     changed.min_turnout = u128::MAX;
     changed.bond_escrow_account = iroha_test_samples::BOB_ID.clone();
     state.set_gov(changed);
-    let mut block = state.block(BlockHeader::new(nonzero!(101_u64), None, None, 0, 0));
-    let mut tx = block.transaction();
+    let mut block = state.block(ordinary_header(&state, 102));
+    let mut tx = block.transaction_for_fastpq_testing(ballot_call());
     for (amount, duration) in [("2.25", 100), ("3.25", 100)] {
         assert!(
             fractional_update(id, amount, duration)
@@ -310,10 +305,10 @@ fn fractional_bonds_escrow_exact_deltas_and_reject_nonmonotonic_updates() {
     let locks = tx.world.governance_locks().get(id).unwrap();
     assert_eq!(locks.locks.len(), 1);
     assert_eq!(
-        iroha_core::state::plain_governance_tally(referendum, Some(locks), 101).unwrap(),
+        iroha_core::state::plain_governance_tally(referendum, Some(locks), 102).unwrap(),
         [45, 0, 0]
     );
-    assert_eq!(locks.locks.get(&ALICE_ID).unwrap().expiry_height, 301);
+    assert_eq!(locks.locks.get(&ALICE_ID).unwrap().expiry_height, 302);
     assert_eq!(
         numeric_balance(&tx, &ALICE_ID, &asset),
         "97.75".parse().unwrap()
@@ -328,13 +323,14 @@ fn closed_plain_result_survives_unlock_rollback_and_policy_changes() {
     use iroha_core::state::{GovernanceReferendumRecord, WorldReadOnly};
     use iroha_data_model::governance::conviction::PlainVotingResultV1;
     use mv::storage::StorageReadOnly;
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let mut state = funded_fractional_state();
+    // The State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let id = "frozen-closed";
     let asset = state.gov.voting_asset_id.clone();
     {
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
-        let mut tx = block.transaction();
+        let mut block = state.block(ordinary_header(&state, 2));
+        let mut tx = block.transaction_for_fastpq_testing(ballot_call());
         seed_fractional_referendum(&mut tx, id);
         fractional_ballot(id, "1.25", 200)
             .execute(&ALICE_ID, &mut tx)
@@ -347,7 +343,7 @@ fn closed_plain_result_survives_unlock_rollback_and_policy_changes() {
     changed.max_conviction = 1;
     state.set_gov(changed);
     {
-        let block = state.block(BlockHeader::new(nonzero!(202_u64), None, None, 0, 0));
+        let block = state.block(ordinary_header(&state, 203));
         assert!(matches!(
             block
                 .world
@@ -368,7 +364,7 @@ fn closed_plain_result_survives_unlock_rollback_and_policy_changes() {
             .plain_result,
         PlainVotingResultV1::Pending
     ));
-    let mut block = state.block(BlockHeader::new(nonzero!(202_u64), None, None, 0, 0));
+    let mut block = state.block(ordinary_header(&state, 203));
     {
         let tx = block.transaction();
         assert_eq!(numeric_balance(&tx, &ALICE_ID, &asset), 100_u64.into());
@@ -380,7 +376,7 @@ fn closed_plain_result_survives_unlock_rollback_and_policy_changes() {
         );
         let record = tx.world.governance_referenda().get(id).unwrap();
         assert_eq!(
-            iroha_core::state::plain_governance_tally(record, None, 202).unwrap(),
+            iroha_core::state::plain_governance_tally(record, None, 203).unwrap(),
             [33, 0, 0]
         );
         let PlainVotingResultV1::Decided(result) = &record.plain_result else {
@@ -399,12 +395,12 @@ fn closed_plain_result_survives_unlock_rollback_and_policy_changes() {
         );
     }
     block.commit_world_overlay_for_testing().unwrap();
-    let later = state.block(BlockHeader::new(nonzero!(203_u64), None, None, 0, 0));
+    let later = state.block(ordinary_header(&state, 204));
     assert_eq!(
         iroha_core::state::plain_governance_tally(
             later.world.governance_referenda().get(id).unwrap(),
             None,
-            203
+            204
         )
         .unwrap(),
         [33, 0, 0]
@@ -421,7 +417,7 @@ fn empty_proposed_plain_referendum_closes_and_requires_result_layout() {
     let state = funded_fractional_state();
     let id = "empty-proposed";
     {
-        let mut block = state.block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0));
+        let mut block = state.block(ordinary_header(&state, 2));
         let mut tx = block.transaction();
         seed_fractional_referendum(&mut tx, id);
         let mut record = tx.world.governance_referenda().get(id).unwrap().clone();
@@ -432,7 +428,7 @@ fn empty_proposed_plain_referendum_closes_and_requires_result_layout() {
         tx.apply();
         block.commit_world_overlay_for_testing().unwrap();
     }
-    let block = state.block(BlockHeader::new(nonzero!(202_u64), None, None, 0, 0));
+    let block = state.block(ordinary_header(&state, 203));
     let record = block.world.governance_referenda().get(id).unwrap();
     assert_eq!(record.status, GovernanceReferendumStatus::Closed);
     let PlainVotingResultV1::Decided(decision) = &record.plain_result else {

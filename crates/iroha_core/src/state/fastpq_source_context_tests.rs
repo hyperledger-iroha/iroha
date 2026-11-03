@@ -12,8 +12,8 @@ use iroha_data_model::{
     parameter::system::SumeragiParameters,
     sumeragi_lanes::{SumeragiLaneFrontier, SumeragiLaneMember, SumeragiLaneRecord},
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
-use nonzero_ext::nonzero;
 
 fn state() -> State {
     State::new(

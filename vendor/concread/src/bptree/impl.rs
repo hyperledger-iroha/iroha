@@ -31,8 +31,8 @@ use std::ops::RangeBounds;
 /// edits only through its closed operation API.
 pub struct BptreeMap<K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapCell<K, V, M>,
@@ -58,8 +58,8 @@ where
 /// of this transaction.
 pub struct BptreeMapReadTxn<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapRead<'a, K, V, M>,
@@ -67,8 +67,8 @@ where
 
 impl<K, V, M> Clone for BptreeMapReadTxn<'_, K, V, M>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     fn clone(&self) -> Self {
@@ -102,8 +102,8 @@ where
 /// prepaid successor permits inspection, publication, detachment or abort.
 pub struct BptreeMapWriteTxn<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: MapWrite<'a, K, V, M>,
@@ -111,8 +111,8 @@ where
 
 enum SnapshotType<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     R(&'a CursorRead<K, V, M>),
@@ -129,24 +129,20 @@ where
 /// same thread while the read snapshot is open.
 pub struct BptreeMapReadSnapshot<'a, K, V, M = Untracked>
 where
-    K: Ord + Clone + Debug + Sync + Send + 'static,
-    V: Clone + Sync + Send + 'static,
+    K: Ord + Clone + Debug + 'static,
+    V: Clone + 'static,
     M: MapMode + NodeCloning<K, V>,
 {
     inner: SnapshotType<'a, K, V, M>,
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static> Default
-    for BptreeMap<K, V>
-{
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> Default for BptreeMap<K, V> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMap<K, V>
-{
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> BptreeMap<K, V> {
     /// Construct a new concurrent tree
     pub fn new() -> Self {
         // I acknowledge I understand what is required to make this safe.
@@ -164,8 +160,8 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    FromIterator<(K, V)> for BptreeMap<K, V>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> FromIterator<(K, V)>
+    for BptreeMap<K, V>
 {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut new_sblock = unsafe { SuperBlock::new() };
@@ -182,16 +178,15 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    Extend<(K, V)> for BptreeMapWriteTxn<'_, K, V>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> Extend<(K, V)>
+    for BptreeMapWriteTxn<'_, K, V>
 {
     fn extend<I: IntoIterator<Item = (K, V)>>(&mut self, iter: I) {
         self.inner.as_mut().extend(iter);
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMapWriteTxn<'_, K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMapWriteTxn<'_, K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
@@ -279,9 +274,7 @@ where
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static>
-    BptreeMapWriteTxn<'_, K, V>
-{
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static> BptreeMapWriteTxn<'_, K, V> {
     // == RW methods
 
     /// Reset this tree to an empty state. As this is within the transaction this
@@ -349,8 +342,7 @@ impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 's
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMapReadTxn<'_, K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMapReadTxn<'_, K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {
@@ -438,8 +430,7 @@ where
     }
 }
 
-impl<K: Clone + Ord + Debug + Sync + Send + 'static, V: Clone + Sync + Send + 'static, M>
-    BptreeMapReadSnapshot<'_, K, V, M>
+impl<K: Clone + Ord + Debug + 'static, V: Clone + 'static, M> BptreeMapReadSnapshot<'_, K, V, M>
 where
     M: MapMode + NodeCloning<K, V>,
 {

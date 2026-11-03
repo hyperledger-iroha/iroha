@@ -1823,7 +1823,9 @@ async fn stale_or_mismatched_claims_cause_no_external_calls() {
     assert_eq!(inventory.qualification_calls.load(Ordering::SeqCst), 0);
     assert_eq!(inventory.readiness_calls.load(Ordering::SeqCst), 0);
 }
-#[tokio::test]
+// All elapsed deadlines and injected delays in this control use Tokio time.
+// Keep the exact 5 ms/10 ms boundary independent of host scheduling and crypto cost.
+#[tokio::test(start_paused = true)]
 async fn shared_deadline_prevents_late_external_results_from_becoming_durable() {
     let mut policy = test_policy();
     policy.lease_ttl_ms = 20;
@@ -1858,6 +1860,7 @@ async fn shared_deadline_prevents_late_external_results_from_becoming_durable() 
             .await,
         Err(MusubiProviderAttestationJournalErrorV1::SignerUnavailable)
     );
+    assert_eq!(delayed_signer.approve_calls.load(Ordering::SeqCst), 1);
     assert_eq!(
         journal
             .status(id)
@@ -1888,6 +1891,15 @@ async fn shared_deadline_prevents_late_external_results_from_becoming_durable() 
             .handoff_claim_with_inventory(&handoff, &delayed_inventory, &clock_at(109))
             .await,
         Err(MusubiProviderAttestationJournalErrorV1::InventoryUnavailable)
+    );
+    assert_eq!(delayed_inventory.put_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(delayed_inventory.get_calls.load(Ordering::SeqCst), 0);
+    assert!(
+        delayed_inventory
+            .entries
+            .lock()
+            .expect("inventory")
+            .is_empty()
     );
     assert_eq!(
         journal

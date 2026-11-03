@@ -2824,9 +2824,9 @@ impl_default!(Governance => {
 #[derive(Debug, Clone, Copy)]
 #[allow(clippy::struct_field_names)]
 pub struct Concurrency {
-    /// Minimum scheduler worker threads (0 = auto/physical cores)
+    /// Minimum scheduler worker threads (0 = available parallelism)
     pub scheduler_min_threads: usize,
-    /// Maximum scheduler worker threads (0 = auto/physical cores)
+    /// Maximum scheduler worker threads (0 = available parallelism)
     pub scheduler_max_threads: usize,
     /// Global Rayon thread pool size (0 = auto/physical cores)
     pub rayon_global_threads: usize,
@@ -5420,7 +5420,7 @@ pub struct Pipeline {
     pub ivm_execution_max_bytes: usize,
     /// Original State capture work policy, independent of allocation and committed validity.
     pub state_capture: StateCapture,
-    /// Rayon worker cap for prover/trace verification (0 = physical cores).
+    /// Rayon worker cap for prover/trace verification (0 = available parallelism).
     pub ivm_prover_threads: usize,
     /// Maximum instructions allowed per overlay (0 = unlimited).
     pub overlay_max_instructions: usize,

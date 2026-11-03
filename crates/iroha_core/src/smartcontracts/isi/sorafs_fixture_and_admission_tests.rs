@@ -59,8 +59,8 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::sorafs::CanOperateSorafsRepair;
 use iroha_model_base::{domain::DomainId, metadata::Metadata, name::Name};
+use iroha_primitives::nonzero;
 use iroha_primitives::{bigint::BigInt, json::Json};
-use nonzero_ext::nonzero;
 use norito::{json, to_bytes};
 use sorafs_manifest::{
     DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1,

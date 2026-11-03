@@ -161,6 +161,9 @@ fn native_worker_binding_leaf_refusal_keeps_original_bank_and_reuses_controls_af
 ///
 /// The external occupancy is held for the whole test. A repeated immediate dispatch
 /// therefore exposes credits returned by this execution's own rolled-back prefix.
+/// Distinct retained preparation can make finite progress across refusals. A cycle
+/// repeats the same exact refusal and post-rollback occupancy while the original
+/// source and binding bank are unchanged; counting attempts alone cannot prove it.
 #[test]
 fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_release() {
     use crate::sumeragi::driver::{
@@ -170,12 +173,13 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
     use iroha_allocation::{AllocationBudget, AllocationRefusal, release::ReleaseRegistration};
     use std::task::{Context, Poll, Waker};
 
+    // Pin before constructing the chain so this fixture's earlier retired State
+    // generations cannot change original-pool occupancy during the retry observations.
+    let _retirement = crossbeam_epoch::pin();
     publication_tests::with_worker_from(
         chain,
         ConsensusMode::Permissioned,
         |chain, worker, _blocks, events| {
-            // Keep unrelated deferred epoch reclamation outside the observation window.
-            let _retirement = crossbeam_epoch::pin();
             let owner = chain.genesis_account().clone();
             let recipient = crate::smartcontracts::isi::sccp::test_support::authority(13);
             let key =
@@ -225,10 +229,12 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                 .unwrap()
                 .retained_allocation_layout()
                 .size();
-            let mut observations = [None; 3];
+            let mut observations = Vec::new();
+            let mut immediate_refusals = std::collections::BTreeSet::new();
             let mut original_body = None;
             let mut original_bank = None;
-            for attempt in 0..3 {
+            let mut attempt = 0;
+            loop {
                 let ExecOp::Execute {
                     block,
                     block_hash,
@@ -268,7 +274,10 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                     panic!("original local execution refusal: {error:?}");
                 };
                 let Some(AllocationRefusal::Capacity {
-                    requested_bytes, ..
+                    requested_bytes,
+                    reserved_bytes,
+                    limit_bytes,
+                    ..
                 }) = reason.allocation_refusal()
                 else {
                     panic!("original finite-pool refusal: {error:?}");
@@ -293,14 +302,16 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                 let release_ready = registration
                     .poll_wait(release, &mut Context::from_waker(Waker::noop()))
                     == Poll::Ready(());
-                observations[attempt] = Some((
+                let after_rollback = pool.reserved_bytes();
+                let geometry = (
                     *requested_bytes,
-                    release_ready,
-                    observer.snapshot().0,
-                    pool.reserved_bytes(),
-                ));
+                    *reserved_bytes,
+                    *limit_bytes,
+                    after_rollback,
+                );
+                observations.push((geometry, release_ready, observer.snapshot().0));
                 eprintln!(
-                    "UID rollback diagnostic attempt {}: (requested_bytes, original_ready, binding_visits, reserved_bytes)={:?}",
+                    "UID rollback diagnostic attempt {}: ((requested_bytes, refused_reserved_bytes, limit_bytes, retained_bytes), original_ready, binding_visits)={:?}",
                     attempt + 1,
                     observations[attempt],
                 );
@@ -331,11 +342,14 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                         release_ready,
                         "RetryGate cannot dispatch before its original capacity observation"
                     );
+                    // Each attempt's geometry is printed above; the fixed message lets
+                    // the §13.4 HC983 gate match this exact cause.
                     assert!(
-                        attempt < 2,
-                        "whole execution rollback repeatedly wakes the same native job without external credit return: {observations:?}"
+                        immediate_refusals.insert(geometry),
+                        "whole execution rollback repeatedly wakes the same native job without external credit return"
                     );
                     next = retry;
+                    attempt += 1;
                 } else {
                     eprintln!(
                         "UID rollback diagnostic parked after {} refusal(s); original_ready={release_ready}; observations={observations:?}",
@@ -344,7 +358,6 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                     return;
                 }
             }
-            unreachable!("third refusal either parks or exposes repeated immediate dispatch");
         },
     );
 }

@@ -17,12 +17,36 @@
       "package": "iroha_core_privacy",
       "sites": [
         {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/commitment_observation.rs",
+          "use": "Test-only aggregate commitment observation: seven fixed coordinator operation labels use an explicitly delegated parent and retain the original worker joins. No ambient recorder lookup, production recorder access or measurements returned to computation."
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/commitment_observation_tests.rs",
+          "use": "Test-only explicit-parent context controls for the fixed operation inventory, thread-bound guards, session isolation, repeated-call accounting and original recorder lifecycle semantics."
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/joined_observation_tests.rs",
+          "use": "Test-only genuine joined and streaming commitment controls for explicit phase ownership, root and frontier parity, worker error and unwind joins, and clearing of original private allocations."
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine.rs",
+          "use": "Test-only credential producer control: asserts the original failed observation outcome and reached preflight phase after witness rejection. No production measurement access."
+        },
+        {
           "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs",
           "use": "Test-only complete-proof diagnostic: reads the harness hand-off and retains the public phase-tree record beside the receipt."
         },
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation.rs",
-          "use": "Test-only X509 prover observation: each PhaseTimerV1 also opens a phase in the shared tree and the public geometry counters are recorded as work counters. Collection is thread-scoped."
+          "use": "Test-only X509 prover observation: initiating-thread timers and explicitly parented worker guards use the fixed phase inventory; the initial Base timer delegates seven tree-only aggregate commitment operations. The 75 flat counters remain unchanged and thread-scoped; explicit contexts never activate unrelated observations."
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation_transform.rs",
+          "use": "Test-only whole-batch semantic transform contexts and finished-record coverage validation: exact delegated parents, original backend column counters, closed family labels and automatic refusal of invalid or incomplete attribution. No shipping recorder access or producer-result changes."
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation_worker_tests.rs",
+          "use": "Test-only real-worker controls for explicit phase ownership, nesting, completion, interruption, unwind, observation isolation and original recorder bounds. No production recorder access."
         },
         {
           "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",

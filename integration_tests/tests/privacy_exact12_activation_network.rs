@@ -222,7 +222,7 @@ fn expected_states(
         "expected-state construction requires exactly {} available profiles and policies",
         PrivacyProtocolIdV1::COUNT - UNAVAILABLE_PROTOCOLS.len()
     );
-    let mut available = profiles.iter().copied().zip(policies).peekable();
+    let mut available = profiles.iter().copied().zip(policies);
     let mut expected = Vec::with_capacity(PrivacyProtocolIdV1::COUNT);
     for protocol_id in PrivacyProtocolIdV1::ALL {
         let compiled_profile = compiled_privacy_profile_snapshot_result_v1(protocol_id);

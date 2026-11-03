@@ -495,9 +495,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        // The 410 baseline instructions and the one release addition.
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 411;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 411;
+        // The 410 baseline instructions and the seven this release adds after them.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 417;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 417;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -633,7 +633,15 @@ mod tests {
         added.sort_unstable();
         assert_eq!(
             added,
-            ["iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"],
+            [
+                "iroha.game_partition.advance.v1",
+                "iroha.game_partition.export.v1",
+                "iroha.game_partition.import.v1",
+                "iroha.game_partition.install.v1",
+                "iroha.game_partition.register_peer.v1",
+                "iroha.game_partition.seed.v1",
+                "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
+            ],
             "instructions added after the frozen baseline changed"
         );
     }

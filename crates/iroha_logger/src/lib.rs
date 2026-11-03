@@ -20,7 +20,6 @@ pub use tracing::{
     Instrument, debug, debug_span, error, error_span, info, info_span, instrument as log, trace,
     trace_span, warn, warn_span,
 };
-pub use tracing_futures::Instrument as InstrumentFutures;
 pub use tracing_subscriber::reload::Error as ReloadError;
 use tracing_subscriber::{layer::SubscriberExt, registry::Registry, reload};
 const TELEMETRY_CAPACITY: usize = 1000;

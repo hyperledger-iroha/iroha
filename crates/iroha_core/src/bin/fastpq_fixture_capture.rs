@@ -14,7 +14,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::env;
 fn account(label: &str) -> AccountId {
     let seed: [u8; Hash::LENGTH] = Hash::new(label).into();

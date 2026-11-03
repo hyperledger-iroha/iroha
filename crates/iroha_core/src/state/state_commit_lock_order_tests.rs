@@ -1,7 +1,7 @@
 use super::*;
 use crate::kura::Kura;
 use iroha_data_model::{block::BlockHeader, nexus::LaneConfig as LaneConfigModel};
-use nonzero_ext::nonzero;
+use iroha_primitives::nonzero;
 use std::{
     sync::{Arc, Barrier, mpsc},
     thread,

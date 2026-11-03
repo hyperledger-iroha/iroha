@@ -41,11 +41,11 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
+use iroha_primitives::nonzero;
 use iroha_test_network::{
     Network, NetworkBuilder, init_instruction_registry, read_on_dedicated_thread,
 };
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
-use nonzero_ext::nonzero;
 use norito::json::{Map, Value};
 use rand::{Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;

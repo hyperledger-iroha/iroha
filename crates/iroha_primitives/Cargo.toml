@@ -59,6 +59,10 @@ harness = false
 name = "rs16"
 harness = false
 
+[[bench]]
+name = "base32"
+harness = false
+
 [[test]]
 name = "addr_parsing"
 path = "tests/addr_parsing.rs"

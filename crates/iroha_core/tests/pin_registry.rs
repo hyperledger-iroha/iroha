@@ -1,11 +1,11 @@
 //! Integration tests covering the `SoraFS` pin registry flows.
 
+use crate::native_genesis::{certified_state, certified_state_with};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STD};
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{State, StateReadOnly, World, WorldReadOnly},
+    sumeragi::test_chain::TestChainConfig,
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair, PrivateKey, PublicKey, Signature};
 use iroha_data_model::{
@@ -40,21 +40,27 @@ use sorafs_manifest::{
     ReplicationOrderV1, chunker_registry,
     pin_registry::{AliasProofBundleV1, alias_merkle_root, alias_proof_signature_digest},
 };
-use std::{collections::BTreeSet, convert::TryInto, env, fs, num::NonZeroU64, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    convert::TryInto,
+    env, fs,
+    num::{NonZeroU64, NonZeroUsize},
+    path::PathBuf,
+};
 const FIXTURE_PATH: &str = "tests/fixtures/sorafs_pin_registry/snapshot.json";
 const ORDER_ISSUED_EPOCH: u64 = 20;
 const ORDER_DEADLINE_EPOCH: u64 = 28;
 #[test]
 fn pin_registry_snapshot_matches_fixture() {
     let mut state = make_state();
-    seed_completion_anchor(&state);
+    let anchor = completion_anchor(&state);
     assert_eq!(
         state
             .view()
             .block_hashes()
             .first()
             .map(|hash| *hash.as_ref()),
-        Some(completion_anchor().block_hash),
+        Some(anchor.block_hash),
         "provider completion anchor must name the exact committed prefix"
     );
     let digest = default_digest();
@@ -65,7 +71,7 @@ fn pin_registry_snapshot_matches_fixture() {
     {
         // Approval and completion observe their real consensus-time headers in
         // separate component overlays; neither overlay invents block finality.
-        let mut block = state.block(block_header_at(2, 5_000));
+        let mut block = state.block(next_block_header_at(&state, 5_000));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
         bootstrap_sorafs(&mut tx);
         register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
@@ -90,7 +96,7 @@ fn pin_registry_snapshot_matches_fixture() {
             .commit_world_overlay_for_testing()
             .expect("commit the component approval overlay");
     }
-    let mut block = state.block(block_header_at(2, 25_000));
+    let mut block = state.block(next_block_header_at(&state, 25_000));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     let providers = [
         ProviderId::new([0x51; 32]),
@@ -116,7 +122,7 @@ fn pin_registry_snapshot_matches_fixture() {
             completion_epoch: 25,
             expected_authority: completion_authority(&alice()),
             expected_assignment_revision: 1,
-            finalized_anchor: completion_anchor(),
+            finalized_anchor: anchor,
         }
         .execute(&alice(), &mut tx)
         .expect("complete provider replication assignment");
@@ -255,7 +261,7 @@ fn duplicate_alias_binding_is_rejected() {
     let council_keys = council_keypair();
     configure_council_approval(&mut state, &council_keys);
     {
-        let mut block = state.block(block_header(1));
+        let mut block = state.block(next_block_header(&state));
         let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
         bootstrap_sorafs(&mut tx);
         let digest = default_digest();
@@ -277,7 +283,7 @@ fn duplicate_alias_binding_is_rejected() {
     }
     let digest_b = manifest_digest_for_seed(0xBB);
     let chunk_digest_b = chunk_digest_for_seed(0xBB);
-    let mut block = state.block(block_header(2));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest_b, chunk_digest_b, &council_keys);
@@ -309,7 +315,7 @@ fn replication_order_with_mismatched_profile_is_rejected() {
     configure_council_approval(&mut state, &council_keys);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
@@ -348,7 +354,7 @@ fn alias_binding_with_expiry_before_bound_is_rejected() {
     let mut state = make_state();
     let council_keys = council_keypair();
     configure_council_approval(&mut state, &council_keys);
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let digest = default_digest();
@@ -380,7 +386,7 @@ fn alias_binding_exceeding_retention_is_rejected() {
     let mut state = make_state();
     let council_keys = council_keypair();
     configure_council_approval(&mut state, &council_keys);
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let digest = default_digest();
@@ -422,7 +428,7 @@ fn replication_order_below_min_replicas_is_rejected() {
     configure_council_approval(&mut state, &council_keys);
     let digest = default_digest();
     let chunk_digest = default_chunk_digest();
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
@@ -465,7 +471,7 @@ fn register_manifest_requires_retained_component_invocation() {
         successor_of: None,
     };
     {
-        let mut block = state.block(block_header(1));
+        let mut block = state.block(next_block_header(&state));
         let mut tx = block.transaction();
         tx.tx_call_hash = Some(invocation);
         bootstrap_sorafs(&mut tx);
@@ -485,7 +491,7 @@ fn register_manifest_requires_retained_component_invocation() {
         assert_eq!(pin_fee_balance(&tx, &treasury), treasury_before);
     }
     {
-        let mut block = state.block(block_header(1));
+        let mut block = state.block(next_block_header(&state));
         // This existing fixture API retains a finite E owner; it does not
         // authenticate a Network input or grant finalized publication authority.
         let mut tx = block.transaction_for_fastpq_testing(invocation);
@@ -507,7 +513,7 @@ fn register_manifest_requires_retained_component_invocation() {
 #[test]
 fn register_manifest_rejects_unknown_chunker_profile() {
     let state = make_state();
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let mut manifest = manifest_fixture(0xCC);
@@ -562,7 +568,7 @@ fn register_manifest_rejects_storage_class_outside_governance_allowlist() {
 #[test]
 fn register_manifest_rejects_unknown_successor() {
     let state = make_state();
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let unknown_parent = manifest_digest_for_seed(0xF1);
@@ -586,7 +592,7 @@ fn register_manifest_rejects_unknown_successor() {
 #[test]
 fn register_manifest_rejects_self_successor() {
     let state = make_state();
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let digest = manifest_digest_for_seed(0xE2);
@@ -610,7 +616,7 @@ fn register_manifest_rejects_self_successor() {
 #[test]
 fn register_manifest_accepts_active_successor() {
     let state = make_state();
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let parent = manifest_digest_for_seed(0xE3);
@@ -625,7 +631,7 @@ fn register_manifest_accepts_active_successor() {
     block
         .commit_empty_block_for_testing()
         .expect("commit predecessor");
-    let mut block = state.block(block_header(2));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     RegisterPinManifest {
@@ -648,7 +654,7 @@ fn register_manifest_rejects_retired_successor() {
     let council_keys = council_keypair();
     configure_council_approval(&mut state, &council_keys);
     let parent = manifest_digest_for_seed(0xE5);
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE5), &council_keys);
@@ -656,7 +662,7 @@ fn register_manifest_rejects_retired_successor() {
     block
         .commit_empty_block_for_testing()
         .expect("commit approved predecessor");
-    let mut block = state.block(block_header(2));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     RetirePinManifest {
@@ -669,7 +675,7 @@ fn register_manifest_rejects_retired_successor() {
     block
         .commit_empty_block_for_testing()
         .expect("commit retirement");
-    let mut block = state.block(block_header(3));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     assert!(matches!(
@@ -703,7 +709,7 @@ fn register_manifest_with_successor_persists_pointer() {
     let council_keys = council_keypair();
     configure_council_approval(&mut state, &council_keys);
     let parent = manifest_digest_for_seed(0xE7);
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, parent, chunk_digest_for_seed(0xE7), &council_keys);
@@ -711,7 +717,7 @@ fn register_manifest_with_successor_persists_pointer() {
     block
         .commit_empty_block_for_testing()
         .expect("commit approved predecessor");
-    let mut block = state.block(block_header(2));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let child = manifest_digest_for_seed(0xE8);
@@ -737,7 +743,7 @@ fn bind_alias_rejects_expiry_before_bound_epoch() {
     configure_council_approval(&mut state, &council_keys);
     let digest = manifest_digest_for_seed(0xD1);
     let chunk_digest = chunk_digest_for_seed(0xD1);
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
@@ -767,7 +773,7 @@ fn bind_alias_rejects_bound_epoch_before_approval() {
     configure_council_approval(&mut state, &council_keys);
     let digest = manifest_digest_for_seed(0xD2);
     let chunk_digest = chunk_digest_for_seed(0xD2);
-    let mut block = state.block(block_header_at(1, 5_000));
+    let mut block = state.block(next_block_header_at(&state, 5_000));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
@@ -805,7 +811,7 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
     configure_council_approval(&mut state, &council_keys);
     let digest = manifest_digest_for_seed(0xD3);
     let chunk_digest = chunk_digest_for_seed(0xD3);
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(&state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     register_and_approve(&mut tx, digest, chunk_digest, &council_keys);
@@ -836,8 +842,6 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
     }
 }
 fn make_state() -> State {
-    let kura = Kura::blank_kura_for_testing();
-    let live = LiveQueryStore::start_test();
     let default_domain =
         DomainId::try_new("default", "universal").expect("explicit fixture domain");
     let alice = alice();
@@ -856,8 +860,9 @@ fn make_state() -> State {
         [alice_account, bob_account],
         std::iter::empty::<AssetDefinition>(),
     );
-    let mut state = State::new_for_testing(world, kura, live);
-    let mut governance = state.gov.clone();
+    // Provider-owner bindings are bootstrap configuration: the node installs them before
+    // its authenticated genesis, and later changes come only from enacted governance.
+    let mut governance = certified_state(World::default()).gov.clone();
     governance.sorafs_provider_owners.extend(
         [
             ProviderId::new([0x51; 32]),
@@ -873,25 +878,23 @@ fn make_state() -> State {
         .into_iter()
         .map(|provider_id| (provider_id, alice.clone())),
     );
-    state.set_gov(governance);
-    state
+    let mut config = TestChainConfig::new(world, 0);
+    config.governance = Some(governance);
+    certified_state_with(config)
 }
-fn completion_anchor_header() -> iroha_data_model::block::BlockHeader {
-    iroha_data_model::block::BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 42, 0)
-}
-fn completion_anchor() -> ProviderIngestFinalizedAnchorV1 {
+/// The provider completion anchor names the certified genesis, read from its Kura frame.
+/// It is the first block of the committed prefix; the components never invent finality.
+fn completion_anchor(state: &State) -> ProviderIngestFinalizedAnchorV1 {
+    let genesis = state
+        .view()
+        .kura()
+        .get_block(NonZeroUsize::MIN, &state.ivm_execution_budget())
+        .expect("read the certified genesis frame")
+        .expect("the certified genesis is stored");
     ProviderIngestFinalizedAnchorV1 {
         height: 1,
-        block_hash: *completion_anchor_header().hash().as_ref(),
+        block_hash: *genesis.hash().as_ref(),
     }
-}
-fn seed_completion_anchor(state: &State) {
-    // This component fixture owns synthetic empty membership and its exact
-    // header. It does not claim a signed, network-finalized completion anchor.
-    state
-        .block(completion_anchor_header())
-        .commit_empty_block_for_testing()
-        .expect("commit the component completion prefix");
 }
 fn completion_authority(owner: &AccountId) -> ProviderIngestCompletionAuthorityV1 {
     ProviderIngestCompletionAuthorityV1::new(
@@ -954,7 +957,7 @@ fn pin_fee_balance(
         .map_or_else(Quantity::zero, |value| value.clone().into_inner())
 }
 fn assert_governed_policy_rejection(state: &State, policy: PinPolicy, expected_message: &str) {
-    let mut block = state.block(block_header(1));
+    let mut block = state.block(next_block_header(state));
     let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0x91; Hash::LENGTH]));
     bootstrap_sorafs(&mut tx);
     let alice_balance_before = pin_fee_balance(&tx, &alice());
@@ -1003,12 +1006,26 @@ fn assert_governed_policy_rejection(state: &State, policy: PinPolicy, expected_m
         "rejected manifest policy must not credit the treasury"
     );
 }
-fn block_header(height: u64) -> iroha_data_model::block::BlockHeader {
-    block_header_at(height, 0)
+/// Header of the next ordinary block after the committed prefix of `state`.
+fn next_block_header(state: &State) -> iroha_data_model::block::BlockHeader {
+    next_block_header_at(state, 0)
 }
-fn block_header_at(height: u64, creation_time_ms: u64) -> iroha_data_model::block::BlockHeader {
+/// Header of the next ordinary block, chained to the latest committed block of `state`.
+/// Component overlays do not advance the height; committed fixture blocks do.
+fn next_block_header_at(
+    state: &State,
+    creation_time_ms: u64,
+) -> iroha_data_model::block::BlockHeader {
+    let view = state.view();
+    let height = u64::try_from(view.height()).expect("fixture height fits u64") + 1;
     let nz_height = NonZeroU64::new(height).expect("height must be non-zero");
-    iroha_data_model::block::BlockHeader::new(nz_height, None, None, creation_time_ms, 0)
+    iroha_data_model::block::BlockHeader::new(
+        nz_height,
+        view.latest_block_hash(),
+        None,
+        creation_time_ms,
+        0,
+    )
 }
 fn default_digest() -> ManifestDigest {
     manifest_digest_for_seed(0xAA)

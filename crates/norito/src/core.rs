@@ -9,7 +9,6 @@
 use crate::guarded_try_deserialize;
 #[cfg(feature = "schema-structural")]
 use crate::json;
-pub use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use core::convert::TryFrom;
 pub use norito_derive::{DeserializePayload, NoritoDeserialize, NoritoSerialize};
 use sha2::{Digest, Sha256};
@@ -111,7 +110,7 @@ pub mod simd_crc64;
 pub use simd_crc64::crc64_neon;
 #[cfg(all(target_arch = "x86_64", target_feature = "sse4.2"))]
 pub use simd_crc64::crc64_sse42;
-pub use simd_crc64::{crc64_fallback, hardware_crc64};
+pub use simd_crc64::{Crc64Digest, crc64_fallback, hardware_crc64};
 #[cfg(feature = "gpu-compression")]
 pub mod gpu_zstd;
 /// Default upper bound on Norito archive length (bytes) when hosts do not
@@ -1696,7 +1695,8 @@ pub fn write_fixed_len_prefixed(
     value: &dyn SerializePayload,
 ) -> Result<(), Error> {
     let length = encoded_payload_len(value)?;
-    writer.write_u64::<LittleEndian>(u64::try_from(length).map_err(|_| Error::LengthMismatch)?)?;
+    let prefix = u64::try_from(length).map_err(|_| Error::LengthMismatch)?;
+    writer.write_all(&prefix.to_le_bytes())?;
     write_counted_payload(value, writer, length)
 }
 /// Write a compact varint length prefix regardless of layout flags.
@@ -3681,14 +3681,17 @@ impl Header {
         if magic != MAGIC {
             return Err(Error::InvalidMagic);
         }
-        let major = r.read_u8()?;
+        let mut byte = [0u8; 1];
+        r.read_exact(&mut byte)?;
+        let major = byte[0];
         if major != VERSION_MAJOR {
             return Err(Error::UnsupportedVersion {
                 found: major,
                 expected: VERSION_MAJOR,
             });
         }
-        let minor = r.read_u8()?;
+        r.read_exact(&mut byte)?;
+        let minor = byte[0];
         if minor != VERSION_MINOR {
             return Err(Error::UnsupportedMinorVersion {
                 found: minor,
@@ -3697,12 +3700,17 @@ impl Header {
         }
         let mut schema = [0u8; 16];
         r.read_exact(&mut schema)?;
-        let compression = Compression::from_u8(r.read_u8()?)?;
-        let length = r.read_u64::<LittleEndian>()?;
-        let checksum = r.read_u64::<LittleEndian>()?;
-        let mut pad = [0u8; 1];
-        r.read_exact(&mut pad)?;
-        let flags = pad[0];
+        r.read_exact(&mut byte)?;
+        let compression = Compression::from_u8(byte[0])?;
+        // Fixed stack buffers retain the header's field-by-field validation and
+        // short-read semantics without exposing a general byte-order API.
+        let mut word = [0u8; 8];
+        r.read_exact(&mut word)?;
+        let length = u64::from_le_bytes(word);
+        r.read_exact(&mut word)?;
+        let checksum = u64::from_le_bytes(word);
+        r.read_exact(&mut byte)?;
+        let flags = byte[0];
         validate_header_flags(flags)?;
         Ok(Self {
             magic,
@@ -6328,14 +6336,14 @@ const PAYLOAD_CHECKSUM_BLOCK: usize = 512;
 /// a dispatch and a table walk for every tiny write. CRC64 is a streaming checksum, so the
 /// result is identical to one pass over the concatenated bytes.
 pub(crate) struct PayloadChecksum {
-    digest: crc64fast::Digest,
+    digest: Crc64Digest,
     pending: [u8; PAYLOAD_CHECKSUM_BLOCK],
     filled: usize,
 }
 impl PayloadChecksum {
     pub(crate) fn new() -> Self {
         Self {
-            digest: crc64fast::Digest::new(),
+            digest: Crc64Digest::new(),
             pending: [0; PAYLOAD_CHECKSUM_BLOCK],
             filled: 0,
         }

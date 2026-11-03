@@ -18,9 +18,9 @@ use iroha_data_model::{
     isi::{error::InstructionExecutionError, zk::FinalizeElection},
     proof::{ProofAttachment, ProofBox},
 };
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 
 #[test]
 fn zk_finalize_rejects_unqualified_tally_keys_without_mutating_state() {

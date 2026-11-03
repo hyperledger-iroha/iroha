@@ -11,9 +11,9 @@ use iroha_core::{
     state::{State, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
+use iroha_primitives::nonzero;
 use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
-use nonzero_ext::nonzero;
 use std::collections::BTreeSet;
 use zk_components::execute_isi_component;
 fn rejected_native_pipa_r_proof(

@@ -118,6 +118,40 @@ pub fn commit_genesis_fixture(
     iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
         .expect("original signed fixture genesis")
 }
+/// Apply the original signed genesis and bind the configuration to it, as node startup does.
+#[allow(dead_code)]
+pub fn commit_signed_genesis(
+    cfg: &mut iroha_config::parameters::actual::Root,
+    world: World,
+    instructions: Vec<iroha_data_model::prelude::InstructionBox>,
+) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+    commit_signed_genesis_with(cfg, world, |config| {
+        config.genesis_instructions = instructions;
+    })
+}
+/// [`commit_signed_genesis`] for a chain that also authors parameters or Nexus configuration.
+#[allow(dead_code)]
+pub fn commit_signed_genesis_with(
+    cfg: &mut iroha_config::parameters::actual::Root,
+    world: World,
+    author: impl FnOnce(&mut iroha_core::sumeragi::test_chain::TestChainConfig),
+) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
+    let time_ms = u64::try_from(
+        iroha_primitives::time::TimeSource::new_system()
+            .get_unix_time()
+            .as_millis(),
+    )
+    .expect("fixture time fits");
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(world, time_ms);
+    config.chain_id = cfg.common.chain.clone();
+    config.genesis_key = cfg.common.key_pair.clone();
+    author(&mut config);
+    let native_chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
+        .expect("original signed fixture genesis");
+    cfg.genesis.expected_hash = native_chain.genesis().hash();
+    cfg.genesis.public_key = cfg.common.key_pair.public_key().clone();
+    native_chain
+}
 /// Keep an applied signed genesis alive until the router finishes its final request.
 /// This owner supplies no routing authority; the existing native genesis execution does.
 #[allow(dead_code)]
@@ -152,6 +186,10 @@ impl CommittedToriiRouterRuntime {
     /// Borrow the original committed State for fixture invariants.
     pub fn state(&self) -> &Arc<State> {
         self.chain.state()
+    }
+    /// Clone the router handle owned by this runtime.
+    pub fn router(&self) -> axum::Router {
+        self.runtime.router()
     }
     /// Authenticate an operator request against this actual genesis-derived network.
     pub fn operator_signed_request(
@@ -297,24 +335,29 @@ pub struct StandardToriiHarness {
     pub state: Arc<State>,
     /// Transaction queue retained for request-side-effect assertions.
     pub queue: Arc<Queue>,
+    /// Applied signed genesis owner when this harness authored the ledger itself.
+    _native_chain: Option<iroha_core::sumeragi::test_chain::CertifiedTestChain>,
 }
 #[allow(dead_code)]
 impl StandardToriiHarness {
-    /// Build the common `test-chain` router around an explicitly supplied world.
-    pub fn new(cfg: &iroha_config::parameters::actual::Root, mut world: World) -> Self {
-        let kura = Kura::blank_kura_for_testing();
-        let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-        seed_peer(&mut world, local_peer_id.clone());
-        let chain_id = cfg.common.chain.clone();
-        let network_id = NetworkId::from_genesis_hash(cfg.genesis.expected_hash);
-        let state = Arc::new(State::new_with_chain_and_network_id_for_testing(
-            world,
-            kura.clone(),
-            LiveQueryStore::start_test(),
-            chain_id,
-            network_id,
-        ));
-        Self::from_state(cfg, &kura, state)
+    /// Build the common `test-chain` router over an applied signed genesis of `world`.
+    pub fn new(cfg: &iroha_config::parameters::actual::Root, world: World) -> Self {
+        Self::with_genesis_instructions(cfg, world, Vec::new())
+    }
+    /// Build the common router over a signed genesis that also executes `instructions`.
+    pub fn with_genesis_instructions(
+        cfg: &iroha_config::parameters::actual::Root,
+        world: World,
+        instructions: Vec<iroha_data_model::prelude::InstructionBox>,
+    ) -> Self {
+        let mut cfg = cfg.clone();
+        let native_chain = commit_signed_genesis(&mut cfg, world, instructions);
+        let local_peer_id = native_chain.validators()[0].0.clone();
+        let kura = native_chain.kura().clone();
+        let state = native_chain.state().clone();
+        let mut torii = Self::from_state_with_local_peer(&cfg, &kura, state, &local_peer_id);
+        torii._native_chain = Some(native_chain);
+        torii
     }
     /// Build the common router around a preconfigured state snapshot.
     pub fn from_state(
@@ -323,6 +366,14 @@ impl StandardToriiHarness {
         state: Arc<State>,
     ) -> Self {
         let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+        Self::from_state_with_local_peer(cfg, kura, state, &local_peer_id)
+    }
+    fn from_state_with_local_peer(
+        cfg: &iroha_config::parameters::actual::Root,
+        kura: &Arc<Kura>,
+        state: Arc<State>,
+        local_peer_id: &PeerId,
+    ) -> Self {
         let queue = Arc::new(Queue::from_config(
             iroha_config::parameters::actual::Queue::default(),
             tokio::sync::broadcast::channel(1).0,
@@ -332,7 +383,7 @@ impl StandardToriiHarness {
             kura,
             &state,
             &queue,
-            &local_peer_id,
+            local_peer_id,
             tokio::sync::broadcast::channel(1).0,
             TelemetryProfile::Operator,
         );
@@ -340,6 +391,7 @@ impl StandardToriiHarness {
             harness,
             state,
             queue,
+            _native_chain: None,
         }
     }
     /// Build the endpoint router while retaining the ledger fixture.
@@ -353,27 +405,7 @@ pub async fn request(
     app: &axum::Router,
     request: Request<Body>,
 ) -> Result<axum::response::Response, std::convert::Infallible> {
-    let response = app.clone().oneshot(request).await?;
-    Ok(temp_debug_response(response).await)
-}
-/// TEMP-DEBUG: print every non-success response body (diagnostic only; to be removed).
-#[allow(dead_code)]
-pub async fn temp_debug_response(response: axum::response::Response) -> axum::response::Response {
-    if response.status().is_success() {
-        return response;
-    }
-    let (parts, body) = response.into_parts();
-    let bytes = http_body_util::BodyExt::collect(body)
-        .await
-        .expect("TEMP-DEBUG body")
-        .to_bytes();
-    eprintln!(
-        "TEMP-DEBUG {} {:?} {}",
-        parts.status,
-        parts.headers.get("content-type"),
-        String::from_utf8_lossy(&bytes)
-    );
-    axum::response::Response::from_parts(parts, Body::from(bytes))
+    app.clone().oneshot(request).await
 }
 /// Send a bodyless GET request while preserving the router result for caller-specific errors.
 #[allow(dead_code)]

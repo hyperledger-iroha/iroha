@@ -50,7 +50,6 @@ const I105_SENTINEL_TEST: &str = "test";
 const I105_SENTINEL_DEV: &str = "dev";
 const I105_SENTINEL_FALLBACK_PREFIX: &str = "n";
 const I105_CHECKSUM_LEN: usize = 6;
-const BECH32M_CONST: u32 = 0x2bc8_30a3;
 const I105_BASE_U8: u8 = 105;
 const I105_BASE: u32 = I105_BASE_U8 as u32;
 const CHAIN_DISCRIMINANT_SORA: u16 = 0x02F1;
@@ -1371,91 +1370,15 @@ fn validate_base_n_digits(digits: &[u8], base: u32) -> Result<(), AccountAddress
     }
     Ok(())
 }
-/// Bech32m-style checksum digits over the `snx` domain for a canonical account payload.
+/// Bech32m checksum digits over the `snx` domain for a canonical account payload.
 #[doc(hidden)]
 #[must_use]
 pub fn i105_checksum_digits(canonical: &[u8]) -> [u8; I105_CHECKSUM_LEN] {
-    let mut chk = 1_u32;
-    for byte in "snx".bytes() {
-        chk = bech32_polymod_step(chk, byte >> 5);
-    }
-    chk = bech32_polymod_step(chk, 0);
-    for byte in "snx".bytes() {
-        chk = bech32_polymod_step(chk, byte & 0x1f);
-    }
-    let mut acc = 0_u32;
-    let mut bits = 0_u32;
-    for &byte in canonical {
-        acc = (acc << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            chk = bech32_polymod_step(chk, u8::try_from((acc >> bits) & 0x1f).unwrap());
-        }
-    }
-    if bits > 0 {
-        chk = bech32_polymod_step(
-            chk,
-            u8::try_from((acc << (5 - bits)) & 0x1f).expect("base32 limb fits in u8"),
-        );
-    }
-    for _ in 0..I105_CHECKSUM_LEN {
-        chk = bech32_polymod_step(chk, 0);
-    }
-    let polymod = chk ^ BECH32M_CONST;
-    let mut result = [0_u8; I105_CHECKSUM_LEN];
-    for (index, slot) in result.iter_mut().enumerate() {
-        let shift = 5 * (I105_CHECKSUM_LEN - 1 - index);
-        *slot = u8::try_from((polymod >> shift) & 0x1f).expect("checksum limb fits in u8");
-    }
-    result
-}
-#[cfg(test)]
-fn convert_to_base32(data: &[u8]) -> Vec<u8> {
-    let mut acc = 0u32;
-    let mut bits = 0u32;
-    let mut out = Vec::with_capacity((data.len() * 8).div_ceil(5));
-    for &byte in data {
-        acc = (acc << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            let value = u8::try_from((acc >> bits) & 0x1f).expect("base32 limb fits in u8");
-            out.push(value);
-        }
-    }
-    if bits > 0 {
-        let value = u8::try_from((acc << (5 - bits)) & 0x1f).expect("base32 limb fits in u8");
-        out.push(value);
-    }
-    out
-}
-fn bech32_polymod_step(mut chk: u32, value: u8) -> u32 {
-    const GEN: [u32; 5] = [
-        0x3b6a_57b2,
-        0x2650_8e6d,
-        0x1ea1_19fa,
-        0x3d42_33dd,
-        0x2a14_62b3,
-    ];
-    let top = chk >> 25;
-    chk = ((chk & 0x1ff_ffff) << 5) ^ u32::from(value);
-    for (index, generator) in GEN.iter().enumerate() {
-        if (top >> index) & 1 == 1 {
-            chk ^= generator;
-        }
-    }
-    chk
-}
-#[cfg(test)]
-fn expand_hrp(hrp: &str) -> Vec<u8> {
-    let mut out = Vec::with_capacity(hrp.len() * 2 + 1);
-    for byte in hrp.bytes() {
-        out.push(byte >> 5);
-    }
-    out.push(0);
-    out.extend(hrp.bytes().map(|byte| byte & 0x1f));
-    out
+    crate::bech32::create_checksum(
+        crate::bech32::Variant::Bech32m,
+        "snx",
+        crate::bech32::BytesToValues::new(canonical),
+    )
 }
 #[cfg(test)]
 fn decode_i105_payload(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
@@ -1950,17 +1873,13 @@ mod tests {
     }
 
     #[test]
-    fn base32_and_checksum_helpers_cover_empty_and_partial_bytes() {
-        assert_eq!(convert_to_base32(&[]), Vec::<u8>::new());
-        assert_eq!(convert_to_base32(&[0x00]), vec![0, 0]);
-        assert_eq!(convert_to_base32(&[0xff]), vec![31, 28]);
-        assert_eq!(expand_hrp("snx"), vec![3, 3, 3, 0, 19, 14, 24]);
-        let checksum = i105_checksum_digits(&[0x02, 0x00, 0x01]);
-        assert_eq!(checksum.len(), I105_CHECKSUM_LEN);
-        assert!(
-            checksum.iter().all(|digit| u32::from(*digit) < 32),
-            "bech32m checksum digits must be base32 limbs"
+    fn i105_checksum_digits_cover_empty_and_partial_bytes() {
+        // Values pinned from the pre-consolidation polymod implementation.
+        assert_eq!(
+            i105_checksum_digits(&[0x02, 0x00, 0x01]),
+            [9, 22, 18, 0, 20, 22]
         );
+        assert_eq!(i105_checksum_digits(&[]), [8, 4, 24, 15, 6, 6]);
     }
     #[test]
     fn truncated_selector_prefixed_payloads_are_rejected() {

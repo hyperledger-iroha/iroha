@@ -92,6 +92,8 @@ impl fmt::Display for OpaqueDeferredAuthorityError {
 ///
 /// Borrow the original ordered effects so every consumption boundary applies the
 /// same recursive signed-plan rule before executing its first instruction.
+/// Deferred multisig approvals are resolved against this execution overlay, so a live
+/// proposal cannot smuggle a command that its signers never reviewed as an instruction.
 ///
 /// # Errors
 /// Rejects nested committee, monetary staking or `RecordSccpMessage` instructions,

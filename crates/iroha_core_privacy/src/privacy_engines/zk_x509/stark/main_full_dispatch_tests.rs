@@ -169,3 +169,126 @@ fn every_full_route_erases_returned_originals_on_consumer_unwind() {
             && entry.nonzero_after == 0));
     }
 }
+
+#[test]
+fn full_native_gate_requires_every_complete_registered_masked_length() {
+    use selected_coset::measured_full_prefix_v1;
+    assert_eq!(MASK_DEGREE + 1, 1816);
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let native_logs = layout
+        .trace_groups
+        .iter()
+        .map(|group| group.native_trace_log2)
+        .collect::<Vec<_>>();
+    assert_eq!(native_logs, [5, 8, 15, 16, 18, 19]);
+    for native in native_logs {
+        let length = (1usize << native) + MASK_DEGREE + 1;
+        for width in 0..=9 {
+            assert_eq!(
+                measured_full_prefix_v1(native, 22, std::iter::repeat_n(length, width)),
+                width == 8
+            );
+        }
+        for changed in 0..8 {
+            for bad in [0, length - 1, length + 1] {
+                let mut lengths = [length; 8];
+                lengths[changed] = bad;
+                assert!(!measured_full_prefix_v1(native, 22, lengths.into_iter()));
+            }
+        }
+        assert!(!measured_full_prefix_v1(
+            native,
+            21,
+            std::iter::repeat_n(length, 8)
+        ));
+        assert!(!measured_full_prefix_v1(
+            native,
+            23,
+            std::iter::repeat_n(length, 8)
+        ));
+    }
+    for native in [0, 1, 4, 6, 17, 20, 22, 255] {
+        assert!(!measured_full_prefix_v1(
+            native,
+            22,
+            std::iter::repeat_n(1816, 8)
+        ));
+    }
+}
+
+#[test]
+fn full_native_admission_is_feature_and_architecture_bound() {
+    #[cfg(target_arch = "x86_64")]
+    let supported = cfg!(feature = "simd") && std::is_x86_feature_detected!("avx2");
+    #[cfg(not(target_arch = "x86_64"))]
+    let supported = false;
+    assert_eq!(
+        selected_coset::FullPrefixBackendV1::detect_v1().is_native_v1(),
+        supported
+    );
+    assert!(!selected_coset::FullPrefixBackendV1::Scalar.is_native_v1());
+}
+
+#[cfg(not(feature = "simd"))]
+#[test]
+fn full_native_feature_off_measured_batch_executes_scalar_and_clears() {
+    let rows = 1usize << 22;
+    let native = 5;
+    let length = (1usize << native) + MASK_DEGREE + 1;
+    let columns = (0..8)
+        .map(|column| {
+            Column::from_vec_v1(
+                (0..length)
+                    .map(|degree| F((column * 19 + degree * 7 + 1) as u64))
+                    .collect(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert!(selected_coset::measured_full_prefix_v1(
+        native,
+        22,
+        columns.iter().map(|column| column.len())
+    ));
+    let layout = AggregateProofLayoutV1::for_full_profile_v1().unwrap();
+    let replay = main_resources::MainProverBufferPlanV1::new_v1(&layout)
+        .unwrap()
+        .replay_batch;
+    assert!(8 * (rows + length) * core::mem::size_of::<F>() <= replay);
+    // Stream one dense original column into the oracle, then release it. The
+    // complete oracle is gone before the one8N production result is allocated.
+    let mut expected = blake3::Hasher::new();
+    for source in &columns {
+        let dense =
+            Column::from_vec_v1(masked_trace_coefficients_on_coset_v1(source, native, 22).unwrap());
+        for value in dense.iter() {
+            expected.update(&value.0.to_le_bytes());
+        }
+        drop(dense);
+    }
+    let expected = expected.finalize();
+    let mut evaluator = owner(0);
+    evaluator.evaluation_rows = rows;
+    let actual = evaluator.evaluate_v1(&columns, native, 22).unwrap();
+    assert_eq!(evaluator.receipt.cpu_columns, 8);
+    assert_eq!(evaluator.receipt.full_prefix_cpu_columns, 8);
+    assert_eq!(evaluator.receipt.full_dense_cpu_columns, 0);
+    assert_eq!(evaluator.receipt.full_avx2_cpu_columns, 0);
+    assert_eq!(evaluator.receipt.full_avx2_vector_blocks, 0);
+    assert_eq!(evaluator.receipt.full_avx2_scalar_pairs, 0);
+    assert_eq!(actual.len(), 8);
+    let mut digest = blake3::Hasher::new();
+    for column in &actual {
+        assert_eq!(column.len(), rows);
+        for value in column.iter() {
+            digest.update(&value.0.to_le_bytes());
+        }
+    }
+    assert_eq!(digest.finalize(), expected);
+    let ((), erased) = field_column_inspection::observe_v1(|| drop(actual));
+    assert_eq!(erased.len(), 8);
+    assert!(
+        erased.iter().all(|entry| entry.cells == rows
+            && entry.nonzero_before > 0
+            && entry.nonzero_after == 0)
+    );
+}

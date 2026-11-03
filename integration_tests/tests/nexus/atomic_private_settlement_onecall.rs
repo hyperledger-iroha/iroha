@@ -917,7 +917,14 @@ fn require_cold_deadline(deadline: Instant) -> Result<()> {
 fn cold_final_evidence_cannot_renew_or_outlive_original_deadline() {
     assert!(require_cold_deadline(Instant::now() + Duration::from_secs(60)).is_ok());
     assert!(require_cold_deadline(Instant::now()).is_err());
-    assert!(require_cold_deadline(Instant::now() - Duration::from_secs(1)).is_err());
+    assert!(
+        require_cold_deadline(
+            Instant::now()
+                .checked_sub(Duration::from_secs(1))
+                .expect("the monotonic clock is at least one second old")
+        )
+        .is_err()
+    );
 }
 
 #[test]

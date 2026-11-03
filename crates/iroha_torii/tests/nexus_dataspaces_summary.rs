@@ -15,12 +15,15 @@ use iroha_core::{
     state::{State, World, WorldReadOnly},
 };
 use iroha_crypto::{Algorithm, Hash, KeyPair};
+use iroha_data_model::Registrable as _;
 use iroha_data_model::{
     account::{AccountId, NewAccount},
-    asset::{AssetBalancePolicy, AssetDefinitionId, AssetId, NewAssetDefinition},
+    asset::{
+        Asset, AssetBalancePolicy, AssetDefinition, AssetDefinitionId, AssetId, NewAssetDefinition,
+    },
     block::BlockHeader,
     domain::Domain,
-    isi::{Mint, Register},
+    isi::Register,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
         DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion, UniversalAccountId,
@@ -51,6 +54,7 @@ fn nexus_dataspaces_summary_ed25519_fixture_uses_checked_key_generation() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let query = LiveQueryStore::start_test();
     let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
@@ -63,7 +67,18 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         .expect("i105 account literal");
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii::dataspaces::summary"));
     let dataspace = DataSpaceId::new(42);
-    let mut world = World::default();
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("nexus", "universal").expect("domain id"),
+        "xor".parse().expect("asset definition name"),
+    );
+    let mut world = world_with_uaid_portfolio(
+        &domain_id,
+        &account_id,
+        uaid,
+        &asset_definition_id,
+        "xor",
+        500,
+    );
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -111,42 +126,6 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
         cfg.common.chain.clone(),
         iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
     );
-    let asset_definition_id = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("nexus", "universal").expect("domain id"),
-        "xor".parse().expect("asset definition name"),
-    );
-    let mut block = state.block(block_header(1));
-    let mut stx = block.transaction();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register domain");
-    Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account with uaid");
-    Register::asset_definition(NewAssetDefinition {
-        id: asset_definition_id.clone(),
-        name: "xor".to_owned(),
-        description: None,
-        alias: None,
-        spec: iroha_primitives::numeric::NumericSpec::default(),
-        mintable: iroha_data_model::asset::Mintable::default(),
-        logo: None,
-        metadata: iroha_model_base::metadata::Metadata::default(),
-        balance_scope_policy: AssetBalancePolicy::Global,
-        owning_domain: Some(domain_id.clone()),
-    })
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register asset definition");
-    Mint::asset_quantity(
-        500u64,
-        AssetId::new(asset_definition_id.clone(), account_id.clone()),
-    )
-    .execute(&ALICE_ID, &mut stx)
-    .expect("mint asset");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit seeded state");
     let router = build_test_router(Arc::new(state));
     let response = router
         .router()
@@ -154,7 +133,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
             Request::builder()
                 .uri(format!(
                     "/v1/nexus/dataspaces/accounts/{}/summary",
-                    urlencoding::encode(&account_literal)
+                    iroha_torii::test_utils::percent_encode(&account_literal)
                 ))
                 .body(Body::empty())
                 .expect("request"),
@@ -192,7 +171,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_without_uaid() {
-    let state = minimal_state();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -200,18 +179,14 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
         .to_account_address()
         .and_then(|address| address.to_i105())
         .expect("i105 account literal");
-    let mut block = state.block(block_header(1));
-    let mut stx = block.transaction();
-    Register::account(NewAccount::new(account_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit account");
+    let state = state_over(World::with(
+        [],
+        [NewAccount::new(account_id.clone()).build(&ALICE_ID)],
+        [],
+    ));
     let router = build_test_router(state);
     let spaced_literal = format!("  {account_literal}  ");
-    let literal = urlencoding::encode(&spaced_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&spaced_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -234,7 +209,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_zeroed_snapshot_for_account_w
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_dataspace() {
-    let state = minimal_state();
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let account_keypair = checked_nexus_dataspaces_summary_ed25519_key_fixture();
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -248,37 +223,16 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
         domain_id.clone(),
         "rose".parse().expect("asset definition name"),
     );
-    let mut block = state.block(block_header(1));
-    let mut stx = block.transaction();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register domain");
-    Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account with uaid");
-    Register::asset_definition(NewAssetDefinition {
-        id: definition_id.clone(),
-        name: "rose".to_owned(),
-        description: None,
-        alias: None,
-        spec: iroha_primitives::numeric::NumericSpec::default(),
-        mintable: iroha_data_model::asset::Mintable::default(),
-        logo: None,
-        metadata: iroha_model_base::metadata::Metadata::default(),
-        balance_scope_policy: AssetBalancePolicy::Global,
-        owning_domain: Some(domain_id.clone()),
-    })
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register asset definition");
-    Mint::asset_quantity(25u64, AssetId::new(definition_id, account_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("mint asset");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit seeded state");
+    let state = state_over(world_with_uaid_portfolio(
+        &domain_id,
+        &account_id,
+        uaid,
+        &definition_id,
+        "rose",
+        25,
+    ));
     let router = build_test_router(state);
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -313,6 +267,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_portfolio_only_default_datasp
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_manifests() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let query = LiveQueryStore::start_test();
     let pending_dataspace = DataSpaceId::new(7);
@@ -335,7 +290,13 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         expiry_epoch: Some(30),
         entries: Vec::new(),
     };
-    let mut world = World::default();
+    let mut world = World::with(
+        [],
+        [NewAccount::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&ALICE_ID)],
+        [],
+    );
     let mut bindings = UaidDataspaceBindings::default();
     for dataspace in [pending_dataspace, expired_dataspace, revoked_dataspace] {
         bindings.bind_account(dataspace, account_id.clone());
@@ -392,17 +353,8 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
         cfg.common.chain.clone(),
         iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
     );
-    let mut block = state.block(block_header(1));
-    let mut stx = block.transaction();
-    Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account with uaid");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit account");
     let router = build_test_router(Arc::new(state));
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -477,6 +429,7 @@ async fn nexus_dataspaces_summary_endpoint_reports_pending_expired_and_revoked_m
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserves_global_portfolio()
 {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let dataspace = DataSpaceId::new(404);
@@ -493,37 +446,9 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
         domain_id.clone(),
         "lotus".parse().expect("asset definition name"),
     );
-    let world = World::default();
+    let world =
+        world_with_uaid_portfolio(&domain_id, &account_id, uaid, &definition_id, "lotus", 9);
     let mut state = State::new_for_testing(world, Arc::clone(&kura), query);
-    let mut block = state.block(block_header(1));
-    let mut stx = block.transaction();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register domain");
-    Register::account(NewAccount::new(account_id.clone()).with_uaid(Some(uaid)))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register account with uaid");
-    Register::asset_definition(NewAssetDefinition {
-        id: definition_id.clone(),
-        name: "lotus".to_owned(),
-        description: None,
-        alias: None,
-        spec: iroha_primitives::numeric::NumericSpec::default(),
-        mintable: iroha_data_model::asset::Mintable::default(),
-        logo: None,
-        metadata: iroha_model_base::metadata::Metadata::default(),
-        balance_scope_policy: AssetBalancePolicy::Global,
-        owning_domain: Some(domain_id.clone()),
-    })
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register asset definition");
-    Mint::asset_quantity(9u64, AssetId::new(definition_id, account_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("mint asset");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit seeded state");
     let mut bindings = UaidDataspaceBindings::default();
     bindings.bind_account(dataspace, account_id.clone());
     state
@@ -548,8 +473,9 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
         .space_directory_manifests_mut_for_testing()
         .insert(uaid, set);
     // Reconstruct an initial World containing a dataspace absent from the active
-    // catalog. Configured genesis must prune both its manifest and derived binding;
-    // the account's global asset remains owned by the same canonical account.
+    // catalog. A genesis that configures a new catalog must prune both its manifest
+    // and derived binding; the account's global asset remains owned by the same
+    // canonical account.
     {
         let world = state.world_view();
         assert!(
@@ -577,7 +503,18 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
     assert_eq!(before_account.account_id, account_id);
     assert_eq!(before_account.assets.len(), 1);
     assert_eq!(before_account.assets[0].quantity, Quantity::from(9u32));
-    let (router, state) = build_test_router_with_state(Arc::new(state));
+    let mut nexus = state.nexus_snapshot();
+    nexus.dataspace_catalog = DataSpaceCatalog::new(vec![
+        DataSpaceMetadata::default(),
+        DataSpaceMetadata {
+            id: DataSpaceId::new(405),
+            alias: "retail".to_owned(),
+            description: None,
+            fault_tolerance: 1,
+        },
+    ])
+    .expect("dataspace catalog");
+    let (router, state) = build_test_router_with_nexus(Arc::new(state), nexus);
     {
         let world = state.world_view();
         assert!(world.uaid_dataspaces().get(&uaid).is_none());
@@ -588,7 +525,7 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
     assert_eq!(after.dataspaces.len(), 1);
     assert_eq!(after.dataspaces[0].dataspace_id, DataSpaceId::UNIVERSAL);
     assert_eq!(after.dataspaces[0].accounts, before.dataspaces[0].accounts);
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -630,6 +567,7 @@ async fn nexus_dataspaces_summary_endpoint_prunes_uncataloged_state_and_preserve
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uaid_owner() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
     let query = LiveQueryStore::start_test();
     let dataspace = DataSpaceId::new(52);
@@ -652,7 +590,25 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         domain_id.clone(),
         "cedar".parse().expect("asset definition name"),
     );
-    let mut world = World::default();
+    let mut world = World::with_assets(
+        [Domain::new(domain_id.clone()).build(&ALICE_ID)],
+        [
+            NewAccount::new(primary_account_id.clone())
+                .with_uaid(Some(uaid))
+                .build(&ALICE_ID),
+            NewAccount::new(secondary_account_id.clone()).build(&ALICE_ID),
+        ],
+        [portfolio_asset_definition(
+            &domain_id,
+            &definition_id,
+            "cedar",
+        )],
+        [Asset::new(
+            AssetId::new(definition_id.clone(), primary_account_id.clone()),
+            Quantity::from(13_u32),
+        )],
+        [],
+    );
     let manifest = AssetPermissionManifest {
         version: ManifestVersion::V1,
         uaid,
@@ -687,51 +643,6 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         cfg.common.chain.clone(),
         iroha_data_model::NetworkId::from_genesis_hash(cfg.genesis.expected_hash),
     );
-    let mut block = state.block(block_header(1));
-    let mut stx = block.transaction();
-    Register::domain(Domain::new(domain_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register domain");
-    Register::account(NewAccount::new(primary_account_id.clone()).with_uaid(Some(uaid)))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register primary account with uaid");
-    let duplicate =
-        Register::account(NewAccount::new(secondary_account_id.clone()).with_uaid(Some(uaid)))
-            .execute(&ALICE_ID, &mut stx)
-            .expect_err("a UAID has exactly one canonical account owner");
-    assert_eq!(
-        duplicate,
-        iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
-            format!("UAID {uaid} already bound to account {primary_account_id}").into()
-        )
-    );
-    Register::account(NewAccount::new(secondary_account_id.clone()))
-        .execute(&ALICE_ID, &mut stx)
-        .expect("register secondary account");
-    Register::asset_definition(NewAssetDefinition {
-        id: definition_id.clone(),
-        name: "cedar".to_owned(),
-        description: None,
-        alias: None,
-        spec: iroha_primitives::numeric::NumericSpec::default(),
-        mintable: iroha_data_model::asset::Mintable::default(),
-        logo: None,
-        metadata: iroha_model_base::metadata::Metadata::default(),
-        balance_scope_policy: AssetBalancePolicy::Global,
-        owning_domain: Some(domain_id.clone()),
-    })
-    .execute(&ALICE_ID, &mut stx)
-    .expect("register asset definition");
-    Mint::asset_quantity(
-        13u64,
-        AssetId::new(definition_id, primary_account_id.clone()),
-    )
-    .execute(&ALICE_ID, &mut stx)
-    .expect("mint asset");
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit seeded state");
     let mut bindings = state
         .view()
         .world()
@@ -749,6 +660,25 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         .insert(uaid, bindings);
     let (router, state) = build_test_router_with_state(Arc::new(state));
     {
+        // Registering a new account cannot claim a UAID that already has an owner.
+        let third_account_id = AccountId::new(
+            checked_nexus_dataspaces_summary_ed25519_key_fixture()
+                .public_key()
+                .clone(),
+        );
+        let mut block = state.block(block_header(2));
+        let mut stx = block.transaction();
+        let duplicate = Register::account(NewAccount::new(third_account_id).with_uaid(Some(uaid)))
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("a UAID has exactly one canonical account owner");
+        assert_eq!(
+            duplicate,
+            iroha_data_model::isi::error::InstructionExecutionError::InvariantViolation(
+                format!("UAID {uaid} already bound to account {primary_account_id}").into()
+            )
+        );
+    }
+    {
         let world = state.world_view();
         assert_eq!(world.uaid_accounts().get(&uaid), Some(&primary_account_id));
         assert_eq!(
@@ -762,7 +692,7 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
         assert!(bindings.is_bound_to(dataspace, &primary_account_id));
         assert!(!bindings.is_bound_to(dataspace, &secondary_account_id));
     }
-    let literal = urlencoding::encode(&primary_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&primary_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::OK, "unexpected body: {body}");
@@ -801,6 +731,7 @@ async fn nexus_dataspaces_summary_endpoint_rebuilds_bindings_from_the_unique_uai
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let state = minimal_state();
     let router = build_test_router(state);
     let (status, body) = request_summary(
@@ -817,6 +748,7 @@ async fn nexus_dataspaces_summary_endpoint_rejects_invalid_account_literal() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let state = minimal_state();
     let router = build_test_router(state);
     let (status, body) =
@@ -830,21 +762,69 @@ async fn nexus_dataspaces_summary_endpoint_rejects_empty_account_literal() {
 }
 #[tokio::test(flavor = "current_thread")]
 async fn nexus_dataspaces_summary_endpoint_returns_not_found_for_missing_account() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
     let state = minimal_state();
     let router = build_test_router(state);
     let account_literal = valid_missing_account_literal();
-    let literal = urlencoding::encode(&account_literal);
+    let literal = iroha_torii::test_utils::percent_encode(&account_literal);
     let uri = format!("/v1/nexus/dataspaces/accounts/{literal}/summary");
     let (status, _body) = request_summary(&router, &uri).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
     router.shutdown().await;
 }
 fn minimal_state() -> Arc<State> {
+    state_over(World::default())
+}
+fn state_over(world: World) -> Arc<State> {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let world = World::default();
-    let state = State::new_for_testing(world, Arc::clone(&kura), query);
-    Arc::new(state)
+    Arc::new(State::new_for_testing(world, kura, query))
+}
+/// The UAID owner's initial World rows. Ordinary instructions need the crypto policy that only
+/// signed genesis installs, so the pre-genesis fixture states its accounts and assets directly.
+fn world_with_uaid_portfolio(
+    domain_id: &DomainId,
+    account_id: &AccountId,
+    uaid: UniversalAccountId,
+    definition_id: &AssetDefinitionId,
+    asset_name: &str,
+    quantity: u32,
+) -> World {
+    World::with_assets(
+        [Domain::new(domain_id.clone()).build(&ALICE_ID)],
+        [NewAccount::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(&ALICE_ID)],
+        [portfolio_asset_definition(
+            domain_id,
+            definition_id,
+            asset_name,
+        )],
+        [Asset::new(
+            AssetId::new(definition_id.clone(), account_id.clone()),
+            Quantity::from(quantity),
+        )],
+        [],
+    )
+}
+fn portfolio_asset_definition(
+    domain_id: &DomainId,
+    definition_id: &AssetDefinitionId,
+    asset_name: &str,
+) -> AssetDefinition {
+    NewAssetDefinition {
+        id: definition_id.clone(),
+        name: asset_name.to_owned(),
+        description: None,
+        alias: None,
+        spec: iroha_primitives::numeric::NumericSpec::default(),
+        mintable: iroha_data_model::asset::Mintable::default(),
+        logo: None,
+        metadata: iroha_model_base::metadata::Metadata::default(),
+        balance_scope_policy: AssetBalancePolicy::Global,
+        owning_domain: Some(domain_id.clone()),
+    }
+    .build(&ALICE_ID)
 }
 async fn request_summary(router: &axum::Router, uri: &str) -> (StatusCode, String) {
     let response = router
@@ -907,10 +887,16 @@ fn build_test_router(state: Arc<State>) -> iroha_torii::TestApiRouterRuntime {
 fn build_test_router_with_state(
     state: Arc<State>,
 ) -> (iroha_torii::TestApiRouterRuntime, Arc<State>) {
+    let nexus = state.nexus_snapshot();
+    build_test_router_with_nexus(state, nexus)
+}
+fn build_test_router_with_nexus(
+    state: Arc<State>,
+    mut nexus: iroha_config::parameters::actual::Nexus,
+) -> (iroha_torii::TestApiRouterRuntime, Arc<State>) {
     // The fixture assembly above only populates a pre-genesis World. Authenticate that exact
     // initial World through original signed genesis before exercising native fanout reads.
     assert_eq!(state.committed_height(), 0);
-    let mut nexus = state.nexus_snapshot();
     // The catalog routes are physical storage/authority labels, separate from native lanes.
     let lanes = nexus
         .dataspace_catalog

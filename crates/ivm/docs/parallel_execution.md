@@ -19,9 +19,16 @@ semantics.
 ## Thread limits
 
 `ivm::set_scheduler_thread_limits` records the operator's `concurrency.scheduler_min_threads` and
-`concurrency.scheduler_max_threads` bounds (0 means the physical core count), which VM construction
-reports in the startup banner. `ivm::init_global_rayon` and `ivm::apply_stack_sizes` size the host
-Rayon pool and its worker stacks. These settings affect throughput only.
+`concurrency.scheduler_max_threads` bounds (0 means the process's available parallelism), which VM
+construction reports in the startup banner. `ivm::init_global_rayon` and `ivm::apply_stack_sizes`
+size the host Rayon pool and its worker stacks. These settings affect throughput only.
+
+Automatic scheduler bounds and the prover worker cap use
+`std::thread::available_parallelism`, falling back to one worker if the operating system cannot
+provide an estimate. This estimates logical parallelism available to the process, including
+resource limits on supported platforms; it is not a physical-core count or a hard resource
+enforcement mechanism. Explicit counts avoid the operating-system query. When both scheduler
+bounds are automatic they share one query, and the minimum never exceeds the maximum.
 
 ## Determinism and gas
 

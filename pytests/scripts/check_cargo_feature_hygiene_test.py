@@ -18,6 +18,16 @@ FEATURE_HYGIENE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FEATURE_HYGIENE)
 
 
+def test_kagemusha_simulator_stays_an_opt_in_behind_the_forbidden_test_utils() -> None:
+    """A shipping graph selecting the simulator also selects `test-utils`, which the release guard forbids."""
+    for package in ("iroha_core", "iroha_core_zk"):
+        assert "kagemusha-simulator" in FEATURE_HYGIENE.EXPLICIT_OPT_IN_FEATURES[package]
+    core = FEATURE_HYGIENE._load_toml(_manifest_path("iroha_core"))
+    zk = FEATURE_HYGIENE._load_toml(_manifest_path("iroha_core_zk"))
+    assert core["features"]["kagemusha-simulator"] == ["iroha_core_zk/kagemusha-simulator"]
+    assert zk["features"]["kagemusha-simulator"] == ["test-utils"]
+
+
 def test_repository_feature_hygiene() -> None:
     assert FEATURE_HYGIENE.check_repository(ROOT) == []
 

@@ -128,7 +128,7 @@ impl RetainedStateParameters {
     ///
     /// # Errors
     /// Returns the exact original decoder, finite-pool or physical refusal.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn try_copy_for_testing(
         source: &StateParameters,
         budget: &AllocationBudget,
@@ -191,7 +191,7 @@ impl RetainedStateParameters {
     /// publication token: two already applied siblings must not share a stale plan.
     /// The execution owner must already have checked scope, authorization, retained
     /// liabilities and funded its decoder/event backing before calling this method.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn prepare_replace(
         &self,
         next: &StateParameters,

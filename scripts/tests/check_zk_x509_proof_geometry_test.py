@@ -25,20 +25,20 @@ def _sources() -> tuple[str, str, str, str, str]:
 def test_current_source_complete_relation_exact_wire_bound() -> None:
     result = SCREEN["screen"](*_sources())
     assert result["proof_cap_bytes"] == 9_437_184
-    assert result["combined_current_max_bytes"] == 9_412_944
-    assert result["headroom_bytes"] == 24_240
-    assert result["current_trace_columns"] == 5_811
-    assert result["current_trace_opening_bytes"] == 6_322_368
-    assert result["complete_deep_opening_bytes"] == 424_896
+    assert result["combined_current_max_bytes"] == 9_435_984
+    assert result["headroom_bytes"] == 1_200
+    assert result["current_trace_columns"] == 5_831
+    assert result["current_trace_opening_bytes"] == 6_344_128
+    assert result["complete_deep_opening_bytes"] == 426_176
     assert result["main_section_cap_bytes"] == 7_934_010
     assert result["logical_main_groups"] == 6
     assert result["physical_main_base_roots"] == 1
     assert result["p256_signature_count"] == 5
     assert result["p256_all_group_trace_columns"] == 4_000
-    assert result["remaining_non_p256_trace_columns"] == 1_811
+    assert result["remaining_non_p256_trace_columns"] == 1_831
     assert result["production_qualified"] is False
     assert result["implemented_paired_fri_saving_bytes"] == 867_456
-    assert result["current_main_inner_max_bytes"] == 7_908_768
+    assert result["current_main_inner_max_bytes"] == 7_931_808
     assert result["current_ca_inner_max_bytes"] == 1_498_816
     assert result["main_frame_bytes"] == 10 + 31 * 32 == 1_002
     assert result["ca_frame_bytes"] == 10
@@ -74,8 +74,8 @@ def test_candidate_cannot_assume_unimplemented_pair_commitments() -> None:
 def test_source_drift_cannot_silently_reuse_old_component_bound() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
     changed = profile.replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_945;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_984;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_985;",
         1,
     )
     assert changed != profile
@@ -86,8 +86,8 @@ def test_source_drift_cannot_silently_reuse_old_component_bound() -> None:
 def test_opening_width_must_match_independent_rust_budget_assertion() -> None:
     profile, stark, credential, accumulator, native_test = _sources()
     changed = profile.replace(
-        "ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_322_368;",
-        "ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_323_456;",
+        "ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_344_128;",
+        "ZK_X509_SHARED_STARK_WIDE_MAIN_TRACE_OPENING_BYTES_V1: u32 = 6_345_216;",
         1,
     )
     assert changed != profile
@@ -126,14 +126,17 @@ def test_current_rows_require_the_implemented_reduced_layout() -> None:
         SCREEN["screen"](profile, stark, credential, changed, native_test)
 
 
-def test_complete_calendar_bindings_keep_each_column_and_the_same_ceiling() -> None:
+def test_calendar_and_projection_sha_bindings_keep_each_column_and_the_same_ceiling() -> None:
     result = SCREEN["screen"](*_sources())
     added_base = 285 - 113
     added_aux = 280 - 264
+    # Four original product columns in Projection and each of four SHA segments.
+    projection_sha_products = 4 + 4 * 4
     per_column = 136 * 8 + 2 * 32
-    assert result["current_trace_columns"] == 5_623 + added_base + added_aux
-    assert result["combined_current_max_bytes"] == 9_204_362 + (added_base + added_aux) * per_column - 7_532 - 4_718 + 4_224 + 32
-    assert result["headroom_bytes"] == 24_240
+    added_columns = added_base + added_aux + projection_sha_products
+    assert result["current_trace_columns"] == 5_623 + added_columns
+    assert result["combined_current_max_bytes"] == 9_204_362 + added_columns * per_column - 7_532 - 4_718 + 4_224 + 32
+    assert result["headroom_bytes"] == 1_200
 
 
 def test_numeric_constants_accept_public_owner_visibility() -> None:
@@ -181,8 +184,8 @@ def test_main_frame_must_match_independent_native_codec_accounting() -> None:
         "ZK_X509_MAIN_FRAME_BYTES_V1: u32 = 1_003;",
         1,
     ).replace(
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_944;",
-        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_412_945;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_984;",
+        "ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1: u32 = 9_435_985;",
         1,
     )
     repriced_native = stark.replace(
@@ -203,3 +206,17 @@ def test_main_frame_must_match_independent_native_codec_accounting() -> None:
             SCREEN["screen"](
                 candidate_profile, candidate_stark, credential, accumulator, native_test
             )
+
+
+def test_pull_requests_and_local_guards_check_current_proof_geometry() -> None:
+    root = Path(__file__).resolve().parents[2]
+    workflow = (root / ".github/workflows/pr.yml").read_text(encoding="utf-8")
+    assert workflow.count("scripts/tests/check_zk_x509_proof_geometry_test.py") == 1
+    assert workflow.count("python3 -I -S scripts/check_zk_x509_proof_geometry.py\n") == 1
+    makefile = (root / "Makefile").read_text(encoding="utf-8")
+    guards = makefile.split("\nguards:\n", 1)[1].split("\n\n", 1)[0]
+    assert "\t@python3 scripts/run_guards.py" in guards.split("\n")
+    runner = run_path(str(root / "scripts/run_guards.py"))
+    assert runner["GUARDS"].count(
+        ("python3", "scripts/check_zk_x509_proof_geometry.py")
+    ) == 1

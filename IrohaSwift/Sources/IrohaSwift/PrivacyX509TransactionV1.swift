@@ -7,6 +7,8 @@ public enum PrivacyX509TransactionErrorV1: Error, Equatable, Sendable {
     case unsupportedDirectAction
     case authorityMismatch
     case proofBounds
+    /// The original payload or completed versioned signed transaction exceeds 10 MiB.
+    case transactionBounds
 }
 
 /// A prepared direct X509 transaction. All independent inputs are retained unchanged.
@@ -84,6 +86,7 @@ enum PrivacyX509WireV1 {
     static let transactionSchema = "iroha_data_model::transaction::signed::model::TransactionPayload"
     static let statementLimit = 256 * 1024
     static let maximumProofBytes = 9 * 1024 * 1024
+    static let maximumTransactionBytes = 10 * 1024 * 1024
     static let zeroDigest = Data(repeating: 0, count: 32)
     // Same exact field/framing equation as the model's canonical_frame_byte_limit_v1.
     static var requestLimit: Int {
@@ -97,6 +100,18 @@ enum PrivacyX509WireV1 {
         var prefix = 1
         while remaining >= 128 { remaining >>= 7; prefix += 1 }
         return prefix + bytes
+    }
+
+    /// Exact current versioned wire length for the sole supported Ed25519 signer.
+    /// Count the signature's vector, newtype and outer field, the payload field,
+    /// the absent proof field and the version byte before requesting a signature.
+    static func signedTransactionByteCount(payloadBytes: Int) throws -> Int {
+        guard payloadBytes >= 0, payloadBytes <= maximumTransactionBytes else {
+            throw PrivacyX509TransactionErrorV1.transactionBounds
+        }
+        let signatureVectorBytes = 8 + 64 * fieldLength(1)
+        return 1 + fieldLength(fieldLength(signatureVectorBytes))
+            + fieldLength(payloadBytes) + fieldLength(1)
     }
     private static var instructionTupleLimit: Int {
         fieldLength(string(wireId).count) + fieldLength(8 + requestLimit)
@@ -150,15 +165,25 @@ enum PrivacyX509WireV1 {
                 throw PrivacyX509TransactionErrorV1.authorityMismatch
             }
             let payload = try completedPayload(rawProof: rawProof, limits: limits)
+            guard try PrivacyX509WireV1.signedTransactionByteCount(payloadBytes: payload.count)
+                    <= PrivacyX509WireV1.maximumTransactionBytes else {
+                throw PrivacyX509TransactionErrorV1.transactionBounds
+            }
             let message = IrohaHash.hash(payload)
             let signature = try signingKey.sign(message)
             guard let publicKey = try? Curve25519.Signing.PublicKey(rawRepresentation: controller.publicKey),
                   publicKey.isValidSignature(signature, for: message) else {
                 throw PrivacyX509TransactionErrorV1.authorityMismatch
             }
-            return SingleInstructionSwiftNoritoEncoder.signedEnvelope(
+            let envelope = SingleInstructionSwiftNoritoEncoder.signedEnvelope(
                 transactionPayload: payload, signature: signature
             )
+            // Charge the actual versioned signature and field framing, just as the
+            // native transaction owner does; the payload alone is not the wire cap.
+            guard envelope.norito.count <= PrivacyX509WireV1.maximumTransactionBytes else {
+                throw PrivacyX509TransactionErrorV1.transactionBounds
+            }
+            return envelope
         }
 
         func requireStatementBounds(_ limits: PrivacyConsensusLimitsV1) throws {
@@ -184,13 +209,20 @@ enum PrivacyX509WireV1 {
             var complete = payloadFields
             complete[8] = PrivacyX509WireV1.attachments(actionIndependentFields, actionDigest: actionDigest,
                                       proof: rawProof, proofHash: hash)
-            return PrivacyX509WireV1.fields(complete)
+            let payload = PrivacyX509WireV1.fields(complete)
+            guard payload.count <= PrivacyX509WireV1.maximumTransactionBytes else {
+                throw PrivacyX509TransactionErrorV1.transactionBounds
+            }
+            return payload
         }
     }
 
     static func prepareDirect(requestArchive: Data, unsignedPayload: Data) throws -> DirectPlan {
+        guard unsignedPayload.count <= maximumTransactionBytes else {
+            throw PrivacyX509TransactionErrorV1.transactionBounds
+        }
         let request = try parseRequest(requestArchive)
-        var payload = try split(unsignedPayload, count: 9, maximum: 16 * 1024 * 1024)
+        var payload = try split(unsignedPayload, count: 9, maximum: maximumTransactionBytes)
         guard request.actionIndex == 0, try integer32(request.context[1]) == 0,
               payload[8] == Data([0]),
               payload[0] == tagged(0, request.context[0]),

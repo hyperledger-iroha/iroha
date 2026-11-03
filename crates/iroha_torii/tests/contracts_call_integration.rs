@@ -573,11 +573,11 @@ async fn prepare_contract_execution(
 }
 /// Execute the unchanged caller-signed payload in an explicit test-only world overlay.
 /// This exercises Core transaction/contract semantics without claiming durable admission,
-/// transaction membership, or a committed block.
+/// transaction membership, or a committed block. Overlays do not advance the chain, so each
+/// one runs as the next block: the authenticated schedule has no slots further ahead.
 fn execute_prepared_contract_in_test_overlay(
     state: &Arc<State>,
     prepared: &PreparedContractExecution,
-    execution_height: u64,
 ) {
     let original_hash = prepared.transaction.hash();
     prepared
@@ -585,6 +585,7 @@ fn execute_prepared_contract_in_test_overlay(
         .verify_signature()
         .expect("exact signed fixture");
     let committed_height = state.committed_height();
+    let execution_height = u64::try_from(committed_height).expect("height fits u64") + 1;
     let header = iroha_data_model::block::BlockHeader::new(
         NonZeroU64::new(execution_height).expect("positive execution height"),
         None,
@@ -675,7 +676,6 @@ async fn run_contract_hajimari_in_test_overlay(
     creds: &iroha_torii::test_utils::AuthorityCreds,
     contract_address: &str,
     payload: Option<&json::Value>,
-    block_height: u64,
 ) {
     let body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -687,7 +687,7 @@ async fn run_contract_hajimari_in_test_overlay(
         },
     );
     let prepared = prepare_contract_execution(app, body).await;
-    execute_prepared_contract_in_test_overlay(state, &prepared, block_height);
+    execute_prepared_contract_in_test_overlay(state, &prepared);
 }
 #[tokio::test]
 async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() {
@@ -875,7 +875,7 @@ async fn contracts_call_prepares_exact_payload_and_requires_durable_admission() 
             .get("entrypoint_hash_hex")
             .is_some_and(json::Value::is_null)
     );
-    execute_prepared_contract_in_test_overlay(&state, &prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &prepared);
 
     Box::pin(app.shutdown()).await;
 }
@@ -961,7 +961,6 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        3,
     )
     .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
@@ -974,7 +973,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
         },
     );
     let init_prepared = prepare_contract_execution(&app, init_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared);
     let literal =
         run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "literal", None);
     assert_eq!(
@@ -1030,7 +1029,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        3,
     )
     .await;
     let payload = norito::json!({ "amount": "7" });
@@ -1044,7 +1042,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         },
     );
     let call_prepared = prepare_contract_execution(&app, call_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &call_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &call_prepared);
     let state_after_credit = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1070,7 +1068,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
         },
     );
     let asset_call_prepared = prepare_contract_execution(&app, asset_call_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &asset_call_prepared, 5);
+    execute_prepared_contract_in_test_overlay(&state, &asset_call_prepared);
     let state_after_asset = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1123,7 +1121,6 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        3,
     )
     .await;
     let literal =
@@ -1148,7 +1145,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
         },
     );
     let bind_prepared = prepare_contract_execution(&app, bind_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &bind_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &bind_prepared);
     let stored =
         run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "stored", None);
     assert_eq!(
@@ -1230,7 +1227,7 @@ async fn contracts_call_configure_roundtrips_account_id_map_state() {
         },
     );
     let configure_prepared = prepare_contract_execution(&app, configure_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &configure_prepared, 3);
+    execute_prepared_contract_in_test_overlay(&state, &configure_prepared);
     let admin =
         run_contract_view_in_test_overlay(&app, &creds.account, &contract_address, "admin", None);
     assert_eq!(
@@ -1281,7 +1278,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         &creds,
         contract_address.as_str(),
         Some(&hajimari_payload),
-        3,
     )
     .await;
     let credit_payload = norito::json!({ "amount": "7" });
@@ -1295,7 +1291,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         },
     );
     let credit_prepared = prepare_contract_execution(&app, credit_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &credit_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &credit_prepared);
     let asset_payload = norito::json!({ "asset_definition_id": asset_literal });
     let asset_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1307,7 +1303,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
         },
     );
     let asset_prepared = prepare_contract_execution(&app, asset_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &asset_prepared, 5);
+    execute_prepared_contract_in_test_overlay(&state, &asset_prepared);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1352,7 +1348,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None)
         .await;
     let write_payload = norito::json!({ "amount": "7" });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
@@ -1365,7 +1361,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
         },
     );
     let write_prepared = prepare_contract_execution(&app, write_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &write_prepared);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1429,7 +1425,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None)
         .await;
     let write_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("amount", "7"),
@@ -1446,7 +1442,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
         },
     );
     let write_prepared = prepare_contract_execution(&app, write_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &write_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &write_prepared);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1510,7 +1506,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None)
         .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1522,7 +1518,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         },
     );
     let init_prepared = prepare_contract_execution(&app, init_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", &creds.account),
         iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
@@ -1540,7 +1536,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
         },
     );
     let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 5);
+    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,
@@ -1609,7 +1605,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&mut native_chain, &queue);
     assert_eq!(applied_deploy, 1);
-    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None, 3)
+    run_contract_hajimari_in_test_overlay(&app, &state, &creds, contract_address.as_str(), None)
         .await;
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1621,7 +1617,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         },
     );
     let init_prepared = prepare_contract_execution(&app, init_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &init_prepared, 4);
+    execute_prepared_contract_in_test_overlay(&state, &init_prepared);
     let deposit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", &creds.account),
         iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
@@ -1639,7 +1635,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         },
     );
     let deposit_prepared = prepare_contract_execution(&app, deposit_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared, 5);
+    execute_prepared_contract_in_test_overlay(&state, &deposit_prepared);
     let burn_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("user", &creds.account),
         iroha_torii::json_entry("asset_definition_id", &asset_definition_id.to_string()),
@@ -1655,7 +1651,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
         },
     );
     let burn_prepared = prepare_contract_execution(&app, burn_body).await;
-    execute_prepared_contract_in_test_overlay(&state, &burn_prepared, 6);
+    execute_prepared_contract_in_test_overlay(&state, &burn_prepared);
     let view_json = run_contract_view_in_test_overlay(
         &app,
         &creds.account,

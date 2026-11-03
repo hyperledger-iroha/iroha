@@ -79,13 +79,36 @@ fn token_stream_mentions_generic(tokens: TokenStream2, generic_names: &[syn::Ide
 /// recursive type such as `enum Expr { Nested(Box<Expr>) }` into the cyclic
 /// obligation `Box<Expr>: Trait -> Expr: Trait -> Box<Expr>: Trait`.
 fn add_bound(generics: &mut Generics, ty: &syn::Type, bound: TokenStream2) {
+    add_bound_for_params(generics, ty, bound, true);
+}
+
+/// Like [`add_bound`], but only type and const parameters make a field generic.
+///
+/// Use this for traits without lifetime parameters, such as `JsonSerialize`:
+/// whether a field type implements such a trait does not depend on which
+/// lifetime it is instantiated with. A borrowed view with many lifetime-bound
+/// fields would otherwise get one `where` predicate per field, and the compiler
+/// re-checks that whole parameter environment for every obligation inside the
+/// generated implementation.
+fn add_type_param_bound(generics: &mut Generics, ty: &syn::Type, bound: TokenStream2) {
+    add_bound_for_params(generics, ty, bound, false);
+}
+
+fn add_bound_for_params(
+    generics: &mut Generics,
+    ty: &syn::Type,
+    bound: TokenStream2,
+    include_lifetimes: bool,
+) {
     let generic_names = generics
         .params
         .iter()
-        .map(|parameter| match parameter {
-            syn::GenericParam::Type(parameter) => parameter.ident.clone(),
-            syn::GenericParam::Lifetime(parameter) => parameter.lifetime.ident.clone(),
-            syn::GenericParam::Const(parameter) => parameter.ident.clone(),
+        .filter_map(|parameter| match parameter {
+            syn::GenericParam::Type(parameter) => Some(parameter.ident.clone()),
+            syn::GenericParam::Lifetime(parameter) => {
+                include_lifetimes.then(|| parameter.lifetime.ident.clone())
+            }
+            syn::GenericParam::Const(parameter) => Some(parameter.ident.clone()),
         })
         .collect::<Vec<_>>();
     if generic_names.is_empty()
@@ -1117,7 +1140,6 @@ fn derive_struct_serialize(
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
-                use norito::core::WriteBytesExt;
                 // Count each field before streaming it into its declared frame.
                 #(#serialize_calls)*
                 Ok(())
@@ -1317,7 +1339,6 @@ fn derive_enum_serialize(
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
-                use norito::core::WriteBytesExt;
                 match self {
                     #(#arms),*
                 }

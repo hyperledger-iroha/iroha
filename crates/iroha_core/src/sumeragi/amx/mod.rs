@@ -373,6 +373,7 @@ mod tests;
 mod native;
 pub(crate) use native::VerifiedAmxMovement;
 pub(crate) use native::admit_world_state;
+pub(crate) use native::authenticate_game_peer;
 pub(crate) use native::empty_participant_cell;
 pub use native::{NativeAmxAdmissionError, RetainedNativeAmx};
 pub(crate) use native::{NativeAmxLegExecution, NativeAmxLegPreparations};

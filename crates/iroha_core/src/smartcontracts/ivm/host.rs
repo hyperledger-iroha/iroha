@@ -600,17 +600,27 @@ impl HostOutputBudgetViolation {
         }
     }
 }
+/// A failed measurement cannot certify an output size or become a recoverable child result.
+/// The local variant retains its original non-wire scope owner after that scope retires.
+#[derive(Debug)]
+enum HostOutputMeasurementFailure {
+    Incomplete,
+    Local(norito::core::DecodeLocalRefusal),
+    Invalid,
+}
 struct BoundedCountingWriter {
     written: usize,
     max: usize,
+    exceeded: bool,
 }
 impl std::io::Write for BoundedCountingWriter {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        let next = self
-            .written
-            .checked_add(bytes.len())
-            .ok_or_else(|| std::io::Error::other("encoded output length overflow"))?;
+        let Some(next) = self.written.checked_add(bytes.len()) else {
+            self.exceeded = true;
+            return Err(std::io::Error::other("encoded output length overflow"));
+        };
         if next > self.max {
+            self.exceeded = true;
             return Err(std::io::Error::other("encoded output exceeds host limit"));
         }
         self.written = next;
@@ -894,6 +904,9 @@ pub struct CoreHostImpl<'run, 'tx, QS> {
     instruction_queue_count: u64,
     instruction_queue_encoded_bytes: u64,
     instruction_queue_violation: Option<HostOutputBudgetViolation>,
+    // Attempt-wide: neither child rollback nor output-limit reconfiguration can
+    // turn incomplete local measurement into a certified result.
+    output_measurement_failure: Option<HostOutputMeasurementFailure>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Canonically ordered account ids walked by `CREATE_NFTS_FOR_ALL_USERS`; state
     // owners supply only the prefix it can observe
@@ -3687,6 +3700,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
             instruction_queue_violation: None,
+            output_measurement_failure: None,
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -3817,6 +3831,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
             instruction_queue_violation: None,
+            output_measurement_failure: None,
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -3901,6 +3916,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
             instruction_queue_count: 0,
             instruction_queue_encoded_bytes: 0,
             instruction_queue_violation: None,
+            output_measurement_failure: None,
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
             bound_contract_records_by_subject: BTreeMap::new(),
@@ -5526,8 +5542,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     /// Drain ordinary queued ISIs for inspection/replay paths without attachment custody.
     ///
     /// # Errors
-    /// Refuses the entire group if extracting it would discard an original proof owner.
+    /// Refuses the entire group after incomplete output measurement or when
+    /// extraction would discard an original proof owner. Deterministic output
+    /// faults still permit diagnostic inspection, never certified application.
     pub fn drain_instructions(&mut self) -> Result<Vec<InstructionBox>, ivm::VMError> {
+        self.ensure_output_measurement()?;
         if self.x509_queue_backing.is_some() {
             self.abort_attachment_attempt();
             return Err(ivm::VMError::PermissionDenied);
@@ -5578,7 +5597,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     }
     fn try_reserve_output(&mut self, items: usize, bytes: usize) -> bool {
         let limits = self.instruction_queue_limits;
-        if self.instruction_queue_violation.is_some() {
+        if self.instruction_queue_violation.is_some() || self.output_measurement_failure.is_some() {
             return false;
         }
         let items = u64::try_from(items).unwrap_or(u64::MAX);
@@ -5610,25 +5629,49 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
     ) -> bool {
         const RETAINED_ITEM_OVERHEAD_BYTES: u64 = 64;
         let limits = self.instruction_queue_limits;
-        if self.instruction_queue_violation.is_some() {
+        if self.instruction_queue_violation.is_some() || self.output_measurement_failure.is_some() {
             return false;
         }
         let remaining = limits
             .max_bytes
             .saturating_sub(self.instruction_queue_encoded_bytes);
-        // Count directly into a bounded sink, avoiding a temporary encoded
-        // allocation while enforcing the exact aggregate consensus budget.
+        // Count directly into a bounded sink, avoiding a payload-sized buffer.
+        // Encoders may still allocate scratch (for example canonical HashMap
+        // sorting). Capture original local failures before their scope retires;
+        // they are not evidence that the committed byte limit was exceeded.
         let payload_limit = remaining.saturating_sub(RETAINED_ITEM_OVERHEAD_BYTES);
         let mut writer = BoundedCountingWriter {
             written: 0,
             max: usize::try_from(payload_limit).unwrap_or(usize::MAX),
+            exceeded: false,
         };
+        // If an encoder unwinds and an outer caller catches it, this attempt
+        // still cannot export earlier effects or an incomplete byte count.
+        self.output_measurement_failure = Some(HostOutputMeasurementFailure::Incomplete);
         let serialization = {
             let _canonical_flags =
                 norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags());
-            norito::core::serialize_to_writer(value, &mut writer)
+            norito::core::classify_decode_attempt(|| {
+                norito::core::serialize_to_writer(value, &mut writer)
+            })
         };
-        if serialization.is_err() {
+        self.output_measurement_failure = None;
+        if let Err(error) = serialization {
+            match error.into_local_refusal() {
+                Ok(original) => {
+                    self.output_measurement_failure =
+                        Some(HostOutputMeasurementFailure::Local(original));
+                    return false;
+                }
+                Err(_) if !writer.exceeded => {
+                    self.output_measurement_failure = Some(HostOutputMeasurementFailure::Invalid);
+                    return false;
+                }
+                Err(_) => {}
+            }
+        }
+        // A serializer must not hide a real sink refusal by returning success.
+        if writer.exceeded {
             self.instruction_queue_violation = Some(HostOutputBudgetViolation::EncodedBytes {
                 attempted: limits.max_bytes.saturating_add(1),
                 limit: limits.max_bytes,
@@ -5705,6 +5748,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         &mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<Vec<QueuedEffect>, ivm::VMError> {
+        self.ensure_output_measurement()?;
         if self.x509_queue_backing.is_some() {
             self.abort_attachment_attempt();
             return Err(ivm::VMError::PermissionDenied);
@@ -5817,7 +5861,23 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         }
         Ok(())
     }
+    fn ensure_output_measurement(&self) -> Result<(), ivm::VMError> {
+        match &self.output_measurement_failure {
+            Some(HostOutputMeasurementFailure::Incomplete) => {
+                return Err(ivm::VMError::ExecutionDeferred(
+                    ivm::ExecutionDeferral::LocalInvariantViolation,
+                ));
+            }
+            Some(HostOutputMeasurementFailure::Local(original)) => {
+                return Err(ivm::VMError::DecodeDeferred(original.clone()));
+            }
+            Some(HostOutputMeasurementFailure::Invalid) => return Err(ivm::VMError::NoritoInvalid),
+            None => {}
+        }
+        Ok(())
+    }
     fn ensure_output_budget(&self) -> Result<(), ivm::VMError> {
+        self.ensure_output_measurement()?;
         self.instruction_queue_violation
             .map_or(Ok(()), |violation| Err(violation.into_vm_error()))
     }
@@ -12262,7 +12322,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -12328,7 +12388,7 @@ seiyaku ReadOnlyBinding { permission CanInspectContract;
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
         let state = State::new_for_testing(world, kura, query);
-        let header = BlockHeader::new(nonzero_ext::nonzero!(1_u64), None, None, 0, 0);
+        let header = BlockHeader::new(iroha_primitives::nonzero!(1_u64), None, None, 0, 0);
         let mut block = state.block(header);
         let mut stx = block.transaction();
         let error = host
@@ -13549,7 +13609,7 @@ seiyaku PrivilegedBinding { permission CanAdministerContract;
         let manifest_root = [0x66; 32];
         let snapshot = make_policy_snapshot(dsid, manifest_root, 5);
         let timing = iroha_config::parameters::actual::NexusAxt {
-            slot_length_ms: nonzero_ext::nonzero!(1_u64),
+            slot_length_ms: iroha_primitives::nonzero!(1_u64),
             max_clock_skew_ms: 0,
             proof_cache_ttl_slots: NonZeroU64::new(2).expect("non-zero ttl"),
             replay_retention_slots: NonZeroU64::new(
@@ -15547,6 +15607,9 @@ fn build_program(code: &[u8], vector_length: u8) -> Vec<u8> {
     program.extend_from_slice(code);
     program
 }
+#[cfg(test)]
+#[path = "host/output_measurement_tests.rs"]
+mod output_measurement_tests;
 #[cfg(test)]
 #[path = "host_tests.rs"]
 mod tests;

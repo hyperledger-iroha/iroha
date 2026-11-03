@@ -421,6 +421,10 @@ mod tests {
         ZeroizingMainTraceColumnV1(vec![F(value); 32])
     }
     #[test]
+    #[expect(
+        clippy::reversed_empty_ranges,
+        reason = "the inverted `7..4` range is a deliberate rejection case"
+    )]
     fn complete_registration_borrow_preserves_original_addresses_and_rejects_subsets() {
         let mut retained = fixture();
         assert!(retained.registration_columns_v1(5, 4..7).is_err());

@@ -29,7 +29,10 @@ async fn sse_filters_by_proof_envelope_hash() {
     let filter = iroha_torii::filter::FilterExpr::from_json_value(filter_value)
         .expect("valid filter")
         .to_string();
-    let uri = format!("/v1/events/sse?filter={}", urlencoding::encode(&filter));
+    let uri = format!(
+        "/v1/events/sse?filter={}",
+        iroha_torii::test_utils::percent_encode(&filter)
+    );
     let req = http::Request::builder()
         .method("GET")
         .uri(uri)

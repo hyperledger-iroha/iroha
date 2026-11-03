@@ -536,7 +536,7 @@ def test_shared_fixture_pins_the_public_transition_table() -> None:
     transitions = _fixture()["public_transitions"]
     table = parliament_api_module._PUBLIC_TRANSITION_FIELDS
 
-    assert [entry["norito_index"] for entry in transitions] == list(range(len(transitions)))
+    assert [entry["norito_index"] for entry in transitions] == [*range(10), 17, 20, 21]
     assert set(table) == {entry["json_tag"] for entry in transitions}
     for entry in transitions:
         assert (table[entry["json_tag"]] is None) == (entry["json_payload"] == "forbidden")
@@ -545,9 +545,9 @@ def test_shared_fixture_pins_the_public_transition_table() -> None:
 def test_shared_fixture_pins_the_no_result_kinds() -> None:
     kinds = _fixture()["no_result_kinds"]
 
-    assert [entry["norito_index"] for entry in kinds] == list(range(len(kinds)))
+    assert [entry["norito_index"] for entry in kinds] == [0, 1, 7, 8, 9]
     assert parliament_api_module._NO_RESULT_KINDS_V1 == {entry["json_tag"] for entry in kinds}
-    assert kinds[-1] == {"norito_index": 4, "json_tag": "RandomnessRedrawBudgetExhausted"}
+    assert kinds[-1] == {"norito_index": 9, "json_tag": "RandomnessRedrawBudgetExhausted"}
 
 
 def test_shared_fixture_pins_body_order_and_projection_shapes() -> None:

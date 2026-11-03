@@ -590,7 +590,21 @@ mod tests {
         assert!(resolve_network_identity(None, Some(file.path())).is_err());
     }
 
-    use assertables::assert_contains;
+    /// Assert that `container.contains(containee)` holds, reporting both on failure.
+    macro_rules! assert_contains {
+        ($container:expr, $containee:expr $(,)?) => {
+            match (&$container, &$containee) {
+                (container, containee) => assert!(
+                    container.contains(*containee),
+                    "assertion failed: `{}` does not contain `{}`\n container: {:?}\n containee: {:?}",
+                    stringify!($container),
+                    stringify!($containee),
+                    container,
+                    containee,
+                ),
+            }
+        };
+    }
     use iroha_config_base::env::MockEnv;
     use iroha_crypto::ExposedPrivateKey;
     use std::{collections::HashSet, io::Write};

@@ -628,11 +628,11 @@ Run these with a new binary before it replaces an old one:
 - `iroha3d --config <file> --check-storage` inspects a stopped node's store:
   it opens Kura in emergency-Fast mode (taking the store-root lock, so a store
   owned by a running node is refused), decodes every retained block body with
-  this build, restores the newest snapshot into a scratch Kura, compares every
-  block hash the snapshot retains with Kura's as a Strict startup does, and prints
-  `{tip_height, tip_hash, snapshot_height, prefix_hash_at_snapshot_height,
-  snapshot_restore_dry_run, snapshot_restore_error}`. It exits nonzero when the
-  store cannot be read or the restore dry run fails, and never writes to the store.
+  this build, checks each against the hash journal and its parent, and prints
+  `{tip_height, tip_hash}`. It exits nonzero when the store cannot be read, and
+  never writes to the store. Snapshot restore needs a snapshot's certified
+  successor and the certified chain below it, so `--check-replay` checks it on a
+  copy of the store.
 - `iroha3d --config <file> --check-replay` replays a stopped node's store (or an
   immutable copy of it) with this build. It opens the store as `--check-storage`
   does, authenticates signed genesis against the configured trust anchor, copies
@@ -647,8 +647,9 @@ Run these with a new binary before it replaces an old one:
   missing_height}` with `outcome` `matched`, `diverged` (the first block whose
   result differs, its first differing commitment component such as
   `world_state_root`, both values and every differing component) or
-  `missing_history` (the first height whose body the store no longer holds). It
-  exits nonzero unless every replayed block matched, and never writes to the
+  `missing_history` (the first height whose body the store no longer holds), or
+  `empty` (the store holds no blocks, so nothing was replayed). It exits nonzero
+  unless it replayed blocks and every one matched, and never writes to the
   store, the snapshot directory or the tiered-state directory.
 
 `lifecycle.exit_on_stdin_close = true` makes the daemon shut down cleanly when

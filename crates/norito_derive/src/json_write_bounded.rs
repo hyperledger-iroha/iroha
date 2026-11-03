@@ -1,5 +1,5 @@
 //! Checked JSON writer code-generation helpers.
-use super::{ContainerAttr, FieldAttr, add_bound};
+use super::{ContainerAttr, FieldAttr, add_bound, add_type_param_bound};
 use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{Attribute, Generics, Path, meta::ParseNestedMeta};
@@ -87,7 +87,7 @@ impl FieldAttr {
     }
     pub(super) fn require_json_serialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {
         if self.with.is_none() {
-            add_bound(generics, ty, quote!(norito::json::JsonSerialize));
+            add_type_param_bound(generics, ty, quote!(norito::json::JsonSerialize));
         }
     }
     pub(super) fn require_json_deserialize_bound(&self, generics: &mut Generics, ty: &syn::Type) {

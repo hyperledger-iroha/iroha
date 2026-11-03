@@ -23,3 +23,8 @@ hex-literal = "1.1.0"
 [[bench]]
 name = "digest"
 harness = false
+
+[lints.clippy]
+# Reported by the Rust 1.99.1 clippy at the toolchain bump. TODO: fix the
+# flagged sites and remove each allow.
+chunks_exact_to_as_chunks = "allow"

@@ -548,7 +548,9 @@ fn incoming_sources_pin_quoted_credential_and_preserve_malformed_receipt() {
     assert!(incoming.accepts(&incoming.public(true)));
     let specs = ArchiveIncomingObjects::context_specs().unwrap();
     assert_eq!(specs.map(|s| s.tag), [2, 5, 11]);
-    assert_eq!(specs.map(|s| s.capacity), [522, 540, 402]);
+    // Request, quoted credential and receipt bodies plus their 64-byte signatures,
+    // after the Blacklist object and its Request/Credential fields were retired.
+    assert_eq!(specs.map(|s| s.capacity), [482, 532, 402]);
     // Incoming evidence is soft, including noncanonical original fields. Its
     // digest must still be derived from the complete original bytes.
     for mutation in 0..4 {

@@ -152,7 +152,7 @@ same construction for other Rust clients. JavaScript exposes
 A proof binds the exact pre-action roster root, so roster changes serialize per
 call: of several joins proved against one root, only the first to execute succeeds,
 and the rest are rejected with `KAIGI_STALE_ROSTER_ROOT_ERROR_V1`. That rejection
-leaves the call unchanged but is charged like any failed transaction, at the same fee
+leaves the call unchanged but is deliberately charged like any failed transaction, at the same fee
 as a success, so losing a race costs money: if N clients all retry at once, N joins can
 cost about N²/2 fees. A client should read its standing again after proving, submit only
 if it has not moved, and wait a random moment before proving again after a loss.

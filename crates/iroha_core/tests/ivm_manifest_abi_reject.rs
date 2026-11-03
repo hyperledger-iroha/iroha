@@ -15,8 +15,8 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::topology::DataSpaceId;
+use iroha_primitives::nonzero;
 use ivm::{ProgramMetadata, encoding};
-use nonzero_ext::nonzero;
 use std::{borrow::Cow, num::NonZeroU64, sync::Arc};
 const TEST_GAS_LIMIT: u64 = 1_000_000;
 fn checked_random_ivm_manifest_keypair() -> KeyPair {
@@ -278,15 +278,12 @@ fn ivm_manifest_mismatched_abi_hash_rejected_at_admission() {
 }
 #[test]
 fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
         permission,
         transaction::{Executable, TransactionBuilder},
     };
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
     // Build world with a domain and an authority account
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -294,9 +291,8 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let chain: ChainId = "chain".parse().unwrap();
-    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
-    install_current_lane_manifest_registry(&state);
+    // The authenticated signed genesis commits the Global root scope and crypto policy.
+    let state = crate::native_genesis::certified_state(world);
     let network_id = *state.network_id_ref();
     // Prepare a minimal IVM program and its hashes
     let (prog, manifest) = minimal_contract_artifact(1);
@@ -309,12 +305,15 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     let policy = ivm::SyscallPolicy::AbiV1;
     let correct_abi = ivm::syscalls::compute_abi_hash(policy);
     // Block 1: grant permission and register a manifest with correct abi_hash under the code_hash
-    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    stx1.world
-        .set_parameter_for_testing(manifest_admission_root_parameter())
-        .expect("valid fixture parameters");
     // Grant permission
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
@@ -373,7 +372,14 @@ fn ivm_manifest_matching_abi_hash_accepted_at_admission() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit the IVM program; admission should accept due to matching abi_hash
-    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    // The overlay above published no block: the schedule admits height two next.
+    let header2 = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block2 = state.block(header2);
     assert_eq!(
         iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),
@@ -490,14 +496,11 @@ fn ivm_manifest_without_abi_hash_is_rejected_at_admission() {
 }
 #[test]
 fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
-    use iroha_core::{kura::Kura, query::store::LiveQueryStore};
     use iroha_data_model::{
         permission,
         transaction::{Executable, TransactionBuilder},
     };
     let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let kp = checked_random_ivm_manifest_keypair();
     let (pubkey, _) = kp.clone().into_parts();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
@@ -505,9 +508,8 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);
     let world = World::with([domain], [account], std::iter::empty::<AssetDefinition>());
-    let chain: ChainId = "chain".parse().unwrap();
-    let state = State::new_with_chain_for_testing(world, kura, query_handle, chain.clone());
-    install_current_lane_manifest_registry(&state);
+    // The authenticated signed genesis commits the Global root scope and crypto policy.
+    let state = crate::native_genesis::certified_state(world);
     let network_id = *state.network_id_ref();
     let (prog, manifest) = minimal_contract_artifact(1);
     let code_hash = manifest
@@ -518,12 +520,15 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
             .expect("derive manifest admission contract address");
     let abi_current = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
     // Block 1: grant permission and register manifest with v1 abi_hash
-    let header1 = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header1 = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block1 = state.block(header1);
     let mut stx1 = block1.transaction();
-    stx1.world
-        .set_parameter_for_testing(manifest_admission_root_parameter())
-        .expect("valid fixture parameters");
     let token = iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode;
     let perm: permission::Permission = token.into();
     Grant::account_permission(perm, account_id.clone())
@@ -579,7 +584,14 @@ fn ivm_manifest_matching_abi_hash_v1_accepted_at_admission() {
     stx1.apply();
     let _ = block1.commit_world_overlay_for_testing();
     // Block 2: submit program; admission should accept
-    let header2 = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
+    // The overlay above published no block: the schedule admits height two next.
+    let header2 = iroha_data_model::block::BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
     let mut block2 = state.block(header2);
     assert_eq!(
         iroha_core::sumeragi::lanes::routing::committed_root_scope(block2.world()),

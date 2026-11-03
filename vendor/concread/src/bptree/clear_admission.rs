@@ -63,8 +63,8 @@ where
 
 impl<K, V, P> BptreeMapWriteTxn<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: NodeCloning<K, V>,
 {
     /// Reset this private tree through one complete finite admission.
@@ -90,8 +90,8 @@ where
 
 impl<K, V, P> BptreeMapCheckpoint<'_, K, V, Prepaid<P>>
 where
-    K: Clone + Ord + Debug + Send + Sync + 'static,
-    V: Clone + Send + Sync + 'static,
+    K: Clone + Ord + Debug + 'static,
+    V: Clone + 'static,
     P: NodeCloning<K, V>,
 {
     /// Reset while retaining this exact parent's tree and tracking allocations.

@@ -82,8 +82,17 @@ mod tests {
     }
     #[test]
     fn arithmetic_product_sum_all_lengths_boundaries_and_order_match_original() {
-        let p = super::super::GOLDILOCKS_MODULUS_V1;
-        let values = [0, 1, 2, (1 << 32) - 1, 1 << 32, p / 2, p - 2, p - 1];
+        let modulus = super::super::GOLDILOCKS_MODULUS_V1;
+        let values = [
+            0,
+            1,
+            2,
+            (1 << 32) - 1,
+            1 << 32,
+            modulus / 2,
+            modulus - 2,
+            modulus - 1,
+        ];
         for length in [0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 65] {
             for seed in 0..64 {
                 let term = |index: usize| {
@@ -109,9 +118,9 @@ mod tests {
             for negative in [false, true] {
                 let term = |_| {
                     if negative {
-                        (F::ZERO, F::ZERO, F(p - 1), F(p - 1))
+                        (F::ZERO, F::ZERO, F(modulus - 1), F(modulus - 1))
                     } else {
-                        (F(p - 1), F(p - 1), F::ZERO, F::ZERO)
+                        (F(modulus - 1), F(modulus - 1), F::ZERO, F::ZERO)
                     }
                 };
                 let expected = if negative {

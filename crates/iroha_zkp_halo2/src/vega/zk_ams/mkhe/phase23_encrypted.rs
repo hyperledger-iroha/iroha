@@ -53,11 +53,11 @@ use crate::vega::{
 #[cfg(test)]
 use core::fmt;
 #[cfg(test)]
-use once_cell::sync::Lazy;
-#[cfg(test)]
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::sync::Arc;
+#[cfg(test)]
+use std::sync::LazyLock;
 pub(super) const PHASE23_ENCRYPTED_VERSION_V1: u8 = 1;
 #[cfg(test)]
 pub(super) const PHASE23_MAX_BATCH_SIZE_V1: u8 = 8;
@@ -128,9 +128,9 @@ const PHASE23_ENCRYPTED_ALGEBRA_V1: &[u8] = b"A/B/C:canonical-csr:packed-diagona
 #[cfg(test)]
 type CommitmentPreimageLayoutDigestsV1 = ([u8; 32], [u8; 32], [u8; 32]);
 #[cfg(test)]
-static PHASE23_RELEASE_MAP_MANIFEST_V1: Lazy<
+static PHASE23_RELEASE_MAP_MANIFEST_V1: LazyLock<
     Result<ZkAmsPhase23ReleaseMapManifestV1, ZkAmsMkheErrorV1>,
-> = Lazy::new(compile_release_map_manifest_v1);
+> = LazyLock::new(compile_release_map_manifest_v1);
 /// Maximum number of nonzero entries admitted by one canonical sparse map.
 ///
 /// The Shape-backed canonical view checks this as a streaming work ceiling;
