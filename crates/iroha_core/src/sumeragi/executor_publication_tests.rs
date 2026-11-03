@@ -308,6 +308,9 @@ pub(super) fn proposal(chain: &CertifiedTestChain, worker: &Worker<'_>) -> Avail
 fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
     use iroha_data_model::block::BlockSignatures;
 
+    // Pin before constructing State: a later pin cannot retain generations
+    // already retired by the fixture while exact decode custody is measured.
+    let _state_retirement = crossbeam_epoch::pin();
     with_worker(|chain, worker, _blocks, events| {
         let block = proposal(chain, worker);
         let hash = block.hash(&**worker.context.crypto.as_ref().unwrap());
@@ -316,8 +319,8 @@ fn payload_decode_refusal_retains_available_owner_without_negative_cache() {
         let budget = worker.state.ivm_execution_budget();
         let state_height = worker.state.view().height();
         assert!(block.admitted_to(&budget));
-        // Pin only the refusal observations: unrelated MV reclamation must not change the
-        // baseline while this test measures the request's exact retained decode controls.
+        // Keep the refusal loop locally pinned as well; the outer fixture-wide pin
+        // also retains State generations retired before this worker was constructed.
         let epoch = crossbeam_epoch::pin();
         let retained = budget.reserved_bytes();
         let decoder_controls = norito::core::PreparedDecodeWorkspace::allocation_layouts()
