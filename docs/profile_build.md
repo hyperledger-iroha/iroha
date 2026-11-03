@@ -131,6 +131,18 @@ cumulative child high-water mark. The separate Cargo-process peak includes its
 child accounting and must not be interpreted as simultaneous process-tree
 memory or as an individual compiler unit's memory.
 
+The two heavy Core library-test commands and selected release-binary build in
+PR CI also run through `ci/observe_build_capacity.py`. This observer flushes a
+capacity snapshot to stderr every five seconds, capped at 1,080 periodic snapshots plus
+a final snapshot. It records host memory, swap and pressure, root and actual
+cgroup counters, workspace/temp disk capacity, and the five largest resident
+processes among at most 256 scanned processes (names and RSS only). Missing
+resources are reported as unavailable. These point-in-time observations can
+survive in logs when runner shutdown prevents post-job diagnostics; they do not
+establish a failure cause, compiler peak, or qualified compile-memory baseline.
+The child keeps its command, environment, working directory, streams and exit
+status; the observer does not signal, retry or limit it.
+
 `result.compiler_measurements.compiled` contains one measurement for each
 compiled Cargo artifact. It includes the package, target name/kinds/crate
 types, package-relative source path, sorted features, complete Cargo profile,

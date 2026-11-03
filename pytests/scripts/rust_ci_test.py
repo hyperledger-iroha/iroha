@@ -24,6 +24,12 @@ rust_ci = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = rust_ci
 SPEC.loader.exec_module(rust_ci)
 
+CAPACITY_SCRIPT = ROOT / "ci" / "observe_build_capacity.py"
+CAPACITY_SPEC = importlib.util.spec_from_file_location("build_capacity", CAPACITY_SCRIPT)
+assert CAPACITY_SPEC is not None and CAPACITY_SPEC.loader is not None
+capacity = importlib.util.module_from_spec(CAPACITY_SPEC)
+CAPACITY_SPEC.loader.exec_module(capacity)
+
 
 def _workflow_job(name: str) -> str:
     """Read one actual PR job without depending on YAML tag resolution."""
@@ -57,6 +63,8 @@ def test_core_host_capacity_policy_preserves_every_test_command() -> None:
     """Only the two heavy Core jobs bound build concurrency; every suite stays selected."""
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
     assert workflow.count('CARGO_BUILD_JOBS: "2"') == 2
+    observer = "python3 -I -S ci/observe_build_capacity.py -- "
+    assert workflow.count(observer) == 3
     seeds = "env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS "
     expected = {
         "sumeragi": [
@@ -74,12 +82,51 @@ def test_core_host_capacity_policy_preserves_every_test_command() -> None:
         assert '      CARGO_BUILD_JOBS: "2"' in job
         actual = re.findall(r"(?m)^        run: (.*cargo test.*)$", job)
         assert all(command.count("/usr/bin/time -v ") == 1 for command in actual)
-        assert [command.replace("/usr/bin/time -v ", "") for command in actual] == commands
+        assert [command.replace(observer, "").replace("/usr/bin/time -v ", "")
+                for command in actual] == commands
+        assert [observer in command for command in actual] == [
+            "-p iroha_core --lib" in command for command in commands
+        ]
         assert "continue-on-error" not in job
         assert ("      - name: Record hosted build capacity after testing\n"
                 "        if: always()\n        run: *linux_build_capacity") in job
         assert job.index("Record hosted build capacity before testing") < job.index(actual[0])
     assert workflow.count("run: *linux_build_capacity") == 3
+
+
+@pytest.mark.parametrize("code", [0, 9])
+def test_pre_build_capacity_observer_preserves_release_build_command(
+    tmp_path: Path, code: int,
+) -> None:
+    """Run the real shell step through the observer without compiling release binaries."""
+    job = _workflow_job("pre_build")
+    assert "    timeout-minutes: 30\n" in job
+    assert "CARGO_BUILD_JOBS" not in job
+    body = job.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    command = textwrap.dedent(body)
+    original = command.replace("python3 -I -S ci/observe_build_capacity.py -- ", "")
+    assert original.splitlines() == [
+        "python3 scripts/rust_ci.py build-binaries \\",
+        '  --binaries "$REQUIRED_BINARIES" \\',
+        "  --output-dir target/release/pre_build",
+    ]
+    (tmp_path / "ci").mkdir()
+    (tmp_path / "ci/observe_build_capacity.py").symlink_to(CAPACITY_SCRIPT)
+    (tmp_path / "scripts").mkdir()
+    (tmp_path / "scripts/rust_ci.py").write_text(
+        "import json, sys\nprint(json.dumps(sys.argv[1:]))\n" + f"sys.exit({code})\n"
+    )
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path,
+        env={**os.environ, "REQUIRED_BINARIES": "iroha,iroha3d,kagami,koto"},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == [
+        "build-binaries", "--binaries", "iroha,iroha3d,kagami,koto",
+        "--output-dir", "target/release/pre_build",
+    ]
+    assert "[build-capacity]" in result.stderr
 
 
 @pytest.mark.parametrize("membership", ["normal", "missing", "traversal"])
@@ -114,6 +161,180 @@ def test_host_capacity_diagnostics_read_bounded_root_and_actual_cgroup(
     assert "unavailable (FileNotFoundError)" in result.stdout
     assert ("oom_kill 2" in result.stdout) == (membership == "normal")
     assert "OUTSIDE_SENTINEL" not in result.stdout
+
+
+def test_capacity_reader_bounds_data_and_rejects_invalid_counters(tmp_path: Path) -> None:
+    """Truncated, missing and non-numeric kernel fields cannot create invented counters."""
+    path = tmp_path / "counter"
+    path.write_bytes(b"12345")
+    assert capacity.bounded_text(path, 4) == "1234 [truncated]"
+    assert capacity.bounded_text(path, 5) == "12345"
+    assert capacity.bounded_text(tmp_path / "missing") == "unavailable (FileNotFoundError)"
+    assert capacity.selected_numbers(
+        "MemTotal: 100 kB\nSwapFree: -1\nOther: 5\nMemAvailable: \u00b2\n"
+        "SwapTotal: " + "9" * 21, ("MemTotal", "SwapFree", "MemAvailable", "SwapTotal"),
+    ) == {"MemTotal": 100}
+
+
+@pytest.mark.parametrize("membership", [
+    "0::/../outside", "0::relative", "0::/job [truncated]", "2:memory:/job",
+    "0::/" + "/".join(["deep"] * 17), "0::/escape", "0::/loop",
+])
+def test_capacity_cgroup_reader_rejects_unbounded_or_escaping_paths(
+    tmp_path: Path, membership: str,
+) -> None:
+    """A membership path cannot read outside the cgroup root or defeat bounded depth."""
+    root = tmp_path / "cgroups"
+    root.mkdir()
+    (root / "escape").symlink_to(tmp_path)
+    (root / "loop").symlink_to(root / "loop")
+    assert capacity.cgroup_scopes(root, membership) == [root]
+    assert capacity.cgroup_scopes(root, "0::/parent/job\n0::/second/root\n") == [
+        root, root / "parent", root / "parent/job",
+    ]
+
+
+def test_capacity_snapshot_bounds_processes_and_reads_actual_cgroup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Controlled Linux views expose counters and names/RSS, never process inputs."""
+    proc = tmp_path / "proc"
+    (proc / "self").mkdir(parents=True)
+    (proc / "self/cgroup").write_text("0::/parent/job\n")
+    (proc / "meminfo").write_text("MemTotal: 1000 kB\nMemAvailable: 400 kB\nSwapFree: 200 kB\n")
+    (proc / "vmstat").write_text("oom_kill 3\npgmajfault 8\n")
+    (proc / "pressure").mkdir()
+    (proc / "pressure/memory").write_text("some avg10=1.00 total=123\n")
+    root = tmp_path / "cgroups"
+    (root / "parent/job").mkdir(parents=True)
+    (root / "parent/job/memory.events").write_text("oom_kill 2\n")
+    (root / "memory.max").write_text("max\n")
+    for pid in range(1, 8):
+        directory = proc / str(pid)
+        directory.mkdir()
+        (directory / "status").write_text(f"Name:\trustc-{pid}\nVmRSS:\t{pid * 100} kB\n")
+        (directory / "cmdline").write_text("SECRET_ARG_SENTINEL")
+        (directory / "environ").write_text("SECRET_ENV_SENTINEL")
+    monkeypatch.setenv("GITHUB_WORKSPACE", str(tmp_path))
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    observed = capacity.snapshot(proc, root)
+    assert observed["host_memory_kib"] == {"MemTotal": 1000, "MemAvailable": 400, "SwapFree": 200}
+    assert observed["host_vm_counters"] == {"oom_kill": 3, "pgmajfault": 8}
+    assert observed["cgroups"][str(root / "parent/job")]["memory.events"] == "oom_kill 2\n"
+    assert observed["cgroups"][str(root)]["memory.max"] == "max\n"
+    assert observed["processes_scanned"] == 7 and not observed["process_scan_truncated"]
+    assert observed["process_scan_error"] is None
+    assert observed["largest_sampled_processes"] == [
+        {"name": f"rustc-{pid}", "rss_kib": pid * 100} for pid in range(7, 2, -1)
+    ]
+    assert observed["disks"]["GITHUB_WORKSPACE"]["total_bytes"] > 0
+    assert "SENTINEL" not in json.dumps(observed)
+    monkeypatch.setattr(capacity, "MAX_PROCESSES", 3)
+    limited = capacity.snapshot(proc, root)
+    assert limited["processes_scanned"] == 3 and limited["process_scan_truncated"]
+    assert len(limited["largest_sampled_processes"]) == 3
+
+
+def test_capacity_snapshot_labels_unavailable_resources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Missing kernel files and disk inputs remain unavailable instead of zero usage."""
+    monkeypatch.delenv("GITHUB_WORKSPACE", raising=False)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "missing"))
+    observed = capacity.snapshot(tmp_path / "missing", tmp_path / "cgroups")
+    for field in ("host_memory_kib", "host_vm_counters", "memory_pressure", "process_scan_error"):
+        assert observed[field] == "unavailable (FileNotFoundError)"
+    assert observed["disks"] == {
+        "GITHUB_WORKSPACE": "unavailable (KeyError)",
+        "RUNNER_TEMP": "unavailable (FileNotFoundError)",
+    }
+
+
+@pytest.mark.parametrize("code,expected", [(0, 0), (7, 7), (-15, 143)])
+def test_capacity_observer_bounds_samples_and_preserves_status(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], code: int, expected: int,
+) -> None:
+    """Exhausting observation or failing a collector never changes the child outcome."""
+    class Child:
+        waits = 0
+
+        def wait(self, timeout: int) -> int:
+            assert timeout == capacity.INTERVAL_SECONDS
+            self.waits += 1
+            if self.waits < 5:
+                raise subprocess.TimeoutExpired("child", timeout)
+            return code
+
+    child = Child()
+    commands = []
+
+    def start(command: list[str]) -> Child:
+        commands.append(command)
+        return child
+
+    def unavailable() -> dict:
+        raise OSError("SECRET_EXCEPTION_SENTINEL")
+
+    monkeypatch.setattr(capacity.subprocess, "Popen", start)
+    monkeypatch.setattr(capacity, "MAX_SAMPLES", 2)
+    monkeypatch.setattr(capacity, "snapshot", unavailable)
+    command = ["/usr/bin/time", "-v", "cargo", "test", "--", "exact filter"]
+    assert capacity.observe(command) == expected
+    assert commands == [command] and child.waits == 5
+    output = capsys.readouterr()
+    assert output.out == "" and "SENTINEL" not in output.err
+    records = [json.loads(line.removeprefix("[build-capacity] ")) for line in output.err.splitlines()]
+    assert records == [{"unavailable": "OSError"}, {"unavailable": "OSError"}, {
+        "completed": True, "child_returncode": code, "samples": 2,
+        "final": {"unavailable": "OSError"},
+    }]
+
+
+def test_capacity_snapshot_flushes_before_child_completion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each record requests an immediate flush, even if a later post-job step cannot run."""
+    writes = []
+    monkeypatch.setattr(capacity, "snapshot", lambda: {"observation": 1})
+    monkeypatch.setattr("builtins.print", lambda *args, **kwargs: writes.append((args, kwargs)))
+    capacity.emit_snapshot()
+    assert len(writes) == 1 and writes[0][1] == {"file": sys.stderr, "flush": True}
+
+
+@pytest.mark.parametrize("code", [0, 7])
+def test_capacity_cli_preserves_actual_child_argv_environment_cwd_and_streams(
+    tmp_path: Path, code: int,
+) -> None:
+    """Execute a real child through the observer; diagnostics cannot contaminate stdout."""
+    child = tmp_path / "child.py"
+    child.write_text(
+        "import json, os, sys\n"
+        "print(json.dumps({'argv': sys.argv[1:], 'cwd': os.getcwd(), "
+        "'env': os.environ['CAPACITY_TEST_SENTINEL'], 'stdin': sys.stdin.read()}))\n"
+        "print('CHILD_STDERR', file=sys.stderr)\n"
+        f"sys.exit({code})\n"
+    )
+    argv = ["--flag", "two words", "'quoted'", "$literal", ""]
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(CAPACITY_SCRIPT), "--", sys.executable, str(child), *argv],
+        cwd=tmp_path, env={**os.environ, "CAPACITY_TEST_SENTINEL": "preserved"},
+        input="inherited input", capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == code, result.stderr
+    assert json.loads(result.stdout) == {
+        "argv": argv, "cwd": str(tmp_path), "env": "preserved", "stdin": "inherited input",
+    }
+    assert "CHILD_STDERR" in result.stderr
+    records = [json.loads(line.removeprefix("[build-capacity] "))
+               for line in result.stderr.splitlines() if line.startswith("[build-capacity] ")]
+    assert records[-1]["completed"] and records[-1]["child_returncode"] == code
+
+
+@pytest.mark.parametrize("argv", [[], ["--"], ["cargo", "test"]])
+def test_capacity_cli_requires_explicit_command(argv: list[str]) -> None:
+    """Malformed invocations fail instead of silently omitting the actual test command."""
+    result = subprocess.run([sys.executable, "-I", "-S", str(CAPACITY_SCRIPT), *argv],
+                            capture_output=True, text=True, check=False)
+    assert result.returncode == 2
+    assert "an explicit command after -- is required" in result.stderr
 
 
 @pytest.mark.parametrize("gate", ["CLASSIFIER_RESULT", "SOURCE_GUARDS_RESULT"])

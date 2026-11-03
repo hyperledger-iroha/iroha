@@ -69,7 +69,7 @@ jobs:
         env:
           REQUIRED_BINARIES: ${{ needs.rust_changes.outputs.binaries }}
         run: |
-          python3 scripts/rust_ci.py build-binaries \
+          python3 -I -S ci/observe_build_capacity.py -- python3 scripts/rust_ci.py build-binaries \
             --binaries "$REQUIRED_BINARIES" \
             --output-dir target/release/pre_build
       - name: Upload binaries
@@ -196,7 +196,7 @@ jobs:
       - name: Core, simulator, specification traceability and quorums (default seeds)
         run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS /usr/bin/time -v cargo test --locked -p iroha_sumeragi --features sim
       - name: Node driver, lanes and four-validator node tests
-        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS /usr/bin/time -v cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
+        run: env -u SUMERAGI_SIM_SEED -u SUMERAGI_SIM_SEED_BASE -u SUMERAGI_SIM_SEEDS python3 -I -S ci/observe_build_capacity.py -- /usr/bin/time -v cargo test --locked -p iroha_core --lib -- sumeragi::lanes sumeragi::node sumeragi::driver sumeragi::executor
       - name: Record hosted build capacity after testing
         if: always()
         run: *linux_build_capacity
@@ -225,7 +225,7 @@ jobs:
       # conformance adapters and their measurement target compile only under
       # opt-in features that no default lane sets.
       - name: State commitment candidates satisfy the keyed State contract
-        run: /usr/bin/time -v cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
+        run: python3 -I -S ci/observe_build_capacity.py -- /usr/bin/time -v cargo test --locked -p iroha_core --lib --features state-commitment-prototypes -- keyed_commitment::candidates_tests
       - name: State commitment candidate measurement target (smoke run)
         run: /usr/bin/time -v cargo test --locked -p iroha_core_privacy --features fastpq-replay-measurement --test state_commitment_candidates_measurement
       - name: Record hosted build capacity after testing

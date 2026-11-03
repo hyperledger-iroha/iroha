@@ -2825,6 +2825,11 @@ def test_ci_sumeragi_sweeps_execute_with_their_declared_seed_environment(
     command = run.group(1)
     if command.startswith('"'):
         command = json.loads(command)
+    command = command.replace(
+        "python3 -I -S ci/observe_build_capacity.py -- ",
+        shlex.quote(sys.executable) + " -I -S "
+        + shlex.quote(str(ROOT / "ci/observe_build_capacity.py")) + " -- ",
+    )
     if "/usr/bin/time -v " in command:
         # GNU time is a hosted diagnostic, while this shell/seed control also
         # runs on Darwin. Forward the exact child through a fixture timer.
