@@ -1592,7 +1592,7 @@ fn require_inrou_cgroup_kill_control(path: &Path) -> eyre::Result<()> {
     let mut options = fs::OpenOptions::new();
     options
         .write(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32);
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits().cast_signed());
     let opened = options.open(path).wrap_err_with(|| {
         format!(
             "open mandatory writable Inrou cgroup.kill {}",

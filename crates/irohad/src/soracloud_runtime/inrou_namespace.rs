@@ -616,7 +616,7 @@ fn prepare_startup_probe_binding(
     let mut options = fs::OpenOptions::new();
     options
         .read(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32);
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits().cast_signed());
     let host_file = options
         .open(&host_path)
         .wrap_err("open the fixed Inrou startup-probe descriptor binding")?;
@@ -1568,7 +1568,7 @@ fn attest_runtime_manifest_entry_full(
             }
             let mut options = fs::OpenOptions::new();
             options.read(true).custom_flags(
-                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32,
+                (rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits().cast_signed(),
             );
             let file = options.open(path)?;
             let opened = file.metadata()?;
@@ -1633,7 +1633,7 @@ fn authenticate_runtime_manifest_file(
     let mut options = fs::OpenOptions::new();
     options
         .read(true)
-        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits() as i32);
+        .custom_flags((rustix::fs::OFlags::NOFOLLOW | rustix::fs::OFlags::CLOEXEC).bits().cast_signed());
     let file = options
         .open(path)
         .wrap_err_with(|| format!("open authenticated Inrou runtime file {}", path.display()))?;
