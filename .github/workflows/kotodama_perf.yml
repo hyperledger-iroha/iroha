@@ -4,6 +4,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/kotodama_perf.yml"
+      - ".github/actions/setup-native-ci/**"
       - "crates/ivm/benches/bench_kotodama.rs"
       - "crates/ivm/Cargo.toml"
       - "crates/ivm/src/**"
@@ -114,10 +115,11 @@ jobs:
         run: npm run test:native-provenance --prefix javascript/iroha_js
 
   representative-regression:
-    # Benchmark the base and candidate on the same controlled Iroha runner.
-    # Shared GitHub-hosted runners have enough host-to-host variance to make a
-    # five-percent regression ceiling meaningless.
-    runs-on: [self-hosted, Linux, iroha2]
+    # Both immutable revisions are measured serially on this same hosted VM.
+    # Conservative median confidence bounds must establish the unchanged 5%
+    # ceiling and zero List slowdown; noisy/inconclusive runs cannot qualify.
+    # This component comparison is not named-hardware release calibration.
+    runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
       CARGO_BUILD_JOBS: "1"
@@ -147,14 +149,10 @@ jobs:
             fi
           done
 
-      - name: Install Python 3.12
-        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+      - name: Install native benchmark prerequisites
+        uses: ./candidate/.github/actions/setup-native-ci
         with:
-          python-version: "3.12"
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
-        with:
+          working-directory: candidate
           toolchain: 1.99.1
 
       - name: Restore Rust build cache

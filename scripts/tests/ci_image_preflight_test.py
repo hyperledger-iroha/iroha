@@ -162,6 +162,17 @@ def test_native_provisioning_uses_pinned_actions_and_declared_rust_toolchain() -
         assert re.fullmatch(r"[^@]+@[0-9a-f]{40}", action), action
 
 
+def test_native_setup_installs_helpers_from_the_selected_checkout() -> None:
+    source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+    inputs = source.split("inputs:\n", 1)[1].split("runs:\n", 1)[0]
+    assert '  working-directory:\n' in inputs
+    assert '    default: "."' in inputs
+    step = source.split("    - name: Install repository Python build helpers\n", 1)[1].split("    - uses:", 1)[0]
+    assert '      working-directory: ${{ inputs.working-directory }}' in step
+    assert '      run: python -m pip install -r scripts/requirements.txt' in step
+    assert '${{ inputs.working-directory }}' not in step.split('      run:', 1)[1]
+
+
 @pytest.mark.parametrize("existing", ["absent", "private-file", "private-link", "tmp-file", "tmp-link"])
 def test_native_setup_provisions_real_private_replay_roots(tmp_path: Path, existing: str) -> None:
     source = (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()

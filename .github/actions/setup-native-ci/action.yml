@@ -1,6 +1,10 @@
 name: Set up native Rust validation
 description: Install native Linux dependencies and the repository Rust toolchain.
 inputs:
+  working-directory:
+    description: Checkout directory containing scripts/requirements.txt.
+    required: false
+    default: "."
   toolchain:
     description: Optional explicit toolchain for nightly-only coverage.
     required: false
@@ -39,6 +43,7 @@ runs:
         python-version: "3.12"
     - name: Install repository Python build helpers
       shell: bash
+      working-directory: ${{ inputs.working-directory }}
       run: python -m pip install -r scripts/requirements.txt
     - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad
       with:

@@ -53,7 +53,9 @@ EXPECTED_SOURCE_BOUND_BENCHMARKS = (
 def write_estimate(path: Path, median: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        json.dumps({"median": {"point_estimate": median}}), encoding="utf-8"
+        json.dumps({"median": {"point_estimate": median, "confidence_interval": {
+            "confidence_level": 0.95, "lower_bound": median, "upper_bound": median,
+        }}}), encoding="utf-8"
     )
 
 
@@ -114,6 +116,82 @@ class KotodamaPerfGateTests(unittest.TestCase):
 
         write_estimate(missing, float("nan"))
         self.assertEqual(self.run_gate(), 1)
+
+    def test_criterion_confidence_intervals_are_mandatory_and_validated(self) -> None:
+        path = self.root / "estimates.json"
+        valid = {"confidence_level": 0.95, "lower_bound": 95.0, "upper_bound": 105.0}
+        for field, value in (
+            ("confidence_level", 0.9), ("confidence_level", 1.0),
+            ("confidence_level", True), ("lower_bound", 0),
+            ("lower_bound", float("nan")), ("lower_bound", 101.0),
+            ("upper_bound", 99.0), ("upper_bound", float("inf")),
+            ("upper_bound", "105"),
+        ):
+            with self.subTest(field=field, value=value):
+                path.write_text(json.dumps({"median": {"point_estimate": 100.0,
+                    "confidence_interval": {**valid, field: value}}}))
+                with self.assertRaises(PERF.GateError):
+                    PERF.read_criterion_estimate(path)
+        path.write_text(json.dumps({"median": {"point_estimate": 100.0}}))
+        with self.assertRaisesRegex(PERF.GateError, "missing median confidence"):
+            PERF.read_criterion_median(path)
+        path.write_text(json.dumps({"median": {"point_estimate": 100.0,
+            "confidence_interval": valid}}))
+        self.assertEqual(PERF.read_criterion_estimate(path),
+                         PERF.MedianEstimate(100.0, 95.0, 105.0, 0.95))
+
+    def test_uncertain_regression_cannot_qualify_or_write_a_receipt(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        name = PERF.REGRESSION_BENCHMARKS[0]
+        path = self.root / name / "base" / "estimates.json"
+        payload = json.loads(path.read_text())
+        payload["median"]["confidence_interval"]["lower_bound"] *= 0.9
+        path.write_text(json.dumps(payload))
+        report = self.root / "report.json"
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_candidate_provenance") as candidate,
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            result = PERF.main([
+                "--criterion-dir", str(self.root), "--baseline-root", "baseline",
+                "--candidate-root", "candidate", "--expected-candidate-commit", "c" * 40,
+                "--json-output", str(report),
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("inconclusive confidence bounds: no performance qualification", stderr.getvalue())
+        candidate.assert_not_called()
+        self.assertFalse(report.exists())
+
+    def test_confidence_extremes_keep_exact_five_percent_boundary(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        path = self.root / PERF.REGRESSION_BENCHMARKS[0] / "new" / "estimates.json"
+        payload = json.loads(path.read_text())
+        point = payload["median"]["point_estimate"]
+        payload["median"]["confidence_interval"]["upper_bound"] = point * 1.05
+        path.write_text(json.dumps(payload))
+        PERF.enforce_confidence_bounds(self.root, 0.05)
+        payload["median"]["confidence_interval"]["upper_bound"] = point * 1.051
+        path.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(PERF.GateError, "inconclusive"):
+            PERF.enforce_confidence_bounds(self.root, 0.05)
+
+    def test_list_sugar_requires_zero_slowdown_at_interval_extremes(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        for name in (PERF.LIST_SUGAR_BENCHMARK, PERF.LIST_MANUAL_BENCHMARK):
+            for sample in ("base", "new"):
+                write_estimate(self.root / name / sample / "estimates.json", 100.0)
+        PERF.enforce_confidence_bounds(self.root, 0.05)
+        path = self.root / PERF.LIST_SUGAR_BENCHMARK / "new" / "estimates.json"
+        payload = json.loads(path.read_text())
+        payload["median"]["confidence_interval"]["upper_bound"] = 100.001
+        path.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(PERF.GateError, "inconclusive.*0.00%"):
+            PERF.enforce_confidence_bounds(self.root, 0.05)
 
     def test_portable_and_self_baseline_cli_paths_are_rejected(self) -> None:
         common = ["--baseline-root", str(self.root / "baseline")]
@@ -813,6 +891,11 @@ class KotodamaPerfGateTests(unittest.TestCase):
         report = json.loads(report_path.read_text(encoding="utf-8"))
         self.assertEqual(report["schema"], PERF.EVIDENCE_SCHEMA)
         self.assertEqual(report["threshold"], PERF.MAX_REGRESSION)
+        bounds = report["confidence_bounds"]
+        self.assertEqual(bounds["minimum_individual_confidence_level"], 0.95)
+        self.assertEqual(len(bounds["comparisons"]), len(PERF.REGRESSION_BENCHMARKS))
+        self.assertTrue(all(row["maximum_change"] <= 0.05 for row in bounds["comparisons"]))
+        self.assertLessEqual(bounds["list_sugar"]["maximum_change"], 0.0)
         self.assertEqual(
             report["benchmark_count"], len(PERF.REGRESSION_BENCHMARKS)
         )
@@ -1026,29 +1109,22 @@ class KotodamaPerfGateTests(unittest.TestCase):
             r"(?m)^\s*(?:cargo|cp|curl|install|ln|mv|python|rsync|touch|wget)\b",
         )
 
-        python_marker = "      - name: Install Python 3.12\n"
-        self.assertEqual(representative_job.count(python_marker), 1)
-        python_step = representative_job.split(python_marker, 1)[1].split(
+        setup_marker = "      - name: Install native benchmark prerequisites\n"
+        self.assertEqual(representative_job.count(setup_marker), 1)
+        setup_step = representative_job.split(setup_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn(
-            "uses: actions/setup-python@"
-            "6d4fd22b20465ccc0f7354476588e8df7c9ca0e0",
-            python_step,
-        )
-        self.assertIn('          python-version: "3.12"', python_step)
-        regression_test_marker = "      - name: Test regression checker\n"
+        self.assertIn("uses: ./candidate/.github/actions/setup-native-ci", setup_step)
+        self.assertIn("working-directory: candidate", setup_step)
+        self.assertIn("toolchain: 1.99.1", setup_step)
+        self.assertIn("runs-on: ubuntu-24.04", representative_job)
+        self.assertNotIn("self-hosted", representative_job)
+        self.assertIn('".github/actions/setup-native-ci/**"', workflow)
         self.assertLess(
-            representative_job.index(python_marker),
-            representative_job.index(regression_test_marker),
+            representative_job.index(setup_marker),
+            representative_job.index("      - name: Test regression checker\n"),
         )
 
-        toolchain_marker = "      - name: Install Rust toolchain\n"
-        self.assertEqual(representative_job.count(toolchain_marker), 1)
-        toolchain_step = representative_job.split(toolchain_marker, 1)[1].split(
-            "\n      - name:", 1
-        )[0]
-        self.assertIn("          toolchain: 1.99.1", toolchain_step)
         self.assertNotIn("Install the candidate benchmark harness", workflow)
         self.assertNotIn(
             "cp candidate/crates/ivm/benches/bench_kotodama.rs", workflow
