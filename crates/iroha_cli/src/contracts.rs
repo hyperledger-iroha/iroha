@@ -2643,7 +2643,7 @@ mod tests {
                 args_file: None,
             },
         };
-        args.run(&mut ctx).expect_err("trapped debug view");
+        let _ = args.run(&mut ctx).expect_err("trapped debug view");
         let output = ctx.take_output().expect("output");
         assert_eq!(
             output.get("ok").and_then(norito::json::Value::as_bool),
@@ -2847,7 +2847,7 @@ mod tests {
                 args_file: None,
             },
         };
-        args.run(&mut ctx).expect_err("trapped debug view");
+        let _ = args.run(&mut ctx).expect_err("trapped debug view");
         let output = ctx.take_output().expect("output");
         let snippet = output
             .get("source_snippet")
