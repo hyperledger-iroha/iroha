@@ -1,3 +1,4 @@
+#[cfg(test)]
 #[macro_export]
 macro_rules! endo {
     ($name:ident, $field:ident, $params:expr) => {

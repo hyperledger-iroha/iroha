@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod curve;
 mod fp;
 mod fq;

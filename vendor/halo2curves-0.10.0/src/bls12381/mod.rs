@@ -21,6 +21,7 @@ const BLS_X: [u8; 64] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
 ];
 
+#[cfg(test)]
 const ENDO_PARAMS: EndoParameters = EndoParameters {
     // round(b2/n)
     gamma2: [0x63f6e522f6cfee30u64, 0x7c6becf1e01faadd, 0x01, 0x0],
@@ -30,8 +31,12 @@ const ENDO_PARAMS: EndoParameters = EndoParameters {
     b2: [0x0000000100000000, 0xac45a4010001a402, 0x0, 0x0],
 };
 
+#[cfg(test)]
 use ff::{PrimeField, WithSmallOrderMulGroup};
 
+#[cfg(test)]
 use crate::arithmetic::{mul_512, sbb, CurveEndo, EndoParameters};
+#[cfg(test)]
 crate::endo!(G1, Fr, ENDO_PARAMS);
+#[cfg(test)]
 crate::endo!(G2, Fr, ENDO_PARAMS);

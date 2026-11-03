@@ -13,9 +13,13 @@ use core::{
 use rand_core::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
+#[cfg(test)]
 use crate::{
     arithmetic::{mul_512, sbb, CurveEndo, EndoParameters},
     endo,
+};
+
+use crate::{
     ff::{Field, PrimeField, WithSmallOrderMulGroup},
     group::{prime::PrimeCurveAffine, Curve, Group, GroupEncoding},
     grumpkin::{Fq, Fr},
@@ -59,6 +63,7 @@ const G1_B: Fq = Fq([
 // with `bn256::Fq::ZETA`
 // See https://github.com/demining/Endomorphism-Secp256k1/blob/main/README.md
 // to have more details about the endomorphism.
+#[cfg(test)]
 const ENDO_PARAMS_GRUMPKIN: EndoParameters = EndoParameters {
     gamma1: [0xd91d232ec7e0b3d2, 0x2, 0, 0],
     gamma2: [0x5398fd0300ff655f, 0x4ccef014a773d2d2, 0x02, 0],
@@ -66,6 +71,7 @@ const ENDO_PARAMS_GRUMPKIN: EndoParameters = EndoParameters {
     b2: [0x0be4e1541221250b, 0x6f4d8248eeb859fd, 0, 0],
 };
 
+#[cfg(test)]
 endo!(G1, Fr, ENDO_PARAMS_GRUMPKIN);
 
 impl group::cofactor::CofactorGroup for G1 {

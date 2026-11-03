@@ -1,7 +1,7 @@
 #[cfg(not(feature = "std"))]
 extern crate alloc;
 #[cfg(not(feature = "std"))]
-use alloc::{boxed::Box, vec::Vec};
+use alloc::boxed::Box;
 
 use core::{
     cmp,
@@ -122,6 +122,7 @@ mod test {
     use rand_core::OsRng;
 
     use super::*;
+    #[cfg(feature = "std")]
     use crate::serde::SerdeObject;
     crate::curve_testing_suite!(T256);
     crate::curve_testing_suite!(T256, "ecdsa_example");

@@ -13,10 +13,14 @@ use core::{
 use rand_core::RngCore;
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, CtOption};
 
+#[cfg(test)]
 use crate::{
     arithmetic::{mul_512, sbb, CurveEndo, EndoParameters},
-    bn256::{Fq, Fq2, Fr},
     endo,
+};
+
+use crate::{
+    bn256::{Fq, Fq2, Fr},
     ff::{Field, PrimeField, WithSmallOrderMulGroup},
     group::{cofactor::CofactorGroup, prime::PrimeCurveAffine, Curve, Group, GroupEncoding},
     impl_binops_additive, impl_binops_additive_specify_output, impl_binops_multiplicative,
@@ -134,6 +138,7 @@ const G2_GENERATOR_Y: Fq2 = Fq2 {
 // with `bn256::Fr::ZETA`
 // See https://github.com/demining/Endomorphism-Secp256k1/blob/main/README.md
 // to have more details about the endomorphism.
+#[cfg(test)]
 const ENDO_PARAMS_BN: EndoParameters = EndoParameters {
     // round(b2/n)
     gamma1: [0xd91d232ec7e0b3d7, 0x2, 0, 0],
@@ -143,6 +148,7 @@ const ENDO_PARAMS_BN: EndoParameters = EndoParameters {
     b2: [0x0be4e1541221250b, 0x6f4d8248eeb859fd, 0, 0],
 };
 
+#[cfg(test)]
 endo!(G1, Fr, ENDO_PARAMS_BN);
 
 impl group::cofactor::CofactorGroup for G1 {

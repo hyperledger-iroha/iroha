@@ -4,8 +4,10 @@
 //! This module is temporary, and the extension traits defined here are expected
 //! to be upstreamed into the `ff` and `group` crates after some refactoring.
 
+#[cfg(test)]
 use crate::CurveExt;
 
+#[cfg(test)]
 pub(crate) struct EndoParameters {
     pub(crate) gamma1: [u64; 4],
     pub(crate) gamma2: [u64; 4],
@@ -13,6 +15,7 @@ pub(crate) struct EndoParameters {
     pub(crate) b2: [u64; 4],
 }
 
+#[cfg(test)]
 pub trait CurveEndo: CurveExt {
     fn decompose_scalar(e: &Self::ScalarExt) -> (u128, bool, u128, bool);
 }
@@ -39,6 +42,7 @@ pub(crate) const fn mac(a: u64, b: u64, c: u64, carry: u64) -> (u64, u64) {
 }
 
 /// Compute a + (b * c), returning the result and the new carry over.
+#[cfg(test)]
 #[inline(always)]
 pub(crate) const fn macx(a: u64, b: u64, c: u64) -> (u64, u64) {
     let res = (a as u128) + ((b as u128) * (c as u128));
@@ -46,6 +50,7 @@ pub(crate) const fn macx(a: u64, b: u64, c: u64) -> (u64, u64) {
 }
 
 /// Compute a * b, returning the result.
+#[cfg(test)]
 #[inline(always)]
 pub(crate) fn mul_512(a: [u64; 4], b: [u64; 4]) -> [u64; 8] {
     let (r0, carry) = macx(0, a[0], b[0]);

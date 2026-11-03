@@ -13,3 +13,12 @@ I/O helpers; disabling it selects native serial behavior, not another runtime.
 The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the
 unmodified upstream manifest. Remove the macro dependency patch when an upstream
 release carries it; retain the repository's native-only build policy.
+
+The private scalar-decomposition helper and its parameters belong to the
+existing curve unit tests, their only callers. Compile those owners with the
+tests without exporting a new arithmetic API; all production group operations
+remain unconditional. Remove the unused compressed-flag convenience method
+(the encoder already sets those flags directly), an unused T256 import and an
+ineffective `#[must_use]` on the `Group::double` implementation. These changes
+allow Rust 1.99 builds with warnings denied without changing arithmetic or
+compressed encodings.
