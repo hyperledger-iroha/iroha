@@ -85,7 +85,8 @@ jobs:
   native:
     name: Native ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Intel must complete both native and feature-off builds before the DIF receipt.
+    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 120 || 60 }}
     strategy:
       fail-fast: false
       matrix:

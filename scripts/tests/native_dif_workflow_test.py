@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import textwrap
@@ -33,6 +34,24 @@ NATIVE_NAMES = [KERNEL] + [
         "registered_common22_outputs_fit_original_funding",
     )
 ]
+
+
+def test_only_intel_native_job_has_the_two_build_timeout_allowance() -> None:
+    """The longer native/feature-off build allowance applies only to Intel macOS."""
+
+    workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
+    job = workflow.split("  native:\n", 1)[1].split("    defaults:\n", 1)[0]
+    assert job.count("timeout-minutes:") == 1
+    assert (
+        "    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 120 || 60 }}\n"
+        in job
+    )
+    assert re.findall(r"- runner: (\S+)\n\s+target: (\S+)", job) == [
+        ("ubuntu-latest", "x86_64-unknown-linux-gnu"),
+        ("macos-15-intel", "x86_64-apple-darwin"),
+        ("windows-latest", "x86_64-pc-windows-msvc"),
+    ]
+    assert "      fail-fast: false\n" in job
 
 
 @pytest.mark.parametrize(
