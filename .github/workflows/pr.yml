@@ -289,7 +289,8 @@ jobs:
   rust_changes:
     name: Classify affected Rust lanes
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The complete source-guard suite scans the full workspace and exceeds 15 minutes.
+    timeout-minutes: 90
     outputs:
       has_rust: ${{ steps.classify.outputs.has_rust }}
       full: ${{ steps.classify.outputs.full }}
