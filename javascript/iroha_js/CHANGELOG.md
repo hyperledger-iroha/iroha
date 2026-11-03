@@ -14,7 +14,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
 - `PARLIAMENT_PUBLIC_TRANSITIONS_V1`, `PARLIAMENT_AUTOMATIC_EXECUTION_OUTCOMES_V1` and
   `PARLIAMENT_NO_RESULT_KINDS_V1` state Core's actual Norito and event-kind indices: rows after
   `EndorsePublicFinding` keep the sparse numbers that the retired timed-OVN transitions and no-result
-  kinds still occupy in the codec.
+  kinds still occupy in the codec. `ParliamentAutomaticExecutionOutcomeLayoutV1.eventKindIndex` is
+  typed `17 | 18 | 19` to match.
 
 - `attestRuntimeUpgrade(idHex)` has the node sign its support for a scheduled runtime change set with
   its own validator key (`POST /v1/runtime/upgrades/attest/{id}`) and admits exactly one
@@ -31,7 +32,8 @@ All notable changes to `@iroha/iroha-js` are documented in this file.
   as `record`. `proposeRuntimeUpgrade(changeSet, { provenance })` posts `{ change_set, provenance }`: an exact
   universal-root `ChangeSetV1` and the trusted release signers' `ChangeSetEndorsementV1` objects the
   committed `runtime_provenance_policy_v1` requires (`ToriiRuntimeChangeSetEndorsement`); it and
-  `cancelRuntimeUpgrade(idHex)` return exactly one `ProposeRuntimeUpgradeProposal` draft. The three calls
+  `cancelRuntimeUpgrade(idHex)` return exactly one `ProposeRuntimeUpgradeProposal` draft, or, for a
+  proposal with endorsements, the release addition's `ProposeEndorsedRuntimeUpgradeProposal`. The three calls
   sign with the client's `OperatorSigningContext`, which these operator routes require.
   `activateRuntimeUpgrade` is removed: an approved change set activates at the start of its effective
   block. `getRuntimeMetrics()` counts `scheduled`, `activated`, `lapsed` and `canceled` change sets. The

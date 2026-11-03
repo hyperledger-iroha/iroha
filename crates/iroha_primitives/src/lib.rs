@@ -6,6 +6,7 @@
 //! wrapper as a submodule to this crate, rather than into `iroha_data_model` directly.
 #![deny(warnings)]
 pub mod addr;
+pub mod base32;
 pub mod bigint;
 pub mod calendar;
 pub mod chain_id;

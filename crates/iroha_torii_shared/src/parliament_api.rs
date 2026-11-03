@@ -282,8 +282,28 @@ mod tests {
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal,
         MAX_PARLIAMENT_GOVERNANCE_ATTEMPT_RETRIES_V1,
     };
+    use iroha_data_model::isi::governance::ParliamentAutomaticExecutionOutcomeV1;
     use iroha_data_model::smart_contract::ContractAddress;
     use norito::json;
+
+    /// Variants a data-model enum declares in its schema: JSON tag, Norito index and payload.
+    fn schema_variants<T: iroha_schema::IntoSchema + 'static>() -> Vec<iroha_schema::EnumVariant> {
+        let schema = T::schema();
+        let Some(iroha_schema::Metadata::Enum(metadata)) = schema.get::<T>() else {
+            panic!("{} must keep its closed enum schema", T::type_name());
+        };
+        metadata.variants.clone()
+    }
+
+    fn schema_variant<'a>(
+        variants: &'a [iroha_schema::EnumVariant],
+        tag: &str,
+    ) -> &'a iroha_schema::EnumVariant {
+        variants
+            .iter()
+            .find(|variant| variant.tag == tag)
+            .unwrap_or_else(|| panic!("data model has no `{tag}` variant"))
+    }
 
     fn proposal_operator() -> iroha_data_model::account::AccountId {
         let key_pair =
@@ -531,6 +551,19 @@ mod tests {
                 Some(kind_index)
             );
         }
+        // The fixture and these tables are maintained by hand, so bind every row to the enums.
+        let transition_variants = schema_variants::<ParliamentLifecycleTransitionV1>();
+        let kind_variants = schema_variants::<ParliamentLifecycleTransitionKindV1>();
+        for (index, tag, payload_required, kind_index) in expected_public {
+            let variant = schema_variant(&transition_variants, tag);
+            assert_eq!(u64::from(variant.discriminant), index, "{tag} Norito index");
+            assert_eq!(variant.ty.is_some(), payload_required, "{tag} payload");
+            assert_eq!(
+                u64::from(schema_variant(&kind_variants, tag).discriminant),
+                kind_index,
+                "{tag} event kind index"
+            );
+        }
 
         let kinds = [
             ParliamentLifecycleTransitionKindV1::EscalateRisk,
@@ -611,6 +644,14 @@ mod tests {
                 Some(tag)
             );
         }
+        let no_result_variants = schema_variants::<ParliamentNoResultKindV1>();
+        for (index, tag) in expected_no_result_kinds {
+            assert_eq!(
+                u64::from(schema_variant(&no_result_variants, tag).discriminant),
+                index,
+                "{tag} Norito index"
+            );
+        }
 
         let body_state = fixture
             .get("attempt_read_body_state")
@@ -665,6 +706,17 @@ mod tests {
             assert_eq!(
                 entry.get("event_kind_index").and_then(json::Value::as_u64),
                 Some(kind_index)
+            );
+        }
+        let outcome_variants = schema_variants::<ParliamentAutomaticExecutionOutcomeV1>();
+        for (index, tag, payload_required, kind, kind_index) in expected_outcomes {
+            let variant = schema_variant(&outcome_variants, tag);
+            assert_eq!(u64::from(variant.discriminant), index, "{tag} Norito index");
+            assert_eq!(variant.ty.is_some(), payload_required, "{tag} payload");
+            assert_eq!(
+                u64::from(schema_variant(&kind_variants, kind).discriminant),
+                kind_index,
+                "{kind} event kind index"
             );
         }
 

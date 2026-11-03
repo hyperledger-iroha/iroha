@@ -3,35 +3,32 @@
 #![allow(clippy::items_after_statements)]
 //! Independent account metadata events expose execution order. Ordinary network transactions
 //! follow proposal position, and block results retain those positions after execution.
-use iroha_core::sumeragi::test_chain::{CertifiedTestChain, TestChainConfig};
+use iroha_core::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
-fn build_world() -> (
-    CertifiedTestChain,
-    NetworkId,
-    Vec<(AccountId, iroha_crypto::KeyPair)>,
-) {
+use std::num::NonZeroU32;
+/// Universal accounts and their signing keys.
+type Accounts = Vec<(AccountId, iroha_crypto::KeyPair)>;
+fn build_world() -> (CertifiedTestChain, Accounts) {
     let chain_id: ChainId = "chain".parse().unwrap();
     // Each universal account owns a separate metadata key, so the transactions do not conflict.
-    let (a1, k1) = iroha_test_samples::gen_account_in("wonderland");
-    let (a2, k2) = iroha_test_samples::gen_account_in("wonderland");
-    let (a3, k3) = iroha_test_samples::gen_account_in("wonderland");
-    let (a4, k4) = iroha_test_samples::gen_account_in("wonderland");
-    let acc1 = Account::new(a1.clone()).build(&a1);
-    let acc2 = Account::new(a2.clone()).build(&a1);
-    let acc3 = Account::new(a3.clone()).build(&a1);
-    let acc4 = Account::new(a4.clone()).build(&a1);
-    let world = iroha_core::state::World::with([], [acc1, acc2, acc3, acc4], []);
+    let accounts: Accounts = (0..4)
+        .map(|_| iroha_test_samples::gen_account_in("wonderland"))
+        .collect();
+    let (a1, _) = &accounts[0];
+    let world = iroha_core::state::World::with(
+        [],
+        accounts
+            .iter()
+            .map(|(account, _)| Account::new(account.clone()).build(a1)),
+        [],
+    );
     let mut config = TestChainConfig::new(world, 1000);
     config.chain_id = chain_id;
-    let chain = CertifiedTestChain::start(config).unwrap();
-    let network_id = chain.network_id();
-    (
-        chain,
-        network_id,
-        vec![(a1, k1), (a2, k2), (a3, k3), (a4, k4)],
-    )
+    (CertifiedTestChain::start(config).unwrap(), accounts)
 }
+/// Execute and publish one proposal. A completed execution is immutable, so the execution
+/// order is read from the events its publication delivers, which preserve that order.
 fn run_block(
     chain: &mut CertifiedTestChain,
     txs: Vec<SignedTransaction>,
@@ -40,64 +37,81 @@ fn run_block(
         .iter()
         .map(SignedTransaction::hash_as_entrypoint)
         .collect();
+    chain
+        .take_events()
+        .expect("drain events delivered before the observed block");
     let proposal = chain.proposal(None, txs);
-    let mut pending = chain
-        .begin_proposal(proposal, iroha_sumeragi::types::ControlWitness::default())
-        .unwrap();
-    let (block, execution_order) = pending
-        .inspect(move |original| {
-            let execution_order = original
-                .state
-                .world
-                .take_external_events()
-                .into_iter()
-                .filter_map(|event| {
-                    let EventBox::Data(event) = event else {
-                        return None;
-                    };
-                    match event.as_ref() {
-                        DataEvent::Account(AccountEvent::MetadataInserted(change)) => {
-                            Some(change.target().clone())
-                        }
-                        _ => None,
-                    }
-                })
-                .collect();
-            assert_eq!(
-                original
-                    .block
-                    .as_ref()
-                    .network_input_hashes()
-                    .collect::<Vec<_>>(),
-                payload_hashes,
-                "entrypoint hashes must preserve proposal order"
-            );
-            (original.block.as_ref().clone(), execution_order)
+    let committed = chain.commit_proposal(
+        proposal,
+        Signers::Quorum,
+        iroha_sumeragi::types::ControlWitness::default(),
+    );
+    let execution_order = chain
+        .take_events()
+        .expect("native publication events")
+        .into_iter()
+        .filter_map(|event| {
+            let EventBox::Data(event) = event else {
+                return None;
+            };
+            match event.as_ref() {
+                DataEvent::Account(AccountEvent::MetadataInserted(change)) => {
+                    Some(change.target().clone())
+                }
+                _ => None,
+            }
         })
-        .unwrap();
-    // This test observes execution only; the original unpublished overlay is discarded so
-    // every permutation starts from exactly the same authenticated state.
-    drop(pending);
+        .collect();
+    let block = committed.block().as_ref().clone();
+    assert_eq!(
+        block.network_input_hashes().collect::<Vec<_>>(),
+        payload_hashes,
+        "entrypoint hashes must preserve proposal order"
+    );
     (block, execution_order)
+}
+/// Distinct signed copy of a round's transaction: a published transaction is never admitted
+/// again, so every proposal round signs the same instructions under its own nonce.
+fn sign_for_round(
+    network_id: NetworkId,
+    (authority, key_pair): &(AccountId, iroha_crypto::KeyPair),
+    instruction: impl Into<InstructionBox>,
+    round: usize,
+) -> SignedTransaction {
+    let instruction: InstructionBox = instruction.into();
+    let mut builder = TransactionBuilder::new(
+        network_id,
+        authority.clone(),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([instruction]);
+    builder.set_nonce(
+        u32::try_from(round)
+            .ok()
+            .and_then(|round| round.checked_add(1))
+            .and_then(NonZeroU32::new)
+            .expect("round nonce fits"),
+    );
+    builder.sign(key_pair.private_key())
 }
 fn independent_transactions(
     network_id: NetworkId,
     accs: &[(AccountId, iroha_crypto::KeyPair)],
+    round: usize,
 ) -> Vec<SignedTransaction> {
     accs.iter()
         .enumerate()
-        .map(|(i, (aid, kp))| {
-            TransactionBuilder::new(
+        .map(|(i, signer)| {
+            sign_for_round(
                 network_id,
-                aid.clone(),
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                signer,
+                SetKeyValue::account(
+                    signer.0.clone(),
+                    "scheduler_marker".parse().unwrap(),
+                    iroha_primitives::json::Json::new(format!("transaction-{i}")),
+                ),
+                round,
             )
-            .with_instructions([SetKeyValue::account(
-                aid.clone(),
-                "scheduler_marker".parse().unwrap(),
-                iroha_primitives::json::Json::new(format!("transaction-{i}")),
-            )])
-            .sign(kp.private_key())
         })
         .collect()
 }
@@ -106,8 +120,8 @@ fn proposal_order(txs: &[SignedTransaction]) -> Vec<AccountId> {
 }
 #[test]
 fn ordinary_network_execution_follows_proposal_order() {
-    let (mut chain, network_id, accs) = build_world();
-    let txs = independent_transactions(network_id, &accs);
+    let (mut chain, accs) = build_world();
+    let network_id = chain.network_id();
     // Each permutation is a distinct proposal order, irrespective of entrypoint hashes.
     let perms: Vec<Vec<usize>> = vec![
         vec![0, 1, 2, 3], // identity
@@ -116,7 +130,8 @@ fn ordinary_network_execution_follows_proposal_order() {
         vec![2, 3, 0, 1], // rotate left 2
         vec![0, 2, 1, 3], // swap middle
     ];
-    for p in perms {
+    for (round, p) in perms.into_iter().enumerate() {
+        let txs = independent_transactions(network_id, &accs, round);
         let permuted_txs: Vec<_> = p.iter().map(|&i| txs[i].clone()).collect();
         let expected = proposal_order(&permuted_txs);
         let (vb, got) = run_block(&mut chain, permuted_txs);
@@ -135,8 +150,8 @@ fn ordinary_network_execution_follows_proposal_order() {
 #[test]
 fn ordinary_network_execution_follows_randomized_proposal_orders() {
     // Exercise many distinct proposal orders with a fixed, reproducible shuffle.
-    let (mut chain, network_id, accs) = build_world();
-    let txs = independent_transactions(network_id, &accs);
+    let (mut chain, accs) = build_world();
+    let network_id = chain.network_id();
     // Deterministic LCG for shuffling
     #[derive(Clone)]
     struct Lcg(u64);
@@ -162,7 +177,8 @@ fn ordinary_network_execution_follows_randomized_proposal_orders() {
     }
     // Exercise many randomized permutations with a fixed seed for reproducibility
     let mut rng = Lcg::new(0x00C0_FFEE);
-    for _ in 0..64 {
+    for round in 0..64 {
+        let txs = independent_transactions(network_id, &accs, round);
         let permuted = shuffle(&mut rng, &txs);
         let expected = proposal_order(&permuted);
         let (vb, got) = run_block(&mut chain, permuted);
@@ -183,25 +199,23 @@ fn ordinary_network_execution_follows_randomized_proposal_orders() {
 
 #[test]
 fn scheduler_results_preserve_payload_indices_after_reordering() {
-    let (mut chain, network_id, accs) = build_world();
-    let mut txs = independent_transactions(network_id, &accs);
-    let (authority, keypair) = &accs[0];
-    txs[0] = TransactionBuilder::new(
-        network_id,
-        authority.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([RemoveKeyValue::account(
-        authority.clone(),
-        "missing".parse().unwrap(),
-    )])
-    .sign(keypair.private_key());
-    let rejected_hash = txs[0].hash_as_entrypoint();
-
-    // Descending hashes show that ordinary execution follows proposal position,
-    // including when hash priority would choose the reverse order.
-    txs.sort_by_key(|tx| std::cmp::Reverse(tx.hash_as_entrypoint()));
-    for _ in 0..txs.len() {
+    let (mut chain, accs) = build_world();
+    let network_id = chain.network_id();
+    for round in 0..accs.len() {
+        let mut txs = independent_transactions(network_id, &accs, round);
+        let authority = accs[0].0.clone();
+        txs[0] = sign_for_round(
+            network_id,
+            &accs[0],
+            RemoveKeyValue::account(authority, "missing".parse().unwrap()),
+            round,
+        );
+        let rejected_hash = txs[0].hash_as_entrypoint();
+        // Descending hashes show that ordinary execution follows proposal position,
+        // including when hash priority would choose the reverse order; each round
+        // rotates that order by one more position.
+        txs.sort_by_key(|tx| std::cmp::Reverse(tx.hash_as_entrypoint()));
+        txs.rotate_left(round);
         let expected: Vec<_> = txs
             .iter()
             .filter(|tx| tx.hash_as_entrypoint() != rejected_hash)
@@ -222,6 +236,5 @@ fn scheduler_results_preserve_payload_indices_after_reordering() {
                 "a transaction result must remain attached to its payload index"
             );
         }
-        txs.rotate_left(1);
     }
 }

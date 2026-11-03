@@ -1,6 +1,5 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use blake3::hash as blake3_hash;
-use data_encoding::BASE32_NOPAD;
 use iroha_primitives::soradns::{
     GatewayHostBindings, GatewayHostProfile, derive_gateway_hosts,
     derive_gateway_hosts_with_profile,
@@ -126,18 +125,15 @@ fn soradns_binding_template_writes_payload_and_headers() {
     assert_eq!(payload["hostname"].as_str(), Some("docs.sora.gw.sora.name"));
     assert_eq!(payload["proof_status"].as_str(), Some("ok"));
     assert_eq!(payload["generated_at"].as_str(), Some(timestamp));
-    let expected_cid = {
-        let root = hex::decode("0123456789abcdef").expect("root hex");
-        let encoded = BASE32_NOPAD.encode(&root).to_ascii_lowercase();
-        format!("b{encoded}")
-    };
-    assert_eq!(payload["content_cid"].as_str(), Some(expected_cid.as_str()));
+    // Independent lowercase, unpadded base32 vector for 0123456789abcdef.
+    let expected_cid = "baerukz4jvpg66";
+    assert_eq!(payload["content_cid"].as_str(), Some(expected_cid));
     let headers = payload["headers"]
         .as_object()
         .expect("headers block should be an object");
     assert_eq!(
         headers.get("Sora-Content-CID").and_then(Value::as_str),
-        Some(expected_cid.as_str())
+        Some(expected_cid)
     );
     assert_eq!(
         headers.get("Sora-Name").and_then(Value::as_str),
@@ -276,15 +272,9 @@ fn soradns_gar_template_derives_manifest_metadata() {
     cmd.assert().success();
     let payload_raw = fs::read_to_string(&output_path).expect("gar payload");
     let payload: Value = json::from_str(&payload_raw).expect("gar json");
-    let expected_root = hex::decode("0123456789abcdef").expect("root hex");
-    let expected_cid = format!(
-        "b{}",
-        BASE32_NOPAD.encode(&expected_root).to_ascii_lowercase()
-    );
-    assert_eq!(
-        payload["manifest_cid"].as_str(),
-        Some(expected_cid.as_str())
-    );
+    // Independent lowercase, unpadded base32 vector for 0123456789abcdef.
+    let expected_cid = "baerukz4jvpg66";
+    assert_eq!(payload["manifest_cid"].as_str(), Some(expected_cid));
     let expected_digest = blake3_hash(&fs::read(&manifest_path).expect("read manifest"))
         .to_hex()
         .to_string();

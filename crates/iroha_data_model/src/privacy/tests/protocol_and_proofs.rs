@@ -1124,9 +1124,11 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     excessive_rows.protocols.push(excessive_rows.protocols[0]);
     let excessive_rows =
         norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");
+    // A thirteenth row exceeds the protocol-owned twelve-row ceiling the early decode limit
+    // enforces, so the archive is an invalid manifest, not a local resource refusal.
     assert_eq!(
         validate_privacy_capability_archive_v1(&excessive_rows),
-        Status::DecodeResourceLimit
+        Status::InvalidManifest
     );
 }
 #[test]

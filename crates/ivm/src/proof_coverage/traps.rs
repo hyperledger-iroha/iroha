@@ -237,7 +237,8 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     ),
     // The ledger host. Verifying keys and public-input records are rehydrated from State
     // before the run; `begin_tx` refuses an open nested-call journal, which an honest
-    // executor never leaves.
+    // executor never leaves. Output measurement preserves the original decoder resource
+    // refusal as a local deferral.
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host.rs",
         PrepareRejection: [NoritoInvalid],
@@ -247,7 +248,17 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
             OutOfGas, PermissionDenied, UnknownSyscall,
         ],
         HostInvariant: [DecodeError],
-        LocalDeferral: [AllocationDeferred, ExecutionDeferred, VerificationDeferred],
+        LocalDeferral: [AllocationDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
+    ),
+    // Signed-attachment custody frames. Nested calls enter and leave a child inside the
+    // call syscall. `begin_tx` requires an unchanged root, which an honest executor
+    // always presents; after a recoverable Err result Core refuses a root whose
+    // declarations were consumed, outside any run.
+    producer!(
+        "crates/iroha_core/src/smartcontracts/ivm/host/attachment_lifecycle.rs",
+        SyscallTrap: [PermissionDenied],
+        HostInvariant: [PermissionDenied],
+        OutsideInvocation: [PermissionDenied],
     ),
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host/contract_calls.rs",
@@ -295,6 +306,14 @@ pub const VM_ERROR_PRODUCERS: &[ProducerFile] = &[
     producer!(
         "crates/iroha_core/src/smartcontracts/ivm/host/uid_holding_quote.rs",
         SyscallTrap: [DecodeError, GasCostOverflow, NotImplemented, PermissionDenied],
+    ),
+    // The X.509 attachment syscall decodes and queues one request inside the run; its
+    // allocation, decode and verification refusals stay local, including the queue
+    // backing Core reserves again when it applies the queued effects.
+    producer!(
+        "crates/iroha_core/src/smartcontracts/ivm/host/x509_attachment.rs",
+        SyscallTrap: [NoritoInvalid, PermissionDenied],
+        LocalDeferral: [AllocationDeferred, DecodeDeferred, ExecutionDeferred, VerificationDeferred],
     ),
     // Core encodes a fee-conversion state value with the VM codec outside any run.
     producer!(

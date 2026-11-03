@@ -788,14 +788,16 @@ fn fetch_cli_rejects_missing_or_substituted_plan_payload_digest() {
     )
     .expect("write substituted plan");
     let substituted_assert = sorafs_fetch_cmd()
+        .arg("--allow-implicit-provider-metadata")
         .arg(format!("--plan={}", substituted_path.display()))
         .arg(format!("--provider=alpha={}", payload_path.display()))
         .assert()
         .failure();
+    let substituted_stderr =
+        String::from_utf8_lossy(substituted_assert.get_output().stderr.as_ref());
     assert!(
-        String::from_utf8_lossy(substituted_assert.get_output().stderr.as_ref())
-            .contains("assembled payload digest"),
-        "substituted whole-payload digest must fail after assembly"
+        substituted_stderr.contains("invalid chunk fetch plan: assembled payload digest"),
+        "substituted whole-payload digest must fail after assembly as an invalid plan: {substituted_stderr}"
     );
 }
 #[test]

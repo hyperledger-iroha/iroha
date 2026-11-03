@@ -51,6 +51,8 @@ mod kotodama_pointer_abi_apply;
 mod limits_enforcement;
 #[path = "../../src/manifest_signing_test_support.rs"]
 mod manifest_signing_test_support;
+#[path = "../common/native_genesis.rs"]
+mod native_genesis;
 #[path = "../nexus_policies.rs"]
 mod nexus_policies;
 #[path = "../oracle.rs"]

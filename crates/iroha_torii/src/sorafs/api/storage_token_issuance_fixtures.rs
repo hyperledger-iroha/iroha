@@ -56,8 +56,9 @@ fn token_test_context_with_payload_and_signer_mode(
     let provider = make_signed_advert_with_host_and_provider("storage.example.test", provider_id);
     // Range requests authenticate the provider's signed range capabilities before
     // exercising token quotas, payload verification or manifest-envelope policy.
-    let mut app = Arc::try_unwrap(app_state_with_seeded_cache(&provider))
-        .unwrap_or_else(|_| panic!("exclusive app state required"));
+    // The context installs its own node below, so the seeded node's storage goes with it.
+    let (app, _seeded_storage) = app_state_with_seeded_cache(&provider);
+    let mut app = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("exclusive app state required"));
     #[cfg(feature = "telemetry")]
     {
         app.telemetry = isolated_test_telemetry();

@@ -1363,9 +1363,9 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
             "[{}] pulse {pulse} verifies against the pre-dealt session on all four validators",
             elapsed(started)
         );
-        // 11. The stopped stores pass the read-only storage check, including the restore of a
-        //     real signed snapshot the qualification cadence wrote, reconciled against every
-        //     retained Kura hash.
+        // 11. The stopped stores pass the read-only storage check, and this build restores the
+        //     real signed snapshot the qualification cadence wrote and reproduces every later
+        //     block (`--check-replay`, on a copy of each store).
         let deadline = Instant::now() + PHASE;
         for (index, node_file) in node_files.iter().enumerate() {
             let mut check = daemon.command()?;
@@ -1377,16 +1377,37 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
                 .arg("--check-storage");
             let report = run(check, &root.join(format!("check-storage-{index}")), deadline).await?;
             let report: Value = json::from_slice(&report)?;
+            let tip = report.get("tip_height").and_then(Value::as_u64);
             ensure!(
-                report.get("snapshot_restore_dry_run").and_then(Value::as_str) == Some("ok")
-                    && report.get("tip_height").and_then(Value::as_u64) >= Some(pulse + 2)
-                    && report
-                        .get("snapshot_height")
-                        .and_then(Value::as_u64)
-                        .is_some_and(|height| height > 0),
-                "validator {index} failed the storage check with a restored snapshot: {report:?}"
+                tip >= Some(pulse + 2) && report.get("tip_hash").and_then(Value::as_str).is_some(),
+                "validator {index} failed the storage check: {report:?}"
             );
             eprintln!("check-storage validator {index}: {}", json::to_string(&report)?);
+            let mut replay = daemon.command()?;
+            replay
+                .env_clear()
+                .current_dir(&root)
+                .arg("--config")
+                .arg(node_file)
+                .arg("--check-replay");
+            let replayed = run(replay, &root.join(format!("check-replay-{index}")), deadline).await?;
+            let replayed: Value = json::from_slice(&replayed)?;
+            let start = replayed.get("start");
+            let start_height = start
+                .and_then(|start| start.get("height"))
+                .and_then(Value::as_u64);
+            ensure!(
+                start
+                    .and_then(|start| start.get("source"))
+                    .and_then(Value::as_str)
+                    == Some("snapshot")
+                    && start_height.is_some_and(|height| height > 0 && Some(height) < tip)
+                    && replayed.get("outcome").and_then(Value::as_str) == Some("matched")
+                    && replayed.get("replayed_to").and_then(Value::as_u64) == tip,
+                "validator {index} did not restore its snapshot and reproduce every later block: \
+                 {replayed:?}"
+            );
+            eprintln!("check-replay validator {index}: {}", json::to_string(&replayed)?);
         }
         Ok::<_, color_eyre::Report>(())
     }

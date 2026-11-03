@@ -43,6 +43,89 @@ pub(crate) fn founded_selection() -> Result<RootSelectionV1, CatalogError> {
     Ok(release_catalog()?.baseline.clone())
 }
 
+/// Activate this release's additions on `world`'s universal root, in declaration order, up to and
+/// including `through`, as their governed change sets do at block start: publish each addition's
+/// definitions, install its storage (a cell at its published initial value) and move the
+/// selection. An addition already active stays as it is.
+///
+/// Fixtures only. A network activates an addition through a governed change set
+/// (`specs/runtime_upgrades.md`); no production World is founded on one.
+///
+/// # Errors
+/// `through` is not an addition of this release, or one of the activations does not apply.
+#[cfg(any(test, feature = "iroha-core-tests"))]
+pub fn activate_additions_for_testing(
+    world: &crate::state::World,
+    through: &str,
+) -> Result<(), String> {
+    let catalog = release_catalog().map_err(|error| error.to_string())?;
+    let last = catalog
+        .additions
+        .iter()
+        .position(|addition| addition.module == through)
+        .ok_or_else(|| format!("{through} is not an addition of this release"))?;
+    // A change set's network scope does not shape the selection it produces.
+    let network = iroha_data_model::NetworkId::from_genesis_hash(
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::prehashed([0; 32])),
+    );
+    let mut block = world.block();
+    for addition in &catalog.additions[..=last] {
+        let current = block.runtime_selection.get().clone();
+        if current.active.contains(&addition.implementation) {
+            continue;
+        }
+        let published = change_set::PublishedDefinitions(&block.runtime_definitions);
+        let change = catalog
+            .activation(addition.module, &current, &published, network, 1, [0; 32])
+            .map_err(|error| error.to_string())?;
+        let applied = change
+            .apply(&current, &published)
+            .map_err(|error| error.to_string())?;
+        for (definition, descriptor) in applied.published {
+            block.runtime_definitions.insert(definition, descriptor);
+        }
+        *block.runtime_selection.get_mut() = applied.selection;
+        let mut transaction = block.transaction_without_telemetry(
+            iroha_config::parameters::actual::LaneConfig::default(),
+            0,
+        );
+        change_set::install_cells(&mut transaction, &change, catalog, 1)
+            .map_err(|error| error.to_string())?;
+        transaction.apply();
+    }
+    block.commit();
+    Ok(())
+}
+
+/// The top-level World members whose storage `selection` does not install, by snapshot member
+/// name (`specs/live_runtime_upgrades.md` §5.5).
+///
+/// A World field a release addition adds stays out of snapshots until a change set installs its
+/// storage, and a restore gives it its empty default, so the release before the addition keeps
+/// reading this release's snapshots until activation.
+///
+/// # Errors
+/// The release catalog cannot be built (a build defect), or an uninstalled field is not a
+/// top-level World member.
+pub(crate) fn uninstalled_world_members(
+    selection: &RootSelectionV1,
+) -> Result<Vec<&'static str>, String> {
+    let catalog = release_catalog().map_err(|error| error.to_string())?;
+    let members = <crate::state::World as norito::json::FastJsonWrite>::json_object_field_order()
+        .unwrap_or_default();
+    catalog
+        .world_storage
+        .iter()
+        .filter(|(_, storage)| selection.installed_storage.binary_search(storage).is_err())
+        .map(|(field, _)| {
+            field
+                .strip_prefix("world.")
+                .and_then(|name| members.iter().find(|member| **member == name).copied())
+                .ok_or_else(|| format!("uninstalled World field {field} is not a top-level member"))
+        })
+        .collect()
+}
+
 /// The change set that moves the universal root of `world`, on `network`, from its committed
 /// selection to the addition `module` of this release, effective at `effective_height`
 /// ([`ReleaseCatalog::activation`]); an operator endorses and proposes it.

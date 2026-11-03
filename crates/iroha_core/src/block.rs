@@ -10463,32 +10463,6 @@ pub(crate) mod tests {
         assert!(matches!(results.as_slice(), [Err(_)]), "{results:?}");
         assert_eq!(state_block.gas_used_in_block, expected_gas);
     }
-    // These typed-store fixtures bypass Register, so capture deferred consent
-    // from the same World and executor that will execute each callback.
-    fn capture_component_trigger_runtime(
-        world: &World,
-        executable: &Executable,
-        metadata: &mut Metadata,
-    ) {
-        let mut world_block = world.block();
-        let world_transaction = world_block.transaction_without_telemetry(
-            iroha_config::parameters::actual::LaneConfig::default(),
-            0,
-        );
-        let expected =
-            crate::runtime::expectation::capture_executable(executable, &world_transaction)
-                .expect("component action has an installed runtime closure");
-        crate::runtime::expectation::check(&expected, &world_transaction, 1)
-            .expect("component action is admitted at its registration height");
-        let digest = crate::runtime::expectation::digest_owned(&expected, &world_transaction)
-            .expect("capture original component runtime consent");
-        metadata.insert(
-            crate::smartcontracts::isi::triggers::TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY
-                .parse()
-                .expect("valid runtime consent metadata key"),
-            Json::new(digest),
-        );
-    }
     fn add_pipeline_metadata_trigger(
         state: &State,
         authority: &AccountId,
@@ -10518,22 +10492,6 @@ pub(crate) mod tests {
             filter,
         )
         .expect("test pipeline-trigger action satisfies its authority invariant");
-        // The negative matching fixtures deliberately include a filter that public
-        // registration rejects. Author their consent from this founded State's
-        // actual runtime before inserting them below the registration boundary.
-        let expectation =
-            crate::runtime::expectation::capture_executable(&action.executable, &transaction.world)
-                .expect("fixture executable runtime closure");
-        crate::runtime::expectation::check(&expectation, &transaction.world, height)
-            .expect("fixture runtime closure is executable at its parent height");
-        let digest = crate::runtime::expectation::digest_owned(&expectation, &transaction.world)
-            .expect("fixture execution-consent digest");
-        action.metadata.insert(
-            crate::smartcontracts::isi::triggers::TRIGGER_RUNTIME_EXPECTATION_METADATA_KEY
-                .parse()
-                .expect("valid runtime expectation metadata key"),
-            Json::new(digest),
-        );
         action.metadata.insert(
             crate::smartcontracts::isi::triggers::TRIGGER_REGISTERED_BLOCK_HEIGHT_METADATA_KEY
                 .parse()
@@ -11467,7 +11425,6 @@ seiyaku DynamicTarget { permission CanWriteCounters;
             "sequential heartbeat".to_owned(),
         ))]
         .into();
-        capture_component_trigger_runtime(&state.world, &time_executable, &mut trigger_metadata);
         let time_trigger = Trigger::new(
             time_trigger_id.clone(),
             Action::new(

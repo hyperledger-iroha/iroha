@@ -85,13 +85,8 @@ fn check_storage_reports_a_missing_store_as_empty() {
         StorageCheckReportV1 {
             tip_height: 0,
             tip_hash: None,
-            snapshot_height: None,
-            prefix_hash_at_snapshot_height: None,
-            snapshot_restore_dry_run: DRY_RUN_OK.to_owned(),
-            snapshot_restore_error: None,
         }
     );
-    assert!(report.is_ok());
     assert!(
         !root.path().join("kura").exists(),
         "the probe never creates a store"
@@ -107,7 +102,6 @@ fn check_storage_reads_a_fresh_store_without_blocks() {
     let report = check_storage(&config).expect("inspect fresh store");
     assert_eq!(report.tip_height, 0);
     assert_eq!(report.tip_hash, None);
-    assert!(report.is_ok(), "{report:?}");
     assert_eq!(
         tree(root.path()),
         before,
@@ -127,8 +121,6 @@ fn check_storage_reads_a_populated_store_read_only() {
         report.tip_hash,
         Some(hex_hash(blocks.last().expect("tip").hash()))
     );
-    assert_eq!(report.snapshot_height, None, "no snapshot was written");
-    assert!(report.is_ok(), "{report:?}");
     assert_eq!(
         tree(root.path()),
         before,
@@ -170,21 +162,19 @@ fn check_storage_rejects_a_block_this_build_cannot_decode() {
     assert!(error.contains("block 1"), "{error}");
 }
 
+/// Snapshot restore needs the certified chain the read-only probe cannot restore against, so it
+/// is `--check-replay`'s check: the storage check reads Kura alone.
 #[test]
-fn run_check_storage_fails_closed_on_a_broken_snapshot() {
+fn check_storage_leaves_snapshots_to_check_replay() {
     let root = tempfile::tempdir().expect("temporary store root");
     let config = storage_config(root.path());
     populate_store(&config, 1);
     let snapshot = root.path().join("snapshot");
     std::fs::create_dir_all(&snapshot).expect("snapshot root");
     std::fs::write(snapshot.join("current"), b"not a digest").expect("broken current pointer");
-    let report = check_storage(&config).expect("the Kura store itself opens");
+    let report = check_storage(&config).expect("the Kura store opens");
     assert_eq!(report.tip_height, 1);
-    assert_eq!(report.snapshot_restore_dry_run, DRY_RUN_ERROR);
-    assert!(report.snapshot_restore_error.is_some());
-    assert!(!report.is_ok());
-    let error = run_check_storage(&config).expect_err("a failed dry run exits nonzero");
-    assert!(matches!(error.current_context(), MainError::CheckStorage));
+    run_check_storage(&config).expect("a readable store passes the storage check");
 }
 
 #[test]
@@ -266,10 +256,6 @@ fn probe_reports_roundtrip_through_norito_json() {
     let report = StorageCheckReportV1 {
         tip_height: 7,
         tip_hash: Some("66".repeat(32)),
-        snapshot_height: Some(5),
-        prefix_hash_at_snapshot_height: Some("77".repeat(32)),
-        snapshot_restore_dry_run: DRY_RUN_OK.to_owned(),
-        snapshot_restore_error: None,
     };
     let json = norito::json::to_json(&report).expect("encode storage report");
     assert_eq!(
@@ -289,34 +275,6 @@ fn probe_reports_roundtrip_through_norito_json() {
 
 fn marker_hash(marker: u8) -> HashOf<BlockHeader> {
     HashOf::from_untyped_unchecked(Hash::prehashed([marker; Hash::LENGTH]))
-}
-
-/// A snapshot whose retained hashes match Kura's at its tip but not in its prefix is refused, as
-/// the Strict startup refuses it; a snapshot above Kura's durable tip is also refused.
-#[test]
-fn restored_hashes_are_reconciled_at_every_retained_height() {
-    let kura: Vec<_> = (1_u8..=5).map(marker_hash).collect();
-    let kura_hash = |height: NonZeroUsize| kura.get(height.get() - 1).copied();
-    reconcile_restored_hashes(kura.iter().copied(), 5, kura_hash).expect("identical history");
-    reconcile_restored_hashes(kura[..3].iter().copied(), 5, kura_hash)
-        .expect("a snapshot below Kura's tip");
-    let mut ahead = kura.clone();
-    ahead.push(marker_hash(6));
-    let error = reconcile_restored_hashes(ahead.into_iter(), 5, kura_hash)
-        .expect_err("snapshot state cannot exceed durable certified history");
-    assert!(error.contains("height 6 exceeds"), "{error}");
-
-    let mut tampered = kura.clone();
-    tampered[1] = marker_hash(0xEE);
-    assert_eq!(tampered.last(), kura.last(), "the tip still matches");
-    let error = reconcile_restored_hashes(tampered.into_iter(), 5, kura_hash)
-        .expect_err("a tampered prefix entry is refused");
-    assert!(error.contains("height 2"), "{error}");
-
-    let pruned = |height: NonZeroUsize| (height.get() != 3).then(|| kura[height.get() - 1]);
-    let error = reconcile_restored_hashes(kura.iter().copied(), 5, pruned)
-        .expect_err("a height Kura should hold is missing");
-    assert!(error.contains("height 3"), "{error}");
 }
 
 #[test]

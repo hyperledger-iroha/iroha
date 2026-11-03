@@ -241,6 +241,10 @@ fn prepared_fixed_exact_admission_preserves_inputs_and_uncertainty_priority() {
 #[test]
 #[ignore = "full native19 Metal word/prepared fixed transition cost with four exact cosets"]
 #[cfg(target_os = "macos")]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn prepared_fixed_complete_four_stripe_cost_matches_all_public_fields() {
     use std::time::{Duration, Instant};
     const WIDTH: usize = 134;

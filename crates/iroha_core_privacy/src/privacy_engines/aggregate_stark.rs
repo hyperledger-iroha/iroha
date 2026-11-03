@@ -2037,6 +2037,7 @@ impl Drop for StreamingMerkleAccumulatorV1 {
     }
 }
 /// Commit an exact leaf iterator with logarithmic tree memory.
+#[cfg(test)]
 pub fn streaming_merkle_commitment_v1<I>(
     context: TransparentStarkDigestContextV1,
     node_role: &'static [u8],
@@ -2068,6 +2069,13 @@ pub struct StreamingRowCommitmentResultV1 {
 /// Only the coalescer can construct the preflighted variant's capability.
 /// Ordinary APIs always retain the complete canonical-field scan.
 enum StreamingColumnsV1<'a, C> {
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "only the test-only ordinary column entries construct unchecked input"
+        )
+    )]
     Unchecked(&'a [C]),
     Preflighted(joined_trace::PreflightedInitialColumnsV1<'a, C>),
 }
@@ -2197,6 +2205,7 @@ impl StreamingRowCommitmentV1 {
     /// allocated. The complete batch is checked before any hash state changes.
     /// An unexpected stream failure poisons the builder and selects the error
     /// at the earliest row, independently of worker completion order.
+    #[cfg(test)]
     pub(crate) fn absorb_columns_v1<C: AsRef<[F]> + Sync>(
         &mut self,
         columns: &[C],
@@ -2224,6 +2233,7 @@ impl StreamingRowCommitmentV1 {
         self.absorb_input_with_packing_v1::<128, _>(StreamingColumnsV1::Preflighted(columns))
     }
 
+    #[cfg(test)]
     fn absorb_columns_with_packing_v1<const PACKED_BYTES: usize, C: AsRef<[F]> + Sync>(
         &mut self,
         columns: &[C],
@@ -3060,6 +3070,7 @@ pub fn composition_tree_v1(
     )
 }
 /// Commit one aggregate composition lane without retaining a Merkle tree.
+#[cfg(test)]
 pub fn streaming_composition_commitment_v1(
     domains: &AggregateStarkDomainsV1,
     lane: usize,
@@ -5645,6 +5656,7 @@ pub struct AggregateStreamingFriLaneOpeningsV1 {
 }
 /// Commit and transcript-bind a complete FRI lane while retaining only one
 /// current layer and one half-sized successor layer.
+#[cfg(test)]
 pub fn build_streaming_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
     domains: &AggregateStarkDomainsV1,
@@ -5784,6 +5796,7 @@ fn build_streaming_fri_lane_with_cuts_v1(
 }
 /// Replay a committed FRI lane after transcript queries are fixed, retaining
 /// only the exact opened pairs and canonical minimal frontiers.
+#[cfg(test)]
 pub fn open_streaming_fri_lane_v1(
     parameters: AggregateStarkParametersV1,
     domains: &AggregateStarkDomainsV1,

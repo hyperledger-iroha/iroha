@@ -1,6 +1,5 @@
 //! CLI utility for comparing Android vs Rust telemetry schema definitions.
 use anyhow::{Context, Result, anyhow};
-use chrono::Utc;
 use clap::{Parser, ValueEnum};
 use norito::{
     derive::{JsonDeserialize, JsonSerialize},
@@ -15,6 +14,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
 };
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 #[derive(Parser, Debug)]
 #[command(author, version, about = "Diff Android vs Rust telemetry schemas", long_about = None)]
 struct Args {
@@ -216,8 +216,10 @@ fn main() -> Result<()> {
     let outcome = diff_schemas(&android_schema, &rust_schema);
     let recommendations =
         build_recommendations(&outcome.intentional_differences, &outcome.field_mismatches);
+    // Retain one clock sample for both outputs; metrics need no timestamp parsing.
+    let run_timestamp = OffsetDateTime::now_utc().unix_timestamp();
     let report = DiffReport {
-        generated_at_utc: Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        generated_at_utc: format_run_timestamp(run_timestamp)?,
         tool_version: format!("telemetry_schema_diff {}", env!("CARGO_PKG_VERSION")),
         android_commit: android_origin.commit.clone(),
         rust_commit: rust_origin.commit.clone(),
@@ -245,7 +247,7 @@ fn main() -> Result<()> {
         write_policy_summary(&report, policy_out)?;
     }
     if let Some(metrics_out) = args.metrics_out.as_ref() {
-        write_metrics(&report, metrics_out)?;
+        write_metrics(&report, metrics_out, run_timestamp)?;
     }
     if let Some(markdown_out) = args.markdown_out.as_ref() {
         write_markdown_summary(&report, markdown_out)?;
@@ -771,14 +773,13 @@ fn write_policy_summary(report: &DiffReport, path: &Path) -> Result<()> {
         .with_context(|| format!("finalising policy summary {}", path.display()))?;
     Ok(())
 }
-fn write_metrics(report: &DiffReport, path: &Path) -> Result<()> {
+fn write_metrics(report: &DiffReport, path: &Path, run_timestamp: i64) -> Result<()> {
     let android_origin = origin_label(
         report.android_commit.as_ref(),
         report.android_config.as_ref(),
     );
     let rust_origin = origin_label(report.rust_commit.as_ref(), report.rust_config.as_ref());
     let status = metrics_status(report);
-    let run_timestamp = parse_run_timestamp(&report.generated_at_utc)?;
     let origin_labels = [
         ("android_origin", android_origin.as_str()),
         ("rust_origin", rust_origin.as_str()),
@@ -822,7 +823,7 @@ fn write_metrics(report: &DiffReport, path: &Path) -> Result<()> {
         (
             "telemetry_schema_diff_last_run_timestamp_seconds",
             "Unix timestamp for the schema diff run.",
-            run_timestamp,
+            i64_to_f64(run_timestamp),
         ),
     ];
     let mut buf = String::new();
@@ -855,11 +856,11 @@ fn metrics_status(report: &DiffReport) -> &'static str {
         "ok"
     }
 }
-fn parse_run_timestamp(generated_at_utc: &str) -> Result<f64> {
-    let timestamp = chrono::DateTime::parse_from_rfc3339(generated_at_utc)
-        .with_context(|| format!("parsing generated_at_utc {generated_at_utc} for metrics output"))?
-        .timestamp();
-    Ok(i64_to_f64(timestamp))
+fn format_run_timestamp(unix_seconds: i64) -> Result<String> {
+    OffsetDateTime::from_unix_timestamp(unix_seconds)
+        .context("report generation timestamp is outside the supported range")?
+        .format(&Rfc3339)
+        .context("formatting report generation timestamp as UTC seconds")
 }
 fn metric_value(count: usize) -> f64 {
     u64_to_f64(u64::try_from(count).expect("usize must fit into u64 for metrics conversion"))
@@ -1229,6 +1230,41 @@ mod policy {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+    const REPORT_TIMESTAMP: i64 = 1_771_891_200;
+
+    #[test]
+    fn report_timestamps_are_utc_seconds_with_exact_calendar_boundaries() {
+        for (unix_seconds, expected) in [
+            (-62_167_219_200, "0000-01-01T00:00:00Z"),
+            (-1, "1969-12-31T23:59:59Z"),
+            (0, "1970-01-01T00:00:00Z"),
+            (951_827_696, "2000-02-29T12:34:56Z"),
+            (REPORT_TIMESTAMP, "2026-02-24T00:00:00Z"),
+            (253_402_300_799, "9999-12-31T23:59:59Z"),
+        ] {
+            assert_eq!(
+                format_run_timestamp(unix_seconds).expect("valid UTC timestamp"),
+                expected
+            );
+        }
+        for out_of_range in [i64::MIN, -62_167_219_201, 253_402_300_800, i64::MAX] {
+            assert!(format_run_timestamp(out_of_range).is_err());
+        }
+    }
+
+    #[test]
+    fn report_clock_sample_floors_fractional_seconds_before_the_epoch() {
+        for (nanoseconds, expected_seconds, expected_text) in [
+            (-1, -1, "1969-12-31T23:59:59Z"),
+            (999_999_999, 0, "1970-01-01T00:00:00Z"),
+        ] {
+            let sampled =
+                OffsetDateTime::from_unix_timestamp_nanos(nanoseconds).expect("valid sampled time");
+            let seconds = sampled.unix_timestamp();
+            assert_eq!(seconds, expected_seconds);
+            assert_eq!(format_run_timestamp(seconds).unwrap(), expected_text);
+        }
+    }
     fn schema_from_signals(signals: Vec<Signal>) -> TelemetrySchema {
         TelemetrySchema {
             version: Some("test".to_string()),
@@ -1932,7 +1968,7 @@ mod tests {
         report.summary.parity_matches = 3;
         report.summary.android_only_signals = 1;
         let path = temp_metrics_path("metrics-ok");
-        write_metrics(&report, &path).expect("write metrics");
+        write_metrics(&report, &path, REPORT_TIMESTAMP).expect("write metrics");
         let contents = std::fs::read_to_string(&path).expect("read metrics file");
         assert!(
             contents.contains("telemetry_schema_diff_signals_compared"),
@@ -1942,6 +1978,9 @@ mod tests {
             contents.contains(r#"status="ok""#),
             "status label should be ok when there are no violations",
         );
+        assert!(contents.contains(
+            r#"telemetry_schema_diff_last_run_timestamp_seconds{android_origin="android-commit",rust_origin="rust-commit"} 1771891200"#
+        ));
         let _ = std::fs::remove_file(&path);
     }
     #[test]
@@ -1949,7 +1988,7 @@ mod tests {
         let mut report = report_with_origins();
         report.policy_violations.push("missing status".into());
         let path = temp_metrics_path("metrics-policy");
-        write_metrics(&report, &path).expect("write metrics");
+        write_metrics(&report, &path, REPORT_TIMESTAMP).expect("write metrics");
         let contents = std::fs::read_to_string(&path).expect("read metrics file");
         assert!(
             contents.contains(r#"status="policy_violation""#),
@@ -1971,7 +2010,7 @@ mod tests {
             difference: "representation drift".into(),
         });
         let path = temp_metrics_path("metrics-policy-priority");
-        write_metrics(&report, &path).expect("write metrics");
+        write_metrics(&report, &path, REPORT_TIMESTAMP).expect("write metrics");
         let contents = std::fs::read_to_string(&path).expect("read metrics file");
         assert!(
             contents.contains(r#"status="policy_violation""#),
@@ -1994,7 +2033,7 @@ mod tests {
             difference: "data_type mismatch".into(),
         });
         let path = temp_metrics_path("metrics-field-mismatch");
-        write_metrics(&report, &path).expect("write metrics");
+        write_metrics(&report, &path, REPORT_TIMESTAMP).expect("write metrics");
         let contents = std::fs::read_to_string(&path).expect("read metrics file");
         assert!(
             contents.contains(r#"status="field_mismatch""#),

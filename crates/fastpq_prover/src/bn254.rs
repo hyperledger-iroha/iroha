@@ -1,7 +1,5 @@
 //! Shared BN254 canonical-limb helpers for FASTPQ GPU backends.
 #[cfg(any(test, feature = "dev-tools"))]
-use core::convert::TryInto;
-#[cfg(any(test, feature = "dev-tools"))]
 use halo2curves::{bn256::Fr as Bn254Fr, ff::PrimeField};
 #[cfg(any(test, feature = "dev-tools"))]
 use iroha_zkp_halo2::{Bn254Scalar, IpaScalar};

@@ -88,6 +88,18 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Exact wire identities of the native game-partition instructions, including their built-in dispatch entries. They select instruction layouts; neither the identifiers nor their registration compute a digest or grant the instruction authority",
+        literals: &[
+            r"iroha.game_partition.advance.v1",
+            r"iroha.game_partition.export.v1",
+            r"iroha.game_partition.import.v1",
+            r"iroha.game_partition.install.v1",
+            r"iroha.game_partition.register_peer.v1",
+            r"iroha.game_partition.seed.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "Exact wire identities of native FI, escrow-scope, UID and controlled-lock instructions, including their built-in dispatch entries. They select instruction layouts; neither the identifiers nor their registration compute a digest or grant the instruction authority",
         literals: &[
             r"iroha.asset.escrow.read_scope.initialize.v1",
@@ -428,6 +440,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"\xd5iroha:parliament:timed-ovn:casting-contexts:v1",
             r"\xd7iroha:fastpq:ordinary-source-statements:v1",
             r"\xd8iroha:sccp:state-delta:v1",
+            r"iroha/game-partition/export/v1/",
         ],
     },
     OtherDomains {
@@ -936,6 +949,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha.staking.public_lane_peer_binding.v1",
             r"iroha.validation_fee.payout_lifecycle.seal.v1",
             r"iroha.validation_fee.policy.parliament.v1",
+            r"iroha/game-unit-export/v1",
+            r"iroha/game-unit/v1",
             r"iroha/sumeragi/amx/transaction/v1",
             r"iroha:account-onboarding-plan-receipt:v1\0",
             r"iroha:alias-lifecycle-transaction-plan-body:v1\0",
@@ -1400,11 +1415,13 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
-        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed labels of the reference closures and statements of the baseline and of each release addition after it, and the names of baseline definitions, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline or addition subject; none commits to State content, and the State commitment remains the World root",
+        reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed labels of the reference closures and statements of the baseline and of each release addition after it, and the names of baseline definitions and release-addition modules, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline or addition subject; none commits to State content, and the State commitment remains the World root",
         literals: &[
             r"iroha.events.data.v1",
+            r"iroha.game_partition.v1",
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
+            r"iroha.runtime.endorsed_change_set_proposal.v1",
             r"iroha.world.lthash16.v1",
             r"iroha:runtime:addition:v1\0",
             r"iroha:runtime:baseline:v1\0",
@@ -1464,6 +1481,8 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Test,
         reason: "Test inputs, fixtures and test-network evidence compiled for tests or behind a test-only feature; never a consensus input",
         literals: &[
+            r"fixtures/privacy/exact12_capability_manifest_v1.norito.b64",
+            r"fixtures/privacy/exact12_compiled_profile_catalog_v1.norito.b64",
             r"fixtures/privacy/exact12_typed_fixture_bundle_v1.norito.b64",
             r"fixtures/privacy/exact12_v1.tsv",
             r"iroha-demo-kaigi-chain-signal/v1",

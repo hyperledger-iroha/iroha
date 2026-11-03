@@ -175,6 +175,10 @@ fn widened_sha_relation_preserves_original_refusals_before_destination_mutation(
 
 #[test]
 #[ignore = "isolated full SHA relation Horner-versus-widened fold A/B"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn widened_sha_relation_cost_preserves_all_constraints_and_outputs() {
     use super::super::sha_word_stark::wide_fold::{ShaWordFoldPowersV1, ShaWordWideFoldV1};
     use rayon::prelude::*;

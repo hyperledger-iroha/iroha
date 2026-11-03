@@ -731,7 +731,8 @@ fn commitment_mask_openings_remain_borrowed_until_the_membership_boundary() {
         "pub(super) fn commitments_and_openings<S: ProofSuite<Scalar = F>>",
         "pub(super) struct Circuit<S: ProofSuite>",
     );
-    source_has!(commitment_producer; "Vec<SecretPoint<S::Point>>", "owned_masks.extend_borrowed_v1(masks)?");
+    source_has!(commitment_producer; "Result<CommitmentsAndOpenings<S::Point, F>, FcmpNativeErrorV1>", "owned_masks.extend_borrowed_v1(masks)?");
+    source_has!(circuit_source; "type CommitmentsAndOpenings<P, F> = (Vec<SecretPoint<P>>, Vec<VectorCommitmentOpening<F>>);");
     source_lacks!(commitment_producer; "Vec<S::Point>", "owned_masks.extend_from_slice(masks)", "masks.to_vec()", "copy_from_slice(masks)", "masks[index]", "owned_masks.as_slice()[index]", "VectorCommitmentOpening::new(");
     source_order!(commitment_producer; "let mut commitments = Vec::new()", "let mut openings = Vec::new()", "ZeroizingScalarVec::new(masks.len())?", "owned_masks.extend_borrowed_v1(masks)?", "for (values, mask) in self.values.iter().zip(owned_masks.as_slice())", "for (values, mask) in self.values.iter_mut().zip(owned_masks.values.iter_mut())", "VectorCommitmentOpening::take_mask_from_slot(", "values.take()", "\n                mask,\n            ));");
     source_counts!(commitment_producer; "owned_masks.extend_borrowed_v1(masks)?" => 1, "VectorCommitmentOpening::take_mask_from_slot(" => 1);

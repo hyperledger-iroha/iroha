@@ -1,17 +1,23 @@
 //! Ensure structured Data events emitted as a result of VM syscalls (OUTPUT → ISIs)
 
 //! preserve syscall order within a single transaction overlay.
+//!
+//! Host effects reach State only under the exact signed root of the transaction that ran the
+//! program, so the syscalls run as one signed generic IVM transaction over an authenticated
+//! signed genesis; their pointer arguments are the program's canonical literal TLVs.
 #![allow(clippy::cast_possible_truncation, clippy::items_after_statements)]
 use iroha_core::{
-    kura::Kura, query::store::LiveQueryStore, smartcontracts::ivm::host::CoreHost, state::State,
+    smartcontracts::ivm::cache::IvmCache,
+    state::{State, StateBlock},
+    tx::AcceptedTransaction,
 };
-use iroha_crypto::Hash;
+use iroha_crypto::{Hash, KeyPair};
 use iroha_data_model::{block::BlockHeader, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::nonzero;
-use ivm::{IVM, Memory, PointerType, ProgramMetadata, encoding, syscalls};
-use std::{str::FromStr, sync::Arc};
+use ivm::{PointerType, ProgramMetadata, encoding, instruction, syscalls};
+use std::str::FromStr;
 fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(7 + payload.len() + 32);
     v.extend_from_slice(&(type_id as u16).to_be_bytes());
@@ -22,28 +28,6 @@ fn make_tlv(type_id: PointerType, payload: &[u8]) -> Vec<u8> {
     v.extend_from_slice(&h);
     v
 }
-fn store_tlv(vm: &mut IVM, cursor: &mut u64, type_id: PointerType, payload: &[u8]) -> u64 {
-    let tlv = make_tlv(type_id, payload);
-    vm.memory
-        .preload_input(*cursor, &tlv)
-        .expect("preload tlv into INPUT");
-    let ptr = Memory::INPUT_START + *cursor;
-    let len = tlv.len() as u64;
-    // maintain 8-byte alignment between TLVs
-    let aligned = (len + 7) & !7;
-    *cursor += aligned;
-    ptr
-}
-fn store_quantity(vm: &mut IVM, cursor: &mut u64, amount: u64) -> u64 {
-    let tlv = ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(amount))
-        .expect("encode quantity pointer envelope");
-    vm.memory
-        .preload_input(*cursor, &tlv)
-        .expect("preload quantity TLV into INPUT");
-    let ptr = Memory::INPUT_START + *cursor;
-    *cursor += (u64::try_from(tlv.len()).expect("quantity TLV length fits u64") + 7) & !7;
-    ptr
-}
 fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let scall = ivm::instruction::wide::system::SCALL;
     let syscall = u8::try_from(num).expect("syscall number must fit in wide encoding");
@@ -53,6 +37,91 @@ fn encode_prog_syscall(num: u32) -> Vec<u8> {
     let mut prog = ProgramMetadata::default().encode();
     prog.extend_from_slice(&code);
     prog
+}
+/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
+    // Signed generic programs declare their cycle bound in the authenticated header.
+    let mut program = ProgramMetadata {
+        max_cycles: 1_000_000,
+        ..ProgramMetadata::default()
+    }
+    .encode();
+    let data_offset = 16 + literals.len() * 8;
+    let data_len: usize = literals.iter().map(Vec::len).sum();
+    let pad = (4 - (data_offset + data_len) % 4) % 4;
+    program.extend_from_slice(b"LTLB");
+    for field in [literals.len(), pad, data_len] {
+        program.extend_from_slice(
+            &u32::try_from(field)
+                .expect("literal table field fits u32")
+                .to_le_bytes(),
+        );
+    }
+    let mut offset = data_offset;
+    for literal in literals {
+        let descriptor = ivm::encode_literal_descriptor(
+            ivm::LiteralKindV1::PointerTlv,
+            u64::try_from(offset).expect("literal offset fits u64"),
+        )
+        .expect("literal offset fits its descriptor");
+        program.extend_from_slice(&descriptor.to_le_bytes());
+        offset += literal.len();
+    }
+    for literal in literals {
+        program.extend_from_slice(literal);
+    }
+    program.extend(std::iter::repeat_n(0, pad));
+    for word in code.iter().copied().chain([encoding::wide::encode_halt()]) {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
+    program
+}
+/// Load each `(register, literal)` pointer argument, then invoke `syscall`.
+fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
+    arguments
+        .iter()
+        .map(|&(register, literal)| {
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
+        })
+        .chain([encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(syscall).expect("syscall number must fit in wide encoding"),
+        )])
+        .collect()
+}
+/// Statelessly admit `program` as a generic IVM transaction signed by `key`.
+fn signed_program(state: &State, key: &KeyPair, program: Vec<u8>) -> AcceptedTransaction<'static> {
+    let transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        AccountId::new(key.public_key().clone()),
+        FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(1_000_000)),
+    )
+    .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+    .sign(key.private_key());
+    let parameters = state.transaction_admission_parameters();
+    AcceptedTransaction::accept(
+        transaction,
+        state.network_id_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        parameters
+            .require_crypto_policy()
+            .expect("signed genesis crypto policy"),
+    )
+    .expect("stateless transaction admission")
+}
+/// Execute an admitted transaction in `block`; its signed root owns the host effects.
+fn execute(
+    block: &mut StateBlock<'_>,
+    transaction: AcceptedTransaction<'static>,
+) -> Result<(), TransactionRejectionReason> {
+    iroha_core::tx::execute_component_transaction_for_testing(
+        block,
+        transaction,
+        &mut IvmCache::new(),
+        None,
+    )
+    .map(drop)
 }
 #[test]
 fn encode_prog_syscall_uses_valid_metadata_header() {
@@ -71,7 +140,7 @@ fn encode_prog_syscall_uses_valid_metadata_header() {
 #[allow(clippy::too_many_lines)]
 fn ivm_syscall_data_events_follow_order() {
     // World with domain/account and asset definition for mint
-    let (authority_id, _) = iroha_test_samples::gen_account_in("wonderland");
+    let (authority_id, authority_key) = iroha_test_samples::gen_account_in("wonderland");
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone()).build(&authority_id);
@@ -87,74 +156,61 @@ fn ivm_syscall_data_events_follow_order() {
     )
     .build(&authority_id);
     let world = iroha_core::state::World::with_assets([domain], [account], [asset_def], [], []);
-    let kura = Kura::blank_kura_for_testing();
-    let query = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
-    // VM + host for syscall execution
-    let mut vm = IVM::new(1_000_000);
-    let host = CoreHost::with_accounts(authority_id.clone(), Arc::new(vec![authority_id.clone()]));
-    vm.set_host(host);
-    // Prepare TLVs for account id, metadata keys/values, and asset definition id.
-    let mut cursor = 0u64;
+    let state = crate::native_genesis::certified_state(world);
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
+    // Prepare literal TLVs for account id, metadata keys/values, and asset definition id.
     let acct_bytes = norito::to_bytes(&authority_id).expect("encode account id");
-    let ptr_account = store_tlv(&mut vm, &mut cursor, PointerType::AccountId, &acct_bytes);
     let key1 = Name::from_str("account_key").expect("name");
     let key1_bytes = norito::to_bytes(&key1).expect("encode key");
-    let ptr_key1 = store_tlv(&mut vm, &mut cursor, PointerType::Name, &key1_bytes);
     let val1 = Json::new(norito::json!({"kind": "alpha"}));
     let val1_bytes = norito::to_bytes(&val1).expect("encode json");
-    let ptr_val1 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val1_bytes);
     let key2 = Name::from_str("account_second_key").expect("name");
     let key2_bytes = norito::to_bytes(&key2).expect("encode key");
-    let ptr_key2 = store_tlv(&mut vm, &mut cursor, PointerType::Name, &key2_bytes);
     let val2 = Json::new(norito::json!({"kind": "beta"}));
     let val2_bytes = norito::to_bytes(&val2).expect("encode json");
-    let ptr_val2 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val2_bytes);
     let asset_def_id: AssetDefinitionId =
         iroha_data_model::asset::AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
     let asset_bytes = norito::to_bytes(&asset_def_id).expect("encode asset definition");
-    let ptr_asset_def = store_tlv(
-        &mut vm,
-        &mut cursor,
-        PointerType::AssetDefinitionId,
-        &asset_bytes,
-    );
-    let ptr_amount = store_quantity(&mut vm, &mut cursor, 5);
-    let prog_set_detail = encode_prog_syscall(syscalls::SYSCALL_SET_ACCOUNT_DETAIL);
-    let prog_mint = encode_prog_syscall(syscalls::SYSCALL_MINT_ASSET);
-    // 1) Account metadata insert
-    vm.set_register(10, ptr_account);
-    vm.set_register(11, ptr_key1);
-    vm.set_register(12, ptr_val1);
-    vm.load_program(&prog_set_detail)
-        .expect("load detail program");
-    vm.run().expect("set account detail #1");
-    // 2) Second metadata insert
-    vm.set_register(10, ptr_account);
-    vm.set_register(11, ptr_key2);
-    vm.set_register(12, ptr_val2);
-    vm.load_program(&prog_set_detail)
-        .expect("reload detail program");
-    vm.run().expect("set account detail #2");
-    // 3) Mint asset into the authority account
-    vm.set_register(10, ptr_account);
-    vm.set_register(11, ptr_asset_def);
-    vm.set_register(12, ptr_amount);
-    vm.load_program(&prog_mint).expect("load mint program");
-    vm.run().expect("mint asset");
-    // Apply queued ISIs to the state transaction
-    CoreHost::with_host(&mut vm, |host| {
-        host.apply_queued(&mut stx, &authority_id)
-            .expect("apply queued syscalls");
-    });
+    let literals = [
+        make_tlv(PointerType::AccountId, &acct_bytes),
+        make_tlv(PointerType::Name, &key1_bytes),
+        make_tlv(PointerType::Json, &val1_bytes),
+        make_tlv(PointerType::Name, &key2_bytes),
+        make_tlv(PointerType::Json, &val2_bytes),
+        make_tlv(PointerType::AssetDefinitionId, &asset_bytes),
+        ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(5_u64))
+            .expect("encode quantity pointer envelope"),
+    ];
+    let code = [
+        // 1) Account metadata insert
+        literal_call(
+            syscalls::SYSCALL_SET_ACCOUNT_DETAIL,
+            &[(10, 0), (11, 1), (12, 2)],
+        ),
+        // 2) Second metadata insert
+        literal_call(
+            syscalls::SYSCALL_SET_ACCOUNT_DETAIL,
+            &[(10, 0), (11, 3), (12, 4)],
+        ),
+        // 3) Mint asset into the authority account
+        literal_call(syscalls::SYSCALL_MINT_ASSET, &[(10, 0), (11, 5), (12, 6)]),
+    ]
+    .concat();
+    let transaction = signed_program(&state, &authority_key, literal_program(&literals, &code));
+    // Apply the queued ISIs under the program's signed root
+    let mut block = state.block(header);
+    execute(&mut block, transaction).expect("apply queued syscalls");
     // Collect Data events emitted during execution
-    let events = stx.world.take_external_events();
+    let events = block.world.take_external_events();
     let data_events: Vec<_> = events
         .into_iter()
         .filter_map(|ev| match ev {

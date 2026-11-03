@@ -21,7 +21,6 @@ sha3_hash = { package = "sha3", version = "0.12.0", default-features = false, fe
 ff = { version = "0.13.1", features = ["derive"] }
 halo2curves = { workspace = true }
 rayon = "1.11.0"
-num_cpus = "1.17.0"
 parking_lot = { workspace = true }
 iroha_data_model = { path = "../iroha_data_model", default-features = false, features = ["transparent_api", "bls"] }
 iroha_crypto = { path = "../iroha_crypto", default-features = false, features = ["node-crypto", "rayon", "sm"] }

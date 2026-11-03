@@ -16922,6 +16922,19 @@
               "payload"
             ],
             "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "transition": {
+                "const": "RegisterInitialSortition",
+                "type": "string"
+              }
+            },
+            "required": [
+              "transition"
+            ],
+            "type": "object"
           }
         ]
       },
@@ -17749,7 +17762,7 @@
       },
       "GovernanceParliamentProposalPayloadRuntimeChangeSetV1": {
         "additionalProperties": false,
-        "description": "A governed change from the universal root's predecessor selection to its exact successor (iroha_data_model::runtime::lifecycle::ChangeSetV1). Published definitions and transitions are internally tagged Norito JSON objects.",
+        "description": "A governed change from the universal root's predecessor selection to its exact successor (iroha_data_model::runtime::lifecycle::ChangeSetV1).",
         "properties": {
           "effective_height": {
             "description": "First height executed under the successor.",
@@ -17770,7 +17783,7 @@
           },
           "publish": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/RuntimeDefinitionDescriptorV1"
             },
             "type": "array"
           },
@@ -17807,7 +17820,7 @@
           },
           "transitions": {
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/RuntimeSelectionTransitionV1"
             },
             "type": "array"
           }
@@ -19266,6 +19279,19 @@
             "properties": {
               "kind": {
                 "const": "FailPublicFindingNoResult",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "RegisterInitialSortition",
                 "type": "string"
               }
             },
@@ -39152,6 +39178,524 @@
           }
         ]
       },
+      "RuntimeBindingV1": {
+        "additionalProperties": false,
+        "description": "Binding of one instruction wire ID to an implementation.",
+        "properties": {
+          "implementation": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "interface": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "wire_id": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "implementation",
+          "interface",
+          "wire_id"
+        ],
+        "type": "object"
+      },
+      "RuntimeCarrierFieldV1": {
+        "additionalProperties": false,
+        "description": "One field of a carrier struct.",
+        "properties": {
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "node": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name",
+          "node"
+        ],
+        "type": "object"
+      },
+      "RuntimeCarrierNodeV1": {
+        "description": "One node of a carrier schema; indices refer to earlier nodes of the same schema.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Unit",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Bool",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "U8",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "U16",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "U32",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "U64",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "U128",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "I64",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_bytes": {
+                    "format": "uint32",
+                    "maximum": 1048576,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "max_bytes"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "String",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "max_bytes": {
+                    "format": "uint32",
+                    "maximum": 1048576,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "max_bytes"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Bytes",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "AccountId",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "AssetDefinitionId",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Hash",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "inner": {
+                    "format": "uint32",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "inner"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Option",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "element": {
+                    "format": "uint32",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_len": {
+                    "format": "uint32",
+                    "maximum": 1048576,
+                    "minimum": 1,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "element",
+                  "max_len"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Vec",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "key": {
+                    "format": "uint32",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "max_len": {
+                    "format": "uint32",
+                    "maximum": 1048576,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "value": {
+                    "format": "uint32",
+                    "maximum": 4294967295,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "key",
+                  "max_len",
+                  "value"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Map",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "fields": {
+                    "items": {
+                      "$ref": "#/components/schemas/RuntimeCarrierFieldV1"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "fields"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Struct",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "variants": {
+                    "items": {
+                      "$ref": "#/components/schemas/RuntimeCarrierVariantV1"
+                    },
+                    "maxItems": 64,
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                },
+                "required": [
+                  "variants"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Enum",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeCarrierSchemaV1": {
+        "additionalProperties": false,
+        "description": "Bounded schema of a generic carrier. Nodes are listed children first and the last node is the root.",
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeCarrierNodeV1"
+            },
+            "maxItems": 256,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "nodes"
+        ],
+        "type": "object"
+      },
+      "RuntimeCarrierVariantV1": {
+        "additionalProperties": false,
+        "description": "One variant of a carrier enum.",
+        "properties": {
+          "discriminant": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "node": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "discriminant",
+          "name",
+          "node"
+        ],
+        "type": "object"
+      },
       "RuntimeChangeSetEndorsementV1": {
         "additionalProperties": false,
         "description": "A trusted release signer's endorsement of a change set's provenance (iroha_data_model::runtime::lifecycle::ChangeSetEndorsementV1): the signer's signature over the domain iroha:runtime:change-set-endorsement:v1 with its NUL terminator, followed by the 32-byte change-set identity. The committed runtime_provenance_policy_v1 decides which signers count.",
@@ -39177,6 +39721,801 @@
         ],
         "type": "object"
       },
+      "RuntimeCommitmentProfileDescriptorV1": {
+        "additionalProperties": false,
+        "description": "How State is committed.",
+        "properties": {
+          "parameters": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "scheme": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "parameters",
+          "scheme"
+        ],
+        "type": "object"
+      },
+      "RuntimeCompletionClosureV1": {
+        "additionalProperties": false,
+        "description": "Definitions a live obligation needs to complete.",
+        "properties": {
+          "definitions": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "obligation": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "definitions",
+          "obligation"
+        ],
+        "type": "object"
+      },
+      "RuntimeDefinitionDescriptorV1": {
+        "description": "The canonical descriptor of one definition (iroha_data_model::runtime::definition::DefinitionDescriptorV1).",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeInterfaceDescriptorV1"
+              },
+              "kind": {
+                "const": "Interface",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeImplementationDescriptorV1"
+              },
+              "kind": {
+                "const": "Implementation",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeStorageDescriptorV1"
+              },
+              "kind": {
+                "const": "Storage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeEventDescriptorV1"
+              },
+              "kind": {
+                "const": "Event",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimePermissionDescriptorV1"
+              },
+              "kind": {
+                "const": "Permission",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeParameterDescriptorV1"
+              },
+              "kind": {
+                "const": "Parameter",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeHostProfileDescriptorV1"
+              },
+              "kind": {
+                "const": "HostProfile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeServicesProfileDescriptorV1"
+              },
+              "kind": {
+                "const": "ServicesProfile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeCommitmentProfileDescriptorV1"
+              },
+              "kind": {
+                "const": "CommitmentProfile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeKernelDescriptorV1"
+              },
+              "kind": {
+                "const": "Kernel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeMigrationDescriptorV1"
+              },
+              "kind": {
+                "const": "Migration",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeDefinitionIdV1": {
+        "description": "Content-addressed identity of one immutable definition.",
+        "maxLength": 64,
+        "minLength": 64,
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "RuntimeDraftUpgradeRequest": {
+        "additionalProperties": false,
+        "description": "The addition of this node's release to activate (its native module) and the first height executed under the successor selection. qualification_hex is the digest of the qualification evidence for the successor composition.",
+        "properties": {
+          "addition": {
+            "description": "Native module of the addition.",
+            "type": "string"
+          },
+          "effective_height": {
+            "description": "First height executed under the successor selection.",
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "qualification_hex": {
+            "description": "Digest of the qualification evidence, 32-byte lowercase hex.",
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "addition",
+          "effective_height",
+          "qualification_hex"
+        ],
+        "type": "object"
+      },
+      "RuntimeEntrypointV1": {
+        "description": "What an implementation answers.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "items": {
+                  "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+                },
+                "maxItems": 4096,
+                "minItems": 1,
+                "type": "array"
+              },
+              "kind": {
+                "const": "Instructions",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+                "maxLength": 192,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:@/-]+$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Hook",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+                "maxLength": 192,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:@/-]+$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Query",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeEventDescriptorV1": {
+        "additionalProperties": false,
+        "description": "One event identity and schema.",
+        "properties": {
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/RuntimeSchemaV1"
+          }
+        },
+        "required": [
+          "name",
+          "schema"
+        ],
+        "type": "object"
+      },
+      "RuntimeHostProfileDescriptorV1": {
+        "additionalProperties": false,
+        "description": "IVM behaviour and host semantics.",
+        "properties": {
+          "abi_hash": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "abi_version": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "metering": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "abi_hash",
+          "abi_version",
+          "metering"
+        ],
+        "type": "object"
+      },
+      "RuntimeImplementationCodeV1": {
+        "description": "Where an implementation's code comes from.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "module": {
+                    "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+                    "maxLength": 192,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._:@/-]+$",
+                    "type": "string"
+                  },
+                  "reference_closure": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "module",
+                  "reference_closure"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Native",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "code_hash": {
+                    "maxLength": 64,
+                    "minLength": 64,
+                    "pattern": "^[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "entrypoint": {
+                    "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+                    "maxLength": 192,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9._:@/-]+$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code_hash",
+                  "entrypoint"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Ivm",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeImplementationDescriptorV1": {
+        "additionalProperties": false,
+        "description": "The semantics of one execution entrypoint and everything it relies on.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/RuntimeImplementationCodeV1"
+          },
+          "entrypoint": {
+            "$ref": "#/components/schemas/RuntimeEntrypointV1"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "host_profile": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invokes": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/RuntimeResourceLimitsV1"
+          },
+          "parameters": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "permissions": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "reads": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "scans": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "services_profile": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "writes": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "entrypoint",
+          "events",
+          "host_profile",
+          "invokes",
+          "limits",
+          "parameters",
+          "permissions",
+          "reads",
+          "scans",
+          "services_profile",
+          "writes"
+        ],
+        "type": "object"
+      },
+      "RuntimeInterfaceDescriptorV1": {
+        "additionalProperties": false,
+        "description": "One instruction wire ID: payload schema and behavioural contract.",
+        "properties": {
+          "contract_statement": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "events": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "metering_class": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeSchemaV1"
+          },
+          "rejection_codes": {
+            "items": {
+              "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+              "maxLength": 192,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9._:@/-]+$",
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "type": "array"
+          },
+          "wire_id": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "contract_statement",
+          "events",
+          "metering_class",
+          "payload",
+          "rejection_codes",
+          "wire_id"
+        ],
+        "type": "object"
+      },
+      "RuntimeKernelDescriptorV1": {
+        "additionalProperties": false,
+        "description": "Sequencing, framing, atomic publication and restricted recovery.",
+        "properties": {
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "reference_closure": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "reference_closure"
+        ],
+        "type": "object"
+      },
+      "RuntimeMigrationDescriptorV1": {
+        "additionalProperties": false,
+        "description": "A bounded transform between storage definitions.",
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/RuntimeImplementationCodeV1"
+          },
+          "cursor": {
+            "$ref": "#/components/schemas/RuntimeSchemaV1"
+          },
+          "from": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array"
+          },
+          "host_profile": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "$ref": "#/components/schemas/RuntimeResourceLimitsV1"
+          },
+          "services_profile": {
+            "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+          },
+          "to": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "code",
+          "cursor",
+          "from",
+          "host_profile",
+          "limits",
+          "services_profile",
+          "to"
+        ],
+        "type": "object"
+      },
+      "RuntimeParameterDescriptorV1": {
+        "additionalProperties": false,
+        "description": "One parameter identity, schema and initial value.",
+        "properties": {
+          "initial": {
+            "contentEncoding": "base64",
+            "maxLength": 87384,
+            "minLength": 4,
+            "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+            "type": "string"
+          },
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/RuntimeSchemaV1"
+          }
+        },
+        "required": [
+          "initial",
+          "name",
+          "schema"
+        ],
+        "type": "object"
+      },
+      "RuntimePermissionDescriptorV1": {
+        "additionalProperties": false,
+        "description": "One permission name and payload schema.",
+        "properties": {
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/RuntimeSchemaV1"
+          }
+        },
+        "required": [
+          "name",
+          "payload"
+        ],
+        "type": "object"
+      },
+      "RuntimeProjectionV1": {
+        "description": "How storage values enter the State commitment.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "BareNorito",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Printable ASCII without leading or trailing space, at most 192 bytes.",
+                "maxLength": 192,
+                "minLength": 1,
+                "pattern": "^[!-~](?:[ -~]*[!-~])?$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Semantic",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
       "RuntimeProposeUpgradeRequest": {
         "additionalProperties": false,
         "description": "The change set to schedule and the endorsements the committed runtime provenance policy requires: at most one from each trusted release signer. provenance is empty when the universal root commits no provenance policy.",
@@ -39196,6 +40535,540 @@
           "provenance"
         ],
         "type": "object"
+      },
+      "RuntimeResourceLimitsV1": {
+        "additionalProperties": false,
+        "description": "Resource bounds of one invocation or migration stage.",
+        "properties": {
+          "max_call_depth": {
+            "format": "uint16",
+            "maximum": 65535,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_effects": {
+            "format": "uint32",
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "max_gas": {
+            "format": "uint64",
+            "maximum": 18446744073709551615,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "max_call_depth",
+          "max_effects",
+          "max_gas"
+        ],
+        "type": "object"
+      },
+      "RuntimeRestrictionKindV1": {
+        "description": "A restriction a transition applies; its height is the change set's effective height.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Deprecated",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "AdmissionClosed",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "CompletionOnly",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Disabled",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeSchemaV1": {
+        "description": "Schema of a payload, storage value, key, event or parameter.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "A native Norito type: norito:<nominal name>@<major>.<minor>.<flags> or semantic:<identity>@<major>.<minor>.<flags>.",
+                "maxLength": 192,
+                "minLength": 7,
+                "pattern": "^(?:norito|semantic):(?:[ -~]*[!-~])?$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Codec",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeCarrierSchemaV1"
+              },
+              "kind": {
+                "const": "Carrier",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeSelectionTransitionV1": {
+        "description": "One change to a root's selection (iroha_data_model::runtime::lifecycle::SelectionTransitionV1).",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "InstallStorage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "RetireStorage",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "Activate",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "Deactivate",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeBindingV1"
+              },
+              "kind": {
+                "const": "Bind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+                "maxLength": 192,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:@/-]+$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "Unbind",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "definition": {
+                    "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+                  },
+                  "restriction": {
+                    "$ref": "#/components/schemas/RuntimeRestrictionKindV1"
+                  }
+                },
+                "required": [
+                  "definition",
+                  "restriction"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Restrict",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "Lift",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "SetKernel",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "SetCommitmentProfile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeDefinitionIdV1"
+              },
+              "kind": {
+                "const": "SetServicesProfile",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "$ref": "#/components/schemas/RuntimeCompletionClosureV1"
+              },
+              "kind": {
+                "const": "RetainCompletion",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "description": "Identity of the obligation whose completion closure is released.",
+                "maxLength": 64,
+                "minLength": 64,
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "kind": {
+                "const": "ReleaseCompletion",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "RuntimeServiceEntryV1": {
+        "additionalProperties": false,
+        "description": "One named root-wide service and its reference closure.",
+        "properties": {
+          "name": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "reference_closure": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "reference_closure"
+        ],
+        "type": "object"
+      },
+      "RuntimeServicesProfileDescriptorV1": {
+        "additionalProperties": false,
+        "description": "Root-wide behaviour no single instruction owns.",
+        "properties": {
+          "services": {
+            "items": {
+              "$ref": "#/components/schemas/RuntimeServiceEntryV1"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "services"
+        ],
+        "type": "object"
+      },
+      "RuntimeStorageDescriptorV1": {
+        "additionalProperties": false,
+        "description": "One canonical logical storage namespace.",
+        "properties": {
+          "initial": {
+            "oneOf": [
+              {
+                "contentEncoding": "base64",
+                "maxLength": 87384,
+                "minLength": 4,
+                "pattern": "^[A-Za-z0-9+/]+={0,2}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "invariants": {
+            "maxLength": 64,
+            "minLength": 64,
+            "pattern": "^[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "namespace": {
+            "description": "ASCII letters, digits and . _ : - @ /, at most 192 bytes.",
+            "maxLength": 192,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9._:@/-]+$",
+            "type": "string"
+          },
+          "projection": {
+            "$ref": "#/components/schemas/RuntimeProjectionV1"
+          },
+          "shape": {
+            "$ref": "#/components/schemas/RuntimeStorageShapeV1"
+          },
+          "value": {
+            "$ref": "#/components/schemas/RuntimeSchemaV1"
+          }
+        },
+        "required": [
+          "initial",
+          "invariants",
+          "namespace",
+          "projection",
+          "shape",
+          "value"
+        ],
+        "type": "object"
+      },
+      "RuntimeStorageShapeV1": {
+        "description": "Shape of a storage namespace.",
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "additionalProperties": false,
+                "properties": {
+                  "key": {
+                    "$ref": "#/components/schemas/RuntimeSchemaV1"
+                  }
+                },
+                "required": [
+                  "key"
+                ],
+                "type": "object"
+              },
+              "kind": {
+                "const": "Table",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "content": {
+                "type": "null"
+              },
+              "kind": {
+                "const": "Cell",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "content"
+            ],
+            "type": "object"
+          }
+        ]
       },
       "RwaPage": {
         "additionalProperties": false,
@@ -94136,6 +96009,62 @@
           "authentication": "operator_signature",
           "schemaVersion": 1,
           "stableRouteId": "operator.runtime.upgrade.cancel"
+        },
+        "x-iroha-tool-effect": "operator"
+      }
+    },
+    "/v1/runtime/upgrades/draft": {
+      "post": {
+        "description": "Draft, from this node's release catalog and the committed runtime selection, the change set that activates an addition of its release from the effective height in the body. It publishes the addition's definitions the root lacks, installs its storage, activates its interfaces and implementation and binds their wire IDs. Release signers endorse the change set's identity, /v1/runtime/upgrades/propose drafts the proposal that schedules it, and every validator attests it.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuntimeDraftUpgradeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "IrohaOperatorNonce": [],
+            "IrohaOperatorPublicKey": [],
+            "IrohaOperatorSignature": [],
+            "IrohaOperatorTimestampMs": []
+          }
+        ],
+        "summary": "Draft the change set that activates a release addition.",
+        "tags": [
+          "Runtime"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "operator",
+          "authentication": "operator_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "operator.runtime.upgrade.draft"
         },
         "x-iroha-tool-effect": "operator"
       }

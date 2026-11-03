@@ -544,9 +544,18 @@ pub fn encrypt_fcmp_wallet_note_v1(
     if ephemeral_secret.iter().all(|byte| *byte == 0) {
         return Err(FcmpNativeErrorV1::EncryptedOutputRandomness);
     }
-    let ephemeral_public = x25519_public_key_v1(*ephemeral_secret)
+    // Borrow the secret: `*ephemeral_secret` would copy it into an unzeroized argument.
+    #[expect(
+        clippy::needless_borrows_for_generic_args,
+        reason = "the borrow keeps the ephemeral secret inside its zeroizing owner"
+    )]
+    let ephemeral_public = x25519_public_key_v1(&*ephemeral_secret)
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
-    let shared = x25519_shared_secret_v1(*ephemeral_secret, recipient_public_key)
+    #[expect(
+        clippy::needless_borrows_for_generic_args,
+        reason = "the borrow keeps the ephemeral secret inside its zeroizing owner"
+    )]
+    let shared = x25519_shared_secret_v1(&*ephemeral_secret, recipient_public_key)
         .map_err(|_| FcmpNativeErrorV1::EncryptedOutputKey)?;
     let ephemeral_public_key = PrivacyEncryptionKeyV1::new(ephemeral_public);
     let aad = aad_v1(pool_id, recipient, ephemeral_public_key, output);
@@ -729,8 +738,9 @@ mod tests {
             .expect("output scalar decode");
         assert!(first_validation < spend_decode_take);
         assert!(output_decode < output_decode_take);
-        assert!(constructor.contains("&ED25519_BASEPOINT_POINT * spend_x.expose_ref()"));
-        assert!(constructor.contains("&generator_t() * output_y.expose_ref()"));
+        assert!(constructor.contains("ED25519_BASEPOINT_POINT * spend_x.expose_ref()"));
+        assert!(constructor.contains("generator_t() * output_y.expose_ref()"));
+        assert!(!constructor.contains("* *output_y"));
         assert!(constructor.contains("Zeroizing::new(&*spend_component + &*output_component)"));
         assert!(!constructor.contains("Zeroizing::new(spend_x)"));
         assert!(!constructor.contains("ED25519_BASEPOINT_POINT * *spend_x"));
@@ -893,6 +903,7 @@ mod tests {
         assert!(encrypt.contains("let plaintext = note.encode("));
         assert!(encrypt.contains("XChaCha20Poly1305::new_from_slice(key.expose_ref())"));
         assert!(!encrypt.contains("x25519_public_key_v1(*ephemeral_secret)"));
+        assert!(!encrypt.contains("x25519_shared_secret_v1(*ephemeral_secret"));
         assert!(!encrypt.contains("Zeroizing::new(\n        x25519_shared_secret_v1"));
         assert!(!encrypt.contains("Zeroizing::new(note.encode("));
         let decrypt = source

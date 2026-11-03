@@ -1,11 +1,10 @@
 //! Tests for batched transfer transcripts.
 
+use crate::native_genesis::certified_state;
 use iroha_core::{
     fastpq,
-    kura::Kura,
-    query::store::LiveQueryStore,
     smartcontracts::Execute,
-    state::{State, World, WorldReadOnly},
+    state::{World, WorldReadOnly},
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
@@ -13,8 +12,6 @@ use iroha_primitives::nonzero;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 #[test]
 fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
-    // Direct execution and transcript draining share the block witness recorder.
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let (bob_id, _) = gen_account_in("wonderland");
@@ -42,13 +39,21 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
         [alice_asset],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
-    let query_store = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    // Direct execution and transcript draining share the block witness recorder;
+    // the State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
+    // The first ordinary block after the authenticated genesis.
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(Hash::prehashed([0xCD; Hash::LENGTH]));
+    // The direct component executes under one explicit retained invocation, as a signed call.
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xCD; Hash::LENGTH]));
     Transfer::asset_quantity(AssetId::new(asset_def_id, ALICE_ID.clone()), 10_u32, bob_id)
         .execute(&ALICE_ID, &mut tx)
         .expect("transfer executes successfully");
@@ -70,8 +75,6 @@ fn single_transfer_finalizes_canonical_poseidon_digest_on_block_drain() {
 }
 #[test]
 fn transfer_asset_batch_records_multi_delta_transcript() {
-    // Direct execution and transcript draining share the block witness recorder.
-    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let (bob_id, _) = gen_account_in("wonderland");
@@ -102,13 +105,21 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
         [alice_asset],
         [],
     );
-    let kura = Kura::blank_kura_for_testing();
-    let query_store = LiveQueryStore::start_test();
-    let state = State::new_for_testing(world, kura, query_store);
-    let header = BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let state = certified_state(world);
+    // Direct execution and transcript draining share the block witness recorder;
+    // the State, whose signed genesis records its own witness, is built first.
+    let _witness_guard = iroha_core::exec_witness::exec_witness_guard();
+    // The first ordinary block after the authenticated genesis.
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        1,
+        0,
+    );
     let mut block = state.block(header);
-    let mut tx = block.transaction();
-    tx.tx_call_hash = Some(Hash::prehashed([0xAB; Hash::LENGTH]));
+    // The direct component executes under one explicit retained invocation, as a signed call.
+    let mut tx = block.transaction_for_fastpq_testing(Hash::prehashed([0xAB; Hash::LENGTH]));
     let batch = TransferAssetBatch::new(vec![
         TransferAssetBatchEntry::new(
             ALICE_ID.clone(),

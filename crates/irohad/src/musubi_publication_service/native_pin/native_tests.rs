@@ -177,6 +177,17 @@ impl Fixture {
             root,
         }
     }
+    fn supply(&self) -> Quantity {
+        self.chain
+            .state()
+            .view()
+            .world
+            .asset_definitions()
+            .get(&self.asset)
+            .expect("registered fee asset")
+            .total_quantity()
+            .clone()
+    }
     fn balance(&self, account: &AccountId) -> Quantity {
         self.chain
             .state()
@@ -472,6 +483,7 @@ fn actual_paid_check_queue_original_and_initial_advance_preserve_exact_custody_o
     let owner = AccountId::new(f.key.public_key().clone());
     let before = f.balance(&owner);
     let sink_before = f.balance(&f.sink);
+    let supply_before = f.supply();
     let original = f.coordinator.store.operation(f.original.id).unwrap();
     f.coordinator
         .begin_round(original, now(), Instant::now() + Duration::from_secs(60))
@@ -516,9 +528,11 @@ fn actual_paid_check_queue_original_and_initial_advance_preserve_exact_custody_o
         f.balance(&owner),
         before.checked_sub(&Quantity::from(2u32)).unwrap()
     );
+    // Nexus fees burn the payer's quantity rather than crediting the sink.
+    assert_eq!(f.balance(&f.sink), sink_before);
     assert_eq!(
-        f.balance(&f.sink),
-        sink_before.checked_add(&Quantity::from(2u32)).unwrap()
+        f.supply(),
+        supply_before.checked_sub(&Quantity::from(2u32)).unwrap()
     );
     let expected = f.coordinator.store.inventory(None).unwrap().digest;
     assert!(matches!(

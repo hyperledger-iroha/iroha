@@ -47,19 +47,14 @@ static PROVER_STACK_SIZE: LazyLock<AtomicUsize> =
     LazyLock::new(|| AtomicUsize::new(crate::parallel::thread_stack_size()));
 static PROVER_POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
 fn configured_prover_threads() -> usize {
-    let raw = PROVER_THREADS.load(Ordering::Relaxed);
-    if raw == 0 {
-        num_cpus::get_physical()
-    } else {
-        raw
-    }
+    crate::parallel::configured_thread_count(PROVER_THREADS.load(Ordering::Relaxed))
 }
 /// Return the effective prover/trace verification worker cap.
 #[must_use]
 pub fn prover_threads() -> usize {
     configured_prover_threads()
 }
-/// Configure the Rayon worker cap for prover/trace verification (0 = auto/physical cores).
+/// Configure the Rayon worker cap for prover/trace verification (0 = available parallelism).
 pub fn set_prover_threads(threads: usize) {
     PROVER_THREADS.store(threads, Ordering::Relaxed);
 }

@@ -321,7 +321,7 @@ fn full_prefix_registered_domains_keep_every_output_and_mask_tail() {
         let native_values = (0..1usize << native)
             .map(|index| F((index * 17 + 13) as u64))
             .collect::<Vec<_>>();
-        let mask = (0..MASK_DEGREE + 1)
+        let mask = (0..=MASK_DEGREE)
             .map(|index| F((index * 29 + 7) as u64))
             .collect::<Vec<_>>();
         let coefficients = Column::from_vec_v1(

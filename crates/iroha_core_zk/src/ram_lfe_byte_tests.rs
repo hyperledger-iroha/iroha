@@ -334,7 +334,17 @@ fn native_metrics<const DEGREE: usize>() {
     let circuit = Arithmetic::<8, 63, DEGREE, false>::new([u64::MAX, 0x1234_5678_9abc_def0, 42]);
     let mut meta = ConstraintSystem::default();
     let _ = Arithmetic::<8, 63, DEGREE, false>::configure(&mut meta);
-    assert_eq!(meta.degree(), DEGREE);
+    // The normalized lookup argument sets a degree floor of
+    // `max(6, 2 + 2 * (deg a + deg s))` (specs/plonk_ipa_v1.md); a lower requested
+    // gate degree runs at that floor.
+    let lookup_degree = meta
+        .lookups()
+        .iter()
+        .map(iroha_plonk::cs::LookupArgument::required_degree)
+        .max()
+        .expect("byte lookups");
+    let degree = DEGREE.max(lookup_degree);
+    assert_eq!(meta.degree(), degree);
     assert_eq!(meta.advice_queries().len(), 6);
     assert!(
         meta.advice_queries()
@@ -343,9 +353,9 @@ fn native_metrics<const DEGREE: usize>() {
     );
     assert_eq!(meta.lookups().len(), 2);
     assert_eq!(meta.permutation().columns().len(), 8);
-    if DEGREE > 9 {
-        // The first-release native descriptor has a hard degree-nine ceiling.
-        // Retain the old arithmetic shapes as checks of that rejection boundary.
+    if degree > iroha_plonk::cs::descriptor::MAX_DEGREE {
+        // The native descriptor has a hard degree ceiling. Retain arithmetic
+        // shapes above it as checks of that rejection boundary.
         check(12, &circuit, &[circuit.expected()])
             .expect("arithmetic synthesis")
             .into_result()
@@ -377,9 +387,9 @@ fn native_metrics<const DEGREE: usize>() {
     setup.verify(&public, &proof).expect("byte verification");
     let verify_ms = start.elapsed().as_secs_f64() * 1000.0;
     println!(
-        "RAM_LFE_BYTE_METRICS k=12 degree={DEGREE} advice_columns=6 table_rows={HASH_TABLE_ROWS} operation_rows=48 lookup_arguments=2 permutation_columns=8 fixed_queries_before_selector_compression={} permutation_chunk_columns={} proof_bytes={} vk_bytes={vk_bytes} keygen_ms={keygen_ms:.3} prove_ms={prove_ms:.3} verify_ms={verify_ms:.3}",
+        "RAM_LFE_BYTE_METRICS k=12 degree={degree} advice_columns=6 table_rows={HASH_TABLE_ROWS} operation_rows=48 lookup_arguments=2 permutation_columns=8 fixed_queries_before_selector_compression={} permutation_chunk_columns={} proof_bytes={} vk_bytes={vk_bytes} keygen_ms={keygen_ms:.3} prove_ms={prove_ms:.3} verify_ms={verify_ms:.3}",
         meta.fixed_queries().len(),
-        DEGREE - 2,
+        (degree - 2) / 2,
         proof.len()
     );
     let mut bad = public.clone();
@@ -394,9 +404,11 @@ fn native_metrics<const DEGREE: usize>() {
 }
 #[test]
 fn byte_native_proofs_measure_fixed_degree_tradeoffs() {
+    use iroha_plonk::cs::descriptor::MAX_DEGREE;
     native_metrics::<5>();
     native_metrics::<8>();
     native_metrics::<9>();
-    native_metrics::<11>();
+    native_metrics::<MAX_DEGREE>();
+    native_metrics::<{ MAX_DEGREE + 1 }>();
     native_metrics::<20>();
 }

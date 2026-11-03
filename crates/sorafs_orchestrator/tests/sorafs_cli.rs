@@ -260,21 +260,19 @@ chain_discriminant = 369
     .expect("write deploy client config");
     (path, private_key)
 }
-fn write_deploy_client_config_with_chain(
-    dir: &Path,
-    torii_url: &str,
-    chain: &str,
-) -> (PathBuf, String) {
+fn write_profile_deploy_client_config(dir: &Path, torii_url: &str) -> (PathBuf, String) {
     let keypair = deploy_keypair();
     let public_key = keypair.public_key().to_string();
     let private_key = ExposedPrivateKey(keypair.private_key().clone()).to_string();
-    let network_id = deploy_checkpoint().network_id();
-    let path = dir.join("client-known-chain.toml");
+    let checkpoint = deploy_checkpoint();
+    let chain_id = checkpoint.chain_id();
+    let network_id = checkpoint.network_id();
+    let path = dir.join("client-profile.toml");
     fs::write(
         &path,
         format!(
             r#"
-chain = "{chain}"
+chain = "{chain_id}"
 torii_url = "{torii_url}"
 network_id = "{network_id}"
 [account]
@@ -284,7 +282,7 @@ profile = "taira"
 "#
         ),
     )
-    .expect("write deploy client config with chain");
+    .expect("write profile deploy client config");
     (path, private_key)
 }
 fn make_stream_token_b64(
@@ -1606,6 +1604,15 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .and_then(Value::as_str),
         Some("unverified")
     );
+    // Gateway readback does not establish finality-qualified provider publication.
+    assert!(
+        summary
+            .get("provider_ingest")
+            .and_then(Value::as_object)
+            .and_then(|ingest| ingest.get("error"))
+            .and_then(Value::as_str)
+            .is_some_and(|error| error.contains("publication preparation rejected"))
+    );
     assert!(
         summary
             .get("provider_ingest")
@@ -1649,11 +1656,8 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
         then.status(409)
             .body("fixture has no finalized publication");
     });
-    let (client_config, _private_key) = write_deploy_client_config_with_chain(
-        tempdir.path(),
-        &primary.base_url(),
-        deploy_checkpoint().chain_id(),
-    );
+    let (client_config, _private_key) =
+        write_profile_deploy_client_config(tempdir.path(), &primary.base_url());
     let register = primary.mock(|when, then| {
         when.method(POST)
             .path("/v1/sorafs/pin/register")
@@ -1762,6 +1766,7 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
             .and_then(Value::as_str)
             .is_some()
     );
+    // Publication uses the primary Torii after peer discovery refuses.
     preparation.assert_calls(1);
     fee_quote.assert_calls(1);
 }
@@ -1851,6 +1856,7 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
             .and_then(Value::as_str)
             .is_some_and(|error| error.contains("generic transaction fallback is not supported"))
     );
+    // A refused registration is never followed by a publication attempt.
     preparation.assert_calls(0);
     fee_quote.assert_calls(1);
 }

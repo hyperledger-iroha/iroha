@@ -734,6 +734,13 @@ impl MainTracePolynomialSetV1 {
             assembly_payload,
             (&plan, None),
             |group, columns| {
+                #[cfg_attr(
+                    not(test),
+                    expect(
+                        clippy::infallible_destructuring_match,
+                        reason = "the replay-oracle variant exists only in test builds"
+                    )
+                )]
                 let cache = match &mut set.retained_rfc {
                     RetainedRfcV1::Original(cache) => cache,
                     #[cfg(test)]

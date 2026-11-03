@@ -1,6 +1,5 @@
 //! Lightweight terminal UI helpers for Kagami commands.
 use clap::ValueEnum;
-use owo_colors::OwoColorize as _;
 use std::{
     fmt::Display,
     io::{self, IsTerminal as _, Write},
@@ -55,22 +54,28 @@ impl Ui {
     fn new(mode: UiMode) -> Self {
         Self { mode }
     }
-    fn emit(&self, prefix: &str, message: impl Display, colour: Colour) {
+    fn emit(&self, message: impl Display, colour: Colour) {
         let mut stderr = io::stderr().lock();
-        match self.mode {
-            UiMode::Plain => {
-                writeln!(stderr, "{prefix} {message}").ok();
-            }
-            UiMode::Rich => {
-                let styled_prefix = match colour {
-                    Colour::Info => prefix.bold().cyan().to_string(),
-                    Colour::Success => prefix.bold().green().to_string(),
-                    Colour::Warn => prefix.bold().yellow().to_string(),
-                };
-                writeln!(stderr, "{} {}", styled_prefix, message).ok();
-            }
-            UiMode::Auto => unreachable!("mode resolved at install time"),
-        }
+        self.write_line(&mut stderr, message, colour).ok();
+    }
+    fn write_line(
+        &self,
+        output: &mut impl Write,
+        message: impl Display,
+        colour: Colour,
+    ) -> io::Result<()> {
+        // A single static prefix avoids both an intermediate String and extra writes to
+        // unbuffered stderr for each ANSI escape in the rich form.
+        let prefix = match (self.mode, colour) {
+            (UiMode::Plain, Colour::Info) => "[..]",
+            (UiMode::Plain, Colour::Success) => "[ok]",
+            (UiMode::Plain, Colour::Warn) => "[!!]",
+            (UiMode::Rich, Colour::Info) => "\x1b[36m\x1b[1m[..]\x1b[0m\x1b[39m",
+            (UiMode::Rich, Colour::Success) => "\x1b[32m\x1b[1m[ok]\x1b[0m\x1b[39m",
+            (UiMode::Rich, Colour::Warn) => "\x1b[33m\x1b[1m[!!]\x1b[0m\x1b[39m",
+            (UiMode::Auto, _) => unreachable!("mode resolved at install time"),
+        };
+        writeln!(output, "{prefix} {message}")
     }
 }
 #[derive(Clone, Copy)]
@@ -90,15 +95,15 @@ fn ui() -> &'static Ui {
 }
 /// Emit an informational status line.
 pub fn status(message: impl Display) {
-    ui().emit("[..]", message, Colour::Info);
+    ui().emit(message, Colour::Info);
 }
 /// Emit a success status line.
 pub fn success(message: impl Display) {
-    ui().emit("[ok]", message, Colour::Success);
+    ui().emit(message, Colour::Success);
 }
 /// Emit a warning status line.
 pub fn warn(message: impl Display) {
-    ui().emit("[!!]", message, Colour::Warn);
+    ui().emit(message, Colour::Warn);
 }
 /// Options shared across the CLI for configuring the UI.
 #[derive(Debug, Clone, clap::Args)]
@@ -111,5 +116,66 @@ impl UiOptions {
     /// Configure the global UI per CLI options.
     pub fn install(&self) {
         install(self.mode.into());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn output_modes_preserve_terminal_policy() {
+        assert_eq!(UiMode::Auto.resolve(true), UiMode::Rich);
+        assert_eq!(UiMode::Auto.resolve(false), UiMode::Plain);
+        assert_eq!(UiMode::Plain.resolve(true), UiMode::Plain);
+        assert_eq!(UiMode::Rich.resolve(false), UiMode::Rich);
+    }
+
+    #[test]
+    fn status_lines_preserve_plain_and_rich_bytes() {
+        for (colour, prefix, escape) in [
+            (Colour::Info, "[..]", "\x1b[36m"),
+            (Colour::Success, "[ok]", "\x1b[32m"),
+            (Colour::Warn, "[!!]", "\x1b[33m"),
+        ] {
+            let mut output = Vec::new();
+            Ui::new(UiMode::Plain)
+                .write_line(&mut output, format_args!("進捗 {}", 7), colour)
+                .unwrap();
+            assert_eq!(output, format!("{prefix} 進捗 7\n").as_bytes());
+            output.clear();
+            Ui::new(UiMode::Rich)
+                .write_line(&mut output, format_args!("進捗 {}", 7), colour)
+                .unwrap();
+            assert_eq!(
+                output,
+                format!("{escape}\x1b[1m{prefix}\x1b[0m\x1b[39m 進捗 7\n").as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn rich_status_does_not_add_writer_calls() {
+        struct CountWrites(usize);
+        impl io::Write for CountWrites {
+            fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+                self.0 += 1;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        for colour in [Colour::Info, Colour::Success, Colour::Warn] {
+            let mut plain = CountWrites(0);
+            let mut rich = CountWrites(0);
+            Ui::new(UiMode::Plain)
+                .write_line(&mut plain, "message", colour)
+                .unwrap();
+            Ui::new(UiMode::Rich)
+                .write_line(&mut rich, "message", colour)
+                .unwrap();
+            assert_eq!(rich.0, plain.0);
+        }
     }
 }

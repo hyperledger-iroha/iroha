@@ -181,6 +181,58 @@ def test_native_status_schema_accepts_the_rust_corpus_and_rejects_noncanonical_f
         assert not validator.is_valid(changed), changed
 
 
+def test_parliament_schemas_admit_every_public_transition_of_the_shared_fixture() -> None:
+    """A published union must not reject a transition every SDK may draft."""
+
+    fixture = json.loads(
+        (REPO_ROOT / "fixtures/governance/parliament_api_v1.json").read_bytes()
+    )
+    for authority in OPENAPI_AUTHORITIES:
+        schemas = json.loads(authority.read_bytes())["components"]["schemas"]
+        transitions = {
+            branch["properties"]["transition"]["const"]
+            for branch in schemas["GovernanceParliamentLifecycleTransitionV1"]["oneOf"]
+        }
+        kinds = {
+            branch["properties"]["kind"]["const"]
+            for branch in schemas["GovernanceParliamentTransitionKindV1"]["oneOf"]
+        }
+        for row in fixture["public_transitions"]:
+            assert row["json_tag"] in transitions, row["json_tag"]
+            assert row["json_tag"] in kinds, row["json_tag"]
+        for row in fixture["automatic_execution_outcomes"]:
+            assert row["event_kind"] in kinds, row["event_kind"]
+            assert row["event_kind"] not in transitions, row["event_kind"]
+
+
+def test_runtime_change_set_schema_admits_the_encoder_fixture_and_nothing_wider() -> None:
+    """`iroha_data_model`'s runtime_lifecycle test pins the fixture to the encoder's output."""
+
+    fixture = json.loads(
+        (REPO_ROOT / "fixtures/governance/runtime_change_set_v1.json").read_bytes()
+    )
+    for authority in OPENAPI_AUTHORITIES:
+        spec = json.loads(authority.read_bytes())
+        validator = Draft202012Validator({
+            "$ref": "#/components/schemas/GovernanceParliamentProposalPayloadRuntimeChangeSetV1",
+            "components": spec["components"],
+        })
+        errors = [error.message for error in validator.iter_errors(fixture)]
+        assert not errors, errors[:3]
+        for field in ("publish", "transitions"):
+            assert fixture[field]
+            for index in range(len(fixture[field])):
+                unknown_field = copy.deepcopy(fixture)
+                unknown_field[field][index]["unknown"] = 1
+                assert not validator.is_valid(unknown_field), (field, index)
+                unknown_kind = copy.deepcopy(fixture)
+                unknown_kind[field][index]["kind"] = "Retired"
+                assert not validator.is_valid(unknown_kind), (field, index)
+                missing_content = copy.deepcopy(fixture)
+                del missing_content[field][index]["content"]
+                assert not validator.is_valid(missing_content), (field, index)
+
+
 def test_current_proposal_schemas_are_closed_and_retired_kagemusha_kinds_are_absent() -> None:
     """The first-release proposal union admits exactly the ten implemented kinds."""
 

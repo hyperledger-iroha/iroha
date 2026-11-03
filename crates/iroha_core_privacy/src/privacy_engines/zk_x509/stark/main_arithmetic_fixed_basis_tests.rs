@@ -53,7 +53,7 @@ fn sealed_basis_binding_rejects_mismatch_and_preserves_uncertainty_priority() {
             );
         }
     }
-    assert!(DESCRIPTOR_PAYLOAD < DESCRIPTOR_RESERVATION);
+    const { assert!(DESCRIPTOR_PAYLOAD < DESCRIPTOR_RESERVATION) }
 }
 
 #[test]

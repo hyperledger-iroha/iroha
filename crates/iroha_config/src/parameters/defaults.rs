@@ -3921,7 +3921,7 @@ pub mod pipeline {
         /// Additional canonical encoding work per scheduled attempt, independent of native source work. Zero refuses this work.
         pub const ENCODING_WORK_PER_ATTEMPT: usize = 64 * 1024 * 1024;
     }
-    /// Rayon worker cap for prover/trace verification (0 = number of physical cores).
+    /// Rayon worker cap for prover/trace verification (0 = available parallelism).
     pub const IVM_PROVER_THREADS: usize = 0;
     /// Ed25519-specific batch size (0 disables batching).
     pub const SIGNATURE_BATCH_MAX_ED25519: usize = 64;
@@ -3982,9 +3982,9 @@ pub mod tiered_state {
 }
 /// Concurrency defaults for thread pools and global Rayon.
 pub mod concurrency {
-    /// Minimum scheduler worker threads (0 = auto/physical cores)
+    /// Minimum scheduler worker threads (0 = available parallelism)
     pub const SCHEDULER_MIN: usize = 0;
-    /// Maximum scheduler worker threads (0 = auto/physical cores)
+    /// Maximum scheduler worker threads (0 = available parallelism)
     pub const SCHEDULER_MAX: usize = 0;
     /// Global Rayon thread pool size (0 = auto/physical cores)
     pub const RAYON_GLOBAL: usize = 0;

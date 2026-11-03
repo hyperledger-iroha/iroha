@@ -438,9 +438,9 @@ mod js_host_parity {
         assert!(rust_duration > Duration::ZERO);
         assert!(js_duration > Duration::ZERO);
         assert!(ffi_duration > Duration::ZERO);
-        let rust_ms = rust_duration.as_micros() as f64 / 1000.0;
-        let js_ms = js_duration.as_micros() as f64 / 1000.0;
-        let ffi_ms = ffi_duration.as_micros() as f64 / 1000.0;
+        let rust_ms = rust_duration.as_secs_f64() * 1000.0;
+        let js_ms = js_duration.as_secs_f64() * 1000.0;
+        let ffi_ms = ffi_duration.as_secs_f64() * 1000.0;
         assert!(
             js_ms <= rust_ms * 10.0,
             "JS path is unexpectedly slow: {js_ms}ms vs Rust {rust_ms}ms"

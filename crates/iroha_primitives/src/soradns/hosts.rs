@@ -1,4 +1,5 @@
 //! Deterministic `SoraDNS` gateway host derivation.
+use crate::base32::encode_lower as encode_base32_lower;
 use blake3::hash as blake3_hash;
 use thiserror::Error;
 /// Maximum length of a fully-qualified domain name accepted by the helper.
@@ -270,29 +271,6 @@ fn canonicalise_host(host: &str) -> Option<String> {
         return None;
     }
     Some(trimmed.to_ascii_lowercase())
-}
-fn encode_base32_lower(data: &[u8]) -> String {
-    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
-    if data.is_empty() {
-        return String::new();
-    }
-    let mut acc = 0u32;
-    let mut bits = 0u32;
-    let mut out = Vec::with_capacity((data.len() * 8).div_ceil(5));
-    for &byte in data {
-        acc = (acc << 8) | u32::from(byte);
-        bits += 8;
-        while bits >= 5 {
-            bits -= 5;
-            let index = ((acc >> bits) & 0x1f) as usize;
-            out.push(ALPHABET[index]);
-        }
-    }
-    if bits > 0 {
-        let index = ((acc << (5 - bits)) & 0x1f) as usize;
-        out.push(ALPHABET[index]);
-    }
-    String::from_utf8(out).expect("alphabet contains valid ASCII")
 }
 #[cfg(test)]
 mod tests {

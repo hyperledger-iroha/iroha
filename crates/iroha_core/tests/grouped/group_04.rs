@@ -14,6 +14,8 @@ mod zk_components;
 mod fx_routing_review;
 #[path = "../../src/manifest_signing_test_support.rs"]
 mod manifest_signing_test_support;
+#[path = "../common/native_genesis.rs"]
+mod native_genesis;
 #[path = "../pin_registry.rs"]
 mod pin_registry;
 #[path = "../quarantine_lane.rs"]

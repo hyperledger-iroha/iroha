@@ -24,10 +24,6 @@ SPEC.loader.exec_module(TOOL)
 STORAGE_REPORT = {
     "tip_height": 7,
     "tip_hash": "ab" * 32,
-    "snapshot_height": None,
-    "prefix_hash_at_snapshot_height": None,
-    "snapshot_restore_dry_run": "ok",
-    "snapshot_restore_error": None,
 }
 CONFIG_REPORT = {
     "status": "ready",

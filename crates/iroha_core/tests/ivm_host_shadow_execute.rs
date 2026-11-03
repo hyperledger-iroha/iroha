@@ -1,17 +1,21 @@
 //! `CoreHost` shadow-execute parity tests (IVM syscalls vs native Execute).
+//!
+//! Both paths execute as signed transactions through the node executor over the same
+//! authenticated signed genesis: the native path carries the instructions, the host path a
+//! generic IVM program whose syscalls queue them. Host effects apply only under that exact
+//! signed root; the program's pointer arguments are its canonical literal TLVs.
 
 use iroha_core::{
-    kura::Kura,
-    query::store::LiveQueryStore,
-    smartcontracts::ivm::host::CoreHost,
-    state::{State, World, WorldReadOnly},
+    smartcontracts::ivm::cache::IvmCache,
+    state::{State, StateBlock, World, WorldReadOnly},
+    tx::AcceptedTransaction,
 };
 use iroha_data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_primitives::nonzero;
-use iroha_test_samples::ALICE_ID;
-use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use ivm::{PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use mv::storage::StorageReadOnly;
 use norito::NoritoSerialize;
 const AMPLE_TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -29,21 +33,8 @@ fn tlv_blob<T: NoritoSerialize>(val: &T, ty: PointerType) -> Vec<u8> {
 fn quantity_tlv(value: &Quantity) -> Vec<u8> {
     ivm_abi::numeric_tlv::encode_quantity(value).expect("encode quantity pointer envelope")
 }
-fn load_input_blob(vm: &mut IVM, cursor: &mut u64, blob: &[u8]) -> u64 {
-    vm.memory
-        .input_write_aligned(cursor, blob, 8)
-        .expect("write INPUT blob")
-}
-fn scall_program(syscall: u32) -> Vec<u8> {
-    let mut code = Vec::new();
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(syscall).expect("syscall id fits in u8"),
-        )
-        .to_le_bytes(),
-    );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
+/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
     let mut program = ProgramMetadata {
         version_major: 1,
         version_minor: 1,
@@ -53,17 +44,48 @@ fn scall_program(syscall: u32) -> Vec<u8> {
         abi_version: 1,
     }
     .encode();
-    program.extend_from_slice(&code);
+    let data_offset = 16 + literals.len() * 8;
+    let data_len: usize = literals.iter().map(Vec::len).sum();
+    let pad = (4 - (data_offset + data_len) % 4) % 4;
+    program.extend_from_slice(b"LTLB");
+    for field in [literals.len(), pad, data_len] {
+        program.extend_from_slice(
+            &u32::try_from(field)
+                .expect("literal table field fits u32")
+                .to_le_bytes(),
+        );
+    }
+    let mut offset = data_offset;
+    for literal in literals {
+        let descriptor = ivm::encode_literal_descriptor(
+            ivm::LiteralKindV1::PointerTlv,
+            u64::try_from(offset).expect("literal offset fits u64"),
+        )
+        .expect("literal offset fits its descriptor");
+        program.extend_from_slice(&descriptor.to_le_bytes());
+        offset += literal.len();
+    }
+    for literal in literals {
+        program.extend_from_slice(literal);
+    }
+    program.extend(std::iter::repeat_n(0, pad));
+    for word in code.iter().copied().chain([encoding::wide::encode_halt()]) {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
     program
 }
-fn run_syscall(vm: &mut IVM, syscall: u32, regs: &[(u8, u64)]) {
-    let program = scall_program(syscall);
-    vm.load_program(&program).expect("load program");
-    for &(reg, value) in regs {
-        vm.set_register(usize::from(reg), value);
-    }
-    vm.run()
-        .unwrap_or_else(|err| panic!("run syscall 0x{syscall:02X}: {err:?}"));
+/// Load each `(register, literal)` pointer argument, then invoke `syscall`.
+fn literal_call(syscall: u32, arguments: &[(u8, u16)]) -> Vec<u32> {
+    arguments
+        .iter()
+        .map(|&(register, literal)| {
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, register, literal)
+        })
+        .chain([encoding::wide::encode_sys(
+            instruction::wide::system::SCALL,
+            u8::try_from(syscall).expect("syscall id fits in u8"),
+        )])
+        .collect()
 }
 fn setup_state(
     authority: &AccountId,
@@ -71,8 +93,6 @@ fn setup_state(
     asset_domain: &DomainId,
     asset_name: &Name,
 ) -> State {
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let domain = Domain::new(asset_domain.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
     let asset_definition = AssetDefinition::numeric(
@@ -82,18 +102,60 @@ fn setup_state(
         Some(asset_domain.clone()),
     )
     .build(authority);
-    let state = State::new_for_testing(
-        World::with([domain], [account], [asset_definition]),
-        kura,
-        query_handle,
-    );
-    // Finalize the genesis fixture so its asset has an incarnation before
+    // The authenticated signed genesis gives the asset its incarnation before
     // executing the height-two native and IVM transactions.
-    state
-        .block(BlockHeader::new(nonzero!(1_u64), None, None, 0, 0))
-        .commit_empty_block_for_testing()
-        .expect("commit genesis fixture");
-    state
+    crate::native_genesis::certified_state(World::with([domain], [account], [asset_definition]))
+}
+/// Execute `executable` signed by ALICE in the first ordinary block of `state`, commit its
+/// World overlay and return the events the transaction emitted.
+fn execute_signed(
+    state: &State,
+    executable: Executable,
+) -> Vec<iroha_data_model::events::EventBox> {
+    let transaction = TransactionBuilder::new(
+        *state.network_id_ref(),
+        ALICE_ID.clone(),
+        FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(AMPLE_TEST_GAS_LIMIT)),
+    )
+    .with_executable(executable)
+    .sign(ALICE_KEYPAIR.private_key());
+    let parameters = state.transaction_admission_parameters();
+    let accepted = AcceptedTransaction::accept(
+        transaction,
+        state.network_id_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        parameters
+            .require_crypto_policy()
+            .expect("signed genesis crypto policy"),
+    )
+    .expect("stateless transaction admission");
+    let header = BlockHeader::new(
+        nonzero!(2_u64),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    );
+    let mut block = state.block(header);
+    execute(&mut block, accepted).expect("signed execution applies");
+    let events = block.world.take_external_events();
+    block
+        .commit_world_overlay_for_testing()
+        .expect("commit executed block");
+    events
+}
+fn execute(
+    block: &mut StateBlock<'_>,
+    transaction: AcceptedTransaction<'static>,
+) -> Result<(), TransactionRejectionReason> {
+    iroha_core::tx::execute_component_transaction_for_testing(
+        block,
+        transaction,
+        &mut IvmCache::new(),
+        None,
+    )
+    .map(drop)
 }
 fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<String> {
     events
@@ -124,10 +186,6 @@ fn ivm_host_shadow_execute_matches_native_execute() {
     let host_state = setup_state(&authority, &asset_def, &asset_domain, &asset_name);
     // Direct Execute path.
     let direct_events = {
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-        let mut block = direct_state.block(header);
-        let mut tx = block.transaction();
-        let executor = tx.world.executor().clone();
         let set_detail: InstructionBox =
             SetKeyValue::account(authority.clone(), key.clone(), value.clone()).into();
         let mint: InstructionBox = Mint::asset_quantity(
@@ -135,56 +193,31 @@ fn ivm_host_shadow_execute_matches_native_execute() {
             AssetId::of(asset_def.clone(), authority.clone()),
         )
         .into();
-        for instr in [set_detail, mint] {
-            executor
-                .execute_instruction(&mut tx, &authority, instr)
-                .expect("direct execute");
-        }
-        let events = tx.world.take_external_events();
-        tx.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit direct block");
-        events
+        execute_signed(&direct_state, [set_detail, mint].into_iter().collect())
     };
     // CoreHost path via syscalls.
     let host_events = {
-        let mut vm = IVM::new(AMPLE_TEST_GAS_LIMIT);
-        vm.set_host(CoreHost::new(authority.clone()));
-        let account_tlv = tlv_blob(&authority, PointerType::AccountId);
-        let key_tlv = tlv_blob(&key, PointerType::Name);
-        let value_tlv = tlv_blob(&value, PointerType::Json);
-        let asset_tlv = tlv_blob(&asset_def, PointerType::AssetDefinitionId);
-        let amount_tlv = quantity_tlv(&amount);
-        let mut cursor = 0;
-        let ptr_account = load_input_blob(&mut vm, &mut cursor, &account_tlv);
-        let ptr_key = load_input_blob(&mut vm, &mut cursor, &key_tlv);
-        let ptr_value = load_input_blob(&mut vm, &mut cursor, &value_tlv);
-        let ptr_asset = load_input_blob(&mut vm, &mut cursor, &asset_tlv);
-        let ptr_amount = load_input_blob(&mut vm, &mut cursor, &amount_tlv);
-        run_syscall(
-            &mut vm,
-            ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL,
-            &[(10, ptr_account), (11, ptr_key), (12, ptr_value)],
-        );
-        run_syscall(
-            &mut vm,
-            ivm_sys::SYSCALL_MINT_ASSET,
-            &[(10, ptr_account), (11, ptr_asset), (12, ptr_amount)],
-        );
-        let header = BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-        let mut block = host_state.block(header);
-        let mut tx = block.transaction();
-        CoreHost::with_host(&mut vm, |host| {
-            host.apply_queued(&mut tx, &authority)
-                .expect("apply queued syscalls");
-        });
-        let events = tx.world.take_external_events();
-        tx.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("commit host block");
-        events
+        let literals = [
+            tlv_blob(&authority, PointerType::AccountId),
+            tlv_blob(&key, PointerType::Name),
+            tlv_blob(&value, PointerType::Json),
+            tlv_blob(&asset_def, PointerType::AssetDefinitionId),
+            quantity_tlv(&amount),
+        ];
+        let code = [
+            literal_call(
+                ivm_sys::SYSCALL_SET_ACCOUNT_DETAIL,
+                &[(10, 0), (11, 1), (12, 2)],
+            ),
+            literal_call(ivm_sys::SYSCALL_MINT_ASSET, &[(10, 0), (11, 3), (12, 4)]),
+        ]
+        .concat();
+        execute_signed(
+            &host_state,
+            Executable::Ivm(IvmBytecode::from_compiled(literal_program(
+                &literals, &code,
+            ))),
+        )
     };
     let direct_data = data_event_debug(direct_events);
     let host_data = data_event_debug(host_events);

@@ -17,8 +17,18 @@ fn world_id() -> Hash {
 fn key() -> KeyPair {
     KeyPair::from_seed(vec![0xCE; 32], Algorithm::Ed25519)
 }
+/// A World whose root runs the game-partition addition, as its governed change set leaves it.
+fn game_partition_world() -> World {
+    let world = World::new();
+    crate::runtime::activate_additions_for_testing(
+        &world,
+        crate::runtime::catalog::additions::GAME_PARTITIONS.module,
+    )
+    .expect("activate the game-partition addition");
+    world
+}
 fn config(label: &str) -> TestChainConfig {
-    let mut config = TestChainConfig::new(World::new(), 1000);
+    let mut config = TestChainConfig::new(game_partition_world(), 1000);
     config.chain_id = label.parse().expect("canonical fixture chain label");
     config.clock_bootstrap_in_genesis = true;
     config.genesis_instructions = vec![
@@ -88,6 +98,38 @@ fn seed(chain: &mut CertifiedTestChain, nonce: u64) -> Hash {
         }
     ));
     game_unit_id(world_id(), chain.instance().0, nonce)
+}
+#[test]
+fn game_partition_instructions_resolve_only_once_the_addition_activates() {
+    use iroha_data_model::{
+        isi::error::InstructionExecutionError, runtime::lifecycle::RuntimeRejectionV1,
+    };
+    let install = InstructionBox::from(InstallGamePartitionV1 {
+        world_id: world_id(),
+        kernel_hash: ivm::game_unit_step::kernel_hash(),
+    });
+    // A root founded on the baseline: no change set has activated the addition.
+    let baseline = World::new();
+    assert_eq!(
+        crate::runtime::resolve(&install, baseline.runtime_selection.view().get(), 1, || {
+            None
+        }),
+        Err(InstructionExecutionError::Runtime(
+            RuntimeRejectionV1::DefinitionInactive {
+                wire_id: "iroha.game_partition.install.v1".to_owned(),
+            }
+        ))
+    );
+    let activated = game_partition_world();
+    assert!(matches!(
+        crate::runtime::resolve(
+            &install,
+            activated.runtime_selection.view().get(),
+            1,
+            || None
+        ),
+        Ok(Some(_))
+    ));
 }
 fn paired() -> (CertifiedTestChain, CertifiedTestChain) {
     let mut a = start("game-native-root-a");

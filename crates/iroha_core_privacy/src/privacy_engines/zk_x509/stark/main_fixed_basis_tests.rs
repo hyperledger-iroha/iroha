@@ -530,6 +530,10 @@ fn public_arithmetic_basis_preserves_all_coefficients_cosets_and_erasure() {
 #[test]
 #[ignore = "actual Metal complete public fixed basis A/B including reconstruction, cache and erasure"]
 #[cfg(target_os = "macos")]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn public_arithmetic_basis_complete_cost_preserves_all_four_cosets() {
     use std::time::{Duration, Instant};
     const ROUNDS: usize = 4;

@@ -12,6 +12,9 @@
 //! A trailing radix-2 stage runs when `k` is odd. The final pass restores
 //! natural order. In a prime field a radix-4 butterfly needs the same number of
 //! multiplications as two radix-2 stages, so the gain is memory traffic only.
+//! Once the blocks of the remaining stages fit [`DEPTH_FIRST_ELEMENTS`], each
+//! block finishes all of them before the next block starts, so a large
+//! transform reads main memory for its first passes only.
 //!
 //! The twiddle factors of every stage are cached contiguously in the domain
 //! ([`FftDomain::twiddle_bytes`] reports their size). The coset shift is fused
@@ -32,6 +35,14 @@ use crate::{CancellationToken, Cancelled};
 /// Below this many elements per pass the transforms run on the calling
 /// thread; above it they split work across the caller's Rayon pool.
 const PARALLEL_MIN: usize = 1 << 12;
+
+/// At most this many elements per block finish their remaining stages
+/// depth first. 2^12 elements of 32 bytes is 128 KiB, inside the L2 cache of
+/// the smallest phone cores (Cortex-A55: 128 to 256 KiB), where a 2 MiB k16
+/// column would otherwise stream through main memory for all eight passes.
+/// Blocks are independent from that stage on, so this only reorders exact
+/// butterflies: every output is unchanged.
+const DEPTH_FIRST_ELEMENTS: usize = 1 << 12;
 
 /// FFT domain construction failure.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -616,6 +627,24 @@ fn dif_stages<F: PastaField, const PARALLEL: bool>(
         if CancellationToken::checkpoint(cancellation).is_err() {
             return;
         }
+        let block = 1usize << s;
+        // A coset shift belongs to the whole array's first pass; every later
+        // stage keeps within blocks of 2^s, which finish while still in cache.
+        // A block runs its own stages pass by pass: it is already in cache,
+        // and splitting it again would only add calls.
+        if n > DEPTH_FIRST_ELEMENTS
+            && block < n
+            && block <= DEPTH_FIRST_ELEMENTS
+            && (!first || shift.is_none())
+        {
+            let finish = |chunk: &mut [F]| dif_stages::<F, false>(chunk, tw, None, s, cancellation);
+            if PARALLEL && n >= PARALLEL_MIN {
+                a.par_chunks_exact_mut(block).for_each(finish);
+            } else {
+                a.chunks_exact_mut(block).for_each(finish);
+            }
+            return;
+        }
         // Fused stages with half sizes 2m (outer) and m (inner).
         let m = 1usize << (s - 2);
         let outer = &tw[s - 1]; // w_{4m}^j, j < 2m
@@ -946,6 +975,54 @@ mod tests {
             d.coset_ifft(&mut c, shift).unwrap();
             assert_eq!(c, a);
         }
+    }
+
+    /// Every output of a monomial `x^r` is exact: `(shift * omega^i)^r`. A
+    /// transform is linear, so monomials of several degrees pin full-size
+    /// transforms, through the passes over the whole array and the blocks
+    /// that finish depth first, in O(n) per check.
+    #[test]
+    fn full_size_transforms_evaluate_monomials_exactly() {
+        fn check<F: PastaField>() {
+            for workers in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(workers)
+                    .build()
+                    .unwrap();
+                pool.install(|| {
+                    for k in [12u32, 13, 14, 16, 17] {
+                        let domain = FftDomain::<F>::new(k).unwrap();
+                        let n = domain.n();
+                        let degrees = [1usize, 3, 4095, 4097, n / 2 + 5, n - 1];
+                        for degree in degrees.into_iter().filter(|&degree| degree < n) {
+                            for shift in [F::ONE, F::from(7)] {
+                                let mut monomial = vec![F::ZERO; n];
+                                monomial[degree] = F::ONE;
+                                let mut single = monomial.clone();
+                                domain.coset_fft(&mut single, shift).unwrap();
+                                let mut batch = vec![monomial.clone(), monomial.clone()];
+                                let mut columns: Vec<_> =
+                                    batch.iter_mut().map(Vec::as_mut_slice).collect();
+                                domain.coset_fft_many(&mut columns, shift).unwrap();
+                                // (shift * omega^i)^r = shift^r * (omega^r)^i.
+                                let step = domain.omega().pow_vartime([degree as u64]);
+                                let mut expected = shift.pow_vartime([degree as u64]);
+                                for (i, value) in single.iter().enumerate() {
+                                    assert_eq!(*value, expected, "k={k} degree={degree} i={i}");
+                                    expected *= step;
+                                }
+                                assert_eq!(batch[0], single);
+                                assert_eq!(batch[1], single);
+                                domain.coset_ifft(&mut single, shift).unwrap();
+                                assert_eq!(single, monomial);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        check::<Fp>();
+        check::<Fq>();
     }
 
     #[test]

@@ -191,6 +191,7 @@ impl Worker<'_> {
                     returned_refusal: None,
                     amx_legs: None,
                     uid_bindings: None,
+                    rollback_credits: None,
                     successor_context:
                         crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                     policy_decode_controls: None,
@@ -271,6 +272,7 @@ mod tests {
                 returned_refusal: None,
                 amx_legs: None,
                 uid_bindings: None,
+                rollback_credits: None,
                 successor_context:
                     crate::sumeragi::certified_chain::SuccessorContextPreparation::default(),
                 policy_decode_controls: None,

@@ -165,6 +165,10 @@ impl GamePartitionStateV1 {
     ///
     /// # Errors
     /// Rejects inconsistent local custody, watermarks, peer identities or retention bounds.
+    #[expect(
+        clippy::suspicious_operation_groupings,
+        reason = "an export's `source` is the instance it left, which must be this partition's `local_instance`"
+    )]
     pub fn validate(&self) -> Result<(), String> {
         use std::collections::BTreeSet;
         if self.peers.len() > GAME_PARTITION_MAX_PEERS

@@ -892,12 +892,13 @@ pub struct StartupArgs {
     /// Norito JSON object instead of the `Ready`/`Pending` line.
     #[arg(long, requires = "check_config")]
     pub json: bool,
-    /// Inspect the stopped node's Kura store and newest snapshot read-only with this build's
-    /// decoders, print the result as one Norito JSON object and exit nonzero on failure.
+    /// Inspect the stopped node's Kura store read-only with this build's decoders, print its
+    /// durable tip as one Norito JSON object and exit nonzero when a block cannot be read.
     ///
     /// Takes the Kura store-root lock, so it refuses a store a running node owns. It never
     /// mutates the store and never opens runtime-only secrets (the configuration is parsed as for
-    /// `--check-config`).
+    /// `--check-config`). Whether this build restores the node's snapshot and reproduces its
+    /// blocks is `--check-replay`'s check.
     #[arg(long, conflicts_with = "check_config")]
     pub check_storage: bool,
     /// Replay a copy of the stopped node's store with this build, print the result as one Norito
@@ -1034,7 +1035,7 @@ pub enum MainError {
     IrohaStart,
     /// A supervised node subsystem failed while the daemon was running.
     IrohaRun,
-    /// `--check-storage` could not read the store or its snapshot restore dry run failed.
+    /// `--check-storage` could not read the store.
     CheckStorage,
     /// `--check-replay` could not replay the store, or a replayed block diverged or lacked its body.
     CheckReplay,
@@ -1664,21 +1665,40 @@ mod snapshot_read_error_tests {
     }
     #[test]
     fn nonempty_kura_requires_its_original_signed_genesis_body() {
+        use iroha_data_model::block::SharedSignedBlock;
         let chain = native_snapshot_count_fixture(1);
         let count = iroha_core::kura::BlockCount(1);
-        let stored = read_stored_genesis_block(
-            chain.kura(),
-            count,
-            &chain.state().view().execution_budget(),
-        )
-        .expect("read native signed genesis")
-        .expect("nonempty chain has genesis");
+        let budget = chain.state().view().execution_budget();
+        let stored = read_stored_genesis_block(chain.kura(), count, &budget)
+            .expect("read native signed genesis")
+            .expect("nonempty chain has genesis");
         assert_eq!(stored.hash(), chain.genesis().hash());
+        // Genesis execution published its graph into Kura, which the State serves as the
+        // canonical body. The certified receipt instead authenticates a separate decode of
+        // the durable frame, so it is equal in value but is not the retained graph.
+        let genesis_height = std::num::NonZeroUsize::MIN;
+        let executed = chain
+            .state()
+            .block_by_height(genesis_height)
+            .expect("read the executed genesis body")
+            .expect("the executed genesis body is retained");
         assert!(
-            iroha_data_model::block::SharedSignedBlock::ptr_eq(&stored, chain.committed(1).block(),),
+            SharedSignedBlock::ptr_eq(&stored, &executed),
             "startup must retain the original executed genesis graph"
         );
+        assert_eq!(chain.committed(1).block().as_ref(), stored.as_ref());
         assert!(stored.belongs_to(&chain.state().ivm_execution_budget()));
+        // Without the retained graph, startup decodes the same durable genesis frame.
+        drop((stored, executed));
+        chain
+            .kura()
+            .forget_cached_block_for_testing(genesis_height)
+            .expect("forget the retained genesis graph");
+        let cold = read_stored_genesis_block(chain.kura(), count, &budget)
+            .expect("read the durable native signed genesis")
+            .expect("the durable genesis frame remains");
+        assert_eq!(cold.as_ref(), chain.committed(1).block().as_ref());
+        assert!(cold.belongs_to(&chain.state().ivm_execution_budget()));
         let missing = Kura::blank_kura_for_testing();
         assert!(
             read_stored_genesis_block(&missing, count, &chain.state().view().execution_budget())
@@ -8364,7 +8384,7 @@ fn run_main_with_config_guard(
     }
     // Concurrency configuration: set global Rayon pool and IVM scheduler limits.
     let min = if config.concurrency.scheduler_min_threads == 0 {
-        // auto (physical cores) — defer to IVM internals
+        // auto (available parallelism) — defer to IVM internals
         0
     } else {
         config.concurrency.scheduler_min_threads

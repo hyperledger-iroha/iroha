@@ -193,6 +193,10 @@ fn task_grains_keep_original_domain_canonicality_and_power_refusals() {
 
 type TransformV1<T> = fn(&mut [T], F) -> Result<(), TransparentStarkErrorV1>;
 
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn measure_v1<T>(
     log: u8,
     field: &str,

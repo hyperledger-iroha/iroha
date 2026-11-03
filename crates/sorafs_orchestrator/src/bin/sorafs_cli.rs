@@ -205,19 +205,6 @@ fn parse_i32_arg(flag: &str, raw: &str, context: &str) -> Result<i32, String> {
     raw.parse::<i32>()
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
-#[cfg(test)]
-fn parse_decimal_arg(flag: &str, raw: &str, ctx: &str) -> Result<rust_decimal::Decimal, String> {
-    require_canonical_decimal_token(flag, raw, ctx)?;
-    let value = raw
-        .parse::<rust_decimal::Decimal>()
-        .map_err(|err| format!("failed to parse `{flag}` for `{ctx}`: {err}"))?;
-    if value.to_string() != raw {
-        return Err(format!(
-            "failed to parse `{flag}` for `{ctx}`: value must be a canonical decimal"
-        ));
-    }
-    Ok(value)
-}
 fn require_canonical_unsigned_decimal(flag: &str, raw: &str, context: &str) -> Result<(), String> {
     let digits = raw.as_bytes();
     if digits.is_empty()
@@ -245,38 +232,6 @@ fn require_canonical_signed_decimal(flag: &str, raw: &str, context: &str) -> Res
     {
         return Err(format!(
             "failed to parse `{flag}` for `{context}`: value must be a canonical signed decimal integer"
-        ));
-    }
-    Ok(())
-}
-#[cfg(test)]
-fn require_canonical_decimal_token(flag: &str, raw: &str, context: &str) -> Result<(), String> {
-    if raw.is_empty() || raw.trim() != raw || raw.starts_with('+') {
-        return Err(format!(
-            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
-        ));
-    }
-    let body = raw.strip_prefix('-').unwrap_or(raw);
-    let (integer, fractional) = match body.split_once('.') {
-        Some((integer, fractional)) => {
-            if body.matches('.').count() != 1 || fractional.is_empty() || fractional.ends_with('0')
-            {
-                return Err(format!(
-                    "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
-                ));
-            }
-            (integer, Some(fractional))
-        }
-        None => (body, None),
-    };
-    if integer.is_empty()
-        || !integer.as_bytes().iter().all(u8::is_ascii_digit)
-        || (integer.len() > 1 && integer.as_bytes()[0] == b'0')
-        || fractional.is_some_and(|digits| !digits.as_bytes().iter().all(u8::is_ascii_digit))
-        || (raw.starts_with('-') && integer == "0" && fractional.is_none())
-    {
-        return Err(format!(
-            "failed to parse `{flag}` for `{context}`: value must be a canonical decimal"
         ));
     }
     Ok(())

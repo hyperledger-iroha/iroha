@@ -1763,6 +1763,12 @@ class HttpClientTransport private constructor(
             unsignedPayload["fee_payment"],
             "unsignedPayload.fee_payment",
         )
+        // Every signed fee quote carries credentials: refuse an insecure transport before any
+        // attempt is scheduled, like the argument checks above.
+        require(TransportSecurity.isHttpEndpointAllowed(config.baseUri(), config.allowLocalDevelopmentHttp())) {
+            "HttpClientTransport refuses insecure transport for signed fee quotes; use https " +
+                "or explicitly enable local development HTTP for the configured local origin."
+        }
         val body = encodeJsonBody(linkedMapOf("payload" to unsignedPayload))
         val operation = synchronized(lifecycleLock) {
             check(!closed) { "HTTP client is closed" }

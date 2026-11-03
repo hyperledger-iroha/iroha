@@ -560,7 +560,11 @@ fn independently_resign_cross_profile_proof(
         "cross-profile substitution requires different protocols"
     );
     let mut envelope = target_submission.envelope.clone();
-    envelope.proof.bytes_mut().bytes = donor_submission.envelope.proof.bytes().bytes.clone();
+    envelope
+        .proof
+        .bytes_mut()
+        .bytes
+        .clone_from(&donor_submission.envelope.proof.bytes().bytes);
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .wrap_err("cross-profile bytes must preserve the generic envelope contract")?;

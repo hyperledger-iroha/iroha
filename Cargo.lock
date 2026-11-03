@@ -5005,7 +5005,6 @@ dependencies = [
  "libc",
  "musubi",
  "norito",
- "owo-colors",
  "rand 0.10.3",
  "rustix 1.1.6",
  "tempfile",
@@ -6043,7 +6042,6 @@ dependencies = [
  "kotodama_lang",
  "kotodama_surface",
  "norito",
- "num_cpus",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
  "objc2-metal 0.3.2",
@@ -7109,7 +7107,6 @@ name = "norito"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "blake3",
- "byteorder",
  "chacha20poly1305",
  "criterion",
  "gpuzstd_metal",
@@ -9231,16 +9228,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_decimal"
-version = "1.43.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7653272e75dcac41dc199fbea6f5797633994fafd339943c06c9af16bf29cd3a"
-dependencies = [
- "arrayvec",
- "num-traits",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -10195,7 +10182,6 @@ dependencies = [
  "rand 0.10.3",
  "rcgen",
  "reqwest",
- "rust_decimal",
  "rustix 1.1.6",
  "sha2 0.11.1",
  "sha3 0.12.0",
@@ -10542,9 +10528,9 @@ name = "telemetry-schema-diff"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "anyhow",
- "chrono",
  "clap",
  "norito",
+ "time",
 ]
 
 [[package]]
@@ -12426,7 +12412,6 @@ dependencies = [
  "base64 0.23.1",
  "blake2",
  "blake3",
- "data-encoding",
  "ed25519-dalek",
  "eyre",
  "ff 0.14.0",

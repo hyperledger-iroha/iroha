@@ -121,15 +121,9 @@ async fn recovery_endpoint_serves_sidecar_and_404_on_missing() {
         ),
     )
     .expect("original signed recovery fixture genesis");
-    let block_hash = chain.genesis().hash();
-    kura.store_block(
-        iroha_data_model::block::SharedSignedBlock::try_new(
-            chain.genesis().clone(),
-            &chain.state().ivm_execution_budget(),
-        )
-        .expect("fund original fixture block"),
-    )
-    .expect("store canonical block");
+    let genesis = chain.committed(1).block().clone();
+    let block_hash = genesis.hash();
+    kura.store_block(genesis).expect("store canonical block");
     // Prepare a sidecar for height=1
     let mut fingerprint = [0u8; 32];
     fingerprint[..3].copy_from_slice(&[0xAB, 0xCD, 0xEF]);

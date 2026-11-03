@@ -128,7 +128,7 @@ impl RetainedStateParameters {
     ///
     /// # Errors
     /// Returns the exact original decoder, finite-pool or physical refusal.
-    #[cfg(any(test, feature = "iroha-core-tests"))]
+    #[cfg(test)]
     pub(crate) fn try_copy_for_testing(
         source: &StateParameters,
         budget: &AllocationBudget,

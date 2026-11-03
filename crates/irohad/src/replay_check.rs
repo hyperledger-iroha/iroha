@@ -36,6 +36,8 @@ pub const OUTCOME_MATCHED: &str = "matched";
 pub const OUTCOME_DIVERGED: &str = "diverged";
 /// `outcome` when the store no longer holds a block body the replay needs.
 pub const OUTCOME_MISSING_HISTORY: &str = "missing_history";
+/// `outcome` when the store holds no blocks: nothing was replayed, so nothing is qualified.
+pub const OUTCOME_EMPTY: &str = "empty";
 
 /// Blocks between progress lines on standard error.
 const PROGRESS_INTERVAL: u64 = 128;
@@ -79,7 +81,8 @@ pub struct ReplayCheckReportV1 {
     /// Height of the State after the last block this build reproduced; the start height when it
     /// reproduced none.
     pub replayed_to: u64,
-    /// [`OUTCOME_MATCHED`], [`OUTCOME_DIVERGED`] or [`OUTCOME_MISSING_HISTORY`].
+    /// [`OUTCOME_MATCHED`], [`OUTCOME_DIVERGED`], [`OUTCOME_MISSING_HISTORY`] or
+    /// [`OUTCOME_EMPTY`].
     pub outcome: String,
     /// The first divergence, when `outcome` is [`OUTCOME_DIVERGED`].
     pub divergence: Option<ReplayDivergenceV1>,
@@ -94,8 +97,8 @@ impl ReplayCheckReportV1 {
         self.outcome == OUTCOME_MATCHED
     }
 
-    /// The report of a check that replayed nothing, with `missing_height` when the store lacks
-    /// the history the replay needs to start.
+    /// The report of a check that replayed nothing: the store lacks the history the replay needs
+    /// to start (`missing_height`), or holds no blocks at all. Neither qualifies the build.
     fn unstarted(tip_height: u64, missing_height: Option<u64>) -> Self {
         Self {
             tip_height,
@@ -107,7 +110,7 @@ impl ReplayCheckReportV1 {
             outcome: if missing_height.is_some() {
                 OUTCOME_MISSING_HISTORY
             } else {
-                OUTCOME_MATCHED
+                OUTCOME_EMPTY
             }
             .to_owned(),
             divergence: None,
@@ -166,6 +169,9 @@ impl ReplayCheckReportV1 {
                 "the store holds no body at height {height}; blocks up to height {} reproduce their certified results",
                 self.replayed_to
             ),
+            (None, None) if self.outcome == OUTCOME_EMPTY => {
+                "the store holds no blocks, so nothing was replayed; check the configured Kura store directory".to_owned()
+            }
             (None, None) => format!("replay check outcome `{}`", self.outcome),
         }
     }

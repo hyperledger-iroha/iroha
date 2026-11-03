@@ -7,7 +7,7 @@ use crate::{
 };
 use iroha_sccp::ethereum_source::{rlp_encode_bytes, rlp_encode_u64};
 use norito::json::{Map, Value};
-use std::io::{BufReader, Read as _};
+use std::io::{BufRead as _, BufReader, Read as _};
 
 /// Consensus receipt bytes plus the original source locator used for RPC consistency checks.
 pub struct Receipt {
@@ -177,13 +177,53 @@ impl<'a> Json<'a> {
         }
         Ok(out)
     }
+    /// Decode the plain hexadecimal digit pairs at the front of the read buffer in bulk.
+    ///
+    /// Only pairs of ASCII hex digits are taken here. An escape, the closing quote, an odd
+    /// digit or any other byte stays for the per-character path of [`Self::hex`], so every
+    /// check runs in the same order with the same outcome. Without this, a multi-mebibyte
+    /// receipt costs one buffered read call per character.
+    fn hex_pairs(&mut self, out: &mut Vec<u8>, limit: usize) -> Result<(), RpcError> {
+        loop {
+            let buffer = self
+                .input
+                .fill_buf()
+                .map_err(|_| invalid_response("receipt stream read failed"))?;
+            let (pairs, _) = buffer.as_chunks::<2>();
+            let plain = pairs
+                .iter()
+                .take_while(|[high, low]| high.is_ascii_hexdigit() && low.is_ascii_hexdigit())
+                .count();
+            if plain == 0 {
+                return Ok(());
+            }
+            let taken = plain.min(limit.saturating_sub(out.len()));
+            if taken == 0 {
+                return Err(invalid_response(
+                    "canonical receipt exceeds its caller byte budget",
+                ));
+            }
+            out.try_reserve(taken)
+                .map_err(|_| invalid_response("receipt allocation unavailable"))?;
+            for &[high, low] in &pairs[..taken] {
+                out.push((Self::hex_digit(high)? << 4) | Self::hex_digit(low)?);
+            }
+            self.input.consume(2 * taken);
+        }
+    }
     fn hex(&mut self, limit: usize) -> Result<Vec<u8>, RpcError> {
         self.expect(b'"')?;
         if self.character()? != Some('0') || self.character()? != Some('x') {
             return Err(invalid_response("receipt hex lacks prefix"));
         }
         let mut out = Vec::new();
-        while let Some(first) = self.character()? {
+        loop {
+            if self.look.is_none() {
+                self.hex_pairs(&mut out, limit)?;
+            }
+            let Some(first) = self.character()? else {
+                break;
+            };
             let second = self
                 .character()?
                 .ok_or_else(|| invalid_response("odd receipt hex length"))?;
@@ -614,6 +654,60 @@ mod tests {
                 );
                 assert_eq!(actual.transaction_hash, expected.transaction_hash);
                 assert_eq!(actual.block_hash, expected.block_hash);
+            }
+        }
+    }
+    #[test]
+    fn bulk_hex_pairs_decode_exactly_like_single_characters() {
+        let long = format!("0x{}", "0aF9".repeat(5_000));
+        for data in [
+            long.as_str(),
+            r"0x\u0030\u0031aB",
+            r"0xab\u0063d",
+            "0xABcd12",
+        ] {
+            let value = receipt(data);
+            let expected = crate::builders::ethereum::receipt_rlp(
+                &crate::evm::parse_receipt(&norito::json::from_str::<Value>(&value).unwrap())
+                    .unwrap(),
+            );
+            let wire = format!(r#"{{"result":{value},"id":7,"jsonrpc":"2.0"}}"#);
+            // Single bytes take only the per-character path; larger reads cross the bulk path
+            // at odd and even buffer boundaries.
+            for maximum in [1, 3, 8192, 8193] {
+                let decode_with = |budget| {
+                    decode(
+                        &mut Chunk {
+                            bytes: wire.as_bytes(),
+                            maximum,
+                        },
+                        7,
+                        "test",
+                        budget,
+                    )
+                };
+                assert_eq!(decode_with(1 << 20).unwrap().bytes, expected, "{maximum}");
+                assert!(decode_with(expected.len() - 1).is_err(), "{maximum}");
+            }
+        }
+        for data in [
+            format!("0x{}0", "ab".repeat(5_000)),
+            format!("0x{}g0", "ab".repeat(5_000)),
+        ] {
+            let wire = format!(r#"{{"result":{},"id":7,"jsonrpc":"2.0"}}"#, receipt(&data));
+            for maximum in [1, 8192] {
+                assert!(
+                    decode(
+                        &mut Chunk {
+                            bytes: wire.as_bytes(),
+                            maximum,
+                        },
+                        7,
+                        "test",
+                        1 << 20,
+                    )
+                    .is_err()
+                );
             }
         }
     }

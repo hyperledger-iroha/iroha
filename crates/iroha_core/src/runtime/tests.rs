@@ -21,16 +21,25 @@ fn wire_id() -> &'static str {
 }
 
 #[test]
-fn the_baseline_resolves_every_built_in_instruction() {
+fn the_baseline_resolves_every_baseline_instruction() {
     let selection = baseline();
     assert_eq!(
         resolve(&log(), &selection, 1, || None),
         Ok(Some(selection.bindings[0].implementation)),
         "the bound implementation executes it"
     );
-    assert_eq!(selection.bindings.len(), {
-        iroha_data_model::isi::registry::built_in_instruction_schemas().count()
-    });
+    // A release addition's instruction stays unbound until a change set activates it.
+    let bound: std::collections::BTreeSet<&str> = selection
+        .bindings
+        .iter()
+        .map(|binding| binding.wire_id.as_str())
+        .collect();
+    let baseline_instructions: std::collections::BTreeSet<&str> =
+        iroha_data_model::isi::registry::built_in_instruction_schemas()
+            .filter(|schema| !schema.tolerant)
+            .map(|schema| schema.wire_id)
+            .collect();
+    assert_eq!(bound, baseline_instructions);
 }
 
 #[test]

@@ -69,8 +69,8 @@ class SubmitPrivacyZkX509CertificateV1Test {
             SubmitPrivacyZkX509CertificateV1.fromStatementV1(row.statementNorito, request.proofActionIndex)
         } // Supplied materialized intent is forbidden.
         assertFailsWith<IllegalArgumentException> { request.materializeStatementV1(original.copy(nonce = 99L), codec.chainDiscriminant) }
-        val action = original.attachments!!.actions.single()
-        fun changed(action: ActionIntentV1) = original.copy(attachments = SignedAttachmentsV1(listOf(action), original.attachments!!.occurrences))
+        val action = original.attachments.actions.single()
+        fun changed(action: ActionIntentV1) = original.copy(attachments = SignedAttachmentsV1(listOf(action), original.attachments.occurrences))
         fun replace(role: ActionRoleV1 = action.role, operation: ActionOperationV1 = action.operation,
             publicInputs: ActionPublicInputsDigestV1 = action.publicInputsDigest,
             invocation: ActionInvocationBindingV1 = action.invocation,
@@ -92,7 +92,7 @@ class SubmitPrivacyZkX509CertificateV1Test {
             refuses(candidate.copy(attachments = null), "X509 request requires signed attachments")
             refuses(candidate.copy(networkId = NetworkId.fromBytes(ByteArray(32) { 3 })), "X509 request network mismatch")
             val wrong = replace(invocation = ActionInvocationBindingV1.Direct(1))
-            refuses(candidate.copy(attachments = SignedAttachmentsV1(listOf(wrong), original.attachments!!.occurrences)), "direct invocation mismatch")
+            refuses(candidate.copy(attachments = SignedAttachmentsV1(listOf(wrong), original.attachments.occurrences)), "direct invocation mismatch")
         }
     }
 
@@ -142,12 +142,30 @@ class SubmitPrivacyZkX509CertificateV1Test {
             assertFailsWith<NoritoException> { SignedTransactionEncoder.decode(writeRawFields(signedFields)) }
         }
         refuses(writeRawFields(fields.toMutableList().also { it[8] = byteArrayOf(0) }), "X509 request requires signed attachments")
+        // A descriptor without actions is structurally invalid before any request binding applies.
         val emptySequence = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS).also { it.writeLength(0, false) }.toByteArray()
         val emptyAttachments = byteArrayOf(1) + rawField(writeRawFields(listOf(emptySequence, emptySequence)))
-        refuses(writeRawFields(fields.toMutableList().also { it[8] = emptyAttachments }), "X509 request action is absent")
+        refuses(writeRawFields(fields.toMutableList().also { it[8] = emptyAttachments }), "signed attachment action count is out of range")
+        val executable = fields[3]
+        fun withSoleInstruction(wireName: String, frame: ByteArray, attachments: ByteArray): ByteArray {
+            val list = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS).also {
+                it.writeLength(1, false); it.writeBytes(rawField(encodeRawInstruction(wireName, frame)))
+            }.toByteArray()
+            return writeRawFields(fields.toMutableList().also {
+                it[3] = executable.copyOfRange(0, 4) + rawField(list); it[8] = attachments
+            })
+        }
+        // The builder reproduces the exact fixture, so each mutation changes only its instruction.
+        assertContentEquals(exact, withSoleInstruction(SubmitPrivacyZkX509CertificateV1.WIRE_ID, row.submitProofInstructionNorito, fields[8]))
+        // A valid native request whose attachment action ordinal the signed descriptor does not declare.
+        val actions = decoded.attachments!!.actions
+        val undeclared = SubmitPrivacyZkX509CertificateV1.fromStatementV1(
+            X509AttachedRequestTestInputs.independentStatement(row.statementNorito), actions.size.toLong())
+        refuses(withSoleInstruction(SubmitPrivacyZkX509CertificateV1.WIRE_ID, undeclared.canonicalRequestBytes(), fields[8]),
+            "X509 request action is absent")
         val changedNetwork = fields[0].copyOf().also { it[it.lastIndex] = (it.last().toInt() xor 0x40).toByte() }
         refuses(writeRawFields(fields.toMutableList().also { it[0] = changedNetwork }), "X509 request network mismatch")
-        val digest = decoded.attachments!!.actions.single().statementDigest.bytes
+        val digest = actions.single().statementDigest.bytes
         val stale = fields[8].copyOf()
         val matches = (0..stale.size - digest.size).filter { at -> digest.indices.all { stale[at + it] == digest[it] } }
         assertEquals(1, matches.size)
@@ -155,21 +173,8 @@ class SubmitPrivacyZkX509CertificateV1Test {
         refuses(writeRawFields(fields.toMutableList().also { it[8] = stale }), "action statement binding mismatch")
         assertFailsWith<IllegalArgumentException> { TransactionPayloadAdapter.validateCanonicalPayloadBytes(exact + byteArrayOf(0)) }
         // Generic privacy bytes cannot skip native canonical inspection when attachments are absent.
-        val executable = fields[3]
-        val genericName = "iroha.privacy.submit_proof.v1"
-        val originalName = SubmitPrivacyZkX509CertificateV1.WIRE_ID.toByteArray(Charsets.UTF_8)
-        val at = (0..executable.size - originalName.size).single { start ->
-            originalName.indices.all { executable[start + it] == originalName[it] }
-        }
-        assertTrue(at > 0)
-        fun withoutAttachmentsAsGeneric(frame: ByteArray): ByteArray {
-            val instruction = encodeRawInstruction(genericName, frame)
-            val list = NoritoEncoder(NoritoCodec.DEFAULT_FLAGS).also {
-                it.writeLength(1, false); it.writeBytes(rawField(instruction))
-            }.toByteArray()
-            val genericExecutable = executable.copyOfRange(0, 4) + rawField(list)
-            return writeRawFields(fields.toMutableList().also { it[3] = genericExecutable; it[8] = byteArrayOf(0) })
-        }
+        fun withoutAttachmentsAsGeneric(frame: ByteArray): ByteArray =
+            withSoleInstruction("iroha.privacy.submit_proof.v1", frame, byteArrayOf(0))
         refuses(withoutAttachmentsAsGeneric(row.submitProofInstructionNorito), "submit-proof instruction is not canonical typed Norito")
         // Reconstruct the retired single-envelope request only as a negative mutation. The
         // schema and padding come from an authentic generic fixture; no golden is invented.

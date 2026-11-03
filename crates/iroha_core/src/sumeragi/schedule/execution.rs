@@ -473,6 +473,9 @@ impl StateBlock<'_> {
                 })?;
                 CapturedExecution::Boundary(frozen)
             } else if let Some(original) = successor {
+                // The bank was prepared after certified lane expansion against this exact
+                // expanded execution header (`specs/sumeragi_lanes.md` §4.3); parent-service
+                // custody, not this continuation, keeps the original proposal-header identity.
                 CapturedExecution::Retained(original.lend_continuation(
                     self,
                     &self._curr_block,

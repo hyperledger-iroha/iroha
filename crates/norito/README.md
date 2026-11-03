@@ -4,6 +4,12 @@ This crate bundles the Norito serialization core along with optional
 procedural macros. Norito includes a CRC64-XZ integrity checksum with
 portable and hardware-accelerated implementations (x86_64 CLMUL, aarch64 PMULL).
 
+Fixed-width numeric I/O uses stack buffers, `read_exact`, and the standard
+library's `from_le_bytes`/`to_le_bytes`. Payload implementations write numeric
+bytes through `Encoder::write_all`; Norito exposes no general byte-order traits.
+Header validation remains field ordered, and incomplete fields fail with an I/O
+error without allocating from an untrusted declared length.
+
 ## Derive macros
 
 The companion crate `norito_derive` houses Norito's procedural macros and is

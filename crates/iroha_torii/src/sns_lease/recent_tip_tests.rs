@@ -236,3 +236,73 @@ fn lease_default_finality_allowance_handles_consecutive_maximum_payments_and_rel
     assert_eq!(budget.reserved_bytes(), 0);
     assert_eq!(pool.available_bytes(), working as u64);
 }
+
+#[test]
+fn zz_tmp_debug_sns_decode_demand() {
+    use iroha_data_model::{
+        isi::{InstructionBox, SettleAtomic, settlement::SettlementInstructionBox},
+        transaction::{Executable, SignedTransaction},
+    };
+    use iroha_model_base::metadata::Metadata;
+    use iroha_primitives::json::Json;
+    let chain = crate::finality_interval::maximum_paid_chain_for_testing();
+    let unlimited =
+        norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
+    let measure = |label: &str, bytes: usize, decode: &dyn Fn()| {
+        let context = norito::core::DecodeBudgetContext::new(unlimited);
+        context.with(decode);
+        eprintln!(
+            "DBG {label}: wire={bytes} decode={}",
+            context.consumed_allocated_bytes()
+        );
+    };
+    let committed = chain.committed(2);
+    let block = committed.block();
+    let wire = block.encode_wire().unwrap();
+    measure("block", wire.len(), &|| {
+        drop(iroha_data_model::block::decode_framed_signed_block(&wire).unwrap());
+    });
+    let tx = block.external_transactions().next().unwrap().clone();
+    let tx_bytes = norito::encode_canonical(&tx).unwrap();
+    measure("tx", tx_bytes.len(), &|| {
+        drop(norito::decode_canonical::<SignedTransaction>(&tx_bytes).unwrap());
+    });
+    let Executable::Instructions(instructions) = tx.instructions() else {
+        panic!("native instructions");
+    };
+    let instruction: InstructionBox = instructions[0].clone();
+    let isi_bytes = norito::encode_canonical(&instruction).unwrap();
+    measure("instruction", isi_bytes.len(), &|| {
+        drop(norito::decode_canonical::<InstructionBox>(&isi_bytes).unwrap());
+    });
+    let any = instruction.as_any();
+    let settle = any
+        .downcast_ref::<SettleAtomic>()
+        .or_else(|| match any.downcast_ref::<SettlementInstructionBox>() {
+            Some(SettlementInstructionBox::Atomic(payment)) => Some(payment),
+            _ => None,
+        })
+        .unwrap()
+        .clone();
+    let settle_bytes = norito::encode_canonical(&settle).unwrap();
+    measure("settle", settle_bytes.len(), &|| {
+        drop(norito::decode_canonical::<SettleAtomic>(&settle_bytes).unwrap());
+    });
+    let metadata: Metadata = settle.metadata.clone();
+    let metadata_bytes = norito::encode_canonical(&metadata).unwrap();
+    measure("metadata", metadata_bytes.len(), &|| {
+        drop(norito::decode_canonical::<Metadata>(&metadata_bytes).unwrap());
+    });
+    let json: Json = metadata.iter().next().unwrap().1.clone();
+    let json_bytes = norito::encode_canonical(&json).unwrap();
+    measure("json", json_bytes.len(), &|| {
+        drop(norito::decode_canonical::<Json>(&json_bytes).unwrap());
+    });
+    eprintln!(
+        "DBG entries={} first_json_len={} outputs={} entrypoints={}",
+        metadata.iter().count(),
+        json.get().len(),
+        block.execution_outputs().len(),
+        block.network_entrypoint_count()
+    );
+}

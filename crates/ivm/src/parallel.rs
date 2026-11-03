@@ -6,6 +6,8 @@
 //! size applied to host thread pools.
 use std::{
     collections::HashSet,
+    io,
+    num::NonZeroUsize,
     sync::atomic::{AtomicUsize, Ordering},
 };
 /// Number of general purpose registers in the VM register file.
@@ -35,12 +37,12 @@ pub fn set_thread_stack_size(bytes: usize) {
     THREAD_STACK_SIZE.store(bytes.max(1), Ordering::Relaxed);
 }
 // Global defaults for scheduler thread limits (set by the host/node).
-// 0 means "auto" (use physical cores).
+// 0 means "auto" (use the process's available parallelism).
 static DEFAULT_SCHED_MIN: AtomicUsize = AtomicUsize::new(0);
 static DEFAULT_SCHED_MAX: AtomicUsize = AtomicUsize::new(0);
 /// Set global default scheduler thread limits reported by [`crate::IVM`] construction.
 ///
-/// - Pass `None` to keep "auto" for that bound (uses physical cores).
+/// - Pass `None` to keep "auto" for that bound (uses available parallelism).
 /// - Bounds are clamped to at least 1 and `min <= max` is enforced by clamping `min` down.
 pub fn set_default_scheduler_limits(min_threads: Option<usize>, max_threads: Option<usize>) {
     let min = min_threads.unwrap_or(0);
@@ -51,25 +53,57 @@ pub fn set_default_scheduler_limits(min_threads: Option<usize>, max_threads: Opt
 }
 /// Read global default scheduler limits as concrete `(min, max)` counts.
 ///
-/// 0 values are resolved to the current number of physical cores.
+/// Zero bounds use the standard library's estimate of available parallelism,
+/// falling back to one worker if the operating system cannot provide it.
+/// Explicit bounds avoid querying the operating system.
 pub fn default_scheduler_limits() -> (usize, usize) {
-    let phys = num_cpus::get_physical().max(1);
-    let mut min = DEFAULT_SCHED_MIN.load(Ordering::SeqCst);
-    let mut max = DEFAULT_SCHED_MAX.load(Ordering::SeqCst);
+    resolve_scheduler_limits(
+        DEFAULT_SCHED_MIN.load(Ordering::SeqCst),
+        DEFAULT_SCHED_MAX.load(Ordering::SeqCst),
+        std::thread::available_parallelism,
+    )
+}
+
+/// Resolve zero to the process's available parallelism, or one on query failure.
+pub(crate) fn configured_thread_count(configured: usize) -> usize {
+    resolve_thread_count(configured, std::thread::available_parallelism)
+}
+
+fn resolve_thread_count(
+    configured: usize,
+    query: impl FnOnce() -> io::Result<NonZeroUsize>,
+) -> usize {
+    if configured == 0 {
+        query().map_or(1, NonZeroUsize::get)
+    } else {
+        configured
+    }
+}
+
+fn resolve_scheduler_limits(
+    mut min: usize,
+    mut max: usize,
+    query: impl FnOnce() -> io::Result<NonZeroUsize>,
+) -> (usize, usize) {
+    // Query at most once and only when a bound actually needs an automatic value.
+    let available = if min == 0 || max == 0 {
+        resolve_thread_count(0, query)
+    } else {
+        1
+    };
     if min == 0 {
-        min = phys;
+        min = available;
     }
     if max == 0 {
-        max = phys;
+        max = available;
     }
-    min = min.max(1);
-    max = max.max(1);
     if max < min {
         // Respect the configured max bound; clamp the minimum down.
         min = max;
     }
     (min, max)
 }
+
 /// Read and write sets associated with a transaction for conflict detection.
 #[derive(Clone, Debug)]
 pub struct StateAccessSet {
@@ -90,5 +124,75 @@ impl StateAccessSet {
 impl Default for StateAccessSet {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod thread_count_tests {
+    use super::*;
+
+    #[test]
+    fn explicit_thread_count_does_not_query_the_operating_system() {
+        for count in [1, 4, usize::MAX] {
+            assert_eq!(
+                resolve_thread_count(count, || panic!("explicit count must not query")),
+                count,
+            );
+            assert_eq!(configured_thread_count(count), count);
+        }
+    }
+
+    #[test]
+    fn automatic_thread_count_uses_available_parallelism_or_one() {
+        assert_eq!(
+            resolve_thread_count(0, || Ok(NonZeroUsize::new(7).unwrap())),
+            7
+        );
+        assert_eq!(
+            resolve_thread_count(0, || Err(io::Error::other("unavailable"))),
+            1
+        );
+        assert!(configured_thread_count(0) >= 1);
+    }
+
+    #[test]
+    fn explicit_scheduler_limits_skip_query_and_preserve_the_maximum() {
+        for (min, max, expected) in [(2, 8, (2, 8)), (8, 2, (2, 2)), (1, 1, (1, 1))] {
+            assert_eq!(
+                resolve_scheduler_limits(min, max, || panic!("explicit bounds must not query")),
+                expected,
+            );
+        }
+    }
+
+    #[test]
+    fn automatic_scheduler_limits_query_once_and_clamp_the_minimum() {
+        for (min, max, expected) in [
+            (0, 0, (6, 6)),
+            (0, 4, (4, 4)),
+            (0, 8, (6, 8)),
+            (3, 0, (3, 6)),
+            (8, 0, (6, 6)),
+        ] {
+            let mut calls = 0;
+            assert_eq!(
+                resolve_scheduler_limits(min, max, || {
+                    calls += 1;
+                    Ok(NonZeroUsize::new(6).unwrap())
+                }),
+                expected,
+            );
+            assert_eq!(calls, 1);
+        }
+    }
+
+    #[test]
+    fn unavailable_parallelism_keeps_scheduler_limits_positive_and_ordered() {
+        for (min, max, expected) in [(0, 0, (1, 1)), (0, 4, (1, 4)), (4, 0, (1, 1))] {
+            assert_eq!(
+                resolve_scheduler_limits(min, max, || Err(io::Error::other("unavailable"))),
+                expected,
+            );
+        }
     }
 }

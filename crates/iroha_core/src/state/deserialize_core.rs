@@ -460,6 +460,9 @@ struct SnapshotJsonMap<'a> {
     // Keys and values borrow authenticated input; retained keys also record source
     // order after values are removed, so no key copies or ordering Vec are needed.
     admitted: Option<iroha_allocation::ChargedBuffer<SnapshotJsonEntry<'a>>>,
+    // Members the snapshot's runtime selection does not install, with the empty default each
+    // reads as: the writer leaves them out (`specs/live_runtime_upgrades.md` §5.5).
+    omitted: Vec<(&'static str, &'static str)>,
     #[cfg(test)]
     fields: BTreeMap<String, SnapshotJsonField<'a>>,
     // Only the DOM-order test fixture records this; admitted maps validate their
@@ -565,6 +568,7 @@ impl<'a> SnapshotJsonMap<'a> {
         }
         Ok(Self {
             admitted: Some(entries),
+            omitted: Vec::new(),
             #[cfg(test)]
             fields: BTreeMap::new(),
             #[cfg(test)]
@@ -595,6 +599,7 @@ impl<'a> SnapshotJsonMap<'a> {
     fn from_owned(map: json::native::Map) -> Self {
         Self {
             admitted: None,
+            omitted: Vec::new(),
             fields: map
                 .into_iter()
                 .map(|(key, value)| (key, SnapshotJsonField::Owned(value)))
@@ -678,9 +683,41 @@ impl<'a> SnapshotJsonMap<'a> {
         }
         Ok(Self {
             admitted: None,
+            omitted: Vec::new(),
             fields,
             source_order: Some(source_order),
         })
+    }
+    /// Read the World members the snapshot's runtime selection does not install as their empty
+    /// defaults (`specs/live_runtime_upgrades.md` §5.5). The writer leaves them out, so they are
+    /// absent from the source order too; a present one is refused as an unknown field.
+    fn omit_uninstalled_world_members(&mut self) -> Result<(), StateRestoreError> {
+        let selection: Cell<iroha_data_model::runtime::definition::RootSelectionV1> = self
+            .get("runtime_selection")
+            .ok_or_else(|| json::Error::missing_field("world.runtime_selection"))?
+            .decode_canonical("runtime_selection")?;
+        let members = crate::runtime::uninstalled_world_members(selection.view().get()).map_err(
+            |message| json::Error::InvalidField {
+                field: "world.runtime_selection".to_owned(),
+                message,
+            },
+        )?;
+        for member in members {
+            let default =
+                world_member_default(member).map_err(|message| json::Error::InvalidField {
+                    field: format!("world.{member}"),
+                    message,
+                })?;
+            self.omitted.push((member, default));
+        }
+        Ok(())
+    }
+    /// The empty default of an omitted World member, if `key` names one.
+    fn omitted_default(&self, key: &str) -> Option<SnapshotJsonField<'a>> {
+        self.omitted
+            .iter()
+            .find(|(member, _)| *member == key)
+            .map(|(_, raw)| SnapshotJsonField::Borrowed { raw: *raw })
     }
     fn remove(&mut self, key: &str) -> Option<SnapshotJsonField<'a>> {
         if let Some(entries) = self.admitted.as_mut() {
@@ -689,10 +726,14 @@ impl<'a> SnapshotJsonMap<'a> {
                 .iter_mut()
                 .find(|entry| entry.key == key)
                 .and_then(|entry| entry.raw.take())
-                .map(|raw| SnapshotJsonField::Borrowed { raw });
+                .map(|raw| SnapshotJsonField::Borrowed { raw })
+                .or_else(|| self.omitted_default(key));
         }
         #[cfg(test)]
-        return self.fields.remove(key);
+        return self
+            .fields
+            .remove(key)
+            .or_else(|| self.omitted_default(key));
         #[cfg(not(test))]
         unreachable!("production snapshot maps always retain their admitted index")
     }
@@ -705,17 +746,25 @@ impl<'a> SnapshotJsonMap<'a> {
                 .iter()
                 .find(|entry| entry.key == key)
                 .and_then(|entry| entry.raw)
-                .map(|raw| SnapshotJsonField::Borrowed { raw });
+                .map(|raw| SnapshotJsonField::Borrowed { raw })
+                .or_else(|| self.omitted_default(key));
         }
         #[cfg(test)]
-        return self.fields.get(key).map(|field| match field {
-            SnapshotJsonField::Borrowed { raw } => SnapshotJsonField::Borrowed { raw },
-            SnapshotJsonField::Owned(value) => SnapshotJsonField::Owned(value.clone()),
-        });
+        return self
+            .fields
+            .get(key)
+            .map(|field| match field {
+                SnapshotJsonField::Borrowed { raw } => SnapshotJsonField::Borrowed { raw },
+                SnapshotJsonField::Owned(value) => SnapshotJsonField::Owned(value.clone()),
+            })
+            .or_else(|| self.omitted_default(key));
         #[cfg(not(test))]
         unreachable!("production snapshot maps always retain their admitted index")
     }
     fn contains_key(&self, key: &str) -> bool {
+        if self.omitted.iter().any(|(member, _)| *member == key) {
+            return true;
+        }
         if let Some(entries) = &self.admitted {
             return entries
                 .as_slice()
@@ -745,19 +794,25 @@ impl<'a> SnapshotJsonMap<'a> {
         #[cfg(not(test))]
         unreachable!("production snapshot maps always retain their admitted index")
     }
-    /// Require exactly `expected`, in order. Admitted and fixture maps report the same
-    /// diagnostics; either refusal is terminal, so it may own its field name.
+    /// Require exactly `expected`, in order, less the members the map reads as omitted. Admitted
+    /// and fixture maps report the same diagnostics; either refusal is terminal, so it may own its
+    /// field name.
     fn require_source_order(&self, expected: &[&str], field: &str) -> Result<(), json::Error> {
+        let present = || {
+            expected
+                .iter()
+                .copied()
+                .filter(|key| !self.omitted.iter().any(|(member, _)| member == key))
+        };
         if let Some(entries) = &self.admitted {
             let actual = entries.as_slice();
-            if let Some(entry) = actual.iter().find(|entry| !expected.contains(&entry.key)) {
+            if let Some(entry) = actual
+                .iter()
+                .find(|entry| !present().any(|key| key == entry.key))
+            {
                 return Err(unknown_snapshot_field(field, entry.key));
             }
-            return if actual
-                .iter()
-                .map(|entry| entry.key)
-                .eq(expected.iter().copied())
-            {
+            return if actual.iter().map(|entry| entry.key).eq(present()) {
                 Ok(())
             } else {
                 Err(unordered_snapshot_fields(field))
@@ -772,14 +827,13 @@ impl<'a> SnapshotJsonMap<'a> {
             let Some(actual) = self.source_order.as_ref() else {
                 return Ok(());
             };
-            if let Some(unknown) = actual.iter().find(|key| !expected.contains(&key.as_str())) {
+            if let Some(unknown) = actual
+                .iter()
+                .find(|key| !present().any(|present| present == key.as_str()))
+            {
                 return Err(unknown_snapshot_field(field, unknown));
             }
-            if actual
-                .iter()
-                .map(String::as_str)
-                .eq(expected.iter().copied())
-            {
+            if actual.iter().map(String::as_str).eq(present()) {
                 Ok(())
             } else {
                 Err(unordered_snapshot_fields(field))
@@ -802,6 +856,75 @@ fn unordered_snapshot_fields(field: &str) -> json::Error {
 fn canonical_world_field_order() -> &'static [&'static str] {
     <World as norito::json::FastJsonWrite>::json_object_field_order()
         .expect("World snapshot has a fixed derived object schema")
+}
+/// The members of the JSON object `input`, each name with its raw value, in source order.
+///
+/// # Errors
+/// `input` is not exactly one JSON object whose member names are unescaped.
+pub(crate) fn json_object_members(input: &str) -> Result<Vec<(&str, &str)>, json::Error> {
+    let mut parser = json::Parser::new(input);
+    let mut visitor = json::MapVisitor::new(&mut parser)?;
+    let mut members = Vec::new();
+    loop {
+        let position = visitor.parser().position();
+        let key = visitor.next_key_with_buffer(|_| -> Result<[u8; 0], json::Error> {
+            Err(json::Error::WithPos {
+                msg: "member names must be unescaped",
+                byte: position,
+                line: 1,
+                col: position + 1,
+            })
+        })?;
+        let Some(json::KeyRef::Borrowed(key)) = key else {
+            break;
+        };
+        let raw = visitor.parse_value_with_parser(|parser| {
+            parser.skip_ws();
+            let start = parser.position();
+            parser.skip_value_lexical()?;
+            Ok(&input[start..parser.position()])
+        })?;
+        members.push((key, raw));
+    }
+    visitor.finish()?;
+    parser.skip_ws();
+    if !parser.eof() {
+        return Err(json::Error::WithPos {
+            msg: "trailing bytes after the object",
+            byte: parser.position(),
+            line: 1,
+            col: parser.position() + 1,
+        });
+    }
+    Ok(members)
+}
+/// The canonical JSON of the World member `member` when it is empty: what a field holds while
+/// the runtime selection does not install its storage (`specs/live_runtime_upgrades.md` §5.5).
+fn world_member_default(member: &str) -> Result<&'static str, String> {
+    static DEFAULTS: std::sync::OnceLock<Result<Vec<(&'static str, String)>, String>> =
+        std::sync::OnceLock::new();
+    let defaults = DEFAULTS
+        .get_or_init(|| {
+            let empty = json::to_json(&World::default()).map_err(|error| error.to_string())?;
+            json_object_members(&empty)
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .map(|(key, raw)| {
+                    canonical_world_field_order()
+                        .iter()
+                        .find(|member| **member == key)
+                        .map(|member| (*member, raw.to_owned()))
+                        .ok_or_else(|| format!("the empty World writes unknown member {key}"))
+                })
+                .collect()
+        })
+        .as_ref()
+        .map_err(Clone::clone)?;
+    defaults
+        .iter()
+        .find(|(name, _)| *name == member)
+        .map(|(_, raw)| raw.as_str())
+        .ok_or_else(|| format!("the empty World writes no member {member}"))
 }
 /// Canonical first-release State envelope fields, in signed source order.
 const STATE_SNAPSHOT_FIELDS: &[&str] = &[
@@ -1099,6 +1222,7 @@ mod state_snapshot_decode_error_tests {
     fn parameters_map(raw: &str) -> SnapshotJsonMap<'_> {
         SnapshotJsonMap {
             admitted: None,
+            omitted: Vec::new(),
             fields: BTreeMap::from([(
                 "parameters".to_owned(),
                 SnapshotJsonField::Borrowed { raw },
@@ -1411,11 +1535,12 @@ impl KuraSeed {
         let world_value = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?;
-        let world_map = world_value.into_object(
+        let mut world_map = world_value.into_object(
             "world",
             canonical_world_field_order(),
             &self.execution_budget,
         )?;
+        world_map.omit_uninstalled_world_members()?;
         world_map.require_source_order(canonical_world_field_order(), "world")?;
         if !world_map.contains_key("contract_subject_bindings") {
             return Err((json::Error::missing_field("world.contract_subject_bindings")).into());
@@ -2173,10 +2298,11 @@ pub(in crate::state) fn decode_world_snapshot_projection_for_testing(
             .into());
         };
         let mut map = SnapshotJsonMap::from_owned(fields);
-        let world_map = map
+        let mut world_map = map
             .remove("world")
             .ok_or_else(|| json::Error::missing_field("world"))?
             .into_object("world", canonical_world_field_order(), execution_budget)?;
+        world_map.omit_uninstalled_world_members()?;
         world_map.require_source_order(canonical_world_field_order(), "world")?;
         let ivm = IVM::try_new(0).map_err(StateRestoreError::VmInitialization)?;
         let seed = IvmSeed {

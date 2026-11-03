@@ -21584,6 +21584,33 @@ impl Client {
             .send_blocking()?;
         Self::decode_json_ok(resp, "Failed to propose runtime upgrade")
     }
+    /// POST `/v1/runtime/upgrades/draft`: the node drafts, from its release catalog and the
+    /// committed selection, the change set that activates its release addition `addition` from
+    /// `effective_height`, with `qualification_hex` the 32-byte hex digest of the qualification
+    /// evidence. The response is `{"id_hex": …, "change_set": …}`.
+    ///
+    /// # Errors
+    /// Returns an error if operator signing or the HTTP request fails, the node refuses the draft
+    /// (the addition is not one of its release, or its activation does not apply to the committed
+    /// selection), or JSON deserialization fails.
+    pub fn post_runtime_draft_upgrade_json(
+        &self,
+        addition: &str,
+        effective_height: u64,
+        qualification_hex: &str,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/runtime/upgrades/draft");
+        let body = norito::json::to_vec(&norito::json!({
+            "addition": addition,
+            "effective_height": effective_height,
+            "qualification_hex": qualification_hex,
+        }))?;
+        let resp = self.send_builder(
+            self.operator_signed_request(HttpMethod::POST, url, body)?
+                .header("Content-Type", APPLICATION_JSON),
+        )?;
+        Self::decode_json_ok(resp, "Failed to draft runtime upgrade")
+    }
     /// POST `/v1/runtime/upgrades/cancel/:id` (change-set id hex in path); the response drafts the
     /// SORA Parliament proposal that withdraws the scheduled change set.
     ///

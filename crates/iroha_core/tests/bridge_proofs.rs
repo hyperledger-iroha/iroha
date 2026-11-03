@@ -77,7 +77,7 @@ fn execute_bridge_proof(proof: BridgeProof) -> Result<(), String> {
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     Executor::default()
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), &submit)
         .map_err(|error| format!("{error:?}"))
 }
 #[test]
@@ -105,7 +105,7 @@ fn rejected_generic_proof_does_not_mutate_proof_registry() {
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(proof).into();
     let error = Executor::default()
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), &submit)
         .expect_err("generic proof admission must reject");
     assert!(format!("{error:?}").contains("authoritative on-chain verifier"));
     assert!(stx.world.proofs().get(&expected_id).is_none());
@@ -139,7 +139,7 @@ fn bridge_range_length_cap_enforced() {
     let submit: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(make_ics_proof(0x44, (5, 10))).into();
     let error = Executor::default()
-        .execute_instruction(&mut stx, &ALICE_ID.clone(), submit)
+        .execute_instruction(&mut stx, &ALICE_ID.clone(), &submit)
         .expect_err("range cap should reject long bridge proofs");
     assert!(
         format!("{error:?}").contains("range too large"),
@@ -160,7 +160,7 @@ fn bridge_height_window_respected_before_generic_backend_rejection() {
     let submit_future: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(make_ics_proof(0x55, (7, 7))).into();
     let error = executor
-        .execute_instruction(&mut stx_future, &ALICE_ID.clone(), submit_future)
+        .execute_instruction(&mut stx_future, &ALICE_ID.clone(), &submit_future)
         .expect_err("future drift guard should reject proof ahead of window");
     assert!(format!("{error:?}").contains("future window"));
     drop(stx_future);
@@ -177,7 +177,7 @@ fn bridge_height_window_respected_before_generic_backend_rejection() {
     let submit_past: InstructionBox =
         iroha_data_model::isi::bridge::SubmitBridgeProof::new(make_ics_proof(0x66, (1, 7))).into();
     let error = executor
-        .execute_instruction(&mut stx_past, &ALICE_ID.clone(), submit_past)
+        .execute_instruction(&mut stx_past, &ALICE_ID.clone(), &submit_past)
         .expect_err("past window should reject stale proof");
     assert!(format!("{error:?}").contains("past window"));
 }
@@ -219,7 +219,7 @@ fn manual_prune_has_no_caller_controlled_retention_bypass() {
     let mut stx = block.transaction();
     let prune = iroha_data_model::isi::zk::PruneProofs::new(Some("bridge/ics23".to_owned()));
     Executor::default()
-        .execute_instruction(&mut stx, &ALICE_ID, prune.into())
+        .execute_instruction(&mut stx, &ALICE_ID, &prune.into())
         .expect("manual bridge prune through the Initial executor");
     assert!(stx.world.proofs().get(&older_id).is_none());
     assert!(stx.world.proofs().get(&newer_id).is_some());

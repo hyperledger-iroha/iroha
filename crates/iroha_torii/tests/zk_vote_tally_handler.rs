@@ -17,7 +17,6 @@ use iroha_data_model::{
     zk::BackendTag,
 };
 use iroha_primitives::json::Json;
-use iroha_primitives::nonzero;
 use iroha_torii::{NoritoJson, ZkVoteGetTallyRequestDto, handle_v1_zk_vote_tally};
 use mv::storage::StorageReadOnly as _;
 use std::time::Duration;
@@ -50,144 +49,143 @@ fn execute_tally_component(
 }
 #[tokio::test]
 async fn vote_tally_handler_returns_finalized_tally() {
-    // A signed genesis authenticates the crypto policy later registrations need.
+    // Account registration needs the crypto policy that authenticated genesis initializes,
+    // so seed the components on top of an original signed genesis.
     let mut zk = iroha_core::state::default_zk_config();
     zk.pipa_r.enabled = true;
     zk.verify_timeout = Duration::ZERO;
-    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1);
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
     config.zk = Some(zk);
     let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
         .expect("original tally query genesis");
-    let state = chain.state().clone();
-    // Seed one finalized election via ISIs
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-    let mut block = state.block(header);
-    let mut stx = block.transaction();
     let eid = "election-alpha".to_string();
-    let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
-    execute_tally_component(
-        &mut stx,
-        &owner,
-        &InstructionBox::from(Register::account(Account::new(owner.clone()))),
-    )
-    .expect("register owner account");
-    let fixture = native_confidential_fixture_envelope();
-    let vk_box = fixture
-        .vk_box(TALLY_FIXTURE_BACKEND)
-        .expect("actual native key");
-    let vk_commitment = hash_vk(&vk_box);
-    let vk_id = VerifyingKeyId::new(TALLY_FIXTURE_BACKEND, "tally_current");
-    let mut vk_record = VerifyingKeyRecord::new(
-        1,
-        TALLY_FIXTURE_CIRCUIT_ID,
-        BackendTag::NativePipaRPasta,
-        "vesta",
-        fixture.schema_hash,
-        vk_commitment,
-    );
-    vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("VK length fits u32");
-    vk_record.max_proof_bytes =
-        u32::try_from(fixture.proof_bytes.len()).expect("proof length fits u32");
-    vk_record.gas_schedule_id = Some("native_pipa_r_default".into());
-    vk_record.key = Some(vk_box.clone());
-    vk_record.status = ConfidentialStatus::Active;
-    let proof_box = fixture.proof_box(TALLY_FIXTURE_BACKEND);
-    execute_tally_component(
-        &mut stx,
-        &owner,
-        &InstructionBox::from(Grant::account_permission(
-            Permission::new(
-                "CanManageParliament".parse().expect("permission id"),
-                Json::new(()),
-            ),
-            owner.clone(),
-        )),
-    )
-    .expect("grant CanManageParliament");
-    execute_tally_component(
-        &mut stx,
-        &owner,
-        &InstructionBox::from(Grant::account_permission(
-            Permission::new(
-                "CanEnactGovernance".parse().expect("permission id"),
-                Json::new(()),
-            ),
-            owner.clone(),
-        )),
-    )
-    .expect("grant CanEnactGovernance");
-    let report =
-        iroha_core_zk::verify_backend_with_timing(TALLY_FIXTURE_BACKEND, &proof_box, Some(&vk_box))
-            .expect("completed verification fixture");
-    assert!(report.ok, "vote tally proof must verify: {report:?}");
-    execute_tally_component(
-        &mut stx,
-        &owner,
-        &InstructionBox::from(Grant::account_permission(
-            Permission::new(
-                "CanManageVerifyingKeys"
-                    .parse()
-                    .expect("manage vk permission id"),
-                Json::new(()),
-            ),
-            owner.clone(),
-        )),
-    )
-    .expect("grant CanManageVerifyingKeys");
-    execute_tally_component(
-        &mut stx,
-        &owner,
-        &verifying_keys::RegisterVerifyingKey {
-            id: vk_id.clone(),
-            record: vk_record,
-        }
-        .into(),
-    )
-    .expect("register vote/tally verifying key");
-    let create = iroha_data_model::isi::zk::CreateElection {
-        election_id: eid.clone(),
-        options: 2,
-        eligible_root: [0u8; 32],
-        start_ts: 0,
-        end_ts: 0,
-        vk_ballot: vk_id.clone(),
-        vk_tally: vk_id.clone(),
-        domain_tag: "ballot-domain".to_string(),
-    };
-    let error = execute_tally_component(&mut stx, &owner, &InstructionBox::from(create))
-        .expect_err("generic native proof cannot create a governance election");
-    assert!(
-        format!("{error:?}").contains("not qualified")
-            || format!("{error:?}").contains("circuit mismatch")
-    );
-    assert!(stx.world.elections().get(&eid).is_none());
-    let finalize = iroha_data_model::isi::zk::FinalizeElection {
-        election_id: eid.clone(),
-        tally: vec![5, 8],
-        tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
-            TALLY_FIXTURE_BACKEND.into(),
-            proof_box,
-            vk_id.clone(),
-        ),
-    };
-    execute_tally_component(&mut stx, &owner, &InstructionBox::from(finalize))
-        .expect_err("generic native proof cannot finalize a governance election");
-    assert!(stx.world.elections().get(&eid).is_none());
-    // The remaining assertions test query serialization over an explicitly synthetic
-    // finalized row. No proof, authority or production governance qualification is inferred.
-    stx.world.elections_mut().insert(
-        eid.clone(),
-        iroha_core::state::ElectionState {
+    // Seed one finalized election via ISIs
+    chain.setup_world_at(2_000, |stx| {
+        let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
+        execute_tally_component(
+            stx,
+            &owner,
+            &InstructionBox::from(Register::account(Account::new(owner.clone()))),
+        )
+        .expect("register owner account");
+        let fixture = native_confidential_fixture_envelope();
+        let vk_box = fixture
+            .vk_box(TALLY_FIXTURE_BACKEND)
+            .expect("actual native key");
+        let vk_commitment = hash_vk(&vk_box);
+        let vk_id = VerifyingKeyId::new(TALLY_FIXTURE_BACKEND, "tally_current");
+        let mut vk_record = VerifyingKeyRecord::new(
+            1,
+            TALLY_FIXTURE_CIRCUIT_ID,
+            BackendTag::NativePipaRPasta,
+            "vesta",
+            fixture.schema_hash,
+            vk_commitment,
+        );
+        vk_record.vk_len = u32::try_from(vk_box.bytes.len()).expect("VK length fits u32");
+        vk_record.max_proof_bytes =
+            u32::try_from(fixture.proof_bytes.len()).expect("proof length fits u32");
+        vk_record.gas_schedule_id = Some("native_pipa_r_default".into());
+        vk_record.key = Some(vk_box.clone());
+        vk_record.status = ConfidentialStatus::Active;
+        let proof_box = fixture.proof_box(TALLY_FIXTURE_BACKEND);
+        execute_tally_component(
+            stx,
+            &owner,
+            &InstructionBox::from(Grant::account_permission(
+                Permission::new(
+                    "CanManageParliament".parse().expect("permission id"),
+                    Json::new(()),
+                ),
+                owner.clone(),
+            )),
+        )
+        .expect("grant CanManageParliament");
+        execute_tally_component(
+            stx,
+            &owner,
+            &InstructionBox::from(Grant::account_permission(
+                Permission::new(
+                    "CanEnactGovernance".parse().expect("permission id"),
+                    Json::new(()),
+                ),
+                owner.clone(),
+            )),
+        )
+        .expect("grant CanEnactGovernance");
+        let report = iroha_core_zk::verify_backend_with_timing(
+            TALLY_FIXTURE_BACKEND,
+            &proof_box,
+            Some(&vk_box),
+        )
+        .expect("completed verification fixture");
+        assert!(report.ok, "vote tally proof must verify: {report:?}");
+        execute_tally_component(
+            stx,
+            &owner,
+            &InstructionBox::from(Grant::account_permission(
+                Permission::new(
+                    "CanManageVerifyingKeys"
+                        .parse()
+                        .expect("manage vk permission id"),
+                    Json::new(()),
+                ),
+                owner.clone(),
+            )),
+        )
+        .expect("grant CanManageVerifyingKeys");
+        execute_tally_component(
+            stx,
+            &owner,
+            &verifying_keys::RegisterVerifyingKey {
+                id: vk_id.clone(),
+                record: vk_record,
+            }
+            .into(),
+        )
+        .expect("register vote/tally verifying key");
+        let create = iroha_data_model::isi::zk::CreateElection {
+            election_id: eid.clone(),
             options: 2,
-            finalized: true,
+            eligible_root: [0u8; 32],
+            start_ts: 0,
+            end_ts: 0,
+            vk_ballot: vk_id.clone(),
+            vk_tally: vk_id.clone(),
+            domain_tag: "ballot-domain".to_string(),
+        };
+        let error = execute_tally_component(stx, &owner, &InstructionBox::from(create))
+            .expect_err("generic native proof cannot create a governance election");
+        assert!(
+            format!("{error:?}").contains("not qualified")
+                || format!("{error:?}").contains("circuit mismatch")
+        );
+        assert!(stx.world.elections().get(&eid).is_none());
+        let finalize = iroha_data_model::isi::zk::FinalizeElection {
+            election_id: eid.clone(),
             tally: vec![5, 8],
-            ..iroha_core::state::ElectionState::default()
-        },
-    );
-    stx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("seed synthetic tally query fixture");
+            tally_proof: iroha_data_model::proof::ProofAttachment::new_ref(
+                TALLY_FIXTURE_BACKEND.into(),
+                proof_box,
+                vk_id.clone(),
+            ),
+        };
+        execute_tally_component(stx, &owner, &InstructionBox::from(finalize))
+            .expect_err("generic native proof cannot finalize a governance election");
+        assert!(stx.world.elections().get(&eid).is_none());
+        // The remaining assertions test query serialization over an explicitly synthetic
+        // finalized row. No proof, authority or production governance qualification is inferred.
+        stx.world.elections_mut().insert(
+            eid.clone(),
+            iroha_core::state::ElectionState {
+                options: 2,
+                finalized: true,
+                tally: vec![5, 8],
+                ..iroha_core::state::ElectionState::default()
+            },
+        );
+    });
+    let state = chain.state().clone();
     let expected_view = state.view();
     let expected_height = u64::try_from(expected_view.height()).expect("height fits u64");
     let expected_hash = expected_view

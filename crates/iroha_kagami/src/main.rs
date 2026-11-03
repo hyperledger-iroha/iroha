@@ -34,6 +34,7 @@ mod secure_fs;
 use iroha_deploy::shell;
 mod sora_network;
 mod swarm;
+mod terminal_style;
 mod tui;
 mod verify;
 mod wizard;

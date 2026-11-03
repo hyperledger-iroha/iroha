@@ -115,20 +115,22 @@ fn seeded_zk_roots_state(
     );
     let asset_alias = "rose#universal";
     let owner = AccountId::new(ACCOUNT_SIGNATORY.parse().expect("public key"));
-    let definition = AssetDefinition::numeric(
-        asset_def_id.clone(),
-        "rose".to_owned(),
-        iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
-    );
-    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1);
+    // Registration, issuance and alias binding execute only under the authenticated
+    // signed-genesis source, which also installs the configured roots history length.
+    let mut config = iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000);
     config.zk = Some(zk_config_with_tree_roots_history_len(
         tree_roots_history_len,
     ));
     config.genesis_instructions = vec![
         Register::domain(Domain::new(domain_id)).into(),
         Register::account(NewAccount::new(owner.clone())).into(),
-        Register::asset_definition(definition).into(),
+        Register::asset_definition(AssetDefinition::numeric(
+            asset_def_id.clone(),
+            "rose".to_owned(),
+            iroha_data_model::asset::AssetBalancePolicy::Global,
+            None,
+        ))
+        .into(),
         Mint::asset_quantity(10_000u64, AssetId::of(asset_def_id.clone(), owner)).into(),
         iroha_data_model::isi::zk::RegisterZkAsset::new(asset_def_id.clone(), None).into(),
         iroha_data_model::isi::SetAssetDefinitionAlias::bind(
@@ -139,13 +141,9 @@ fn seeded_zk_roots_state(
         .into(),
     ];
     let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(config)
-        .expect("original zk roots genesis");
-    let state = chain.state().clone();
-    {
-        // Only verified proofs append commitments on a chain; seed the query rows in an overlay.
-        let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
-        let mut block = state.block(header);
-        let mut stx = block.transaction();
+        .expect("signed genesis registers the confidential asset");
+    // Commitment roots are seeded fixture state, not admitted shielded transfers.
+    chain.setup_world_at(2_000, |stx| {
         let mut zk_state = stx
             .world
             .zk_assets()
@@ -162,11 +160,8 @@ fn seeded_zk_roots_state(
         let zk_assets = stx.world_mut_for_testing().zk_assets_mut_for_testing();
         zk_assets.remove(asset_def_id.clone());
         zk_assets.insert(asset_def_id.clone(), zk_state);
-        stx.apply();
-        block
-            .commit_world_overlay_for_testing()
-            .expect("seed confidential roots fixture");
-    }
+    });
+    let state = chain.state().clone();
     let roots_all = state
         .view()
         .world

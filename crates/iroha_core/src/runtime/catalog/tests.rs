@@ -264,18 +264,6 @@ mod addition_tests {
     }
 
     #[test]
-    fn no_release_adds_a_world_field_before_snapshots_follow_the_selection() {
-        for addition in crate::runtime::catalog::additions::ADDITIONS {
-            assert!(
-                addition.storage.is_empty(),
-                "addition {} adds World fields; first make snapshot writers omit and readers \
-                 default uninstalled fields (TODO at `additions::ADDITIONS`)",
-                addition.module
-            );
-        }
-    }
-
-    #[test]
     fn an_addition_leaves_the_baseline_and_publishes_its_own_definitions() {
         let real = release_catalog().expect("release catalog");
         let catalog = build(&[LOG]);
@@ -585,6 +573,15 @@ mod addition_tests {
                     &[LOG_WIRE_ID],
                     &[],
                     &[StorageAddition::Table(CELL)],
+                )],
+            ),
+            (
+                "not a top-level World field",
+                vec![addition(
+                    "iroha.test.a",
+                    &[LOG_WIRE_ID],
+                    &[],
+                    &[StorageAddition::Table("triggers.data")],
                 )],
             ),
             (

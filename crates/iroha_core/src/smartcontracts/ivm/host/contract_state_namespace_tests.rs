@@ -721,11 +721,11 @@ fn escrow_scope_rejects_forged_generic_durable_writes_and_deletes() {
 }
 
 #[test]
-fn multisig_runtime_consent_is_opaque_and_cannot_be_replaced_by_durable_artifacts() {
+fn native_multisig_state_is_opaque_and_cannot_be_replaced_by_durable_artifacts() {
     for text in [
         "multisig",
         "multisig/proposal/account/id",
-        "multisig/proposal-expectation/account/id",
+        "multisig/proposal-terminal/account/id",
     ] {
         let path: StatePath = text.parse().unwrap();
         assert!(validate_reserve_durable_state_path(&path).is_err());

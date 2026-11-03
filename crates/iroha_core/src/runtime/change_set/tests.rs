@@ -660,7 +660,7 @@ fn block_start_activates_an_addition_and_installs_its_cell() {
         let id = change.id().unwrap();
         let state = scheduled_state(&change, &validators(), 4);
         assert_eq!(
-            *state.world.soradns_history_len.view().get(),
+            *state.world.soracloud_sequence_watermark.view().get(),
             0,
             "an uninstalled cell holds no value"
         );
@@ -685,7 +685,7 @@ fn block_start_activates_an_addition_and_installs_its_cell() {
                     && binding.implementation == addition.implementation)
         );
         assert_eq!(
-            *block.world.soradns_history_len.get(),
+            *block.world.soracloud_sequence_watermark.get(),
             CELL_INITIAL,
             "installation writes the published initial value"
         );

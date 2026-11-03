@@ -323,6 +323,10 @@ fn proof_encoding_error(error: norito::core::DecodeAttemptError) -> AmxError {
         AmxError::Resource(error)
     }
 }
+#[expect(
+    clippy::suspicious_operation_groupings,
+    reason = "an import's `destination` is the root admitting it, which must be this partition's `local_instance`"
+)]
 fn check_import(p: &GamePartitionStateV1, proof: &GameUnitImportProofV1) -> Result<bool, AmxError> {
     let record = &proof.record;
     if record.world_id != p.world_id

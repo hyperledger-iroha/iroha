@@ -237,10 +237,10 @@ fn commit_contract_activity_transactions(
     let network_id = chain.network_id();
     for first in (0..profile.committed_transactions).step_by(512) {
         let end = (first + 512).min(profile.committed_transactions);
-        let transactions = (first..end)
+        let transactions: Vec<_> = (first..end)
             .map(|index| contract_activity_accepted_transaction(network_id, index))
             .collect();
-        iroha_torii::test_utils::commit_native_accepted_inputs(chain, transactions);
+        iroha_torii::test_utils::commit_native_accepted_inputs(chain, &transactions);
     }
 }
 fn build_query_load_fixture(profile: QueryLoadProfile) -> QueryLoadFixture {
@@ -1028,9 +1028,8 @@ fn bench_transaction_admission(c: &mut Criterion) {
                 .sign(tx_key_pair.private_key())
             },
             |tx| {
-                let accepted =
-                    accept_transaction_for_ingress_for_bench(Arc::clone(&tx_state), tx, &telemetry)
-                        .expect("transaction admission succeeds");
+                let accepted = accept_transaction_for_ingress_for_bench(&tx_state, tx, &telemetry)
+                    .expect("transaction admission succeeds");
                 std::hint::black_box(accepted.hash_as_entrypoint());
             },
             BatchSize::SmallInput,
@@ -1127,9 +1126,8 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
         for _ in 0..backlog {
             let index = counter.fetch_add(1, Ordering::Relaxed);
             let tx = make_tx(index);
-            let accepted =
-                accept_transaction_for_ingress_for_bench(Arc::clone(&tx_state), tx, &telemetry)
-                    .expect("prefill transaction admission succeeds");
+            let accepted = accept_transaction_for_ingress_for_bench(&tx_state, tx, &telemetry)
+                .expect("prefill transaction admission succeeds");
             queue
                 .push(accepted, tx_state.view())
                 .expect("prefill enqueue succeeds");
@@ -1144,12 +1142,9 @@ fn bench_transaction_enqueue_sustained_pressure(c: &mut Criterion) {
                         make_tx(index)
                     },
                     |tx| {
-                        let accepted = accept_transaction_for_ingress_for_bench(
-                            Arc::clone(&tx_state),
-                            tx,
-                            &telemetry,
-                        )
-                        .expect("transaction admission succeeds");
+                        let accepted =
+                            accept_transaction_for_ingress_for_bench(&tx_state, tx, &telemetry)
+                                .expect("transaction admission succeeds");
                         queue
                             .push(accepted, tx_state.view())
                             .expect("sustained enqueue succeeds");

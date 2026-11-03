@@ -44,7 +44,7 @@ pub struct Addition {
     not(test),
     expect(
         dead_code,
-        reason = "a release declares its World-field additions here; this release declares none"
+        reason = "a release declares its World-cell additions here; this release adds only a table"
     )
 )]
 pub enum StorageAddition {
@@ -80,10 +80,10 @@ pub type CellInstaller = fn(&mut WorldTransaction<'_, '_>, &[u8]) -> Result<(), 
 
 /// What this release adds after its frozen baseline, in activation order.
 ///
-/// TODO(`specs/live_runtime_upgrades.md` §5.5): before the first addition of a World field,
-/// snapshot writers must omit, and readers default, every field the snapshot's selection does not
-/// install, so a previous release keeps reading this release's snapshots until activation.
-pub const ADDITIONS: &[Addition] = &[ENDORSED_RUNTIME_UPGRADE_PROPOSAL];
+/// A World field an addition adds must be a top-level World member: snapshots leave it out, and a
+/// restore reads it empty, until a change set installs its storage
+/// ([`crate::runtime::uninstalled_world_members`]).
+pub const ADDITIONS: &[Addition] = &[ENDORSED_RUNTIME_UPGRADE_PROPOSAL, GAME_PARTITIONS];
 
 /// Runtime-upgrade proposals that carry the trusted release signers' endorsements
 /// (`specs/runtime_upgrades.md`, "Provenance policy"). The baseline
@@ -97,6 +97,30 @@ pub const ENDORSED_RUNTIME_UPGRADE_PROPOSAL: Addition = Addition {
     storage: &[],
 };
 
+/// Native game partitions of independent roots (`crate::smartcontracts::isi::game_partition`):
+/// partition installation, peer registration, unit seeding and stepping, and certified unit
+/// export and import, with the `world.game_partitions` table they keep. Until a change set
+/// activates it the instructions stay inactive and the table stays empty and out of snapshots.
+///
+/// TODO(`specs/live_runtime_upgrades.md` §7): an export removes the unit at its source while the
+/// destination's import is still pending, but runtime obligations track only escrow and AMX
+/// State. Make an in-flight export a live obligation, so admission closure, completion-only
+/// restrictions and retirement cannot strand its import, before governance activates this
+/// addition on a live network.
+pub const GAME_PARTITIONS: Addition = Addition {
+    module: "iroha.game_partition.v1",
+    instructions: &[
+        "iroha.game_partition.install.v1",
+        "iroha.game_partition.register_peer.v1",
+        "iroha.game_partition.seed.v1",
+        "iroha.game_partition.advance.v1",
+        "iroha.game_partition.export.v1",
+        "iroha.game_partition.import.v1",
+    ],
+    rebinds: &[],
+    storage: &[StorageAddition::Table("world.game_partitions")],
+};
+
 /// Additions of a hypothetical later release, claiming compiled items the real baseline holds.
 #[cfg(test)]
 pub mod test_additions {
@@ -108,8 +132,8 @@ pub mod test_additions {
     pub const LOG_WIRE_ID: &str = "iroha.log";
     /// The table [`LOG`] adds.
     pub const TABLE: &str = "world.viral_bonus_paid";
-    /// The cell [`LOG`] adds.
-    pub const CELL: &str = "world.soradns_history_len";
+    /// The cell [`LOG`] adds: a top-level World member, as every addition's field must be.
+    pub const CELL: &str = "world.soracloud_sequence_watermark";
     /// The value the cell [`LOG`] adds starts at.
     pub const CELL_INITIAL: u64 = 7;
 
@@ -124,7 +148,7 @@ pub mod test_additions {
                 field: CELL,
                 initial: || norito::encode_canonical(&CELL_INITIAL).map_err(|e| e.to_string()),
                 install: |world, bytes| {
-                    *world.soradns_history_len.get_mut() =
+                    *world.soracloud_sequence_watermark.get_mut() =
                         norito::decode_canonical::<u64>(bytes).map_err(|e| e.to_string())?;
                     Ok(())
                 },

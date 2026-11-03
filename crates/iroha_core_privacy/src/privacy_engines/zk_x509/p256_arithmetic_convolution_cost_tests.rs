@@ -241,6 +241,10 @@ fn arithmetic_convolution_complete_integrated_air_cost_16_workers() {
     arithmetic_convolution_complete_integrated_air_cost_with_workers_v1(&[16]);
 }
 
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn arithmetic_convolution_complete_integrated_air_cost_with_workers_v1(workers: &[usize]) {
     assert!(!cfg!(debug_assertions));
     const ROWS: usize = 1 << 16;

@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
-
-import yaml
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,6 +26,34 @@ def run_checker(workflows_dir: Path) -> subprocess.CompletedProcess[str]:
         capture_output=True,
         check=False,
     )
+
+
+def job_steps(workflow: str, job: str) -> list[dict[str, str]]:
+    """The `uses` and `with.tool` of every step of `job` in a block-style workflow.
+
+    Like the checker, this reads the workflow text without a YAML dependency: the
+    workflow-pin CI job installs only pytest.
+    """
+    lines = workflow.splitlines()
+    start = lines.index(f"  {job}:")
+    body: list[str] = []
+    for line in lines[start + 1:]:
+        if line.strip() and not line.startswith("    "):
+            break
+        body.append(line)
+    steps_line = next(index for index, line in enumerate(body) if line.strip() == "steps:")
+    item = " " * (len(body[steps_line]) - len(body[steps_line].lstrip()) + 2) + "- "
+    steps: list[dict[str, str]] = []
+    for line in body[steps_line + 1:]:
+        if line.startswith(item):
+            steps.append({})
+            line = " " * len(item) + line[len(item):]
+        elif not steps or (line.strip() and not line.startswith(" " * len(item))):
+            break
+        field = re.match(r"^\s*(uses|tool):\s*([^#\s][^#]*?)\s*(?:#.*)?$", line)
+        if field and steps:
+            steps[-1][field.group(1)] = field.group(2)
+    return steps
 
 
 def write_workflow(workflows_dir: Path, name: str, uses: str) -> None:
@@ -123,18 +150,18 @@ class WorkflowActionPinsTests(unittest.TestCase):
         self.assertIn("contains no YAML files", empty.stderr)
 
     def test_release_jobs_install_the_tools_they_execute(self) -> None:
-        workflow = yaml.safe_load(
-            (ROOT / ".github/workflows/workspace_release.yml").read_text()
-        )
+        workflow = (ROOT / ".github/workflows/workspace_release.yml").read_text()
         required = {
             "release-diagnostics": {"cargo-nextest"},
             "coverage": {"cargo-nextest", "cargo-llvm-cov"},
         }
         for job, tools in required.items():
             installed = set()
-            for step in workflow["jobs"][job]["steps"]:
+            steps = job_steps(workflow, job)
+            self.assertTrue(steps, f"{job}: no steps found")
+            for step in steps:
                 if step.get("uses", "").startswith("taiki-e/install-action@"):
-                    selected = step.get("with", {}).get("tool", "")
+                    selected = step.get("tool", "")
                     self.assertTrue(selected, f"{job}: install-action requires tool")
                     installed.update(selected.replace(",", " ").split())
             self.assertTrue(tools <= installed, f"{job}: missing {tools - installed}")

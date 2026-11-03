@@ -7605,6 +7605,38 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
             Builtin::PresentX509,
             "let _queued = ledger::credentials::present_x509(request: evidence)",
         ),
+        (
+            Builtin::AssetLockOpen,
+            "let _custody = ledger::asset_lock::open(key: evidence, source: source, destination: destination, asset_definition: asset_definition, amount: amount, release_until_ms: quorum, cancel_not_before_ms: quorum, expires_at_ms: quorum)",
+        ),
+        (
+            Builtin::AssetLockDrawdown,
+            "ledger::asset_lock::drawdown(key: evidence, amount: amount, expected_remaining: amount)",
+        ),
+        (
+            Builtin::AssetLockCancel,
+            "ledger::asset_lock::cancel(key: evidence, expected_remaining: amount)",
+        ),
+        (
+            Builtin::AssetLockExpire,
+            "ledger::asset_lock::expire(key: evidence)",
+        ),
+        (
+            Builtin::TransferToLinkedFi,
+            "ledger::fi::transfer_linked(asset_definition: asset_definition, account: account, amount: amount, policy_revision: quorum, link_revision: request_generation)",
+        ),
+        (
+            Builtin::AssetLockDrawdownWaterfall,
+            "ledger::asset_lock::drawdown_with_waterfall(key: evidence, amount: amount, expected_remaining: amount, policy_revision: quorum, link_revision: request_generation)",
+        ),
+        (
+            Builtin::AssetLockCancelWaterfall,
+            "ledger::asset_lock::cancel_with_waterfall(key: evidence, expected_remaining: amount, policy_revision: quorum, link_revision: request_generation)",
+        ),
+        (
+            Builtin::AssetLockExpireWaterfall,
+            "ledger::asset_lock::expire_with_waterfall(key: evidence, policy_revision: quorum, link_revision: request_generation)",
+        ),
         // Non-ledger builtins whose registry set must also match codegen.
         (
             Builtin::VerifySignature,
@@ -7635,11 +7667,15 @@ fn ledger_builtin_codegen_emits_exactly_the_registry_operation_syscalls() {
         let spec = builtin.spec();
         let emitted = compile(&format!("{call};"))
             .into_iter()
-            // Pointer publication, checked `int` narrowing and its trap are
-            // compiler-owned plumbing, not ledger operations.
+            // Pointer publication, `Blob` to `NoritoBytes` pointer normalization,
+            // the heap table that carries more arguments than registers, checked
+            // `int` narrowing and its trap are compiler-owned plumbing, not ledger
+            // operations.
             .filter(|syscall| {
                 !baseline.contains(syscall)
                     && *syscall != syscalls::SYSCALL_INPUT_PUBLISH_TLV
+                    && *syscall != syscalls::SYSCALL_NORMALIZE_NORITO_BYTES
+                    && *syscall != syscalls::SYSCALL_ALLOC
                     && *syscall != syscalls::SYSCALL_ABORT
                     && !syscalls::is_numeric_v1_syscall(*syscall)
             })

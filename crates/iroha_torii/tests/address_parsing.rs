@@ -26,8 +26,6 @@ use norito::json;
 use prometheus::core::Collector;
 use std::sync::Arc;
 use tower::ServiceExt as _;
-#[path = "fixtures.rs"]
-mod fixtures;
 const ACCOUNT_SIGNATORY: &str =
     "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245";
 const I105_PREFIX: u16 = 0x002A;

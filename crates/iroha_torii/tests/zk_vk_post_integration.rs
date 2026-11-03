@@ -26,12 +26,12 @@ fn vk_post_authority_fixture_uses_checked_ed25519_key_generation() {
 }
 #[tokio::test]
 async fn vk_register_update_return_unsigned_local_signing_drafts() {
-    // A signed genesis authenticates the crypto policy that drafts are checked against.
+    // Fee quotes read the committed root fee policy that authenticated genesis authors.
     let chain = iroha_core::sumeragi::test_chain::CertifiedTestChain::start(
-        iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1),
+        iroha_core::sumeragi::test_chain::TestChainConfig::new(World::new(), 1_000),
     )
-    .expect("original VK draft genesis");
-    let state = chain.state().clone();
+    .expect("original signed genesis");
+    let state = Arc::clone(chain.state());
     let queue_cfg = iroha_config::parameters::actual::Queue {
         capacity: nonzero!(8usize),
         capacity_per_user: nonzero!(8usize),

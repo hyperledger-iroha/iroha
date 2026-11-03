@@ -166,35 +166,36 @@ fn usage_omits_retired_manifest_authentication_commands() {
     assert!(!help.contains("sorafs_cli manifest verify-signature --"));
 }
 #[test]
-fn decimal_arg_parser_rejects_noncanonical_tokens() {
+fn appeal_quantity_parser_rejects_noncanonical_tokens() {
     for value in [
-        "", " 1.25", "1.25 ", "+1.25", "01.25", "1.250", "1.0", "1.", ".25", "-0",
+        "",
+        " 1.25",
+        "1.25 ",
+        "+1.25",
+        "01.25",
+        "1.250",
+        "1.0",
+        "1.",
+        ".25",
+        "-0",
+        "-1.25",
+        "1e3",
+        "NaN",
+        "0.0000000001",
     ] {
-        let err = parse_decimal_arg("deposit", value, CONTEXT_APPEAL_SETTLE)
-            .expect_err("noncanonical decimal token must fail");
+        let err = parse_appeal_quantity_literal("deposit", value)
+            .expect_err("invalid deposit quantity must fail");
         assert!(
-            err.contains("canonical decimal"),
-            "unexpected decimal error for {value:?}: {err}"
+            err.to_string()
+                .contains("failed to parse `deposit` quantity"),
+            "unexpected quantity error for {value:?}: {err}"
         );
     }
-    assert_eq!(
-        parse_decimal_arg("deposit", "1.25", CONTEXT_APPEAL_SETTLE).expect("canonical decimal"),
-        rust_decimal::Decimal::new(125, 2)
-    );
-    assert_eq!(
-        parse_decimal_arg("deposit", "0", CONTEXT_APPEAL_SETTLE).expect("canonical zero"),
-        rust_decimal::Decimal::ZERO
-    );
-    assert_eq!(
-        parse_decimal_arg("deposit", "0.25", CONTEXT_APPEAL_SETTLE)
-            .expect("canonical fractional decimal"),
-        rust_decimal::Decimal::new(25, 2)
-    );
-    assert_eq!(
-        parse_decimal_arg("deposit", "-1.25", CONTEXT_APPEAL_SETTLE)
-            .expect("canonical negative decimal remains a parser-level value"),
-        rust_decimal::Decimal::new(-125, 2)
-    );
+    for value in ["1.25", "0", "0.25", "0.000000001"] {
+        let quantity = parse_appeal_quantity_literal("deposit", value)
+            .expect("canonical nonnegative deposit quantity");
+        assert_eq!(quantity.to_string(), value);
+    }
 }
 #[test]
 fn fixture_account_uses_checked_seed_derivation() {

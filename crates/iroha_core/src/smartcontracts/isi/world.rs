@@ -3337,7 +3337,7 @@ pub mod isi {
         }
         let payload = RuntimeUpgradeProposal {
             proposal_operator: authority.clone(),
-            action: action.clone(),
+            action,
             notice,
             proposed_ms,
         };

@@ -168,10 +168,12 @@ fn widened_sha_power_table_owns_one_exact_allocation_across_moves_and_rows() {
         core::mem::size_of_val(&moved),
         core::mem::size_of::<usize>()
     );
-    assert!(
-        ShaWordFoldPowersV1::CONSTRUCTION_SCRATCH_BYTES_V1
-            < ShaWordFoldPowersV1::HEAP_PAYLOAD_BYTES_V1 / 10
-    );
+    const {
+        assert!(
+            ShaWordFoldPowersV1::CONSTRUCTION_SCRATCH_BYTES_V1
+                < ShaWordFoldPowersV1::HEAP_PAYLOAD_BYTES_V1 / 10
+        );
+    }
     for _ in 0..3 {
         let mut row = moved.row_v1();
         for _ in 0..SHA_WORD_STARK_BASE_ERROR_COUNT_V1 {

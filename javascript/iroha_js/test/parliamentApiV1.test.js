@@ -211,6 +211,26 @@ test("initial sortition declarations expose an intent without caller payload fie
   );
 });
 
+test("automatic outcome declarations keep Core's event-kind indices", () => {
+  const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+  const result = spawnSync(
+    process.execPath,
+    [
+      "./node_modules/typescript/bin/tsc",
+      "--noEmit", "--strict", "--skipLibCheck",
+      "--module", "NodeNext", "--moduleResolution", "NodeNext",
+      "--target", "ES2022", "--types", "node",
+      "./test/fixtures/typescript/parliamentAutomaticOutcomes.types.ts",
+    ],
+    { cwd: packageRoot, encoding: "utf8" },
+  );
+  assert.equal(
+    result.status,
+    0,
+    [result.stdout, result.stderr].filter(Boolean).join("\n"),
+  );
+});
+
 test("request builders expose only canonical V1 fields and reject removed aliases", () => {
   const proposal = parliamentProposalFixtures()[0];
   assert.deepEqual(

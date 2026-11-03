@@ -1489,13 +1489,14 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
                 .expect("closed transition tag")
         })
         .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(transition_tags.len(), 21);
+    assert_eq!(transition_tags.len(), 22);
     for required in [
         "EndorsePublicFinding",
         "FailPublicFindingNoResult",
         "RecordInvitationResponse",
         "RegisterBallotParticipant",
         "RecordBallotDropout",
+        "RegisterInitialSortition",
     ] {
         assert!(transition_tags.contains(required));
     }
@@ -1517,7 +1518,7 @@ fn parliament_attempt_openapi_is_closed_authenticated_and_bounded() {
             .and_then(|schema| schema.get("oneOf"))
             .and_then(Value::as_array)
             .map(Vec::len),
-        Some(24),
+        Some(25),
         "audit kind inventory includes the three automatic outcomes"
     );
 

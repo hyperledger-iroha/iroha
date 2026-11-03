@@ -80,7 +80,7 @@ fn execute_register_account_like_bench_rolls_back_after_each_iteration() {
             .execute_instruction_with_profile(
                 &mut tx,
                 &authority,
-                instruction,
+                &instruction,
                 InstructionExecutionProfile::Bench,
             )
             .expect("actual benchmark-profile instruction execution");
@@ -109,7 +109,7 @@ fn execute_domain_owned_asset_definition_like_bench_rolls_back_after_each_iterat
             .execute_instruction_with_profile(
                 &mut tx,
                 &authority,
-                Register::asset_definition(definition.clone()).into(),
+                &Register::asset_definition(definition.clone()).into(),
                 InstructionExecutionProfile::Bench,
             )
             .expect("domain owner registers the benchmark asset after genesis");
@@ -129,12 +129,13 @@ fn execute_role_grant_and_revoke_like_bench_preserves_holder_and_rolls_back() {
         let (state, authority) = build_bench_state();
         let (recipient, _) = gen_account_in("wonderland");
         let role: RoleId = "bench_role".parse().unwrap();
-        let execute = |tx: &mut iroha_core::state::StateTransaction<'_, '_>, instruction| {
+        let execute = |tx: &mut iroha_core::state::StateTransaction<'_, '_>,
+                       instruction: InstructionBox| {
             Executor::default()
                 .execute_instruction_with_profile(
                     tx,
                     &authority,
-                    instruction,
+                    &instruction,
                     InstructionExecutionProfile::Bench,
                 )
                 .expect("authorized benchmark role operation");
@@ -222,7 +223,7 @@ fn execute_trigger_like_bench_owns_callback_and_rolls_back_consumption() {
             .execute_instruction_with_profile(
                 &mut tx,
                 &authority,
-                Register::trigger(Trigger::new(id.clone(), action)).into(),
+                &Register::trigger(Trigger::new(id.clone(), action)).into(),
                 InstructionExecutionProfile::Bench,
             )
             .expect("register callback through the permission-enforcing executor");
@@ -236,7 +237,7 @@ fn execute_trigger_like_bench_owns_callback_and_rolls_back_consumption() {
             .execute_instruction_with_profile(
                 &mut tx,
                 &authority,
-                ExecuteTrigger::new(id.clone()).into(),
+                &ExecuteTrigger::new(id.clone()).into(),
                 InstructionExecutionProfile::Bench,
             )
             .expect("empty callback retains its bounded pre-body invocation owner");

@@ -1140,7 +1140,6 @@ fn derive_struct_serialize(
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
-                use norito::core::WriteBytesExt;
                 // Count each field before streaming it into its declared frame.
                 #(#serialize_calls)*
                 Ok(())
@@ -1340,7 +1339,6 @@ fn derive_enum_serialize(
             }
             fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> ::core::result::Result<(), norito::core::Error> {
                 let _norito_depth = norito::core::EncodeValueDepthGuard::enter()?;
-                use norito::core::WriteBytesExt;
                 match self {
                     #(#arms),*
                 }

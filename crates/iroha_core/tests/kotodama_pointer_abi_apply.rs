@@ -92,6 +92,16 @@ fn state_with_asset_definitions(
         query_handle,
     )
 }
+/// The first ordinary block after the applied signed genesis.
+fn ordinary_header(state: &State) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        core::num::NonZeroU64::new(2).expect("first ordinary height"),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    )
+}
 #[test]
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
@@ -131,8 +141,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     }
     // Seed the canonical asset definition directly. This test exercises the
     // generated asset operations, not registration authorization.
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
         .expect("canonical asset definition literal");
@@ -152,16 +160,13 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         [from_account, to_account],
         [asset_definition],
     );
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(
-        core::num::NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = state.block(header);
-    let mut tx = block.transaction();
+    let state = crate::native_genesis::certified_state(world);
+    let mut block = state.block(ordinary_header(&state));
+    // An explicit bounded invocation owns the direct calls' FASTPQ source entry,
+    // as a signed transaction's call would.
+    let mut tx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+        [0x51; iroha_crypto::Hash::LENGTH],
+    ));
     let executor = tx.world.executor().clone();
     // Apply deterministic ISIs mirroring the sample program
     assert_eq!(queued.len(), 3, "expected three enqueued instructions");
@@ -174,9 +179,6 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
         to.clone(),
     );
     let burn = iroha_data_model::isi::Burn::asset_quantity(100u32, expected_asset_id_to.clone());
-    tx.tx_call_hash = Some(iroha_crypto::Hash::prehashed(
-        [0x51; iroha_crypto::Hash::LENGTH],
-    ));
     for instr in [
         InstructionBox::from(iroha_data_model::isi::MintBox::from(mint)),
         InstructionBox::from(iroha_data_model::isi::TransferBox::from(transfer)),
@@ -184,7 +186,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     ] {
         eprintln!("applying {instr:?}");
         executor
-            .execute_instruction(&mut tx, &from, instr)
+            .execute_instruction(&mut tx, &from, &instr)
             .expect("execution should succeed");
     }
     tx.apply();
@@ -249,8 +251,6 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     select_kotodama_entrypoint(&mut vm, &program, "main");
     vm.run_with_host(&mut host)
         .expect("state-loaded pointers should be accepted by transfer_asset");
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
     let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_domain = Domain::new(account_domain_id).build(&authority);
     let asset_domain = Domain::new(asset_domain_id.clone()).build(&authority);
@@ -267,23 +267,19 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
         [authority_account],
         [asset_definition],
     );
-    let state = State::new_for_testing(world, kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(
-        core::num::NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = state.block(header);
-    let mut tx = block.transaction();
+    let state = crate::native_genesis::certified_state(world);
+    let mut block = state.block(ordinary_header(&state));
+    // An explicit bounded invocation owns the direct setup call, as a signed call would.
+    let mut tx = block.transaction_for_fastpq_testing(iroha_crypto::Hash::prehashed(
+        [0x52; iroha_crypto::Hash::LENGTH],
+    ));
     let mint = MintBox::from(Mint::asset_quantity(
         1u32,
         AssetId::of(asset_def.clone(), authority.clone()),
     ));
     let executor = tx.world.executor().clone();
     executor
-        .execute_instruction(&mut tx, &authority, InstructionBox::from(mint))
+        .execute_instruction(&mut tx, &authority, &InstructionBox::from(mint))
         .expect("setup mint should succeed");
     let queued = host
         .drain_instructions()

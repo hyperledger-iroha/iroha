@@ -39,7 +39,9 @@ use iroha::{
         domain::Domain,
         isi::{
             Grant, GrantBox, InstructionBox, Log, Mint, Register, SetParameter, Transfer,
-            privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+            privacy::{
+                SchedulePrivacyConsensusPolicyUpdateV1, SchedulePrivacyProtocolLimitsUpdateV1,
+            },
             private_settlement::{
                 ActivatePrivateSettlementPoolV1, FinalizeAtomicPrivateSettlementV1,
             },
@@ -672,7 +674,10 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
             let lanes = (0..shape.lane_count())
                 .map(|lane| {
                     let mut table = Table::new();
-                    table.insert("index".into(), TomlValue::Integer(lane as i64));
+                    table.insert(
+                        "index".into(),
+                        TomlValue::Integer(i64::try_from(lane).expect("lane index fits i64")),
+                    );
                     table.insert(
                         "alias".into(),
                         TomlValue::String(if lane == 0 {
@@ -715,7 +720,12 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                             participant_dataspace_alias(dataspace - 1)
                         }),
                     );
-                    table.insert("id".into(), TomlValue::Integer(dataspace as i64));
+                    table.insert(
+                        "id".into(),
+                        TomlValue::Integer(
+                            i64::try_from(dataspace).expect("data space index fits i64"),
+                        ),
+                    );
                     table.insert("fault_tolerance".into(), TomlValue::Integer(1));
                     table.insert(
                         "description".into(),
@@ -757,7 +767,10 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     validator_worker_threads,
                 )
                 .write(["pipeline", "workers"], validator_worker_threads)
-                .write(["nexus", "lane_count"], shape.lane_count() as i64)
+                .write(
+                    ["nexus", "lane_count"],
+                    i64::try_from(shape.lane_count()).expect("lane count fits i64"),
+                )
                 .write(
                     ["nexus", "storage", "local_budget_bytes"],
                     TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES,
@@ -775,7 +788,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                 )
                 .write(
                     ["nexus", "staking", "max_validators"],
-                    VALIDATORS_PER_LANE as i64,
+                    i64::try_from(VALIDATORS_PER_LANE).expect("validator count fits i64"),
                 )
                 .write(
                     ["nexus", "atomic_private_settlement", "sidecar_max_records"],
@@ -1955,7 +1968,7 @@ fn prepare_leg_with_private_data_and_rngs(
     manifest: &AtomicPrivateSettlementV1,
     authority_digest: Hash,
     private_data: &PrivateSettlementLegPrivateData,
-    output_rng: &mut (impl rand::TryCryptoRng),
+    output_rng: &mut impl rand::TryCryptoRng,
     capsule_rng: &mut impl rand::rand_core::TryCryptoRng,
 ) -> Result<PreparedLeg> {
     let witness_timing = SmokeDiagnosticSpanV1::start(
@@ -2460,7 +2473,7 @@ fn wait_for_identical_receipt(
             if receipts.windows(2).all(|pair| pair[0] == pair[1]) {
                 return Ok(receipts.remove(0));
             }
-            last = "all peers finalized, but their receipts differ".to_owned();
+            "all peers finalized, but their receipts differ".clone_into(&mut last);
         } else {
             last = not_finalized.join("; ");
         }
@@ -3212,11 +3225,11 @@ fn smoke_diagnostic_early_error_keeps_payload_and_closes_span() {
     let _scope = SmokeDiagnosticScopeV1::start();
     let error = Box::new(23_u8);
     let original = std::ptr::from_ref(error.as_ref());
-    let result: std::result::Result<(), Box<u8>> = (|| {
+    let result: std::result::Result<(), Box<u8>> = {
         let _span =
             SmokeDiagnosticSpanV1::start(SmokeDiagnosticPhaseV1::FinalizationSubmission, None);
         Err(error)
-    })();
+    };
     assert_eq!(std::ptr::from_ref(result.unwrap_err().as_ref()), original);
     SMOKE_DIAGNOSTIC_CONTEXT_V1
         .with(|cell| assert!(cell.borrow().as_ref().unwrap().active.is_empty()));

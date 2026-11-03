@@ -38,6 +38,18 @@ fn record(marker: u8) -> GamePartitionStateV1 {
     }
 }
 
+/// A World whose root runs the game-partition addition, as its governed change set leaves it:
+/// `world.game_partitions` is installed, committed and written to snapshots.
+fn game_world() -> World {
+    let world = World::default();
+    crate::runtime::activate_additions_for_testing(
+        &world,
+        crate::runtime::catalog::additions::GAME_PARTITIONS.module,
+    )
+    .expect("activate the game-partition addition");
+    world
+}
+
 fn write(world: &World, key: Hash, partition: GamePartitionStateV1) {
     let mut block = world.block();
     block.game_partitions.insert(key, partition);
@@ -67,7 +79,7 @@ fn restore(world: &World) -> Result<World, json::Error> {
 
 #[test]
 fn game_partition_snapshot_preserves_current_and_exact_predecessor() {
-    let world = World::default();
+    let world = game_world();
     let first = record(1);
     write(&world, first.world_id, first.clone());
     let mut next = first.clone();
@@ -90,19 +102,43 @@ fn game_partition_snapshot_preserves_current_and_exact_predecessor() {
 }
 
 #[test]
-fn game_partition_snapshot_field_cannot_be_omitted() {
-    let encoded = json::to_json(&World::default()).unwrap();
-    let mut map = SnapshotJsonMap::parse(&encoded, "world").unwrap();
+fn game_partition_snapshot_member_follows_the_selection() {
+    // Installed by the addition: the member is authoritative and cannot be left out.
+    let encoded = json::to_json(&game_world()).unwrap();
+    let mut map = SnapshotJsonMap::parse_world_fixture(&encoded).unwrap();
+    map.omit_uninstalled_world_members().unwrap();
     assert!(map.remove("game_partitions").is_some());
     let error = restore_map(map)
         .err()
         .expect("missing authoritative field rejects");
     assert!(error.to_string().contains("game_partitions"));
+
+    // On the baseline the member is uninstalled: snapshots leave it out and a restore reads it
+    // empty, exactly as on a release without the addition.
+    let baseline = World::default();
+    let uninstalled =
+        crate::runtime::uninstalled_world_members(baseline.runtime_selection.view().get()).unwrap();
+    assert!(uninstalled.contains(&"game_partitions"));
+    let encoded = json::to_json(&baseline).unwrap();
+    let members = json_object_members(&encoded).unwrap();
+    let written: Vec<String> = members
+        .iter()
+        .filter(|(key, _)| !uninstalled.iter().any(|member| member == key))
+        .map(|(key, raw)| format!("\"{key}\":{raw}"))
+        .collect();
+    let written = format!("{{{}}}", written.join(","));
+    let mut map = SnapshotJsonMap::parse_world_fixture(&written).unwrap();
+    map.omit_uninstalled_world_members().unwrap();
+    let restored = restore_map(map).expect("a baseline World restores without the member");
+    assert_eq!(
+        json::to_json(&restored.game_partitions).unwrap(),
+        json::to_json(&baseline.game_partitions).unwrap()
+    );
 }
 
 #[test]
 fn game_partition_restore_rejects_key_substitution() {
-    let world = World::default();
+    let world = game_world();
     write(&world, Hash::new(b"wrong-key"), record(2));
     let error = restore(&world).err().expect("key substitution rejects");
     assert!(error.to_string().contains("authenticated world identifier"));
@@ -110,7 +146,7 @@ fn game_partition_restore_rejects_key_substitution() {
 
 #[test]
 fn game_partition_restore_rejects_inconsistent_current_watermark() {
-    let world = World::default();
+    let world = game_world();
     let mut partition = record(3);
     partition.units[0].sequence += 1;
     write(&world, partition.world_id, partition);
@@ -122,7 +158,7 @@ fn game_partition_restore_rejects_inconsistent_current_watermark() {
 
 #[test]
 fn game_partition_restore_rejects_inconsistent_retained_predecessor() {
-    let world = World::default();
+    let world = game_world();
     let valid = record(4);
     let mut invalid = valid.clone();
     invalid.known_units.clear();
@@ -137,7 +173,7 @@ fn game_partition_restore_rejects_inconsistent_retained_predecessor() {
 #[test]
 fn game_partition_restore_enforces_world_bound_at_both_cuts() {
     for predecessor_only in [false, true] {
-        let world = World::default();
+        let world = game_world();
         {
             let mut block = world.block();
             for marker in 0..=GAME_PARTITION_MAX_WORLDS {
@@ -164,7 +200,7 @@ fn game_partition_restore_enforces_world_bound_at_both_cuts() {
 
 #[test]
 fn game_partition_block_rollback_does_not_persist_unit_mutation() {
-    let world = World::default();
+    let world = game_world();
     let original = record(8);
     write(&world, original.world_id, original.clone());
     let before = json::to_json(&world.game_partitions).unwrap();
@@ -186,7 +222,7 @@ fn game_partition_block_rollback_does_not_persist_unit_mutation() {
 fn game_partition_canonical_projection_binds_every_unit_field() {
     use crate::state::world_projection::WorldStateAccumulator;
 
-    let world = World::default();
+    let world = game_world();
     let original = record(9);
     let empty = WorldStateAccumulator::capture(&world.block()).unwrap();
     write(&world, original.world_id, original.clone());

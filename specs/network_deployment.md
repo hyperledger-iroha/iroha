@@ -753,20 +753,20 @@ $ iroha network apply networks/taira.toml --release 2026.10.1
 
 **Strategy `rolling`** (healthy). Canary order v4, v3, v2, v1. Before each restart, the G4 margin must hold (`blocks_to_pulse ≥ max(32, 3n)`); otherwise the tool first runs a supervised pulse crossing, driving writes until every validator is observed past the pulse with readyz 200. Then, for each node:
 1. Stop.
-2. `iroha3d --check-storage` with the new binary. The node must be stopped because Kura holds an exclusive store-root lock (`kura.rs:2514-2530, 2701`). It returns the tip, the Kura prefix hash at the latest snapshot height, and a snapshot-restore dry run. On failure: restart on the old release and abort with "release cannot open this ledger; use `iroha network reset`".
+2. `iroha3d --check-storage` with the new binary. The node must be stopped because Kura holds an exclusive store-root lock (`kura.rs:2514-2530, 2701`). It decodes every retained block and returns the tip (`tip_height`, `tip_hash`). Then `iroha3d --check-replay` with the new binary: on a copy of the store it restores the newest authenticated snapshot and re-executes every later block. It must report `start.source = "snapshot"` below the tip, `outcome = "matched"` and `replayed_to` equal to the tip. On failure: restart on the old release and abort with "release cannot take over this ledger".
 3. Swap the `release` symlink with `rename(2)` and start.
-4. Catch up to lag ≤ 2. The prefix hash must equal the old binary's reading.
+4. Catch up to lag ≤ 2. The block hash at the recorded tip height must equal the recorded `tip_hash`.
 5. Record actual readiness and catch-up without a G6 write diagnostic.
 
 Then G1–G5, and G9 and G10 when configured. A failure rolls back only the touched nodes.
 
-**Strategy `remediate`** (degraded). The unhealthy nodes (at most f) contribute no liveness, so they are upgraded first: stop, check-storage, swap, start. Each must catch up under the new release within the catch-up budget. If one cannot, it is rolled back, left stopped and reported, and the healthy nodes are not touched. Otherwise the healthy nodes follow under the `rolling` rules. This is how a release that fixes a stall, such as validator 1 stuck at 1969, reaches the network.
+**Strategy `remediate`** (degraded). The unhealthy nodes (at most f) contribute no liveness, so they are upgraded first: stop, check-storage, check-replay, swap, start. Each must catch up under the new release within the catch-up budget. If one cannot, it is rolled back, left stopped and reported, and the healthy nodes are not touched. Otherwise the healthy nodes follow under the `rolling` rules. This is how a release that fixes a stall, such as validator 1 stuck at 1969, reaches the network.
 
 **Strategy `coordinated`** (healthy, degraded or halted):
 1. Edge to maintenance (503 with Retry-After), so user transactions are refused.
 2. Stop all validators and record the tip.
 3. `CheckpointState`: a same-filesystem copy of `state/` into `previous/checkpoint-<op>/`, using a reflink where the filesystem supports it and a full copy otherwise. G0 counts this space.
-4. `--check-storage` on every node.
+4. `--check-storage` and `--check-replay` on every node.
 5. Swap all, start all.
 6. Verify, then bring the edge live.
 
@@ -961,7 +961,7 @@ There is no preinstalled dispatcher, no `guard.json` and no dispatcher transitio
 | Files | `PutBlob`, `EnsureRelease(manifest)`, `EnsureLayout`, `EnsureFile(path, sha, owner, mode)`, `EnsureUnit`, `SetOwnership(tree, user)` |
 | Identity | `GenerateIdentity(node)` (only if absent; returns the card), `GenerateGatewayCert(role)` (`openssl req -x509` on the host; the key never leaves), `WriteSecret`, `ReadSecretsForMove` (identity move only), `DealSeat(plan, phase, frames)` (one signed all-edge DKG seat; writes `beacon.cred`, returns public frames and the seat binding), `SignInstallRange(node, bundle, heights)`, `SignCouncilStage(preimage)` |
 | Process | `Service(start\|stop\|restart\|enable)`. It verifies `systemctl show` ActiveState, SubState, ExecMainPID, InvocationID, NRestarts and numeric ExecMainCode, treats an empty `/proc/<pid>/cmdline` as pending, and resolves `/proc/<pid>/exe` to confirm the release. |
-| State | `CheckConfig(release)`, `CheckStorage(release)` (prefix hash and snapshot dry-run), `SwapRelease`, `CheckpointState`, `RestoreCheckpoint`, `MoveStateToPrevious(gen)`, `RestoreFromHostRecord`, `CollectDiagnostics(since)` |
+| State | `CheckConfig(release)`, `CheckStorage(release)` (tip and block decode), `CheckReplay(release)` (snapshot restore and replay), `SwapRelease`, `CheckpointState`, `RestoreCheckpoint`, `MoveStateToPrevious(gen)`, `RestoreFromHostRecord`, `CollectDiagnostics(since)` |
 | Inrou | `EnsureInrouHost`, `Preseed` (drives the release's `sorafs-node` locally), `StoppedInrouReconcile`. The last runs after every stop, restart or crash of an Inrou node and before the next start. It checks that no process runs under the reserved slot uid, that the node's Inrou cgroup subtree is empty (remaining QEMU processes in it are killed), that the per-slot iptables owner chains are removed and that `/run` slot locks are released. It is ported from `taira_public_reset_stopped_runtime.rs` and `taira_stopped_owner_maintenance.rs`. |
 | Edge | `EnsureEdge(conf, live\|maintenance)` and `EnsureGateway(conf)`: write, `nginx -t`, reload, restore on failure |
 | Housekeeping | `Gc(retention)`, `EnsureWatch(config, webhook bytes)` |
@@ -1192,7 +1192,7 @@ manifest.sig = Ed25519("iroha.release.v1\0" || canonical Norito(manifest))
 **Optional engineering diagnostics.** These run independently of release signing and deployment:
 1. `cargo nextest run --profile release-gate`. Filtersets in `.config/nextest.toml` replace the 1,211 hand-listed names in `taira_release_check.py`.
 2. **Engine self-test** on the artifacts: `iroha network up networks/ci.toml --release ./dist/iroha-<v>.tar && iroha network verify ci --full && iroha network down ci`. That is a real 4-peer `sora-nexus-v1-qual` network with the beacon, snapshot-restore restarts, a pulse crossing and an epoch boundary.
-3. **Upgrade job:** `up` on the previous release, then `apply --release <new>`, then verify. It exercises the strategy decision, `--check-storage` and the prefix-hash comparison.
+3. **Upgrade job:** `up` on the previous release, then `apply --release <new>`, then verify. It exercises the strategy decision, `--check-storage`, `--check-replay` and the tip-hash comparison.
 4. **Container job:** regenerate `defaults/docker-compose.yml` and require byte equality, then boot it.
 5. An aarch64 KVM runner with `--inrou`, triggered by Inrou paths and nightly.
 
@@ -1234,7 +1234,7 @@ crossing test before deployment.
 - `apply` for an upgrade or config change:
   1. G0–G5 and G11, then classification.
   2. The G4 margin before each restart.
-  3. `--check-storage`.
+  3. `--check-storage` and `--check-replay`.
   4. Record the actual node start and serving state without a write diagnostic.
   5. G1–G5, G9 and G10.
 - `reset`: the same as a fresh generation.
@@ -1273,9 +1273,9 @@ crossing test before deployment.
    - The Provision, SignInstall and Assemble core moves from `beacon_bootstrap.rs` to `iroha_core::beacon::ceremony`. It is generalized from the hard-coded 4/2/quorum-3 and the Taira chain id (`beacon_bootstrap.rs:241-262, 455-510`) to n, f+1 and 2f+1.
    - Implemented on Core's signed all-edge DKG (the central dealer is gone): `global_beacon_genesis_dkg_session_v1` (canonical genesis session and attempt ids, which irohad's genesis seat also uses), `GlobalBeaconCeremonyPlanV1` (roster, handles, revision; `seat_credential` encodes one seat's credential), `deal_global_beacon_at_logical_clock_v1` (every seat in process, one `LocalGlobalThresholdBeaconDkgSeatV1` per validator key) and `GlobalBeaconInstallContextV1` (`FinalizeGlobalBeaconKey` drafts, per-host range signing and exact 2f+1 assembly). TODO(P3): the per-phase relay API behind `DealSeat` for remote hosts.
    - The irohad `beacon-bootstrap` subcommand no longer has a centralized dealer: it runs the signed all-edge per-seat DKG (one `provision-*-seat` process per seat over Core's `LocalGlobalThresholdBeaconDkgSeatV1`) and encodes seat credentials with `iroha_core::beacon::credential`. The cutover (P8) deletes it. `iroha_deploy` never depends on irohad.
-5. **`iroha3d --check-storage`.** Takes the store-root lock, opens Kura and the newest snapshot read-only with this build's decoders, and returns `{tip_height, tip_hash, prefix_hash_at_snapshot_height, snapshot_restore_dry_run: ok|error}`. `--check-config --json` prints the seven compatibility values listed in S1-B.
-   - Implementation (`irohad::compatibility_probe`): Kura is opened in emergency-Fast mode, which takes the store-root lock through Kura's own opener, validates the durable commit marker and maps the hash journal without repairing or publishing anything. Every retained block body up to the tip is decoded with this build and checked against the hash journal and its parent. The newest snapshot is checked using a temporary scratch Kura. A positive-height snapshot reports `NativeExecutionReplayRequired`: its signature does not authenticate the complete World against native witnessed-write commitments. Normal Strict startup needs the original signed genesis and complete native certified replay history.
-   - The report also carries `snapshot_height` and `snapshot_restore_error`; hashes are lowercase hex; an absent store reports height 0; an absent or disabled snapshot is `ok` with `snapshot_height = null`. The exit status is nonzero when the store cannot be read (no JSON) or the dry run fails (JSON first). Retired snapshot-import markers are rejected rather than converted into a trust root.
+5. **`iroha3d --check-storage`.** Takes the store-root lock, opens Kura read-only with this build's decoders, and returns `{tip_height, tip_hash}`; snapshot restore is `--check-replay`'s check. `--check-config --json` prints the seven compatibility values listed in S1-B.
+   - Implementation (`irohad::compatibility_probe`): Kura is opened in emergency-Fast mode, which takes the store-root lock through Kura's own opener, validates the durable commit marker and maps the hash journal without repairing or publishing anything. Every retained block body up to the tip is decoded with this build and checked against the hash journal and its parent. Snapshots are not read: only a snapshot's certified successor and the certified chain below it authenticate its World, which needs a Strict Kura over the blocks, so `--check-replay` restores it on a copy of the store.
+   - Hashes are lowercase hex and an absent store reports height 0. The exit status is nonzero when the store cannot be read (no JSON is printed then).
    - `--check-config --json` adds `status` (`ready`/`pending`). The genesis-bound values (`config_fingerprint`, `execution_policy_hash`, `nexus_amx_context_hash`) are `null` without a local signed genesis. `nexus_policy_digest` binds the rendered nonmonetary Nexus settings, frozen lane-manifest and compliance digests, and the original signed root fee policy. Its explicit pre-genesis absence is distinct from a present zero-fee policy. The Nexus/AMX preimage carries that same complete typed policy in `root.fee_policy`; runtime consensus views require the committed original and never substitute the local genesis-authoring recipe.
 6. **Signed beacon horizon.** `SumeragiStatus` gains `beacon_horizon: Option<BeaconHorizonStatusV1 {epoch_length_blocks, next_required_pulse_height, active_session_id, session_covers_next_pulse, local_provider_ready}>` (explicit `null` until serialized activation of that exact height has published it; G4 treats `null` as not yet observable; the epoch length and the next pulse both come from the same frozen `HeightContext`, the epoch length being the span of its authenticated validator epoch authorization, so an `NPoS` horizon is published from the genesis height on; validation rejects a zero `NPoS` epoch length and a non-zero permissioned one), filled from the authenticated beacon height binding. It is embedded in the signed `BridgeFinalityAttestationBodyV1` (`bridge.rs:746-768`), so G4 works over public routes. Norito roundtrip tests are added.
 7. **Torii.**
@@ -1541,7 +1541,7 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
   - Before the install, the fixture requires `/readyz` to be 503 and the local horizon to name no session. `Log` transactions drive the tip to `finalized_at_height`. Three validators pre-sign 16 heights each, and the certificate for the next height installs.
   - At the install height, with no further block, every validator reports `local_provider_ready` and `/readyz` is 200. The pulse at the first mandatory height (63) verifies against the session in all four Kura stores.
   - From height 1 on, the fixture compares every validator's reported epoch length (64) and `--check-config --json` values with its live `SumeragiStatus` and the signed genesis context.
-  - After the stop, `--check-storage` on every validator restores its newest signed snapshot (written by the qualification cadence) and reconciles every retained block hash with Kura; the report is `ok` with a non-null `snapshot_height`.
+  - After the stop, `--check-storage` reads every validator's store, and `--check-replay` restores its newest signed snapshot below the tip (written by the qualification cadence) and reproduces every later block: `start.source` is `snapshot`, `outcome` is `matched` and `replayed_to` is the tip.
   - Its genesis is kagami's Taira output re-targeted to the profile (Taira-only catalog content removed, custody account replaced, qual epoch), signed against the flattened profile render. TODO(P2): use the engine's genesis builder.
 - Unprivileged start must be qualified on macOS arm64 and Linux x86_64 and aarch64, including `production_mode` on macOS. The fixture starts four stock `iroha3d` validator-overlay nodes as a normal user, with every secret in `data_dir/secrets/`. TODO: retain current-candidate results for all three platforms; Linux x86_64 and aarch64 were not run in P1.
 
@@ -1665,7 +1665,7 @@ Line estimates count new or moved production lines. Tests are extra: about 12k l
 | Risk | Mitigation |
 |---|---|
 | Deleting ~150k lines loses edge-case fixes | Each fix becomes a named test first (§12). Consumers are ported before the cutover, and container rehearsals cover every strategy. |
-| An upgrade is misjudged as rolling | The seven-value predicate, canary order, `--check-storage` with the prefix hash, per-node rollback, the CI upgrade job, and coordinated checkpoints. |
+| An upgrade is misjudged as rolling | The seven-value predicate, canary order, `--check-storage` and `--check-replay` with the tip-hash comparison, per-node rollback, the CI upgrade job, and coordinated checkpoints. |
 | Executor and Core disagree on permissions | Identical matrices on both sides (D-2). |
 | Observer floods on public P2P | Accept throttling, per-peer bounded Sumeragi ingress and the connection budget (D-4), and T8. |
 | Beacon install race | Pre-signed certificates for a range of heights, submitted before the edge exists. Install happens once. |

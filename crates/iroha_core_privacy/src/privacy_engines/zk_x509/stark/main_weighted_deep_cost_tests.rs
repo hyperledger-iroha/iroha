@@ -27,6 +27,10 @@ fn scales(column: usize) -> [E; 2] {
 
 #[test]
 #[ignore = "native19 validated DEEP accumulation cost; component timing only"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn widened_native_weighted_accumulation_cost_preserves_scalar_batches() {
     assert!(!cfg!(debug_assertions), "use an optimized build");
     let native = boundary_columns(1 << 19);
@@ -115,6 +119,10 @@ fn widened_native_weighted_accumulation_cost_preserves_scalar_batches() {
 
 #[test]
 #[ignore = "native19 retained DEEP accumulation cost; component timing only"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn widened_retained_weighted_accumulation_cost_preserves_scalar_batches() {
     assert!(!cfg!(debug_assertions), "use an optimized build");
     let coefficients = boundary_columns((1 << 19) + MASK_LENGTH);

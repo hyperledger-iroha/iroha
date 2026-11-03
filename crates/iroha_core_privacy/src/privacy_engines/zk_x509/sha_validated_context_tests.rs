@@ -198,6 +198,10 @@ fn validated_rfc_context_preserves_every_local_residue_and_row_refusal() {
 
 #[test]
 #[ignore = "full SHA/RFC AIR raw-validation versus immutable-capability cost"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn validated_composition_context_cost_preserves_complete_air_outputs() {
     use super::super::{
         credential_pre_aux::ValidatedMainCompositionChallengesV1, rfc5280_stark::*,

@@ -19,7 +19,7 @@ fn columns_v1(native: u8) -> Vec<Column> {
     (0..8usize)
         .map(|column| {
             Column::from_vec_v1(
-                (0..(1usize << native) + MASK_DEGREE + 1)
+                (0..=((1usize << native) + MASK_DEGREE))
                     .map(|degree| F((degree * 137 + column * 53 + 19) as u64))
                     .collect(),
             )

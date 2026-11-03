@@ -19572,6 +19572,9 @@ mod multisig_contract_call_tests {
             Parameter,
             system::{SumeragiConsensusMode, SumeragiNposParameters},
         };
+        // Keep the chain constructor's retired generations live while measuring this
+        // pool: concurrent epoch collection must not refund them mid-check.
+        let _retirement_pin = crossbeam_epoch::pin();
         let mut config = TestChainConfig::new(World::new(), 1_000);
         config.consensus_mode = SumeragiConsensusMode::Npos;
         config.genesis_parameters.push(Parameter::Custom(

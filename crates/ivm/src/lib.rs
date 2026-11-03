@@ -526,7 +526,8 @@ pub struct StackSizeOutcome {
 ///
 /// Hosts should call this early in process startup (before creating VMs) to
 /// avoid oversubscription when multiple thread pools are present. Passing
-/// `None` for a bound keeps the automatic value (number of physical cores).
+/// `None` for a bound keeps the automatic value (available parallelism, or one
+/// worker if the operating system cannot provide an estimate).
 /// After resolving "auto" bounds, `min <= max` is enforced by clamping `min` down.
 pub fn set_scheduler_thread_limits(min_threads: Option<usize>, max_threads: Option<usize>) {
     crate::parallel::set_default_scheduler_limits(min_threads, max_threads);
@@ -646,7 +647,7 @@ mod tests {
     }
     #[test]
     fn init_global_rayon_reports_existing_pool() {
-        let threads = num_cpus::get_physical().max(1);
+        let threads = crate::parallel::configured_thread_count(0);
         let first = init_global_rayon(threads);
         assert!(
             first.is_ok() || first.is_err(),

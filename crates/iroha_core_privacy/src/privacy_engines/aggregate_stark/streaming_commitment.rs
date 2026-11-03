@@ -83,6 +83,7 @@ pub(super) fn first_error_v1(
 }
 
 /// Reduce one complete aligned tile and append precisely its subtree root.
+#[cfg(test)]
 pub(super) fn append_tile_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     nodes: &mut [PrivacyOuterDigestV1],
@@ -207,6 +208,7 @@ pub(super) fn append_retained_subtrees_v1(
 }
 
 /// Tree input remains in exact order; all excess and short streams still fail.
+#[cfg(test)]
 pub(super) fn append_leaves_v1(
     accumulator: &mut StreamingMerkleAccumulatorV1,
     mut leaves: impl Iterator<Item = Result<PrivacyOuterDigestV1, AggregateStarkErrorV1>>,

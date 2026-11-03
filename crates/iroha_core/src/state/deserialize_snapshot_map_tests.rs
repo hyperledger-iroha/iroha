@@ -543,3 +543,100 @@ fn evidence_comparison_matches_ordinary_writer_for_native_and_sccp_records() {
     );
     assert_eq!(snapshot.revert_map().get(&sccp_key), Some(&None));
 }
+
+#[test]
+fn a_world_without_its_uninstalled_members_restores_them_empty() {
+    use crate::runtime::catalog::{
+        additions::test_additions::{CELL, LOG, TABLE},
+        test_catalog,
+    };
+    test_catalog::with_additions(&[LOG], || {
+        let world = World::default();
+        let encoded = json::to_json(&world).unwrap();
+        let mut uninstalled =
+            crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
+                .expect("uninstalled members");
+        uninstalled.sort_unstable();
+        let mut added = [TABLE, CELL].map(|field| field.strip_prefix("world.").unwrap());
+        added.sort_unstable();
+        assert_eq!(
+            uninstalled, added,
+            "the members an addition adds stay uninstalled until a change set activates it"
+        );
+        let members = json_object_members(&encoded).unwrap();
+        let written: Vec<String> = members
+            .iter()
+            .filter(|(key, _)| !uninstalled.iter().any(|member| member == key))
+            .map(|(key, raw)| format!("\"{key}\":{raw}"))
+            .collect();
+        let written = format!("{{{}}}", written.join(","));
+        let ivm = IVM::new(0);
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        let budget = AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        );
+
+        let mut map = SnapshotJsonMap::parse_world_fixture(&written).unwrap();
+        map.omit_uninstalled_world_members().unwrap();
+        let restored = match parse_world(&budget, map, &seed) {
+            Ok(restored) => restored,
+            Err(error) => panic!("a World without its uninstalled members restores: {error:?}"),
+        };
+        let restored = json::to_json(&restored).unwrap();
+        let restored = json_object_members(&restored).unwrap();
+        let raw = |members: &[(&str, &str)], member: &str| {
+            members
+                .iter()
+                .find(|(key, _)| *key == member)
+                .map(|(_, raw)| raw.to_string())
+        };
+        for member in &uninstalled {
+            assert_eq!(
+                raw(&restored, member),
+                raw(&members, member),
+                "{member} restores as the empty World holds it"
+            );
+        }
+
+        // The writer leaves uninstalled members out, so a snapshot carrying one is not canonical.
+        let mut map = SnapshotJsonMap::parse_world_fixture(&encoded).unwrap();
+        map.omit_uninstalled_world_members().unwrap();
+        assert!(
+            parse_world(&budget, map, &seed).is_err(),
+            "an uninstalled member in the snapshot is refused"
+        );
+    });
+}
+
+#[test]
+fn a_baseline_world_installs_every_member_but_the_fields_additions_add() {
+    let world = World::default();
+    let catalog = crate::runtime::release_catalog().expect("release catalog");
+    let mut added: Vec<String> = catalog
+        .additions
+        .iter()
+        .flat_map(|addition| addition.storage.keys())
+        .map(|field| {
+            field
+                .strip_prefix("world.")
+                .expect("an addition adds World fields")
+                .to_owned()
+        })
+        .collect();
+    added.sort_unstable();
+    assert_eq!(added, ["game_partitions"]);
+    let mut uninstalled: Vec<String> =
+        crate::runtime::uninstalled_world_members(world.runtime_selection.view().get())
+            .expect("uninstalled members")
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+    uninstalled.sort_unstable();
+    assert_eq!(
+        uninstalled, added,
+        "the baseline installs every World field of this release but those its additions add"
+    );
+}

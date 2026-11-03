@@ -954,6 +954,10 @@ async fn advance_to_semantic_base_after_crl_second(
     ))
 }
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[expect(
+    clippy::suspicious_operation_groupings,
+    reason = "the semantic replay must carry a different nonce from the canonical transaction"
+)]
 async fn canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart() -> Result<()> {
     // The actual compiled profile must succeed before any network or proof is
     // constructed. JointSecurityReductionIncomplete remains an explicit error;

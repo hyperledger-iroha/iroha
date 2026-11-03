@@ -519,3 +519,318 @@ fn malformed_payload_rejection_round_trips_and_names_its_wire_id() {
     );
     assert!(rejection.to_string().contains("iroha.bond.call.v1"));
 }
+
+/// The JSON of a change set, whose shapes the published OpenAPI schema closes.
+///
+/// `scripts/tests/check_openapi_fail_closed_test.py` validates this same fixture against that
+/// schema, so a new variant reaches the schema through the coverage check here.
+mod change_set_json_fixture {
+    use std::collections::BTreeSet;
+
+    use iroha_data_model::runtime::{
+        definition::{
+            BindingV1, CarrierFieldV1, CarrierNodeV1, CarrierSchemaV1, CarrierVariantV1,
+            CommitmentProfileDescriptorV1, CompletionClosureV1, DefinitionDescriptorV1,
+            DefinitionId, EntrypointV1, EventDescriptorV1, HostProfileDescriptorV1,
+            ImplementationCodeV1, ImplementationDescriptorV1, InterfaceDescriptorV1,
+            KernelDescriptorV1, MigrationDescriptorV1, ParameterDescriptorV1,
+            PermissionDescriptorV1, ProjectionV1, ResourceLimitsV1, SchemaV1, SelectionId,
+            ServiceEntryV1, ServicesProfileDescriptorV1, StorageDescriptorV1, StorageShapeV1,
+        },
+        lifecycle::{ChangeSetV1, RestrictionKindV1, RootScopeV1, SelectionTransitionV1},
+    };
+    use iroha_schema::IntoSchema;
+    use norito::json::Value;
+
+    const FIXTURE: &str = include_str!("../../../fixtures/governance/runtime_change_set_v1.json");
+    const LIMITS: ResourceLimitsV1 = ResourceLimitsV1 {
+        max_gas: u64::MAX,
+        max_effects: 64,
+        max_call_depth: 8,
+    };
+    const WIRE_ID: &str = "iroha.fixture.call.v1";
+
+    fn id(seed: u8) -> DefinitionId {
+        DefinitionId([seed; 32])
+    }
+
+    fn codec(name: &str) -> SchemaV1 {
+        SchemaV1::Codec(format!("norito:{name}@1.0.0"))
+    }
+
+    fn every_carrier_node() -> SchemaV1 {
+        SchemaV1::Carrier(CarrierSchemaV1 {
+            nodes: vec![
+                CarrierNodeV1::Unit,
+                CarrierNodeV1::Bool,
+                CarrierNodeV1::U8,
+                CarrierNodeV1::U16,
+                CarrierNodeV1::U32,
+                CarrierNodeV1::U64,
+                CarrierNodeV1::U128,
+                CarrierNodeV1::I64,
+                CarrierNodeV1::String { max_bytes: 64 },
+                CarrierNodeV1::Bytes { max_bytes: 64 },
+                CarrierNodeV1::AccountId,
+                CarrierNodeV1::AssetDefinitionId,
+                CarrierNodeV1::Hash,
+                CarrierNodeV1::Option { inner: 0 },
+                CarrierNodeV1::Vec {
+                    element: 1,
+                    max_len: 8,
+                },
+                CarrierNodeV1::Map {
+                    key: 2,
+                    value: 3,
+                    max_len: 8,
+                },
+                CarrierNodeV1::Struct {
+                    fields: vec![CarrierFieldV1 {
+                        name: "first".into(),
+                        node: 4,
+                    }],
+                },
+                CarrierNodeV1::Enum {
+                    variants: vec![CarrierVariantV1 {
+                        discriminant: 0,
+                        name: "only".into(),
+                        node: 16,
+                    }],
+                },
+            ],
+        })
+    }
+
+    fn native_code(module: &str) -> ImplementationCodeV1 {
+        ImplementationCodeV1::Native {
+            module: module.into(),
+            reference_closure: [4; 32],
+        }
+    }
+
+    fn implementation(
+        entrypoint: EntrypointV1,
+        code: ImplementationCodeV1,
+        host_profile: Option<DefinitionId>,
+    ) -> DefinitionDescriptorV1 {
+        DefinitionDescriptorV1::Implementation(ImplementationDescriptorV1 {
+            entrypoint,
+            code,
+            reads: vec![id(5)],
+            writes: vec![id(5)],
+            scans: vec![id(5)],
+            events: vec![id(1)],
+            permissions: vec![id(6)],
+            parameters: vec![id(7)],
+            invokes: vec![id(3)],
+            host_profile,
+            services_profile: id(8),
+            limits: LIMITS,
+        })
+    }
+
+    /// One value of every JSON shape a published definition or a transition can take. It is a
+    /// codec fixture that nothing applies, so its identities are arbitrary.
+    fn every_json_shape() -> ChangeSetV1 {
+        ChangeSetV1 {
+            network: super::network(),
+            root: RootScopeV1::Universal,
+            predecessor: SelectionId([0x21; 32]),
+            successor: SelectionId([0x22; 32]),
+            effective_height: 120,
+            publish: vec![
+                DefinitionDescriptorV1::Interface(InterfaceDescriptorV1 {
+                    wire_id: WIRE_ID.into(),
+                    payload: codec("iroha.fixture.Call"),
+                    rejection_codes: vec!["fixture_rejected".into()],
+                    events: vec![id(1)],
+                    metering_class: "iroha.fixture".into(),
+                    contract_statement: [2; 32],
+                }),
+                implementation(
+                    EntrypointV1::Instructions(vec![id(3)]),
+                    native_code("iroha.fixture.instructions"),
+                    None,
+                ),
+                implementation(
+                    EntrypointV1::Hook("iroha.fixture.hook".into()),
+                    ImplementationCodeV1::Ivm {
+                        code_hash: [9; 32],
+                        entrypoint: "main".into(),
+                    },
+                    Some(id(10)),
+                ),
+                implementation(
+                    EntrypointV1::Query("iroha.fixture.query".into()),
+                    native_code("iroha.fixture.query"),
+                    None,
+                ),
+                DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
+                    namespace: "world.fixture_table".into(),
+                    shape: StorageShapeV1::Table {
+                        key: codec("iroha.fixture.Key"),
+                    },
+                    value: codec("iroha.fixture.Value"),
+                    initial: None,
+                    invariants: [11; 32],
+                    projection: ProjectionV1::BareNorito,
+                }),
+                DefinitionDescriptorV1::Storage(StorageDescriptorV1 {
+                    namespace: "world.fixture_cell".into(),
+                    shape: StorageShapeV1::Cell,
+                    value: codec("iroha.fixture.Value"),
+                    initial: Some(vec![1, 2, 3]),
+                    invariants: [11; 32],
+                    projection: ProjectionV1::Semantic("iroha.fixture.projection@1.0.0".into()),
+                }),
+                DefinitionDescriptorV1::Event(EventDescriptorV1 {
+                    name: "iroha.fixture.event".into(),
+                    schema: every_carrier_node(),
+                }),
+                DefinitionDescriptorV1::Permission(PermissionDescriptorV1 {
+                    name: "iroha.fixture.permission".into(),
+                    payload: codec("iroha.fixture.Permission"),
+                }),
+                DefinitionDescriptorV1::Parameter(ParameterDescriptorV1 {
+                    name: "iroha.fixture.parameter".into(),
+                    schema: codec("iroha.fixture.Parameter"),
+                    initial: vec![4, 5],
+                }),
+                DefinitionDescriptorV1::HostProfile(HostProfileDescriptorV1 {
+                    abi_version: 1,
+                    abi_hash: [12; 32],
+                    metering: [13; 32],
+                }),
+                DefinitionDescriptorV1::ServicesProfile(ServicesProfileDescriptorV1 {
+                    services: vec![ServiceEntryV1 {
+                        name: "iroha.fixture.service".into(),
+                        reference_closure: [14; 32],
+                    }],
+                }),
+                DefinitionDescriptorV1::CommitmentProfile(CommitmentProfileDescriptorV1 {
+                    scheme: "iroha.fixture.scheme".into(),
+                    parameters: [15; 32],
+                }),
+                DefinitionDescriptorV1::Kernel(KernelDescriptorV1 {
+                    name: "iroha.fixture.kernel".into(),
+                    reference_closure: [16; 32],
+                }),
+                DefinitionDescriptorV1::Migration(MigrationDescriptorV1 {
+                    code: native_code("iroha.fixture.migration"),
+                    from: vec![id(17)],
+                    to: vec![id(18)],
+                    cursor: codec("iroha.fixture.Cursor"),
+                    host_profile: None,
+                    services_profile: id(8),
+                    limits: LIMITS,
+                }),
+            ],
+            transitions: vec![
+                SelectionTransitionV1::InstallStorage(id(5)),
+                SelectionTransitionV1::RetireStorage(id(19)),
+                SelectionTransitionV1::Activate(id(3)),
+                SelectionTransitionV1::Deactivate(id(20)),
+                SelectionTransitionV1::Bind(BindingV1 {
+                    wire_id: WIRE_ID.into(),
+                    interface: id(3),
+                    implementation: id(21),
+                }),
+                SelectionTransitionV1::Unbind("iroha.fixture.retired.v1".into()),
+                SelectionTransitionV1::Restrict {
+                    definition: id(20),
+                    restriction: RestrictionKindV1::Deprecated,
+                },
+                SelectionTransitionV1::Restrict {
+                    definition: id(20),
+                    restriction: RestrictionKindV1::AdmissionClosed,
+                },
+                SelectionTransitionV1::Restrict {
+                    definition: id(20),
+                    restriction: RestrictionKindV1::CompletionOnly,
+                },
+                SelectionTransitionV1::Restrict {
+                    definition: id(20),
+                    restriction: RestrictionKindV1::Disabled,
+                },
+                SelectionTransitionV1::Lift(id(20)),
+                SelectionTransitionV1::SetKernel(id(22)),
+                SelectionTransitionV1::SetCommitmentProfile(id(23)),
+                SelectionTransitionV1::SetServicesProfile(id(8)),
+                SelectionTransitionV1::RetainCompletion(CompletionClosureV1 {
+                    obligation: [24; 32],
+                    definitions: vec![id(3)],
+                }),
+                SelectionTransitionV1::ReleaseCompletion([24; 32]),
+            ],
+            qualification: [0x5a; 32],
+        }
+    }
+
+    fn variant_tags<T: IntoSchema + 'static>() -> Vec<String> {
+        let schema = T::schema();
+        let Some(iroha_schema::Metadata::Enum(metadata)) = schema.get::<T>() else {
+            panic!("{} must keep its closed enum schema", T::type_name());
+        };
+        metadata
+            .variants
+            .iter()
+            .map(|variant| variant.tag.clone())
+            .collect()
+    }
+
+    fn collect_kinds(value: &Value, kinds: &mut BTreeSet<String>) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::String(kind)) = map.get("kind") {
+                    kinds.insert(kind.clone());
+                }
+                for child in map.values() {
+                    collect_kinds(child, kinds);
+                }
+            }
+            Value::Array(items) => items.iter().for_each(|child| collect_kinds(child, kinds)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn the_fixture_is_the_encoder_output_of_every_definition_and_transition_shape() {
+        let change_set = every_json_shape();
+        for definition in &change_set.publish {
+            definition
+                .validate()
+                .expect("the fixture's definitions follow their format rules");
+        }
+        let encoded = norito::json::to_json(&change_set).expect("encode the fixture change set");
+        let encoded_value: Value = norito::json::from_str(&encoded).expect("encoded JSON parses");
+        let fixture_value: Value = norito::json::from_str(FIXTURE).expect("fixture JSON parses");
+        assert_eq!(
+            encoded_value, fixture_value,
+            "fixtures/governance/runtime_change_set_v1.json is not the encoder's output: {encoded}"
+        );
+        let decoded: ChangeSetV1 = norito::json::from_str(FIXTURE).expect("fixture decodes");
+        assert_eq!(decoded, change_set);
+
+        let mut kinds = BTreeSet::new();
+        collect_kinds(&fixture_value, &mut kinds);
+        for tag in [
+            variant_tags::<DefinitionDescriptorV1>(),
+            variant_tags::<SelectionTransitionV1>(),
+            variant_tags::<SchemaV1>(),
+            variant_tags::<CarrierNodeV1>(),
+            variant_tags::<ImplementationCodeV1>(),
+            variant_tags::<EntrypointV1>(),
+            variant_tags::<StorageShapeV1>(),
+            variant_tags::<ProjectionV1>(),
+            variant_tags::<RestrictionKindV1>(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            assert!(
+                kinds.contains(&tag),
+                "the fixture and the OpenAPI schema need the `{tag}` variant"
+            );
+        }
+    }
+}

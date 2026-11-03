@@ -21,6 +21,9 @@ REPO_ROOT = PYTHON_ROOT.parent
 INPUT_PATH = SDK_ROOT / "requirements-ci.in"
 LOCK_PATH = SDK_ROOT / "requirements-ci.lock"
 LOCAL_PROJECT_NAMES = {"iroha-native", "iroha-norito", "iroha-python", "iroha-torii-client"}
+# Platform-only transitive dependencies the hashed CI gate names as roots, with their markers:
+# the lock is compiled on a POSIX host, so it records them only when requirements-ci.in pins them.
+PLATFORM_TRANSITIVE_ROOTS = {"colorama": 'sys_platform == "win32"'}
 HASH_PATTERN = re.compile(r"--hash=sha256:[0-9a-f]{64}(?:\s|$)")
 
 
@@ -96,7 +99,13 @@ def test_ci_dependency_roots_match_local_project_metadata() -> None:
     expected_requirements = _expected_direct_requirements()
     expected_names = {_canonical_name(requirement.name) for requirement in expected_requirements}
 
-    assert set(input_requirements) == expected_names
+    assert set(input_requirements) == expected_names | set(PLATFORM_TRANSITIVE_ROOTS)
+    platform_markers = {
+        _canonical_name(requirement.name): str(requirement.marker)
+        for requirement in map(Requirement, _requirement_lines(INPUT_PATH))
+        if _canonical_name(requirement.name) in PLATFORM_TRANSITIVE_ROOTS
+    }
+    assert platform_markers == PLATFORM_TRANSITIVE_ROOTS
     for metadata_requirement in expected_requirements:
         name = _canonical_name(metadata_requirement.name)
         version = _exact_version(input_requirements[name])

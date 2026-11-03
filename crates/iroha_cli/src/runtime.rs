@@ -130,6 +130,9 @@ impl Run for AbiCommand {
 pub enum UpgradeCommand {
     /// Show the committed selection, the attesting committee and every recorded change set
     List,
+    /// Have the node draft, from its release catalog and the committed selection, the change set
+    /// that activates an addition of its release; endorse and propose the printed change set
+    Draft(DraftArgs),
     /// Submit the Parliament proposal that schedules a change set, with the trusted release
     /// signers' endorsements the committed provenance policy requires
     Propose(ProposeArgs),
@@ -149,12 +152,65 @@ impl Run for UpgradeCommand {
                 let value = client.get_runtime_upgrades_json()?;
                 context.print_data(&value)
             }
+            UpgradeCommand::Draft(args) => args.run(context),
             UpgradeCommand::Propose(args) => args.run(context),
             UpgradeCommand::Cancel(args) => args.run(context),
             UpgradeCommand::Endorse(args) => args.run(context),
             UpgradeCommand::Attest(args) => args.run(context),
         }
     }
+}
+#[derive(clap::Args, Debug)]
+pub struct DraftArgs {
+    /// Native module of the addition to activate
+    #[arg(long, value_name = "MODULE")]
+    addition: String,
+    /// First height executed under the successor selection
+    #[arg(long, value_name = "HEIGHT")]
+    effective_height: u64,
+    /// Digest of the qualification evidence for the successor composition (32-byte hex)
+    #[arg(long, value_name = "HEX")]
+    qualification: String,
+}
+impl Run for DraftArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let qualification = decode_hex_32("qualification", &self.qualification)?;
+        let client = context.client_from_config()?;
+        // The node drafts from its own release catalog, so the change set publishes exactly the
+        // definitions that release executes (`specs/live_runtime_upgrades.md` §4).
+        let draft = client.post_runtime_draft_upgrade_json(
+            &self.addition,
+            self.effective_height,
+            &hex::encode(qualification),
+        )?;
+        context.print_data(&drafted_change_set(&draft)?)
+    }
+}
+/// The change set a node drafted, checked against the identity it reported.
+fn drafted_change_set(
+    draft: &norito::json::Value,
+) -> Result<iroha::data_model::runtime::lifecycle::ChangeSetV1> {
+    let change_set: iroha::data_model::runtime::lifecycle::ChangeSetV1 = norito::json::from_value(
+        draft
+            .get("change_set")
+            .cloned()
+            .ok_or_else(|| eyre!("the node drafted no change set"))?,
+    )
+    .wrap_err("malformed drafted change set")?;
+    let id = change_set
+        .id()
+        .map_err(|error| eyre!("change-set identity: {error}"))?;
+    let reported = draft
+        .get("id_hex")
+        .and_then(norito::json::Value::as_str)
+        .ok_or_else(|| eyre!("the node reported no change-set identity"))?;
+    if reported != hex::encode(id.0) {
+        return Err(eyre!(
+            "the drafted change set has identity {}, not the reported {reported}",
+            hex::encode(id.0)
+        ));
+    }
+    Ok(change_set)
 }
 #[derive(clap::Args, Debug)]
 pub struct ProposeArgs {
@@ -523,6 +579,30 @@ mod tests {
             context.submitted,
             Some(Executable::Instructions(vec![expected].into()))
         );
+    }
+
+    #[test]
+    fn a_drafted_change_set_carries_the_identity_the_node_reported() {
+        let change_set = change_set();
+        let id_hex = hex::encode(change_set.id().expect("identity").0);
+        let body = norito::json::to_value(&change_set).expect("change-set JSON");
+        let draft = |id_hex: &str| {
+            let mut draft = norito::json::Map::new();
+            draft.insert("id_hex".into(), norito::json::Value::from(id_hex));
+            draft.insert("change_set".into(), body.clone());
+            norito::json::Value::Object(draft)
+        };
+        assert_eq!(
+            drafted_change_set(&draft(&id_hex)).expect("drafted"),
+            change_set
+        );
+        assert!(
+            drafted_change_set(&draft(&hex::encode([0xEE; 32]))).is_err(),
+            "a change set whose identity differs from the reported one is refused"
+        );
+        let mut without_change_set = norito::json::Map::new();
+        without_change_set.insert("id_hex".into(), norito::json::Value::from(id_hex.as_str()));
+        assert!(drafted_change_set(&norito::json::Value::Object(without_change_set)).is_err());
     }
 
     #[test]

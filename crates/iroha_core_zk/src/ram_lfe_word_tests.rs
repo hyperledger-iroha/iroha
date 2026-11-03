@@ -393,7 +393,9 @@ fn compact_owned_words_clear_on_success_error_and_unwind() {
 fn compact_word_geometry_pins_capacity_inputs() {
     let mut meta = ConstraintSystem::default();
     let _ = Compression::configure(&mut meta);
-    assert_eq!(meta.degree(), 5);
+    // The normalized lookup over a degree-two input and a degree-one table needs
+    // `max(6, 2 + 2 * (2 + 1)) = 8` (specs/plonk_ipa_v1.md, lookup argument).
+    assert_eq!(meta.degree(), 8);
     assert_eq!(meta.num_advice_columns(), 6);
     assert_eq!(meta.advice_queries().len(), 6);
     assert!(
@@ -414,7 +416,7 @@ fn compact_word_geometry_pins_capacity_inputs() {
         meta.fixed_queries().len(),
         meta.lookups().len(),
         meta.permutation().columns().len(),
-        meta.degree() - 2,
+        (meta.degree() - 2) / 2,
         meta.blinding_factors(),
         meta.minimum_rows(),
     );

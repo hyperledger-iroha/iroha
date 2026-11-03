@@ -6005,7 +6005,7 @@
    "sites": [
     ["crates/iroha_core/src/block.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core/src/gossiper.rs", "unavailable", "unavailable", 1],
-    ["crates/iroha_core/src/queue.rs", "unavailable", "unavailable", 5],
+    ["crates/iroha_core/src/queue.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core/src/queue/router.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/state/network_policy_routes.rs", "unavailable", "unavailable", 1],
     ["crates/iroha_core/src/state/output_network.rs", "unavailable", "unavailable", 1],

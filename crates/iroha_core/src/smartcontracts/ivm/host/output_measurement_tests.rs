@@ -1,4 +1,8 @@
 //! Original local output-measurement refusals never become certified byte-limit faults.
+#![expect(
+    clippy::disallowed_types,
+    reason = "these refusals exercise Norito's canonical sorting scratch, which only an unordered map allocates"
+)]
 
 use super::*;
 use crate::execution_attempt::ExecutionAttemptError;

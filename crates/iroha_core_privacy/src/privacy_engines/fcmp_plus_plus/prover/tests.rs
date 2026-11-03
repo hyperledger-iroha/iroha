@@ -164,10 +164,10 @@ fn assert_source_counts(source: &str, expected: &[(&str, usize)]) {
     }
 }
 const SOURCE_CONTRACT_GROUPS_V1: &[u8] = include_bytes!("tests/source_contract_groups_v1.json");
-const SOURCE_CONTRACT_GROUPS_V1_LEN: usize = 40_108;
+const SOURCE_CONTRACT_GROUPS_V1_LEN: usize = 40_005;
 const SOURCE_CONTRACT_GROUPS_V1_SHA256: [u8; 32] = [
-    0xab, 0x65, 0xde, 0x4c, 0xc1, 0x54, 0x09, 0xe2, 0x79, 0x2c, 0x43, 0x39, 0xb6, 0x55, 0xf5, 0x8b,
-    0xf7, 0xfa, 0x67, 0x45, 0x73, 0xe3, 0x3e, 0xf7, 0x39, 0xc1, 0x98, 0x36, 0xaa, 0x67, 0x87, 0x29,
+    0xaf, 0x1a, 0x5e, 0x93, 0xcc, 0xe2, 0xa2, 0xda, 0x3b, 0x8e, 0x0f, 0xa3, 0x99, 0xde, 0x63, 0xea,
+    0xc5, 0x36, 0xac, 0x3a, 0x85, 0xdb, 0x66, 0x8d, 0x0a, 0x91, 0x3c, 0x1a, 0x2a, 0xf2, 0x1a, 0xeb,
 ];
 #[derive(Debug, crate::json_macros::JsonDeserialize)]
 #[norito(deny_unknown_fields)]
@@ -321,6 +321,11 @@ fn assert_source_point_order(source: &str, expected: &[SourcePoint<'_>]) {
         previous = Some(position);
     }
 }
+/// The ownership expectation each fixture owner wrapper carries between its gate and its signature.
+const OWNER_WRAPPER_EXPECT: &str = "#[expect(\n    clippy::needless_pass_by_value,\n    reason = \"Taking ownership ensures every accepted secret is zeroized on success, failure, and unwind before the caller can reuse it.\"\n)]\n";
+/// The borrowed-arithmetic expectation the output-opening fixture carries between its gate and
+/// its signature.
+const BORROWED_ARITHMETIC_EXPECT: &str = "#[expect(\n    clippy::op_ref,\n    reason = \"Borrowed arithmetic avoids copying secret values out of their zeroizing owners.\"\n)]\n";
 macro_rules! source_part {
     ($source:expr; $start:expr => $end:expr) => {
         source_section($source, $start, $end)
@@ -503,7 +508,7 @@ fn fixture_u64_wrapper_owns_slots_on_success_error_and_inner_unwind() {
 #[test]
 fn fixture_u64_wrapper_source_takes_every_slot_before_inner_conversion() {
     let source = include_str!("../prover.rs");
-    source_has!(source; "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_spendable_output_v1(");
+    source_has!(source; format!("#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\n{OWNER_WRAPPER_EXPECT}fn with_fcmp_fixture_u64_secret_owners_v1<T>(").as_str(), "#[cfg(any(test, feature = \"test-utils\", feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_spendable_output_v1(");
     let owner_scope = source_part!(source; "fn with_fcmp_fixture_u64_secret_owners_v1<T>(" => "fn fcmp_fixture_spendable_output_v1(");
     source_counts!(owner_scope; "ProverSecretCopyValueV1<u64>" => 5, ".expose_ref()" => 5);
     source_has!(owner_scope; "operation: impl FnOnce(&u64, &u64, &u64, &u64, &u64) -> T");
@@ -616,7 +621,7 @@ fn fixture_output_opening_owns_success_error_mismatch_and_unwind_slots() {
 #[test]
 fn fixture_output_opening_source_stays_owned_until_borrowed_constructor() {
     let source = include_str!("../prover.rs");
-    source_has!(source; "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_output_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_output_opening_v1(");
+    source_has!(source; format!("#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n{OWNER_WRAPPER_EXPECT}fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(").as_str(), format!("#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n{BORROWED_ARITHMETIC_EXPECT}fn fcmp_fixture_output_opening_v1(").as_str());
     let owner_scope = source_part!(source; "fn with_fcmp_fixture_output_u64_secret_owners_v1<T>(" => "fn fcmp_fixture_output_opening_v1(");
     source_counts!(owner_scope; "ProverSecretCopyValueV1<u64>" => 4, ".expose_ref()" => 4);
     source_has!(owner_scope; "operation: impl FnOnce(&u64, &u64, &u64, &u64) -> T");
@@ -858,7 +863,7 @@ fn rerandomization_constructor_direct_handoff_covers_every_exit() {
 #[test]
 fn fixture_rerandomization_source_keeps_feature_secret_owners_in_order() {
     let source = include_str!("../prover.rs");
-    source_has!(source; "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(", "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_rerandomization_v1(");
+    source_has!(source; format!("#[cfg(any(test, feature = \"privacy-release-evidence\"))]\n{OWNER_WRAPPER_EXPECT}fn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(").as_str(), "#[cfg(any(test, feature = \"privacy-release-evidence\"))]\nfn fcmp_fixture_rerandomization_v1(");
     let owner_scope = source_part!(source; "fn with_fcmp_fixture_rerandomization_u64_secret_owners_v1<T>(" => "fn fcmp_fixture_rerandomization_v1(");
     source_counts!(owner_scope; "ProverSecretCopyValueV1<u64>" => 4, ".expose_ref()" => 4);
     source_has!(owner_scope; "operation: impl FnOnce(&u64, &u64, &u64, &u64) -> T");
@@ -1246,6 +1251,13 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
             source_section(field, helper, "}"),
         );
     }
+    let encoder = source_section(
+        field,
+        "fn encode_le_v1(&self) -> SecretEncodedScalarV1 {",
+        "impl Drop for SecretU256V1",
+    );
+    source_has!(encoder; "let mut encoded = SecretEncodedScalarV1(SecretCopyValueV1::new([0; 32]));");
+    source_lacks!(encoder; "to_le_bytes");
     assert_source_contract_group(
         "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/09",
         source_section(
@@ -1268,7 +1280,8 @@ fn fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary() {
         "fixture_secret_cycle_source_has_no_raw_coordinate_hash_or_branch_boundary/11",
         secret_encoding,
     );
-    assert_source_excludes_all(secret_encoding, &["y.as_ref().is_odd_ref()"]);
+    // Both coordinates encode straight into erasing owners; no `Copy` byte-array temporary.
+    assert_source_excludes_all(secret_encoding, &["y.as_ref().is_odd_ref()", "to_le_bytes"]);
 }
 #[test]
 fn invalid_path_fixture_replacement_owns_success_error_and_zeroize_slots() {
@@ -1390,7 +1403,7 @@ fn invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps(
     let helper = source_section(
         source,
         "fn replace_first_secret_coordinate_v1(",
-        "pub(crate) fn fcmp_release_invalid_path_fixture_v1(",
+        "pub fn fcmp_release_invalid_path_fixture_v1(",
     );
     let (helios_arm, selene_arm) = helper
         .split_once("AdditionalBranch::ToSelene(values) => {")
@@ -1413,7 +1426,7 @@ fn invalid_path_fixture_source_confines_both_replacements_to_direct_owner_swaps(
     );
     let fixture = source_section(
         source,
-        "pub(crate) fn fcmp_release_invalid_path_fixture_v1(",
+        "pub fn fcmp_release_invalid_path_fixture_v1(",
         "enum RootValues",
     );
     assert_source_contract_group(

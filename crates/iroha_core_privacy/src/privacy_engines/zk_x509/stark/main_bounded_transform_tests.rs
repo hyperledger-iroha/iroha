@@ -1179,6 +1179,10 @@ fn native19_metal_external_caller_host_modes_preserve_full_outputs_and_report_st
 }
 
 #[cfg(target_os = "macos")]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn native19_metal_host_modes_with_caller_v1(external_caller: bool) {
     use std::time::{Duration, Instant};
 

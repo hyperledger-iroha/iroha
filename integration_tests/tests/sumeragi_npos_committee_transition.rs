@@ -3385,10 +3385,6 @@ fn committee_history_observation_keeps_original_read_deadline_before_query() -> 
     reason = "the rotation workload attaches its own roots; the shared harness's self-started two-bank `Exchange` flow is driven only by the native_amx_network target"
 )]
 #[path = "support/native_amx_harness.rs"]
-#[expect(
-    dead_code,
-    reason = "The AMX harness is shared with `core_api`, whose paid-exchange tests use the exchange-walk helpers."
-)]
 mod amx_harness;
 #[path = "native_amx_network/rotation.rs"]
 mod amx_rotation;

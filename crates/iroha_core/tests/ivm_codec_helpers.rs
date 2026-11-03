@@ -24,6 +24,24 @@ fn make_tlv(pty: PointerType, payload: &[u8]) -> Vec<u8> {
 fn preload_input(vm: &mut IVM, _offset: u64, blob: &[u8]) -> u64 {
     vm.alloc_input_tlv(blob).expect("allocate input TLV")
 }
+/// Canonical durable-state record of one declared `Bytes` map key carrying a Blob pointer.
+fn bytes_key_record(payload: &[u8]) -> Vec<u8> {
+    use ivm::state_value::{
+        StateValueAtomV1, StateValueRecordV1, state_value_schema_for_embedded_type_v1,
+        state_value_schema_hash_v1,
+    };
+    let schema = state_value_schema_for_embedded_type_v1(&EmbeddedStateType::Bytes)
+        .expect("Bytes is a declarable map key type");
+    let schema_payload = norito::encode_canonical(&schema).expect("encode key schema");
+    let record = StateValueRecordV1 {
+        schema_hash: state_value_schema_hash_v1(&schema_payload),
+        atoms: vec![StateValueAtomV1::Pointer(make_tlv(
+            PointerType::Blob,
+            payload,
+        ))],
+    };
+    norito::encode_canonical(&record).expect("encode canonical key record")
+}
 fn load_metadata(vm: &mut IVM) {
     vm.load_program(&ProgramMetadata::default().encode())
         .expect("load metadata");
@@ -244,7 +262,8 @@ fn build_path_key_norito_appends_canonical_key_bytes() {
         let base: Name = "kv".parse().unwrap();
         let base_bytes = norito::to_bytes(&base).expect("encode base name");
         let base_ptr = preload_input(&mut vm, 0, &make_tlv(PointerType::Name, &base_bytes));
-        let key = make_tlv(PointerType::Blob, &payload);
+        // A map key is the canonical durable record of its declared CNTR key type.
+        let key = bytes_key_record(&payload);
         let key_ptr = preload_input(&mut vm, 256, &make_tlv(PointerType::NoritoBytes, &key));
         vm.set_register(10, base_ptr);
         vm.set_register(11, key_ptr);

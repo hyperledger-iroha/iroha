@@ -459,9 +459,13 @@ def test_base64_rejects_whitespace_unpadded_and_urlsafe_aliases(alternate: str) 
 
 def test_base64_file_and_pad_bits_are_exact() -> None:
     alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-    final_index = alphabet.index(FIXTURE_BASE64[-2])
-    assert final_index & 0x03 == 0
-    noncanonical = FIXTURE_BASE64[:-2] + alphabet[final_index | 1] + "="
+    padding = len(FIXTURE_BASE64) - len(FIXTURE_BASE64.rstrip("="))
+    assert padding in (1, 2), "the fixture length leaves a partial final quantum"
+    final = len(FIXTURE_BASE64) - padding - 1
+    final_index = alphabet.index(FIXTURE_BASE64[final])
+    # One pad character leaves two unused low bits in the final symbol, two leave four.
+    assert final_index & (0x03 if padding == 1 else 0x0F) == 0
+    noncanonical = FIXTURE_BASE64[:final] + alphabet[final_index | 1] + "=" * padding
     assert base64.b64decode(noncanonical) == FIXTURE_BYTES
     with pytest.raises(PrivacyExact12FixtureErrorV1, match="canonical"):
         decode_privacy_exact12_fixture_bundle_base64_v1(noncanonical)

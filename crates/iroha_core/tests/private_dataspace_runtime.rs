@@ -296,6 +296,15 @@ fn runtime_private_dataspace_executes_concrete_work_after_certified_activation()
         lane_config: actual::LaneConfig::from_catalog(&baseline),
         ..Default::default()
     };
+    // The operator phases pay the configured Nexus fee recipe. Its rates are authored into
+    // the original signed genesis; runtime fees come only from that committed parameter.
+    config.genesis_parameters.push(Parameter::Custom(
+        nexus
+            .fees
+            .clone()
+            .into_custom_parameter()
+            .expect("complete authored root fee policy"),
+    ));
     config.nexus = Some(nexus);
     let mut chain = CertifiedTestChain::start(config).expect("certified genesis");
     {

@@ -3290,13 +3290,13 @@ max_corpus_entries = 16
 #[derive(Debug, ReadConfig, Clone, Copy)]
 #[allow(clippy::struct_field_names)]
 pub struct Concurrency {
-    /// Minimum scheduler worker threads (0 = auto/physical cores)
+    /// Minimum scheduler worker threads (0 = available parallelism)
     #[config(
         env = "CONCURRENCY_SCHEDULER_MIN",
         default = "defaults::concurrency::SCHEDULER_MIN"
     )]
     pub scheduler_min_threads: usize,
-    /// Maximum scheduler worker threads (0 = auto/physical cores)
+    /// Maximum scheduler worker threads (0 = available parallelism)
     #[config(
         env = "CONCURRENCY_SCHEDULER_MAX",
         default = "defaults::concurrency::SCHEDULER_MAX"
@@ -3707,7 +3707,7 @@ pub struct Pipeline {
     /// Original State capture scheduling and source work, independent of memory.
     #[config(nested)]
     pub state_capture: StateCapture,
-    /// Rayon worker cap for prover/trace verification (0 = number of physical cores).
+    /// Rayon worker cap for prover/trace verification (0 = available parallelism).
     #[config(
         env = "PIPELINE_IVM_PROVER_THREADS",
         default = "defaults::pipeline::IVM_PROVER_THREADS"

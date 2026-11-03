@@ -75,19 +75,93 @@ pub fn is_instruction_wire_id_registered(wire_id: &str) -> bool {
     static DEFAULT_REGISTRY: std::sync::OnceLock<InstructionRegistry> = std::sync::OnceLock::new();
     DEFAULT_REGISTRY.get_or_init(default).contains(wire_id)
 }
-/// Structural layout of an instruction payload type: every type its schema reaches, by name, with
-/// its field, variant and container shape, hashed in name order. The frozen baseline pins it for
-/// every baseline wire ID (`specs/runtime_baseline_instruction_layouts.tsv`), because the catalog's
-/// interface descriptors name only the payload's nominal type.
+/// Structural layout of an instruction payload type: every type its schema reaches, with its
+/// field, variant and container shape, each referenced type named by its stable schema identifier
+/// (never the build-dependent Rust `TypeId`), hashed in identifier order. The frozen baseline pins
+/// it for every baseline wire ID (`specs/runtime_baseline_instruction_layouts.tsv`), because the
+/// catalog's interface descriptors name only the payload's nominal type.
 #[cfg(test)]
 pub(super) fn payload_layout<T: iroha_schema::IntoSchema>() -> String {
+    use iroha_schema::{FloatMode, IntMode, Metadata};
     use sha2::{Digest, Sha256};
-    let mut entries: Vec<String> = T::schema()
+    let schema = T::schema();
+    let ids: std::collections::BTreeMap<core::any::TypeId, &str> = schema
         .iter()
-        .map(|(_, entry)| format!("{}\t{:?}\n", entry.type_name, entry.metadata))
+        .map(|(rust_type_id, entry)| (*rust_type_id, entry.type_id.as_str()))
         .collect();
-    entries.sort_unstable();
-    hex::encode(Sha256::digest(entries.concat().as_bytes()))
+    let id = |rust_type_id: &core::any::TypeId| {
+        *ids.get(rust_type_id)
+            .expect("a schema references only types of its own map")
+    };
+    let list = |items: Vec<String>| items.join(",");
+    // `String` and `Box<str>` share a stable identifier; identical lines collapse.
+    let entries: std::collections::BTreeSet<String> = schema
+        .iter()
+        .map(|(_, entry)| {
+            let shape = match &entry.metadata {
+                Metadata::Struct(fields) => format!(
+                    "struct{{{}}}",
+                    list(
+                        fields
+                            .declarations
+                            .iter()
+                            .map(|field| format!("{}:{}", field.name, id(&field.ty)))
+                            .collect()
+                    )
+                ),
+                Metadata::Tuple(fields) => format!(
+                    "tuple({})",
+                    list(fields.types.iter().map(|ty| id(ty).to_owned()).collect())
+                ),
+                Metadata::Enum(variants) => format!(
+                    "enum{{{}}}",
+                    list(
+                        variants
+                            .variants
+                            .iter()
+                            .map(|variant| match &variant.ty {
+                                Some(ty) => {
+                                    format!("{}#{}({})", variant.tag, variant.discriminant, id(ty))
+                                }
+                                None => format!("{}#{}", variant.tag, variant.discriminant),
+                            })
+                            .collect()
+                    )
+                ),
+                Metadata::Int(IntMode::FixedWidth) => "int".to_owned(),
+                Metadata::Int(IntMode::Compact) => "compact-int".to_owned(),
+                Metadata::Float(FloatMode::Binary32) => "binary32".to_owned(),
+                Metadata::Float(FloatMode::Binary64) => "binary64".to_owned(),
+                Metadata::String => "string".to_owned(),
+                Metadata::Bool => "bool".to_owned(),
+                Metadata::FixedPoint(fixed) => {
+                    format!("fixed({};{})", id(&fixed.base), fixed.decimal_places)
+                }
+                Metadata::Array(array) => format!("array[{};{}]", id(&array.ty), array.len),
+                Metadata::Vec(vector) => format!("vec<{}>", id(&vector.ty)),
+                Metadata::Map(map) => format!("map<{},{}>", id(&map.key), id(&map.value)),
+                Metadata::Option(ty) => format!("option<{}>", id(ty)),
+                Metadata::Result(result) => {
+                    format!("result<{},{}>", id(&result.ok), id(&result.err))
+                }
+                Metadata::Bitmap(bitmap) => format!(
+                    "bitmap<{}>{{{}}}",
+                    id(&bitmap.repr),
+                    list(
+                        bitmap
+                            .masks
+                            .iter()
+                            .map(|mask| format!("{}={}", mask.name, mask.mask))
+                            .collect()
+                    )
+                ),
+            };
+            format!("{}\t{}\t{shape}\n", entry.type_id, entry.type_name)
+        })
+        .collect();
+    hex::encode(Sha256::digest(
+        entries.into_iter().collect::<String>().as_bytes(),
+    ))
 }
 #[cfg(test)]
 pub(super) fn encoding_inventory_for_tests() -> impl Iterator<Item = (&'static str, &'static str)> {
@@ -421,8 +495,9 @@ mod tests {
     }
     #[test]
     fn source_has_one_bounded_typed_codec_registration_inventory() {
-        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 410;
-        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 410;
+        // The 410 baseline instructions and the seven this release adds after them.
+        const EXPECTED_SOURCE_TYPED_CODEC_REGISTRARS: usize = 417;
+        const EXPECTED_ENABLED_TYPED_CODEC_REGISTRARS: usize = 417;
         let registry_source = include_str!("registry.rs");
         let production = registry_source
             .split("\n#[cfg(test)]\nmod tests")
@@ -480,7 +555,8 @@ mod tests {
         // A network that installed the baseline decodes and executes these payloads forever
         // (`specs/live_runtime_upgrades.md` §3.1, §12). The catalog's interface descriptors name
         // only the payload's nominal type, so this pin is what refuses a changed layout under an
-        // unchanged wire ID; new behaviour ships as an addition under its own wire ID.
+        // unchanged wire ID; new behaviour ships as an addition under its own wire ID. The pin
+        // holds the baseline layouts this release brings to a network founded on the baseline.
         const PINNED: &str =
             include_str!("../../../../specs/runtime_baseline_instruction_layouts.tsv");
         let actual = baseline_instruction_layouts();
@@ -496,7 +572,11 @@ mod tests {
             .collect();
         assert!(
             changed.is_empty() && actual == PINNED,
-            "baseline instruction layouts changed (or the pin is stale) for {changed:?}"
+            "baseline instruction layouts changed for {changed:?}: restore the layout, or ship the \
+             change as a release addition under its own wire ID \
+             (`iroha_core::runtime::catalog::additions`); re-pin with \
+             `print_baseline_instruction_layouts` only for an identical encoding, such as a \
+             renamed type, or a change the owner accepts into the baseline"
         );
     }
 
@@ -553,7 +633,15 @@ mod tests {
         added.sort_unstable();
         assert_eq!(
             added,
-            ["iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal"],
+            [
+                "iroha.game_partition.advance.v1",
+                "iroha.game_partition.export.v1",
+                "iroha.game_partition.import.v1",
+                "iroha.game_partition.install.v1",
+                "iroha.game_partition.register_peer.v1",
+                "iroha.game_partition.seed.v1",
+                "iroha.instruction.v1::governance::ProposeEndorsedRuntimeUpgradeProposal",
+            ],
             "instructions added after the frozen baseline changed"
         );
     }

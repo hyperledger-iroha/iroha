@@ -1411,8 +1411,10 @@ where
         }
     }
     if payload_hasher.finalize() != plan.payload_digest {
-        return Err(MultiSourceError::InternalInvariant(
-            "complete payload digest does not match the plan".into(),
+        // Each chunk already matched its plan digest, so the plan's whole-payload digest
+        // contradicts its own chunk inventory: a malformed or substituted plan, not a bug here.
+        return Err(MultiSourceError::InvalidPlan(
+            CarPlanError::PayloadDigestMismatch,
         ));
     }
     if tokio::time::Instant::now() >= deadline {
@@ -2083,6 +2085,37 @@ mod tests {
         assert_eq!(alpha_report.successes, 0);
         assert_eq!(alpha_report.failures, 0);
         assert!(!alpha_report.disabled, "policy should skip before failure");
+    }
+    #[test]
+    fn substituted_payload_digest_is_an_invalid_plan_after_every_chunk_verifies() {
+        let payload: Vec<u8> = (0..=255u8).cycle().take(16 * 1024).collect();
+        let mut plan = plan_for_payload(&payload);
+        plan.payload_digest = blake3::hash(b"substituted whole-payload digest");
+        let shared_payload = Arc::new(payload);
+        let fetcher = move |req: FetchRequest| {
+            let payload = Arc::clone(&shared_payload);
+            async move {
+                let start = req.spec.offset as usize;
+                let end = start + req.spec.length as usize;
+                Ok::<ChunkResponse, TestError>(ChunkResponse::new(payload[start..end].to_vec()))
+            }
+        };
+
+        let error = block_on(fetch_plan_parallel(
+            &plan,
+            vec![FetchProvider::new("alpha")],
+            fetcher,
+            FetchOptions::default(),
+        ))
+        .expect_err("a plan whose whole-payload digest contradicts its chunks must fail");
+
+        assert!(
+            matches!(
+                error,
+                MultiSourceError::InvalidPlan(CarPlanError::PayloadDigestMismatch)
+            ),
+            "{error}"
+        );
     }
     #[test]
     fn score_policy_rejecting_every_provider_returns_without_fetching() {

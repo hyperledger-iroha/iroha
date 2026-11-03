@@ -708,6 +708,10 @@ fn widened_native_openings_preserve_cyclic_shift_and_high_carries_across_blocks(
 
 #[test]
 #[ignore = "native19 DEEP dot-product cost against the original scalar reduction; component timing only"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn widened_native_deep_dot_product_cost_preserves_original_openings() {
     assert!(!cfg!(debug_assertions));
     let native = rows(19, 23);

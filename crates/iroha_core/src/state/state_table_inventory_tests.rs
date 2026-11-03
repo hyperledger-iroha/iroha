@@ -3682,6 +3682,31 @@ const WITNESS_FAMILIES: &[WitnessFamily] = &[
             ),
         ],
     },
+    WitnessFamily {
+        id: "game_unit_export",
+        tags: &[],
+        key: "the domain-separated witness key of the export receipt",
+        value: "canonical GameUnitExportV1 of an export",
+        reads: false,
+        fields: &["world.game_partitions"],
+        source: "",
+        derivation: &[],
+        accessors: &[],
+        digests: &[],
+        value_types: &[],
+        hashes: &[],
+        opaque: &[],
+        evidence: &[
+            (
+                "crates/iroha_core/src/exec_witness.rs",
+                "pub(crate) fn record_write_game_unit_export(",
+            ),
+            (
+                "crates/iroha_core/src/smartcontracts/isi/game_partition.rs",
+                "crate::exec_witness::record_write_game_unit_export(&record)",
+            ),
+        ],
+    },
 ];
 
 const WITNESS_RECORDER: &str = "crates/iroha_core/src/exec_witness.rs";

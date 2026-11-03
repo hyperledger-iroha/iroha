@@ -799,10 +799,13 @@ fn observer_evidence_codec_refusal_remains_local_after_exact_prefix() {
     let encoded = encode_stream_token_observer_reply(&query, &reply).unwrap();
     let limits = |bytes| DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, bytes, usize::MAX);
 
+    // The canonical fixed-shape request allocates nothing, so its enclosing refusal is a
+    // nesting allowance that cannot admit the request's nested fields.
     assert_eq!(
-        with_decode_limits_scope(limits(0), || {
-            decode_stream_token_observer_request(&binding, &payload)
-        })
+        with_decode_limits_scope(
+            DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, usize::MAX, 0),
+            || decode_stream_token_observer_request(&binding, &payload),
+        )
         .err(),
         Some(BrokerError::Unavailable),
         "the real manifest request decoder preserves enclosing admission refusal"

@@ -2,7 +2,10 @@
 
 #![allow(clippy::items_after_statements)]
 // no nonzero macro used in this file
-use iroha_core::sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig};
+use iroha_core::{
+    pipeline_validity_policy::PipelineValidityPolicyV1,
+    sumeragi::test_chain::{CertifiedTestChain, Signers, TestChainConfig},
+};
 use iroha_data_model::prelude::*;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -26,11 +29,23 @@ fn quarantine_overflow_rejects_one_tx() {
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone()).build(&authority_id);
     let world = iroha_core::state::World::with([domain], [account], []);
-    // Bind quarantine configuration before the original signed genesis is applied.
+    // The quarantine limits are chain policy: the original signed genesis commits them, and
+    // node pipeline configuration cannot set them.
     let mut config = TestChainConfig::new(world, 0);
     config.chain_id = chain_id;
-    config.pipeline.quarantine_max_txs_per_block = 1;
-    config.pipeline.quarantine_tx_max_cycles = 0;
+    let quarantine_policy = PipelineValidityPolicyV1 {
+        quarantine_max_txs_per_block: 1,
+        quarantine_tx_max_cycles: 0,
+        ..PipelineValidityPolicyV1::protocol_default()
+    };
+    quarantine_policy
+        .validate()
+        .expect("valid quarantine validity policy");
+    config
+        .genesis_parameters
+        .push(iroha_data_model::parameter::Parameter::Custom(
+            quarantine_policy.into_custom_parameter(),
+        ));
     let mut chain =
         Box::new(CertifiedTestChain::start(config).expect("authenticated quarantine genesis"));
     let network_id = chain.network_id();

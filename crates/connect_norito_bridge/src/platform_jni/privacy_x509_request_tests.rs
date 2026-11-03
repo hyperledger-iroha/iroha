@@ -439,3 +439,47 @@ fn request_admission_checks_network_all_five_identities_and_resource_limits() {
         &network,
     ));
 }
+
+/// SDK ordered-intent projection passes each tracked X509 frame to this inspection unchanged.
+#[test]
+fn shared_ordered_intent_x509_frames_are_inspectable_proof_free_requests() {
+    let vectors: norito::json::Value = norito::json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/zk/signed_attachments_v1/vectors.json"
+    )))
+    .expect("shared signed attachment vectors");
+    let frame = |row: &norito::json::Value, key: &str| {
+        let text = row.get(key).and_then(norito::json::Value::as_str);
+        hex::decode(text.expect("vector frame field")).expect("vector frame hex")
+    };
+    let (request, _, _, _) = fixture();
+    let canonical = norito::encode_canonical(&request).unwrap();
+    let rows: Vec<_> = vectors
+        .get("privacy_intents")
+        .and_then(norito::json::Value::as_array)
+        .expect("privacy intent rows")
+        .iter()
+        .filter(|row| frame(row, "instruction_frame_hex") == canonical)
+        .collect();
+    assert_eq!(rows.len(), 2, "one direct and one batch X509 row");
+    for row in rows {
+        let inspect = |key: &str| {
+            let bytes = frame(row, key);
+            let Some(fields) = inspect_request(&bytes) else {
+                let refusal = norito::decode_canonical::<SubmitPrivacyZkX509CertificateV1>(&bytes)
+                    .map(|request| {
+                        request.validate_proof_free_v1(&PrivacyConsensusLimitsV1::taira_default())
+                    });
+                panic!("{key} is not an inspectable proof-free request: {refusal:?}");
+            };
+            assert_eq!(fields[0], bytes);
+            fields
+        };
+        let original = inspect("instruction_frame_hex");
+        assert_eq!(inspect("instruction_projection_hex"), original);
+        assert_eq!(inspect("generated_fields_changed_frame_hex"), original);
+        let independent = inspect("independent_context_changed_frame_hex");
+        assert_ne!(independent[2], original[2], "independent public inputs");
+        assert_eq!(independent[1], original[1], "attachment action ordinal");
+    }
+}

@@ -5,7 +5,7 @@ use http_body_util::BodyExt as _;
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    state::{ElectionState, State as CoreState, StateReadOnly, World, WorldReadOnly},
+    state::{ElectionState, State as CoreState, StateReadOnly, World},
 };
 use iroha_data_model::{NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
@@ -392,11 +392,8 @@ async fn zk_vote_tally_endpoint_preserves_exact_u128_and_committed_identity() {
 #[tokio::test]
 async fn zk_vote_tally_endpoint_rejects_malformed_or_partial_retained_results() {
     for election in [
-        ElectionState {
-            options: 1,
-            tally: vec![0],
-            ..ElectionState::default()
-        },
+        // A single-option election is refused by State publication itself and can
+        // never be retained; the retained malformed shapes below remain reachable.
         ElectionState {
             options: 2,
             tally: vec![0],

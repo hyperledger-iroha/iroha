@@ -403,7 +403,10 @@ impl RecordRoot {
         ensure!(
             rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::RegularFile
                 && stat.st_size > 0
-                && stat.st_size <= (HARNESS_MAX_JSON_BYTES + 4) as _,
+                && stat.st_size
+                    <= (HARNESS_MAX_JSON_BYTES + 4)
+                        .try_into()
+                        .expect("bound record limit fits the file size type"),
             "invalid bound record file"
         );
         self.check_parents(&parents, &names)?;

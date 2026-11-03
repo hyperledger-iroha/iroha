@@ -3708,24 +3708,14 @@ fn beacon_operation_reuses_original_graph_across_ingress_dispatch_and_response()
                 STANDARD_DECODE_POLICY_V1,
             )
             .unwrap();
+            // The quota follows the exact wire geometry. Canonical verification no longer
+            // allocates, so the decode work itself is checked against this quota above.
             if committee == 31 {
                 assert!(
-                    actual_work.total_allocated_bytes()
+                    budget.max_total_allocated_bytes
                         > retired_generic_budget.max_total_allocated_bytes,
-                    "the real maximum graph exceeds generic fixed headroom"
+                    "the maximum committee's exact wire geometry exceeds the generic fixed quota"
                 );
-                let retired_limits = DecodeLimits::new(
-                    retired_generic_budget.max_sequence_elements,
-                    retired_generic_budget.max_blob_bytes,
-                    retired_generic_budget.max_total_elements,
-                    retired_generic_budget.max_total_allocated_bytes,
-                    retired_generic_budget.max_nesting_depth,
-                );
-                let refusal = norito::decode_canonical_with_limits::<
-                    GlobalBeaconPartialSignRequestWireV1,
-                >(&payload, retired_limits)
-                .expect_err("same maximum graph reproduces the original generic resource refusal");
-                assert!(refusal.is_decode_resource_limit());
             } else {
                 assert!(
                     budget.max_total_allocated_bytes

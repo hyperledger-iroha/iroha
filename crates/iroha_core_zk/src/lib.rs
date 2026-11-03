@@ -3694,9 +3694,14 @@ mod stark_prover_tests {
             vec![vec![[0x11; 32]]],
         )
         .expect_err("alternate-layout STARK VK must be rejected before proving");
+        // The canonical key validator's typed rejection is a completed input
+        // refusal carrying its own reason, never a local deferral.
         assert!(
-            err.to_string()
-                .contains("invalid STARK verifying key payload"),
+            matches!(
+                &err,
+                crate::stark::StarkProofProductionError::Input(reason)
+                    if reason.starts_with("invalid canonical STARK/FRI verifier key")
+            ),
             "unexpected error: {err}"
         );
     }

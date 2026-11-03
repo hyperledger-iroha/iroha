@@ -311,6 +311,10 @@ committed, Parliament admits a proposal that schedules a change set only with va
 by the change-set identity, which binds the network) from its threshold of distinct trusted
 signers. A proposal carries at most one endorsement per trusted signer, and none to cancel a
 change set or under a root without the policy; admission checks them when the proposal executes.
+Endorsements travel in the endorsed proposal (`ProposeEndorsedRuntimeUpgradeProposal`), a release
+addition: the baseline `ProposeRuntimeUpgradeProposal` keeps its frozen layout and semantics and
+checks none, so the policy binds a root once a change set activates that addition and restricts
+the baseline proposal.
 The manifest provenance check and the node configuration it read
 (`governance.runtime_upgrade_provenance`) are deleted; its terms stay frozen in the
 genesis-signed execution policy and the governance authority.
@@ -591,15 +595,18 @@ functionality is retired, not executed forever. Recommended committed defaults:
 2. `iroha3d --check-replay` replays an immutable copy of a live store with the candidate, built on
    `NativeReplaySeed`/`IsolatedNativeReplay` (`sumeragi/node/replay.rs`). It reports the first
    differing commitment component and distinguishes missing historical bodies from divergence.
-3. Validators are replaced one at a time: stop, `--check-storage`, swap, start, certified catch-up.
+3. Validators are replaced one at a time: stop, `--check-storage` (every retained block decodes),
+   `--check-replay` (the newest snapshot below the tip restores and every later block reproduces
+   its certified result), swap, start, certified catch-up.
    Before each stop, the tooling checks that the remaining responsive validators still form a
    quorum with margin; it pauses on degradation, because an already exhausted fault budget plus one
    restart halts the chain.
 4. Attestations are collected from every validator, then the change set activates (section 6).
 
-Taira tooling runs this sequence per validator, with `--check-storage` available through the Taira
-launcher (`irohad/src/taira_runtime_signer.rs`) and a rollback before activation that is a binary
-swap. This is S1-B of `network_deployment.md`.
+Taira tooling runs this sequence per validator, with `--check-storage` and `--check-replay`
+available offline through the Taira launcher (`irohad/src/taira_runtime_signer.rs`), which reads
+no runtime-signer descriptor for them, and a rollback before activation that is a binary swap.
+This is S1-B of `network_deployment.md`.
 
 ## 10. On-chain business logic
 
@@ -727,10 +734,12 @@ not a date: it happens once everything its first selection needs is implemented 
    published initial bytes), and stable envelopes: a wire ID a release does not register decodes
    to an opaque envelope that re-encodes byte for byte, and execution stops at the first unbound
    or opaque envelope with `definition_inactive` or `malformed_payload` before any type-dependent
-   check. Still open: complete-State coverage, which first needs the policy cells of G1-D3 in
-   committed State and the decision how the pinned history meets the new root; snapshots through
-   the selection, required before the first addition of a World field; storage capabilities and
-   generic carriers.
+   check; and snapshots through the selection: the writer leaves out each top-level World member
+   whose storage the selection does not install, a restore reads it as its empty default, and an
+   addition adds only top-level World fields. Still open: complete-State coverage, which first
+   needs the policy cells of G1-D3 in committed State and the decision how the pinned history
+   meets the new root; snapshots of a nested World field, before an addition adds one; storage
+   capabilities and generic carriers.
 3. **Transition and lifecycle engine.** Change sets, all-`n` attestation of resolved selections,
    committed notice and provenance policy, scheduling, the unsupported-node stop, handshake
    profiles, restrictions, completion capabilities, the deferred-kind rules for every obligation the
@@ -771,9 +780,11 @@ not a date: it happens once everything its first selection needs is implemented 
    certified discovery and the client contract (8.4), tested against archived SDK and indexer
    builds. Done: `iroha3d --check-replay`, which replays a copy of a stopped store with the
    candidate from its newest authenticated snapshot (or signed genesis) and names the first
-   differing commitment component or the first missing body. Still open: the operator route that
-   drafts an addition's activation, the Taira launcher treating `--check-replay` as offline, and
-   the rest of this step.
+   differing commitment component or the first missing body; and the operator route
+   (`POST /v1/runtime/upgrades/draft`, `iroha runtime upgrade draft`) that drafts an addition's
+   activation from the node's release catalog; and the Taira launcher running `--check-replay`
+   and `--check-storage` offline, without reading its runtime-signer descriptors. Still open: the
+   rest of this step.
 7. **Taira** adopted the foundation at its upgrade checkpoint with a660d601da (section 13) before
    the gates of steps 2 to 6 passed. What those steps still lack reaches Taira through later
    releases and, where it changes execution, governed change sets. Then the acceptance journey

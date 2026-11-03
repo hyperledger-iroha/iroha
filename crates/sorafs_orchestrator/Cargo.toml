@@ -79,7 +79,6 @@ futures = "0.3.31"
 hex = "0.4.3"
 assert_cmd = "2.1.1"
 httpmock = "0.9.0"
-rust_decimal = { workspace = true }
 sorafs_manifest = { path = "../sorafs_manifest", features = ["pqc"] }
 soranet_pq = { path = "../soranet_pq" }
 

@@ -4,12 +4,16 @@
 use iroha_core::{
     kura::Kura,
     query::store::LiveQueryStore,
-    smartcontracts::ivm::host::{CoreHost, CoreHostImpl},
-    state::{State, World, WorldReadOnly},
+    smartcontracts::ivm::{
+        cache::IvmCache,
+        host::{CoreHost, CoreHostImpl},
+    },
+    state::{State, StateBlock, World, WorldReadOnly},
+    tx::AcceptedTransaction,
 };
 use iroha_data_model::{account::NewAccount, prelude::*};
 use iroha_model_base::domain::DomainId;
-use iroha_test_samples::{ALICE_ID, BOB_ID};
+use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
 use ivm::{IVM, PointerType, ProgramMetadata, encoding, instruction, syscalls as ivm_sys};
 use kotodama_lang::compiler::Compiler;
 use mv::storage::StorageReadOnly;
@@ -43,6 +47,87 @@ fn select_kotodama_entrypoint(vm: &mut IVM, program: &[u8], name: &str) {
     vm.set_program_counter(entrypoint_pc)
         .unwrap_or_else(|error| panic!("select Kotodama V1 entrypoint `{name}`: {error:?}"));
 }
+/// Generic program whose pointer arguments are its authenticated literal-table TLVs.
+fn literal_program(literals: &[Vec<u8>], code: &[u32]) -> Vec<u8> {
+    let mut program = ProgramMetadata {
+        version_major: 1,
+        version_minor: 1,
+        mode: 0,
+        vector_length: 0,
+        max_cycles: 10_000,
+        abi_version: 1,
+    }
+    .encode();
+    let data_offset = 16 + literals.len() * 8;
+    let data_len: usize = literals.iter().map(Vec::len).sum();
+    let pad = (4 - (data_offset + data_len) % 4) % 4;
+    program.extend_from_slice(b"LTLB");
+    for field in [literals.len(), pad, data_len] {
+        program.extend_from_slice(
+            &u32::try_from(field)
+                .expect("literal table field fits u32")
+                .to_le_bytes(),
+        );
+    }
+    let mut offset = data_offset;
+    for literal in literals {
+        let descriptor = ivm::encode_literal_descriptor(
+            ivm::LiteralKindV1::PointerTlv,
+            u64::try_from(offset).expect("literal offset fits u64"),
+        )
+        .expect("literal offset fits its descriptor");
+        program.extend_from_slice(&descriptor.to_le_bytes());
+        offset += literal.len();
+    }
+    for literal in literals {
+        program.extend_from_slice(literal);
+    }
+    program.extend(std::iter::repeat_n(0, pad));
+    for word in code.iter().copied().chain([encoding::wide::encode_halt()]) {
+        program.extend_from_slice(&word.to_le_bytes());
+    }
+    program
+}
+/// The ordinary block after the applied signed genesis (height one).
+///
+/// Committing a fixture block's World overlay publishes no block, so every fixture block
+/// executes at the height the authenticated consensus schedule admits next.
+fn ordinary_header(state: &State) -> iroha_data_model::block::BlockHeader {
+    iroha_data_model::block::BlockHeader::new(
+        core::num::NonZeroU64::new(2).expect("ordinary height"),
+        state.view().latest_block_hash(),
+        None,
+        0,
+        0,
+    )
+}
+/// Statelessly admit a signed transaction against the State's signed genesis policy.
+fn admitted(state: &State, transaction: SignedTransaction) -> AcceptedTransaction<'static> {
+    let parameters = state.transaction_admission_parameters();
+    AcceptedTransaction::accept(
+        transaction,
+        state.network_id_ref(),
+        parameters.sumeragi().max_clock_drift(),
+        parameters.transaction(),
+        parameters
+            .require_crypto_policy()
+            .expect("signed genesis crypto policy"),
+    )
+    .expect("stateless transaction admission")
+}
+/// Execute an admitted transaction in `block`; its signed root owns the host effects.
+fn execute(
+    block: &mut StateBlock<'_>,
+    transaction: AcceptedTransaction<'static>,
+) -> Result<(), TransactionRejectionReason> {
+    iroha_core::tx::execute_component_transaction_for_testing(
+        block,
+        transaction,
+        &mut IvmCache::new(),
+        None,
+    )
+    .map(drop)
+}
 fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
     AssetDefinitionId::from_uuid_bytes(aid_bytes)
         .expect("opaque asset definition id")
@@ -50,7 +135,8 @@ fn opaque_asset_definition_literal(aid_bytes: [u8; 16]) -> String {
 }
 #[test]
 fn apply_queued_isis_from_corehost_transfer_asset() {
-    // Build a minimal IVM program that performs SCALL TRANSFER_ASSET_SCOPED and HALT
+    // Build a minimal IVM program that performs SCALL TRANSFER_ASSET_SCOPED and HALT.
+    // Its pointer arguments are the program's canonical literal TLVs.
     let from = ALICE_ID.clone();
     let to = BOB_ID.clone();
     let asset_def: AssetDefinitionId =
@@ -58,138 +144,100 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
-    let from_bytes = tlv_envelope(PointerType::AccountId, &from);
-    let to_bytes = tlv_envelope(PointerType::AccountId, &to);
-    let asset_bytes = tlv_envelope(PointerType::AssetDefinitionId, &asset_def);
     let amount = Quantity::from(500_u64);
-    let amount_bytes = quantity_tlv(&amount);
     let dataspace = iroha_model_base::topology::DataSpaceId::UNIVERSAL;
-    let dataspace_bytes = tlv_envelope(PointerType::DataSpaceId, &dataspace);
-    let align8 = |n: u64| (n + 7) & !7;
-    let off_from = 0u64;
-    let off_to = align8(off_from + from_bytes.len() as u64);
-    let off_asset = align8(off_to + to_bytes.len() as u64);
-    let off_amount = align8(off_asset + asset_bytes.len() as u64);
-    let off_dataspace = align8(off_amount + amount_bytes.len() as u64);
-    let ptr_from = ivm::Memory::INPUT_START + off_from;
-    let ptr_to = ivm::Memory::INPUT_START + off_to;
-    let ptr_asset = ivm::Memory::INPUT_START + off_asset;
-    let ptr_amount = ivm::Memory::INPUT_START + off_amount;
-    let ptr_dataspace = ivm::Memory::INPUT_START + off_dataspace;
-    let mut code = Vec::new();
-    // SCALL transfer + HALT
-    code.extend_from_slice(
-        &encoding::wide::encode_sys(
-            instruction::wide::system::SCALL,
-            u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
-        )
-        .to_le_bytes(),
+    let program = literal_program(
+        &[
+            tlv_envelope(PointerType::AccountId, &from),
+            tlv_envelope(PointerType::AccountId, &to),
+            tlv_envelope(PointerType::AssetDefinitionId, &asset_def),
+            quantity_tlv(&amount),
+            tlv_envelope(PointerType::DataSpaceId, &dataspace),
+        ],
+        &[
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 10, 0),
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 11, 1),
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 12, 2),
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 13, 3),
+            encoding::wide::encode_literal(instruction::wide::memory::LDLIT, 14, 4),
+            encoding::wide::encode_sys(
+                instruction::wide::system::SCALL,
+                u8::try_from(ivm_sys::SYSCALL_TRANSFER_ASSET_SCOPED).unwrap(),
+            ),
+        ],
     );
-    code.extend_from_slice(&encoding::wide::encode_halt().to_le_bytes());
-    // Full program (metadata + code)
-    let meta = ProgramMetadata {
-        version_major: 1,
-        version_minor: 1,
-        mode: 0,
-        vector_length: 0,
-        max_cycles: 10_000,
-        abi_version: 1,
-    };
-    let mut program = meta.encode();
-    program.extend_from_slice(&code);
-    // Build VM with CoreHost and preload INPUT
-    let mut vm = IVM::new(500_000);
-    vm.memory
-        .preload_input(off_from, &from_bytes)
-        .expect("preload input");
-    vm.memory
-        .preload_input(off_to, &to_bytes)
-        .expect("preload input");
-    vm.memory
-        .preload_input(off_asset, &asset_bytes)
-        .expect("preload input");
-    vm.memory
-        .preload_input(off_amount, &amount_bytes)
-        .expect("preload input");
-    vm.memory
-        .preload_input(off_dataspace, &dataspace_bytes)
-        .expect("preload input");
-    vm.load_program(&program).unwrap();
-    vm.set_register(10, ptr_from);
-    vm.set_register(11, ptr_to);
-    vm.set_register(12, ptr_asset);
-    vm.set_register(13, ptr_amount);
-    vm.set_register(14, ptr_dataspace);
-    // Build a minimal State and apply setup ISIs (register domain/accounts/asset, mint initial balance)
-    let kura = Kura::blank_kura_for_testing();
-    let query_handle = LiveQueryStore::start_test();
-    let state = State::new_for_testing(World::new(), kura, query_handle);
-    let header = iroha_data_model::block::BlockHeader::new(
-        core::num::NonZeroU64::new(1).unwrap(),
-        None,
-        None,
-        0,
-        0,
-    );
-    let mut block = state.block(header);
-    let mut tx = block.transaction();
-    // Setup: register domain 'wonderland', register accounts, asset definition, and mint 1_000 to 'from'
+    // Minimal world: domain 'wonderland', both accounts and the dataspace-restricted asset
+    // definition owned by `from`, over the authenticated signed genesis.
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let new_domain = Domain::new(domain_id.clone());
-    let reg_domain = RegisterBox::from(Register::domain(new_domain));
-    let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
-    let reg_to = RegisterBox::from(Register::account(NewAccount::new(to.clone())));
     let new_asset_def = AssetDefinition::numeric(
         asset_def.clone(),
         "coin".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::DataspaceRestricted,
-        Some(domain_id),
+        Some(domain_id.clone()),
+    )
+    .build(&from);
+    let world = World::with(
+        [Domain::new(domain_id).build(&from)],
+        [
+            NewAccount::new(from.clone()).build(&from),
+            NewAccount::new(to.clone()).build(&to),
+        ],
+        [new_asset_def],
     );
-    let reg_asset_def = RegisterBox::from(Register::asset_definition(new_asset_def));
-    let mint = MintBox::from(Mint::asset_quantity(
-        1000u64,
-        AssetId::with_scope(
-            asset_def.clone(),
-            from.clone(),
-            iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
-        ),
-    ));
-    let executor = tx.world.executor().clone();
-    for instr in [
-        InstructionBox::from(reg_domain),
-        InstructionBox::from(reg_from),
-        InstructionBox::from(reg_to),
-        InstructionBox::from(reg_asset_def),
-        InstructionBox::from(mint),
-    ] {
-        executor
-            .execute_instruction(&mut tx, &from, instr)
-            .expect("setup should succeed");
-    }
-    tx.apply();
-    block
-        .commit_world_overlay_for_testing()
-        .expect("commit setup block");
+    let state = crate::native_genesis::certified_state(world);
+    // Setup: mint 1_000 to 'from' in its dataspace scope through a signed transaction.
     {
+        let mint = MintBox::from(Mint::asset_quantity(
+            1000u64,
+            AssetId::with_scope(
+                asset_def.clone(),
+                from.clone(),
+                iroha_data_model::asset::AssetBalanceScope::Dataspace(dataspace),
+            ),
+        ));
+        let setup = admitted(
+            &state,
+            TransactionBuilder::new(
+                *state.network_id_ref(),
+                from.clone(),
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .with_instructions([InstructionBox::from(mint)])
+            .sign(ALICE_KEYPAIR.private_key()),
+        );
+        let mut block = state.block(ordinary_header(&state));
+        execute(&mut block, setup).expect("setup should succeed");
+        block
+            .commit_world_overlay_for_testing()
+            .expect("commit setup block");
+    }
+    {
+        // The CoreHost bridge queues exactly one transfer for the program.
         let view = state.view();
         let mut host = CoreHostImpl::new(from.clone());
         host.set_query_state(&view);
+        let mut vm = IVM::new(500_000);
+        vm.load_program(&program).unwrap();
         vm.run_with_host(&mut host).unwrap();
-        let header = iroha_data_model::block::BlockHeader::new(
-            core::num::NonZeroU64::new(2).unwrap(),
-            None,
-            None,
-            0,
-            0,
-        );
-        let mut block = state.block(header);
-        let mut tx = block.transaction();
-        // Apply queued transfer via CoreHost bridge.
         let queued = host
-            .apply_queued(&mut tx, &from)
-            .expect("apply queued instructions");
+            .drain_instructions()
+            .expect("ordinary instruction inspection retains no attachment owner");
         assert_eq!(queued.len(), 1);
-        tx.apply();
+    }
+    {
+        // Apply the queued transfer through the program's signed root.
+        let transfer = admitted(
+            &state,
+            TransactionBuilder::new(
+                *state.network_id_ref(),
+                from.clone(),
+                FeePaymentIntent::authority(Vec::new(), core::num::NonZeroU64::new(500_000)),
+            )
+            .with_executable(Executable::Ivm(IvmBytecode::from_compiled(program)))
+            .sign(ALICE_KEYPAIR.private_key()),
+        );
+        let mut block = state.block(ordinary_header(&state));
+        execute(&mut block, transfer).expect("apply queued instructions");
         block
             .commit_world_overlay_for_testing()
             .expect("commit transfer block");
@@ -335,7 +383,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
         InstructionBox::from(mint),
     ] {
         executor
-            .execute_instruction(&mut tx, &from, instr)
+            .execute_instruction(&mut tx, &from, &instr)
             .expect("setup should succeed");
     }
     let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &from))
@@ -440,7 +488,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         InstructionBox::from(mint_cbdc),
     ] {
         executor
-            .execute_instruction(&mut tx, &authority, instr)
+            .execute_instruction(&mut tx, &authority, &instr)
             .expect("setup should succeed");
     }
     let queued = CoreHost::with_host(&mut vm, |host| host.apply_queued(&mut tx, &authority))

@@ -94,6 +94,7 @@ packages = [
   "iroha_managed_ipc",
   "iroha_monitor",
   "iroha_p2p",
+  "iroha_release_bundle",
   "iroha_sumeragi",
   "iroha_swarm",
   "iroha_test_network",
@@ -142,6 +143,8 @@ description = "Code generators, developer tools, samples, benchmarks, and Python
 packages = [
   "oss-scanner-build-features",
   "executor_custom_data_model",
+  "iroha_native_source_delivery",
+  "iroha_process_bridge",
   "iroha_python_rs",
   "iroha_schema_gen",
   "izanami",

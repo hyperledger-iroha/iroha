@@ -215,7 +215,8 @@ mod startup_preparation_tests {
         let mut accounts = vec![genesis_account(signer.public_key().clone())];
         if let Some(account) = source_only_account {
             // This is the exact fresh target account set in PreparedStartup. The extra account
-            // exists only in the signing source, so Unregister succeeds there but not on replay.
+            // exists only in the signing source, so an instruction bound to it succeeds there
+            // but not on replay.
             assert!(accounts.iter().all(|existing| existing.id() != account));
             accounts.push(Account::new(account.clone()).build(&fixture.authority));
         }
@@ -273,10 +274,10 @@ mod startup_preparation_tests {
         )
         .unpack(|_| {})
         .unwrap_or_else(|(_, error)| {
-            panic!("fixture must genuinely execute before sealing: {error}")
+            panic!("fixture must genuinely execute before sealing: {error:?}")
         });
         if let Some(account) = source_only_account {
-            assert!(staged.world().accounts().get(account).is_none());
+            assert!(staged.world().accounts().get(account).is_some());
         }
         drop(staged);
         let mut executed: iroha_data_model::block::SignedBlock = valid.into();
@@ -459,8 +460,15 @@ mod startup_preparation_tests {
                 .public_key()
                 .clone(),
         );
+        // Genesis cannot unregister an account before a root fee policy is committed, so the
+        // source-only dependency is account metadata, which replay cannot write.
         let (_resources, fixture) = fixture_with_source_account(
-            [Unregister::account(absent.clone()).into()],
+            [iroha_data_model::isi::SetKeyValue::account(
+                absent.clone(),
+                "source_only".parse().expect("fixture metadata key"),
+                true,
+            )
+            .into()],
             Some(&absent),
         );
         let config = fixture.config.clone();

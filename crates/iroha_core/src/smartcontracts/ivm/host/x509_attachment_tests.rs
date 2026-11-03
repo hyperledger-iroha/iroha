@@ -55,6 +55,10 @@ fn set_x509_request(
 
 #[test]
 fn x509_host_tag2_queues_original_owner_but_raw_drain_refuses() {
+    // Keep the fixture's retired genesis and deployment generations live while
+    // measuring this pool: concurrent epoch collection must not refund them
+    // between the baseline and the final exact-refund check.
+    let _retirement_pin = crossbeam_epoch::pin();
     let authority = fixture_account("alice");
     let state = contract_test_state(&authority);
     let root = install_contract(

@@ -14,6 +14,8 @@ use iroha_model_base::domain::DomainId;
 use iroha_primitives::nonzero;
 use ivm::{IVMHost, Memory, PointerType, syscalls, zk_verify};
 use mv::storage::StorageReadOnly;
+#[path = "common/root_scope_fixture.rs"]
+mod root_scope_fixture;
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
     out.extend_from_slice(&type_id.to_be_bytes());
@@ -118,8 +120,11 @@ fn zk_roots_get_respects_cap_and_max() {
             },
         })
         .expect("empty state accepts roots-cap test configuration");
+    // Instruction execution requires committed root authority: the first height commits the
+    // Global root scope, so the seed executes at height two.
+    root_scope_fixture::commit_global_root_scope(&state);
     // Seed world: domain/account/asset and mint
-    let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, 0, 0);
+    let header = iroha_data_model::block::BlockHeader::new(nonzero!(2_u64), None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
@@ -146,7 +151,7 @@ fn zk_roots_get_respects_cap_and_max() {
         stx.world
             .executor()
             .clone()
-            .execute_instruction(&mut stx, &owner, instr)
+            .execute_instruction(&mut stx, &owner, &instr)
             .unwrap();
     }
     // Seed authenticated-tree transitions directly; the syscall test only exercises root caps.

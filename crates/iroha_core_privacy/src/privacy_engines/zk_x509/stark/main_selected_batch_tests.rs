@@ -606,6 +606,10 @@ fn residue_classes_erase_one_reused_scratch_and_partial_outputs_on_error_and_unw
 
 #[test]
 #[ignore = "isolated four-coset query A/B; complete CPU oracle, allocation and erasure timing"]
+#[expect(
+    clippy::assertions_on_constants,
+    reason = "ignored release measurements refuse an unoptimized build at run time"
+)]
 fn selected_residue_class_cost_keeps_full_native_masks_and_every_query_coordinate() {
     use std::time::{Duration, Instant};
 
@@ -639,7 +643,7 @@ fn selected_residue_class_cost_keeps_full_native_masks_and_every_query_coordinat
                         .collect(),
                 );
                 let mask = Column::from_vec_v1(
-                    (0..MASK_DEGREE + 1)
+                    (0..=MASK_DEGREE)
                         .map(|degree| F((29 * degree + 7 * column + 3) as u64))
                         .collect(),
                 );

@@ -342,9 +342,11 @@ fn native_worker_binding_rollback_cannot_repeatedly_dispatch_without_external_re
                         release_ready,
                         "RetryGate cannot dispatch before its original capacity observation"
                     );
+                    // Each attempt's geometry is printed above; the fixed message lets
+                    // the §13.4 HC983 gate match this exact cause.
                     assert!(
                         immediate_refusals.insert(geometry),
-                        "whole execution rollback repeatedly wakes the same native job without external credit return: {observations:?}"
+                        "whole execution rollback repeatedly wakes the same native job without external credit return"
                     );
                     next = retry;
                     attempt += 1;

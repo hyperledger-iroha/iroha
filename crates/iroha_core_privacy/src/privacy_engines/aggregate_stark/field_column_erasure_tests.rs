@@ -241,6 +241,10 @@ fn bounded_parallel_owner_drop_preserves_all_initialized_cells_and_unwind_cleanu
 
 #[test]
 #[ignore = "isolated complete field-owner Drop and deallocation A/B"]
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "reported timing means and ratios tolerate binary64 rounding"
+)]
 fn full_field_owner_drop_cost_reports_serial_and_bounded_parallel_cleanup() {
     use std::time::Instant;
 

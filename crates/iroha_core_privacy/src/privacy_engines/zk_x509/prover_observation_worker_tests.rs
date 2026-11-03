@@ -376,7 +376,7 @@ fn worker_open_span_bound_is_retained_without_extra_labels() {
     let parent = outer.worker_parent_v1();
     std::thread::spawn(move || {
         let mut guards = Vec::new();
-        for _ in 0..iroha_measurement::recorder::MAX_OPEN_SPANS + 1 {
+        for _ in 0..=iroha_measurement::recorder::MAX_OPEN_SPANS {
             guards.push(parent.enter_v1(PhaseV1::CompositionBaseReplay));
         }
         while let Some(guard) = guards.pop() {

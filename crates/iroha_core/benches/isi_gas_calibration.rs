@@ -23,7 +23,6 @@ use iroha_data_model::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_primitives::json::Json;
-use iroha_primitives::nonzero;
 use iroha_test_samples::gen_account_in;
 const BENCH_DOMAIN_NAME: &str = "wonderland";
 const BENCH_DATASPACE_NAME: &str = "universal";
@@ -51,7 +50,7 @@ impl BenchState {
                 .execute_instruction_with_profile(
                     &mut tx,
                     &self.ctx.authority,
-                    instr,
+                    &instr,
                     InstructionExecutionProfile::Bench,
                 )
                 .expect("setup instruction execution");
@@ -181,7 +180,7 @@ fn bench_isi(
                 .execute_instruction_with_profile(
                     &mut tx,
                     &bench_state.ctx.authority,
-                    instr,
+                    &instr,
                     InstructionExecutionProfile::Bench,
                 )
                 .expect("bench profile execution");

@@ -391,6 +391,13 @@ fn evaluate_full_owner_v1<O: DifOutputV1>(
 }
 
 /// Infallible public-geometry recursion over disjoint slices of the same scratch.
+#[cfg_attr(
+    not(any(test, all(feature = "simd", target_arch = "x86_64"))),
+    expect(
+        clippy::only_used_in_recursion,
+        reason = "only the x86-64 AVX2 dispatch reads the backend; other targets pass it through the recursion"
+    )
+)]
 fn prune_v1<const INNER_PARALLEL: bool, const ALL_OUTPUTS: bool, O: DifOutputV1>(
     values: &mut [F],
     offset: usize,
