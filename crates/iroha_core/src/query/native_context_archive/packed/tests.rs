@@ -18,7 +18,7 @@ use iroha_data_model::{
 };
 use iroha_model_base::topology::{DataSpaceId, LaneId};
 use std::{
-    fs,
+    fs::{self, File},
     num::NonZeroUsize,
     path::{Path, PathBuf},
 };
