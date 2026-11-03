@@ -27,7 +27,9 @@ poetry run pytest
 
 Each peer query uses a temporary owner-private TOML file beside the generated
 `client.toml`. Only `torii_url` changes; account credentials, exact network identity,
-relative-path resolution and the generated `direct_loopback` policy are preserved.
+relative-path resolution and the bundle generator's `ordinary` transport policy are
+preserved. The harness requires the exact `http://127.0.0.1:<port>/` endpoints; managed
+localnets separately select `direct_loopback` and are not this suite's setup path.
 The original file is untouched and the temporary copy is removed after each case.
 Generated credentials remain runtime-only and must never be committed.
 

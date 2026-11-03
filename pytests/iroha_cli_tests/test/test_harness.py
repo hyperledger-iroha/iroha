@@ -22,7 +22,7 @@ def generated_inputs(tmp_path):
         'chain = "local-fixture"\n'
         'network_id_file = "genesis.expected.hash"\n'
         'torii_url = "http://127.0.0.1:8080/"\n'
-        'http_transport_policy = "direct_loopback"\n'
+        'http_transport_policy = "ordinary"\n'
         '[account]\npublic_key = "fixture-public"\n'
         'private_key = "fixture-private"\n',
         encoding="utf-8",
@@ -65,7 +65,9 @@ def test_peer_toml_removed_after_consumer_failure(generated_inputs):
     [
         ("http://127.0.0.1:8080/", "https://example.invalid/", "loopback peer"),
         ("http://127.0.0.1:8080/", "http://127.0.0.1:8081/", "loopback peer"),
-        ('"direct_loopback"', '"ordinary"', "transport policy"),
+        ('"ordinary"', '"direct_loopback"', "transport policy"),
+        ('"ordinary"', '"unknown"', "transport policy"),
+        ('"ordinary"', "0", "transport policy"),
     ],
 )
 def test_foreign_configuration_is_not_retargeted(generated_inputs, old, new, message):

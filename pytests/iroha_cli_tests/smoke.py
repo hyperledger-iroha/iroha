@@ -45,11 +45,14 @@ def peer_config(localnet: Localnet, peer: int) -> Iterator[Path]:
     """
     if not 0 <= peer < len(localnet.ports):
         raise ValueError("peer is outside the generated four-validator committee")
+    # test_env uses `kagami localnet generate` (bundle mode), which emits
+    # ordinary transport; managed localnets select direct_loopback separately.
+    # Preserve that policy while restricting these copies to exact loopback URLs.
     source = tomlkit.parse(localnet.config.read_text(encoding="utf-8"))
     if source["torii_url"] != f"http://127.0.0.1:{localnet.ports[0]}/":
         raise ValueError("client.toml must select the generated first loopback peer")
-    if source["http_transport_policy"] != "direct_loopback":
-        raise ValueError("the generated direct_loopback transport policy is required")
+    if source["http_transport_policy"] != "ordinary":
+        raise ValueError("the generated ordinary bundle transport policy is required")
     source["torii_url"] = f"http://127.0.0.1:{localnet.ports[peer]}/"
     descriptor, name = tempfile.mkstemp(
         prefix=".cli-smoke-", suffix=".toml", dir=localnet.config.parent

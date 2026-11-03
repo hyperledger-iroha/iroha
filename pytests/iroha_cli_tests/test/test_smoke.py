@@ -77,5 +77,11 @@ def test_invalid_collection_limit_is_refused(localnet, client_config):
         "0",
     )
     assert result.returncode == 4, result.stderr
-    assert "invalid_limit" in result.stderr
+    error = json.loads(result.stderr)["error"]
+    assert error["kind"] == "input"
+    assert error["exit_code"] == 4
+    assert (
+        error["message"]
+        == "invalid `limit`: `limit` must be at least 1 (flag `--limit`)"
+    )
     assert result.stdout == ""
