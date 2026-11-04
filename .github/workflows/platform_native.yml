@@ -315,7 +315,8 @@ jobs:
         run: |
           set -euo pipefail
           # Give fixture callers a valid explicit compiler environment; refusal tests inject overrides.
-          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN
+          # setup-python exports its pkg-config search path on hosted Linux.
+          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN PKG_CONFIG_PATH
           export IROHA_TEST_PROCESS_BRIDGE_LIBRARY="$(python -c 'import os; from pathlib import Path; print((Path("target/debug") / ("iroha_process_bridge.dll" if os.name == "nt" else "libiroha_process_bridge.so")).resolve(), end="")')"
           export IROHA_TEST_PROVENANCE_EMITTER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/examples/provenance_fixture" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q --junitxml=target/platform-native/release-process-python.xml \
@@ -481,6 +482,21 @@ jobs:
           set -euo pipefail
           cargo test --locked -p iroha_core --lib native_evidence_publication_syncs_and_never_replaces_existing_bytes -- --nocapture \
             2>&1 | tee target/platform-consumers/evidence-publication.log
+      - name: Exercise Torii checkpoint custody and webhook persistence on NTFS
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_torii --lib -- native_windows::tests::native_checkpoint_ webhook::windows::tests:: \
+            2>&1 | tee target/platform-consumers/torii-persistence.log
+          python - <<'PYTHON'
+          from pathlib import Path
+          import re
+
+          log = Path("target/platform-consumers/torii-persistence.log").read_text()
+          for test in ("native_checkpoint_refuses_aliased_lock_before_reading_absent_checkpoint",
+                       "bounded_private_read_and_create_collision_preserve_original_bytes"):
+              if not re.search(r"^test [^\n]*::" + test + r" \.\.\. ok$", log, re.M):
+                  raise SystemExit(f"native persistence test did not pass: {test}")
+          PYTHON
       - name: Retain native consumer compilation results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
