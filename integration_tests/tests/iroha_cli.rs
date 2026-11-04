@@ -17,9 +17,9 @@ use integration_tests::{
 use iroha::{
     blocking::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
-    crypto::{ExposedPrivateKey, Hash, KeyPair},
+    crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair},
     data_model::{
-        Encode,
+        Encode, NetworkId,
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
@@ -32,7 +32,6 @@ use iroha::{
 };
 use iroha_config_base::toml::WriteExt;
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
-use iroha_model_base::domain::DomainId;
 use iroha_test_network::{NetworkBuilder, ResolvedCommand, ResolvedProgram};
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
@@ -310,11 +309,13 @@ fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
 }
 fn local_program_config() -> ProgramConfig {
     let key = KeyPair::try_random().expect("generate checked local CLI config keypair");
-    let domain_id: DomainId =
-        DomainId::try_new("wonderland", "universal").expect("literal domain should parse");
     ProgramConfig {
         torii_url: Url::parse("http://127.0.0.1:8080").expect("literal URL should parse"),
-        account_domain: domain_id,
+        // Offline CLI parsing fixtures never submit to this synthetic identity.
+        network_id: NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+            b"iroha.cli.offline-config-fixture",
+        ))),
+        account_chain_discriminant: 753,
         key,
         status_timeout: DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         ttl: DEFAULT_TRANSACTION_TIME_TO_LIVE,
@@ -324,27 +325,45 @@ fn local_program_config() -> ProgramConfig {
 fn local_program_config_uses_checked_key_generation() {
     let config = local_program_config();
     assert_eq!(config.torii_url.as_str(), "http://127.0.0.1:8080/");
-    assert_eq!(
-        config.account_domain,
-        DomainId::try_new("wonderland", "universal").expect("literal domain should parse")
-    );
     assert_eq!(config.status_timeout, DEFAULT_TRANSACTION_STATUS_TIMEOUT);
     assert_eq!(config.ttl, DEFAULT_TRANSACTION_TIME_TO_LIVE);
+    let from_table = iroha_config_base::read::ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(config.toml()))
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("canonical CLI TOML")
+        .parse()
+        .expect("complete CLI identity and signer");
+    let from_env = iroha_config_base::read::ConfigReader::new()
+        .with_env(iroha_config_base::env::MockEnv::from(config.envs()))
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("canonical CLI environment")
+        .parse()
+        .expect("complete CLI environment identity and signer");
+    for parsed in [from_table, from_env] {
+        assert_eq!(parsed.network_id, config.network_id);
+        assert_eq!(
+            parsed.account_chain_discriminant,
+            config.account_chain_discriminant
+        );
+        assert_eq!(
+            parsed.account,
+            AccountId::new(config.key.public_key().clone())
+        );
+        assert_eq!(parsed.key_pair, config.key);
+        assert_eq!(parsed.torii_api_url, config.torii_url);
+        assert_eq!(parsed.transaction_status_timeout, config.status_timeout);
+        assert_eq!(parsed.transaction_ttl, config.ttl);
+    }
 }
-fn program_config_for_account(
-    client: &Client,
-    account_domain: &str,
-    key: &KeyPair,
-) -> ProgramConfig {
-    let account_domain = DomainId::try_new(account_domain, "universal")
-        .expect("account domain literal should parse");
+fn program_config_for_account(client: &Client, key: &KeyPair) -> ProgramConfig {
     let ttl = client
         .client()
         .transaction_ttl()
         .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
     ProgramConfig {
         torii_url: client.client().endpoint().clone(),
-        account_domain,
+        network_id: *client.client().network_id(),
+        account_chain_discriminant: client.client().account_chain_discriminant(),
         key: key.clone(),
         status_timeout: client.client().transaction_status_timeout(),
         ttl,
@@ -352,22 +371,27 @@ fn program_config_for_account(
 }
 struct ProgramConfig {
     torii_url: Url,
-    account_domain: DomainId,
+    network_id: NetworkId,
+    account_chain_discriminant: u16,
     key: KeyPair,
     status_timeout: Duration,
     ttl: Duration,
 }
 impl From<&Client> for ProgramConfig {
     fn from(value: &Client) -> Self {
-        program_config_for_account(value, "wonderland", value.client().key_pair())
+        program_config_for_account(value, value.client().key_pair())
     }
 }
 impl ProgramConfig {
     fn envs(&self) -> impl IntoIterator<Item = (&str, String)> {
         [
             ("CHAIN", iroha_test_network::chain_id().to_string()),
+            ("NETWORK_ID", self.network_id.to_string()),
             ("TORII_URL", self.torii_url.to_string()),
-            ("ACCOUNT_DOMAIN", self.account_domain.to_string()),
+            (
+                "ACCOUNT_CHAIN_DISCRIMINANT",
+                self.account_chain_discriminant.to_string(),
+            ),
             ("ACCOUNT_PUBLIC_KEY", self.key.public_key().to_string()),
             (
                 "ACCOUNT_PRIVATE_KEY",
@@ -386,8 +410,12 @@ impl ProgramConfig {
     fn toml(&self) -> toml::Table {
         toml::Table::new()
             .write("chain", iroha_test_network::chain_id().to_string())
+            .write("network_id", self.network_id.to_string())
             .write("torii_url", self.torii_url.to_string())
-            .write(["account", "domain"], self.account_domain.to_string())
+            .write(
+                ["account", "chain_discriminant"],
+                i64::from(self.account_chain_discriminant),
+            )
             .write(
                 ["account", "private_key"],
                 ExposedPrivateKey(self.key.private_key().clone()).to_string(),
@@ -2255,12 +2283,8 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         100_000,
     )?;
     let alice_config = ProgramConfig::from(&network.client());
-    let bob_config = program_config_for_account(&network.client(), "wonderland", &BOB_KEYPAIR);
-    let carpenter_config = program_config_for_account(
-        &network.client(),
-        "garden_of_live_flowers",
-        &CARPENTER_KEYPAIR,
-    );
+    let bob_config = program_config_for_account(&network.client(), &BOB_KEYPAIR);
+    let carpenter_config = program_config_for_account(&network.client(), &CARPENTER_KEYPAIR);
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
         dir.path().join("client.toml"),
@@ -2984,7 +3008,7 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
         SoracloudSuccessCase::new("agent deploy");
         "agent", "deploy",
         "--manifest", manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "30",
+        "--lease-ticks", "30",
         "--autonomy-budget-units", "500",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
@@ -3129,7 +3153,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "1",
+        "--lease-ticks", "1",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
     let _recipient_deploy = run_bounded_soracloud_success!(
@@ -3137,7 +3161,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "30",
+        "--lease-ticks", "30",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
     let expired_wallet = run_bounded_soracloud_command!(
@@ -3165,7 +3189,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         SoracloudSuccessCase::new("lease renew");
         "agent", "lease-renew",
         "--apartment-name", "ops_agent",
-        "--lease-blocks", "20",
+        "--lease-ticks", "20",
         "--torii-url", network.client().client().endpoint().to_string(),
     );
     let restart = run_bounded_soracloud_success!(
@@ -3404,7 +3428,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         SoracloudSuccessCase::new("sender deploy");
         "agent", "deploy",
         "--manifest", sender_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "80",
+        "--lease-ticks", "80",
         "--autonomy-budget-units", "500",
         "--torii-url", &restart_torii_url,
     );
@@ -3413,7 +3437,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         SoracloudSuccessCase::new("recipient deploy");
         "agent", "deploy",
         "--manifest", recipient_manifest_path.to_string_lossy().into_owned(),
-        "--lease-blocks", "80",
+        "--lease-ticks", "80",
         "--autonomy-budget-units", "250",
         "--torii-url", &restart_torii_url,
     );
@@ -3927,7 +3951,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-deploy",
             "--manifest",
             &manifest_path.to_string_lossy(),
-            "--lease-blocks",
+            "--lease-ticks",
             "1",
         ],
     )
@@ -3940,7 +3964,7 @@ async fn soracloud_agent_lease_commands_require_torii_url() -> eyre::Result<()> 
             "agent-lease-renew",
             "--apartment-name",
             "ops_agent",
-            "--lease-blocks",
+            "--lease-ticks",
             "20",
         ],
     )
