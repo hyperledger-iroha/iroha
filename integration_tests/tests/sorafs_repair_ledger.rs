@@ -148,26 +148,12 @@ async fn race(
     left_metadata.insert("repair_race_route".parse()?, 0u32);
     let mut right_metadata = Metadata::default();
     right_metadata.insert("repair_race_route".parse()?, 1u32);
-    let left_transaction = {
-        let account = left.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [left_instruction],
-                no_fee(),
-                left_metadata,
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }?;
-    let right_transaction = {
-        let account = right.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [right_instruction],
-                no_fee(),
-                right_metadata,
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }?;
+    let left_transaction =
+        super::sorafs_network::prepare_transaction(&left, [left_instruction], left_metadata)
+            .await?;
+    let right_transaction =
+        super::sorafs_network::prepare_transaction(&right, [right_instruction], right_metadata)
+            .await?;
     ensure!(
         left_transaction.hash() != right_transaction.hash(),
         "distinct transactions must exercise instruction replay, not transaction deduplication"

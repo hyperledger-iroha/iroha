@@ -174,10 +174,14 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         assert_eq!(response, others);
     }
     // commit_time
-    network.client().submit(
-        Log::new(Level::INFO, "mewo".to_owned()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
+    let client = network.client();
+    integration_tests::sync::spawn_blocking(move || {
+        client.submit(
+            Log::new(Level::INFO, "mewo".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
     for peer in network.peers() {
         let status = peer.status().await?;
