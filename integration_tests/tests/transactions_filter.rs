@@ -19,10 +19,10 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     let client = network.client();
     let alice_id_str = format!("{}", *iroha_test_samples::ALICE_ID);
     // Submit a tx (registering a dummy asset def) to ensure at least one Alice-authored tx exists
-    tokio::task::spawn_blocking({
+    integration_tests::sync::spawn_blocking({
         let client = client.clone();
         move || {
-            let _ = client.submit(
+            client.submit(
                 Register::asset_definition({
                     let __asset_definition_id = AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -36,10 +36,10 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
                     )
                 }),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            );
+            )
         }
     })
-    .await?;
+    .await??;
     network.ensure_blocks(2).await?;
     // Build filter: authority == ALICE_ID (canonical encoded literal) AND timestamp_ms >= 0
     let eq_filter = norito::json::object([

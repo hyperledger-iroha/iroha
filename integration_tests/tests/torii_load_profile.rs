@@ -16,7 +16,7 @@ use iroha_data_model::{
     transaction::{SignedTransaction, TransactionBuilder},
 };
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
+use iroha_test_samples::ALICE_ID;
 use std::{
     env,
     time::{Duration, Instant},
@@ -37,23 +37,47 @@ fn env_usize(name: &str, default: usize) -> usize {
 fn bounded_concurrency(sample_count: usize, requested: usize) -> usize {
     requested.max(1).min(sample_count.max(1))
 }
-fn build_log_transaction(network_id: NetworkId, prefix: &str, index: usize) -> SignedTransaction {
-    TransactionBuilder::new(
+async fn build_log_transaction(
+    client: &Client,
+    network_id: NetworkId,
+    prefix: &str,
+    index: usize,
+) -> eyre::Result<SignedTransaction> {
+    ensure!(
+        *client.client().network_id() == network_id && client.client().account() == &*ALICE_ID,
+        "load-profile signer differs from the selected network or Alice authority"
+    );
+    let account = client.account_client();
+    // Preserve this profile's original TTL and nonce selection while quoting
+    // the exact payload before signing or starting submission measurements.
+    let mut payload = TransactionBuilder::new(
         network_id,
         ALICE_ID.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )
     .with_instructions([Log::new(Level::INFO, format!("{prefix}-{index:04}"))])
-    .sign(ALICE_KEYPAIR.private_key())
+    .into_payload()?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "load-profile fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    Ok(account.sign_transaction(payload)?)
 }
 async fn warmup_queries(clients: &[Client], warmup_samples: usize) -> eyre::Result<()> {
     for index in 0..warmup_samples {
         let client = clients[index % clients.len()].clone();
-        let params =
-            tokio::task::spawn_blocking(move || client.client().query_single(FindParameters))
-                .await
-                .wrap_err("query warmup worker panicked")?
-                .wrap_err("query warmup worker failed")?;
+        let params = integration_tests::sync::spawn_blocking(move || {
+            client.client().query_single(FindParameters)
+        })
+        .await
+        .wrap_err("query warmup worker panicked")?
+        .wrap_err("query warmup worker failed")?;
         std::hint::black_box(params);
     }
     Ok(())
@@ -72,7 +96,7 @@ async fn run_query_profile(
         let mut handles = Vec::with_capacity(batch);
         for offset in 0..batch {
             let client = clients[(next + offset) % clients.len()].clone();
-            handles.push(tokio::task::spawn_blocking(move || {
+            handles.push(integration_tests::sync::spawn_blocking(move || {
                 let start = Instant::now();
                 let params = client.client().query_single(FindParameters)?;
                 std::hint::black_box(params);
@@ -98,8 +122,10 @@ async fn warmup_transactions(
 ) -> eyre::Result<()> {
     for index in 0..warmup_samples {
         let client = clients[index % clients.len()].clone();
-        let tx = build_log_transaction(network_id, "torii-http-load-profile-warmup", index);
-        let hash = tokio::task::spawn_blocking(move || client.submit_transaction(&tx))
+        let tx =
+            build_log_transaction(&client, network_id, "torii-http-load-profile-warmup", index)
+                .await?;
+        let hash = integration_tests::sync::spawn_blocking(move || client.submit_transaction(&tx))
             .await
             .wrap_err("transaction warmup worker panicked")?
             .wrap_err("transaction warmup worker failed")?;
@@ -115,16 +141,23 @@ async fn run_transaction_submit_profile(
 ) -> eyre::Result<(Vec<Duration>, Duration)> {
     let concurrency = bounded_concurrency(samples, concurrency);
     let mut durations = Vec::with_capacity(samples);
+    // Quote and sign every exact payload before either submission latency or throughput timing.
+    let mut prepared = Vec::with_capacity(samples);
+    for index in 0..samples {
+        let client = clients[index % clients.len()].clone();
+        let transaction =
+            build_log_transaction(&client, network_id, "torii-http-load-profile-submit", index)
+                .await?;
+        prepared.push((client, transaction));
+    }
+    let mut prepared = prepared.into_iter();
     let wall_start = Instant::now();
     let mut next = 0usize;
     while next < samples {
         let batch = concurrency.min(samples - next);
         let mut handles = Vec::with_capacity(batch);
-        for offset in 0..batch {
-            let client = clients[(next + offset) % clients.len()].clone();
-            let tx =
-                build_log_transaction(network_id, "torii-http-load-profile-submit", next + offset);
-            handles.push(tokio::task::spawn_blocking(move || {
+        for (client, tx) in prepared.by_ref().take(batch) {
+            handles.push(integration_tests::sync::spawn_blocking(move || {
                 let start = Instant::now();
                 let hash = client.submit_transaction(&tx)?;
                 std::hint::black_box(hash);
@@ -145,11 +178,9 @@ async fn run_transaction_submit_profile(
 }
 async fn measure_submit_to_commit(
     client: Client,
-    network_id: NetworkId,
-    index: usize,
+    transaction: SignedTransaction,
     event_timeout: Duration,
 ) -> eyre::Result<Duration> {
-    let transaction = build_log_transaction(network_id, "torii-http-load-profile-commit", index);
     let hash = transaction.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
@@ -164,11 +195,12 @@ async fn measure_submit_to_commit(
     tokio::time::sleep(EVENT_STREAM_HANDSHAKE_DELAY).await;
     let submit_client = client.clone();
     let start = Instant::now();
-    let submitted_hash =
-        tokio::task::spawn_blocking(move || submit_client.submit_transaction(&transaction))
-            .await
-            .wrap_err("commit transaction submit worker panicked")?
-            .wrap_err("commit transaction submit worker failed")?;
+    let submitted_hash = integration_tests::sync::spawn_blocking(move || {
+        submit_client.submit_transaction(&transaction)
+    })
+    .await
+    .wrap_err("commit transaction submit worker panicked")?
+    .wrap_err("commit transaction submit worker failed")?;
     std::hint::black_box(submitted_hash);
     tokio::time::timeout(event_timeout, async {
         loop {
@@ -202,17 +234,24 @@ async fn run_transaction_commit_profile(
 ) -> eyre::Result<(Vec<Duration>, Duration)> {
     let concurrency = bounded_concurrency(samples, concurrency);
     let mut durations = Vec::with_capacity(samples);
+    let mut prepared = Vec::with_capacity(samples);
+    for index in 0..samples {
+        let client = clients[index % clients.len()].clone();
+        let transaction =
+            build_log_transaction(&client, network_id, "torii-http-load-profile-commit", index)
+                .await?;
+        prepared.push((client, transaction));
+    }
+    let mut prepared = prepared.into_iter();
     let wall_start = Instant::now();
     let mut next = 0usize;
     while next < samples {
         let batch = concurrency.min(samples - next);
         let mut handles = Vec::with_capacity(batch);
-        for offset in 0..batch {
-            let client = clients[(next + offset) % clients.len()].clone();
+        for (client, transaction) in prepared.by_ref().take(batch) {
             handles.push(tokio::spawn(measure_submit_to_commit(
                 client,
-                network_id,
-                next + offset,
+                transaction,
                 event_timeout,
             )));
         }

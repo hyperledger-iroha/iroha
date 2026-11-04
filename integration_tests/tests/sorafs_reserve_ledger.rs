@@ -13,6 +13,7 @@ use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         events::data::sorafs::SorafsReserveLedgerEventKind,
@@ -206,6 +207,70 @@ type Observation = (
     AccountId,
 );
 
+fn reserve_balances_from_rows(
+    rows: &[norito::json::Value],
+    ids: &[AssetId; 3],
+) -> Result<[Quantity; 3]> {
+    let mut balances = std::array::from_fn(|_| Quantity::zero());
+    let mut found = [false; 3];
+    for row in rows {
+        let definition: AssetDefinitionId = integration_tests::collections::field(row, "asset")?;
+        let account: AccountId = integration_tests::collections::field(row, "account_id")?;
+        let scope: String = integration_tests::collections::field(row, "scope")?;
+        let quantity: Quantity = integration_tests::collections::field(row, "quantity")?;
+        ensure!(
+            &definition == ids[0].definition() && scope == "global",
+            "reserve holder collection returned a different asset or scope"
+        );
+        let id = AssetId::of(definition, account);
+        if let Some(index) = ids.iter().position(|expected| expected == &id) {
+            ensure!(
+                !found[index],
+                "asset query repeated a reserve custody partition"
+            );
+            found[index] = true;
+            balances[index] = quantity;
+        }
+    }
+    Ok(balances)
+}
+
+#[test]
+fn reserve_holder_rows_preserve_quantities_and_refuse_duplicate_or_foreign_scope() -> Result<()> {
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "reserve".parse()?,
+    );
+    let ids = [&*BOB_ID, &*iroha_test_samples::CARPENTER_ID, &*ALICE_ID]
+        .map(|account| AssetId::of(definition.clone(), account.clone()));
+    let row = |index: usize, scope: &str, quantity: &str| {
+        norito::json!({
+            "asset": definition,
+            "account_id": ids[index].account(),
+            "scope": scope,
+            "quantity": quantity,
+        })
+    };
+    assert_eq!(
+        reserve_balances_from_rows(&[row(0, "global", "13"), row(2, "global", "17")], &ids)?,
+        [
+            Quantity::from(13_u32),
+            Quantity::zero(),
+            Quantity::from(17_u32)
+        ]
+    );
+    assert!(
+        reserve_balances_from_rows(&[row(0, "global", "13"), row(0, "global", "13")], &ids)
+            .is_err()
+    );
+    assert!(reserve_balances_from_rows(&[row(0, "dataspace:1", "13")], &ids).is_err());
+    assert!(reserve_balances_from_rows(&[row(0, "global", "invalid")], &ids).is_err());
+    let mut incomplete = row(0, "global", "13");
+    incomplete.as_object_mut().unwrap().remove("account_id");
+    assert!(reserve_balances_from_rows(&[incomplete], &ids).is_err());
+    Ok(())
+}
+
 fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observation> {
     let events = reader
         .client()
@@ -238,20 +303,15 @@ fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observa
         .query_single(FindSorafsProviderOwner::new(PROVIDER))?;
     let ids = [&*BOB_ID, &policy.custody_account, &*ALICE_ID]
         .map(|account| AssetId::of(policy.asset_definition.clone(), account.clone()));
-    let mut balances = std::array::from_fn(|_| Quantity::zero());
-    let mut found = [false; 3];
-    // A completed authenticated asset query establishes zero for an absent asset;
+    // A completed authenticated holder collection establishes zero for an absent asset;
     // an arbitrary missing/failed singular query never becomes a zero balance.
-    for asset in reader.client().query(FindAssets::new()).execute_all()? {
-        if let Some(index) = ids.iter().position(|id| id == asset.id()) {
-            ensure!(
-                !found[index],
-                "asset query repeated a reserve custody partition"
-            );
-            found[index] = true;
-            balances[index] = asset.value().clone();
-        }
-    }
+    let holders = reader
+        .list(
+            Collection::AssetHolders(policy.asset_definition.clone()),
+            ListQuery::new().filter(field("scope").eq("global")),
+        )
+        .collect::<iroha::Result<Vec<_>>>()?;
+    let balances = reserve_balances_from_rows(&holders, &ids)?;
     let after = reader
         .client()
         .query_single(FindSorafsReserveEvents::new(None, None, 16))?;

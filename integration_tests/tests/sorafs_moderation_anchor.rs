@@ -1,9 +1,11 @@
 //! Four-validator regressions for `SoraFS` moderation proof admission, sortition and bond settlement.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
+use futures::StreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     crypto::{HashOf, KeyPair, Signature},
     data_model::{
         events::data::sorafs::SorafsModerationLedgerEventKind,
@@ -19,9 +21,7 @@ use iroha::{
         },
         prelude::*,
         query::{
-            asset::prelude::{FindAssetDefinitionById, FindAssetsByAccountId},
-            block::prelude::FindBlocks,
-            dsl::IntoPredicate as _,
+            asset::prelude::FindAssetDefinitionById,
             sorafs::prelude::{
                 FindSorafsModerationAppeal, FindSorafsModerationCase,
                 FindSorafsModerationChallenge, FindSorafsModerationSnapshot,
@@ -742,13 +742,67 @@ fn voting_asset_balance(
     voting_asset_id: &AssetDefinitionId,
     account: &AccountId,
 ) -> Result<Quantity> {
-    Ok(client
-        .client()
-        .query(FindAssetsByAccountId::new(account.clone()))
-        .execute_all()?
-        .into_iter()
-        .find(|asset| asset.id().definition() == voting_asset_id)
-        .map_or_else(Quantity::zero, |asset| asset.value().clone()))
+    let rows = client
+        .list(
+            Collection::AccountAssets(account.clone()),
+            ListQuery::new().filter(
+                field("asset").eq(voting_asset_id.to_string()) & field("scope").eq("global"),
+            ),
+        )
+        .collect::<iroha::Result<Vec<_>>>()?;
+    voting_balance_from_rows(&rows, voting_asset_id, account)
+}
+
+fn voting_balance_from_rows(
+    rows: &[norito::json::Value],
+    voting_asset_id: &AssetDefinitionId,
+    account: &AccountId,
+) -> Result<Quantity> {
+    ensure!(
+        rows.len() <= 1,
+        "voting asset collection repeated its partition"
+    );
+    let Some(row) = rows.first() else {
+        return Ok(Quantity::zero());
+    };
+    let definition: AssetDefinitionId = integration_tests::collections::field(row, "asset")?;
+    let owner: AccountId = integration_tests::collections::field(row, "account_id")?;
+    let scope: String = integration_tests::collections::field(row, "scope")?;
+    ensure!(
+        &definition == voting_asset_id && &owner == account && scope == "global",
+        "voting asset collection returned a different partition"
+    );
+    integration_tests::collections::field(row, "quantity")
+}
+
+#[test]
+fn voting_rows_require_the_exact_partition_and_preserve_absence_and_quantity() -> Result<()> {
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "vote".parse()?,
+    );
+    let row = |account: &AccountId, scope: &str| norito::json!({"asset": definition, "account_id": account, "scope": scope, "quantity": "13"});
+    assert_eq!(
+        voting_balance_from_rows(&[], &definition, &BOB_ID)?,
+        Quantity::zero()
+    );
+    assert_eq!(
+        voting_balance_from_rows(&[row(&BOB_ID, "global")], &definition, &BOB_ID)?,
+        Quantity::from(13_u32)
+    );
+    assert!(voting_balance_from_rows(&[row(&ALICE_ID, "global")], &definition, &BOB_ID).is_err());
+    assert!(
+        voting_balance_from_rows(&[row(&BOB_ID, "dataspace:1")], &definition, &BOB_ID).is_err()
+    );
+    assert!(
+        voting_balance_from_rows(
+            &[row(&BOB_ID, "global"), row(&BOB_ID, "global")],
+            &definition,
+            &BOB_ID,
+        )
+        .is_err()
+    );
+    Ok(())
 }
 
 fn settlement_observation(
@@ -885,16 +939,30 @@ async fn wait_for_settlement_convergence(
 }
 
 async fn exact_block(client: &Client, height: u64) -> Result<SignedBlock> {
-    let client = client.clone();
-    let block = read_on_dedicated_thread(move || {
-        client
-            .client()
-            .query(FindBlocks)
-            .filter_with(|block| block.equals("height", height).into_predicate())
-            .execute_single()
-            .map_err(|error| eyre!("query exact finalized block {height}: {error}"))
+    let requested = std::num::NonZeroU64::new(height)
+        .ok_or_else(|| eyre!("exact finalized block height must be nonzero"))?;
+    let request_timeout = client.client().torii_request_timeout();
+    ensure!(
+        !request_timeout.is_zero(),
+        "exact block fixture requires its bounded client"
+    );
+    // Keep one existing request budget around authentication, the exact canonical block,
+    // and connection closure. The returned full header still owns hash/time comparisons.
+    let block = tokio::time::timeout(request_timeout, async {
+        let mut blocks = client
+            .account_client()
+            .blocks()
+            .subscribe(requested)
+            .await?;
+        let block = blocks
+            .next()
+            .await
+            .ok_or_else(|| eyre!("block stream ended before finalized block {height}"))??;
+        blocks.close().await?;
+        Ok::<_, eyre::Report>(block)
     })
-    .await?;
+    .await
+    .wrap_err_with(|| format!("timed out reading exact finalized block {height}"))??;
     ensure!(
         block.header().height().get() == height,
         "exact finalized-block query returned height {} for requested height {height}",

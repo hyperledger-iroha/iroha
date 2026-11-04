@@ -23,7 +23,7 @@ use iroha::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetDefinitions, Grant, Json},
+        prelude::{FindAssetById, FindAssetDefinitionById, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -31,7 +31,6 @@ use iroha::{
     },
 };
 use iroha_config_base::toml::WriteExt;
-use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::{NetworkBuilder, ResolvedCommand, ResolvedProgram};
@@ -132,15 +131,13 @@ fn assert_soracloud_hf_lease_asset_ready(
     minimum_amount: u32,
 ) -> eyre::Result<()> {
     let asset_definition_id = soracloud_hf_lease_asset_definition();
-    let asset_definition_exists = client
+    let asset_definition = client
         .client()
-        .query(FindAssetDefinitions::new())
-        .execute_all()?
-        .into_iter()
-        .any(|definition| definition.id == asset_definition_id);
-    if !asset_definition_exists {
+        .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
+    if asset_definition.id != asset_definition_id {
         return Err(eyre::eyre!(
-            "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
+            "soracloud HF lease asset definition query returned `{}` instead of `{asset_definition_id}`",
+            asset_definition.id,
         ));
     }
     for account_id in accounts {

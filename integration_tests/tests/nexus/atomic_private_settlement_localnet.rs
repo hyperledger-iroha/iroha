@@ -70,7 +70,7 @@ use iroha::{
         },
         parameter::{FastpqSourcePolicyV1, Parameter, system::SumeragiParameters},
         permission::Permission,
-        prelude::{FindAssetById, FindAssets, FindPermissionsByAccountId},
+        prelude::{FindAssetById, FindAssets},
         privacy::{
             IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             IvmPrivateNoteLimitsV1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
@@ -80,7 +80,6 @@ use iroha::{
             PrivacyRecipientIdV1, PrivacyRootV1, PrivateSettlementPolicyUpdateV1,
             PrivateSettlementPolicyV1,
         },
-        query::block::prelude::FindBlocks,
         sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy},
         transaction::{
             FeeChargeKind, FeeChargeLimit, FeePaymentIntent, SignedTransaction,

@@ -268,7 +268,7 @@ async fn wait_for_entrypoint_applied(
     let mut last_status = None;
     while Instant::now() < deadline {
         let poll_client = client.clone();
-        let status = tokio::task::spawn_blocking(move || {
+        let status = integration_tests::sync::spawn_blocking(move || {
             poll_client.client().get_transaction_status_response(hash)
         })
         .await??;
@@ -298,7 +298,7 @@ async fn wait_for_entrypoint_rejected(
     let mut last_status = None;
     while Instant::now() < deadline {
         let poll_client = client.clone();
-        let status = tokio::task::spawn_blocking(move || {
+        let status = integration_tests::sync::spawn_blocking(move || {
             poll_client.client().get_transaction_status_response(hash)
         })
         .await??;
@@ -363,7 +363,7 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
         }
         let submit_client = tick_clients[next_tick_client % tick_clients.len()].clone();
         next_tick_client = next_tick_client.wrapping_add(1);
-        let submitted = tokio::task::spawn_blocking(move || {
+        let submitted = integration_tests::sync::spawn_blocking(move || {
             submit_client.submit(
                 Log::new(Level::INFO, "sealed reveal height tick".to_owned()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
