@@ -171,8 +171,12 @@ mod tests {
     ))]
     #[test]
     fn actual_native_elapsed_readings_retain_same_process_and_order() {
+        let lower = native_continuous_clock_nanos().unwrap();
         let first = NativeContinuousReading::now().unwrap();
         let second = NativeContinuousReading::now().unwrap();
+        let upper = native_continuous_clock_nanos().unwrap();
+        assert!(lower <= first.nanos);
+        assert!(second.nanos <= upper);
         assert_eq!(second.process, first.process);
         assert!(second.elapsed_since(&first).is_ok());
         assert!(first.elapsed().is_ok());
