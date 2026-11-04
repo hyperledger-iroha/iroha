@@ -22,11 +22,10 @@ use iroha_data_model::{
 };
 use iroha_fs::ProcessStdio as Stdio;
 use norito::derive::JsonSerialize;
+#[cfg(test)]
+use std::os::fd::{AsFd as _, BorrowedFd};
 use std::{
-    os::{
-        fd::{AsFd as _, BorrowedFd},
-        unix::fs::{MetadataExt as _, OpenOptionsExt as _},
-    },
+    os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     time::Instant,
 };
 use tempfile::TempDir;
@@ -648,6 +647,7 @@ fn write_owner_private_key(path: &Path, signer: &KeyPair) -> Result<fs::File> {
     Ok(file)
 }
 
+#[cfg(test)]
 fn inherit_native_descriptors<const N: usize>(
     command: &mut ResolvedCommand,
     descriptors: [(BorrowedFd<'_>, i32); N],
@@ -655,6 +655,7 @@ fn inherit_native_descriptors<const N: usize>(
     command.inherit_descriptors(&descriptors).map(|_| ())
 }
 
+#[cfg(test)]
 fn inherit_rotation_descriptors(
     command: &mut ResolvedCommand,
     key: BorrowedFd<'_>,
@@ -709,15 +710,9 @@ fn spawn_seat(
     )?;
     let (public_fifo, public_writer) = open_native_phase_fifo(&public_path)?;
     let (finality_fifo, finality_writer) = open_native_phase_fifo(&finality_path)?;
-    let private_log = |name| -> Result<fs::File> {
-        Ok(fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(owner_root.path().join(name))?)
-    };
     let mut command = binary.command()?;
     command
+        .arg("beacon-descriptor-relay")
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("provision-rotation-seat")
@@ -750,20 +745,12 @@ fn spawn_seat(
         .arg(PROCESS_TIMEOUT.as_millis().to_string())
         .env_clear()
         .current_dir(owner_root.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(private_log("stdout.log")?))
-        .stderr(Stdio::from(private_log("stderr.log")?))
+        // The native image receives these inputs before claiming fixed slots.
+        .stdin(Stdio::from(key))
+        .stdout(Stdio::from(public_fifo))
+        .stderr(Stdio::from(finality_fifo))
         .kill_on_drop(true);
-    inherit_rotation_descriptors(
-        &mut command,
-        key.as_fd(),
-        public_fifo.as_fd(),
-        finality_fifo.as_fd(),
-    )?;
     let child = command.spawn_async()?;
-    drop(key);
-    drop(public_fifo);
-    drop(finality_fifo);
     Ok(SeatProcess {
         validator: seat.id(),
         signer_index,
@@ -914,15 +901,9 @@ fn spawn_genesis_seat(
     )?;
     let (public_fifo, public_writer) = open_native_phase_fifo(&public_path)?;
     let (finality_fifo, finality_writer) = open_native_phase_fifo(&finality_path)?;
-    let private_log = |name| -> Result<fs::File> {
-        Ok(fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(owner_root.path().join(name))?)
-    };
     let mut command = binary.command()?;
     command
+        .arg("beacon-descriptor-relay")
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("provision-genesis-seat")
@@ -955,22 +936,14 @@ fn spawn_genesis_seat(
         .arg(PROCESS_TIMEOUT.as_millis().to_string())
         .env_clear()
         .current_dir(owner_root.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(private_log("stdout.log")?))
-        .stderr(Stdio::from(private_log("stderr.log")?))
+        // The native image receives these inputs before claiming fixed slots.
+        .stdin(Stdio::from(provision_key))
+        .stdout(Stdio::from(public_fifo))
+        .stderr(Stdio::from(finality_fifo))
         .kill_on_drop(true);
-    inherit_rotation_descriptors(
-        &mut command,
-        provision_key.as_fd(),
-        public_fifo.as_fd(),
-        finality_fifo.as_fd(),
-    )?;
     let child = command.spawn_async().inspect_err(|_| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
     })?;
-    drop(provision_key);
-    drop(public_fifo);
-    drop(finality_fifo);
     Ok(SeatProcess {
         validator: seat.id(),
         signer_index,
@@ -1228,15 +1201,9 @@ fn spawn_genesis_config_seat(
     )?;
     let (public_fifo, public_writer) = open_native_phase_fifo(&public_path)?;
     let (finality_fifo, finality_writer) = open_native_phase_fifo(&finality_path)?;
-    let private_log = |name| -> Result<fs::File> {
-        Ok(fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(owner_root.path().join(name))?)
-    };
     let mut command = binary.command()?;
     command
+        .arg("beacon-descriptor-relay")
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("provision-genesis-seat")
@@ -1269,22 +1236,14 @@ fn spawn_genesis_config_seat(
         .arg(PROCESS_TIMEOUT.as_millis().to_string())
         .env_clear()
         .current_dir(owner_root.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(private_log("stdout.log")?))
-        .stderr(Stdio::from(private_log("stderr.log")?))
+        // The native image receives these inputs before claiming fixed slots.
+        .stdin(Stdio::from(provision_key))
+        .stdout(Stdio::from(public_fifo))
+        .stderr(Stdio::from(finality_fifo))
         .kill_on_drop(true);
-    inherit_rotation_descriptors(
-        &mut command,
-        provision_key.as_fd(),
-        public_fifo.as_fd(),
-        finality_fifo.as_fd(),
-    )?;
     let child = command.spawn_async().inspect_err(|_| {
         let _ = retire_one_shot_genesis_descriptor(&owner_root.path().join("provision.fd198"));
     })?;
-    drop(provision_key);
-    drop(public_fifo);
-    drop(finality_fifo);
     Ok(SeatProcess {
         validator: seat.validator.clone(),
         signer_index,
@@ -1495,6 +1454,7 @@ async fn sign_genesis_draft(
     )?;
     let mut command = binary.command()?;
     command
+        .arg("beacon-descriptor-relay")
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("sign-genesis-install")
@@ -1514,11 +1474,10 @@ async fn sign_genesis_draft(
         .arg("--output")
         .arg(output)
         .env_clear()
-        .stdin(Stdio::null())
+        .stdin(Stdio::from(key))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    inherit_native_descriptors(&mut command, [(key.as_fd(), KEY_FD)])?;
     let waited = timeout(PROCESS_TIMEOUT, command.status_async()).await;
     let consumed = retire_one_shot_genesis_descriptor(&one_shot_path)?;
     let status = waited??;
@@ -1549,6 +1508,7 @@ async fn sign_rotation_draft(
     )?;
     let mut command = binary.command()?;
     command
+        .arg("beacon-descriptor-relay")
         .arg("beacon-bootstrap")
         .args(credential_memory_args(iroha_config::parameters::defaults::runtime_provider_broker::CREDENTIAL_MAX_MEMORY_BYTES))
         .arg("sign-rotation")
@@ -1563,11 +1523,10 @@ async fn sign_rotation_draft(
         .arg(output)
         .env_clear()
         .current_dir(root.path())
-        .stdin(Stdio::null())
+        .stdin(Stdio::from(key))
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .kill_on_drop(true);
-    inherit_native_descriptors(&mut command, [(key.as_fd(), KEY_FD)])?;
     let status = timeout(PROCESS_TIMEOUT, command.status_async()).await??;
     ensure!(
         status.success(),
@@ -1656,6 +1615,7 @@ pub async fn prepare_disposable_pending_custody(
     let output = root.path().join("prepared-generation");
     let mut command = binary.command()?;
     command
+        .arg("beacon-descriptor-relay")
         .arg("beacon-prepare-custody")
         .args(credential_memory_args(input.credential_max_memory_bytes))
         .arg("--evidence")
@@ -1679,7 +1639,7 @@ pub async fn prepare_disposable_pending_custody(
         .arg(&output)
         .env_clear()
         .current_dir(root.path())
-        .stdin(Stdio::null())
+        .stdin(Stdio::from(share))
         .stdout(Stdio::null())
         // The pinned provisioning command emits static rejection categories only;
         // inherited private descriptors never enter its diagnostics or arguments.
@@ -1688,11 +1648,8 @@ pub async fn prepare_disposable_pending_custody(
     if let Some(path) = &catalog_path {
         command.arg("--current-catalog").arg(path);
     }
-    let retained_fd = current.as_ref().map(std::os::fd::AsFd::as_fd);
-    if let Some(source) = retained_fd {
-        inherit_native_descriptors(&mut command, [(share.as_fd(), KEY_FD), (source, 200)])?;
-    } else {
-        inherit_native_descriptors(&mut command, [(share.as_fd(), KEY_FD)])?;
+    if let Some(current) = current {
+        command.stdout(Stdio::from(current));
     }
     let status = timeout(PROCESS_TIMEOUT, command.status_async()).await??;
     ensure!(
@@ -2772,6 +2729,23 @@ mod tests {
     async fn observe_native_peer_phase_handoff(genesis: bool) {
         use std::os::unix::fs::PermissionsExt as _;
 
+        // Hold a dense table including every fixed protocol number in the parent.
+        // Ordinary stdio launch must retain these owners and let exec close them
+        // only in the child; the native daemon separately tests fixed-slot mapping.
+        let mut occupied = Vec::new();
+        loop {
+            let file = fs::File::open("/dev/null").unwrap();
+            let complete = file.as_raw_fd() >= 220;
+            occupied.push(file);
+            if complete {
+                break;
+            }
+        }
+        let occupied_before = occupied
+            .iter()
+            .map(|file| (file.as_raw_fd(), file.metadata().unwrap().ino()))
+            .collect::<Vec<_>>();
+
         let root =
             super::super::disposable_runtime_provider_broker::new_disposable_owner_private_root()
                 .unwrap();
@@ -2788,9 +2762,11 @@ mod tests {
             format!(
                 r#"#!/bin/sh
 set -eu
-test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
+test "$1" = beacon-descriptor-relay
+test "$2" = beacon-bootstrap
+test "$(/usr/bin/wc -c <&0)" -eq 71
 {consume}
-{python} -c 'import fcntl, os; assert fcntl.fcntl(201, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY; assert fcntl.fcntl(202, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY'
+{python} -c 'import fcntl, os; assert fcntl.fcntl(1, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY; assert fcntl.fcntl(2, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY'
 "#,
             ),
         )
@@ -2857,6 +2833,13 @@ test "$(/usr/bin/wc -c < /dev/fd/198)" -eq 71
                 .unwrap()
                 .unwrap()
                 .success()
+        );
+        assert_eq!(
+            occupied
+                .iter()
+                .map(|file| (file.as_raw_fd(), file.metadata().unwrap().ino()))
+                .collect::<Vec<_>>(),
+            occupied_before
         );
         assert_eq!(
             fs::metadata(process.owner_root.path().join("identity.private"))

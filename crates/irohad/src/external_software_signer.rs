@@ -50,7 +50,8 @@ pub use consensus_threshold::{
 };
 #[cfg(unix)]
 pub(crate) use consensus_threshold::{
-    decode_global_beacon_runtime_signer_v1, dispatch_beacon_custody_preparation_if_requested,
+    decode_global_beacon_runtime_signer_v1, dispatch_beacon_custody_arguments,
+    dispatch_beacon_custody_preparation_if_requested,
 };
 pub use envelope::{
     SoftwareSignerEnvelopeErrorV1, SoftwareSignerKeyEnvelopeV1, SoftwareSignerWrappingKeyV1,

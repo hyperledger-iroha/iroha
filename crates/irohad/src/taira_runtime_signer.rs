@@ -730,6 +730,9 @@ impl IrohaRuntimeProviderRegistryV1 for TairaRuntimeProviderRegistryV1 {
 /// remain offline and do not read the descriptors. Every node-starting invocation resolves exactly the
 /// Soracloud signer and any explicitly configured global-beacon signer through [`crate::run_with_runtime_provider_registry`].
 pub fn main_entry(build: iroha_core::release_identity::CompiledBuildMetadata) {
+    if crate::beacon_bootstrap::descriptor_relay::dispatch_if_requested() {
+        return;
+    }
     if crate::external_software_signer::dispatch_beacon_custody_preparation_if_requested() {
         return;
     }
