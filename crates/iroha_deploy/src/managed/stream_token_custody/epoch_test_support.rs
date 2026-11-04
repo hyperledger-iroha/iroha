@@ -31,6 +31,7 @@ impl ManagedStreamTokenCustody {
             selection: self.selection(&policy.binding, &current).unwrap(),
             action: Action::Configure(policy.clone()),
             checkpoint: checkpoint_bytes(&verifier).unwrap(),
+            source: native.bootstrap_custody_source(&self.authority, policy, &verifier),
         };
         self.validate_original(&original, CustodyPurpose::Configure)
             .unwrap();

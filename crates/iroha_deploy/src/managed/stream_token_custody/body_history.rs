@@ -35,26 +35,35 @@ pub(in crate::managed) use closure_inspector::NativeClosureInspector;
 mod finish_wallet;
 use finish_wallet::{FinishWalletAccount, FinishWalletReads};
 
-/// Private transport seam; each result is still produced by the canonical native verifier.
+/// Private source-read seam; each result is produced by the canonical native verifier.
 pub(super) trait EnrollmentReads {
     fn historical(
         &self,
         owner: &ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
+        unsigned: &UnsignedEnrollment,
         checkpoint: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1>;
 }
-struct NativeEnrollmentReads;
+pub(super) struct NativeEnrollmentReads;
 impl EnrollmentReads for NativeEnrollmentReads {
     fn historical(
         &self,
         owner: &ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
+        unsigned: &UnsignedEnrollment,
         checkpoint: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
-        owner.read_current(&policy.binding, checkpoint, deadline)
+        require_deadline(deadline)?;
+        if policy.binding != unsigned.selection.binding {
+            return Err(invalid("retained custody policy binding differs"));
+        }
+        let historical =
+            owner.verify_retained_source(&unsigned.selection, &unsigned.source, checkpoint)?;
+        require_deadline(deadline)?;
+        Ok(historical)
     }
 }
 
@@ -2868,6 +2877,7 @@ impl BodyHistory {
         let historical = reads.historical(
             owner,
             &control(&unsigned.selection)?.policy,
+            unsigned,
             &checkpoint,
             deadline,
         )?;
@@ -2931,6 +2941,7 @@ impl BodyHistory {
         let original = Original {
             selection: unsigned.selection.clone(),
             checkpoint: unsigned.checkpoint.clone(),
+            source: unsigned.source.clone(),
             action: Action::Enroll {
                 anchor: unsigned.statement.anchor,
                 selected_at_unix_ms: unsigned.selected_at_unix_ms,
@@ -3117,6 +3128,10 @@ pub(in crate::managed) mod metadata_reuse_tests;
 #[cfg(test)]
 #[path = "body_history/signing_boundary_tests.rs"]
 mod signing_boundary_tests;
+
+#[cfg(test)]
+#[path = "body_history/retained_source_tests.rs"]
+mod retained_source_tests;
 
 #[cfg(test)]
 #[path = "body_history/attempts_root_scope_tests.rs"]

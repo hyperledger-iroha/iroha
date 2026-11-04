@@ -280,7 +280,7 @@ impl ManagedStreamTokenCustody {
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
     ) -> Result<(Original, Option<InitialAdmission<'a>>)> {
-        self.select_configuration_using(directory, policy, deadline, Self::observe)
+        self.select_configuration_using(directory, policy, deadline, Self::observe_with_source)
     }
     fn select_configuration_using<'a>(
         &mut self,
@@ -291,7 +291,8 @@ impl ManagedStreamTokenCustody {
             &mut Self,
             &SignerCustodyBindingV1,
             Instant,
-        ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)>,
+        )
+            -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1, Vec<u8>)>,
     ) -> Result<(Original, Option<InitialAdmission<'a>>)> {
         journal::recover_intent(directory, |original| {
             original.matches_configuration(policy)?;
@@ -304,7 +305,7 @@ impl ManagedStreamTokenCustody {
             return Ok((original, None));
         }
         attempts::metadata::require_unselected(directory)?;
-        let (verifier, current) = observe(self, &policy.binding, deadline)?;
+        let (verifier, current, source) = observe(self, &policy.binding, deadline)?;
         if current.current().is_some() {
             return Err(invalid("initial custody configuration already exists"));
         }
@@ -312,6 +313,7 @@ impl ManagedStreamTokenCustody {
             selection: self.selection(&policy.binding, &current)?,
             action: Action::Configure(policy.clone()),
             checkpoint: checkpoint_bytes(&verifier)?,
+            source,
         };
         self.validate_original(&original, CustodyPurpose::Configure)?;
         let admission = journal::publish_intent(directory, &original)?
@@ -389,7 +391,7 @@ impl ManagedStreamTokenCustody {
         body_history::UnsignedEnrollment,
         VerifiedStreamTokenCustodyStateV1,
     )> {
-        let (verifier, current) = self.observe(&policy.binding, deadline)?;
+        let (verifier, current, source) = self.observe_with_source(&policy.binding, deadline)?;
         let selected = current
             .current()
             .ok_or_else(|| invalid("custody policy absent"))?;
@@ -407,7 +409,8 @@ impl ManagedStreamTokenCustody {
         }
         let observed = now_ms()?;
         validate_interval(interval, observed)?;
-        let unsigned = self.unsigned_enrollment(policy, &current, &verifier, interval, observed)?;
+        let unsigned =
+            self.unsigned_enrollment(policy, &current, source, &verifier, interval, observed)?;
         self.authority.validate_profile()?;
         require_deadline(deadline)?;
         Ok((unsigned, current))
@@ -601,7 +604,9 @@ impl ManagedStreamTokenCustody {
     ) -> Result<Observation> {
         self.authority.validate_profile()?;
         let checkpoint = self.authority.decode_checkpoint(&original.checkpoint)?;
-        let historical = self.read_current(&original.selection.binding, &checkpoint, deadline)?;
+        require_deadline(deadline)?;
+        let historical =
+            self.verify_retained_source(&original.selection, &original.source, &checkpoint)?;
         let (_, current) = self.observe(&original.selection.binding, deadline)?;
         self.fresh_predecessor_observation(original, &historical, &current, deadline)
     }
@@ -1199,6 +1204,21 @@ impl ManagedStreamTokenCustody {
         Ok((verifier, current))
     }
 
+    fn observe_with_source(
+        &mut self,
+        binding: &SignerCustodyBindingV1,
+        deadline: Instant,
+    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1, Vec<u8>)> {
+        let verifier = self.authority.observe_finality(deadline)?;
+        let block = verifier
+            .verified_tip_ref()
+            .map_err(|_| invalid("invalid certified custody tip"))?;
+        let (proof, current) = self.read_current_source_at(binding, block, deadline)?;
+        let source = encode(&proof, iroha_data_model::sorafs::stream_token_custody::proof::MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1)?;
+        require_deadline(deadline)?;
+        Ok((verifier, current, source))
+    }
+
     fn read_current(
         &self,
         binding: &SignerCustodyBindingV1,
@@ -1217,6 +1237,19 @@ impl ManagedStreamTokenCustody {
         block: &VerifiedSumeragiBlock,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        self.read_current_source_at(binding, block, deadline)
+            .map(|(_, current)| current)
+    }
+
+    fn read_current_source_at(
+        &self,
+        binding: &SignerCustodyBindingV1,
+        block: &VerifiedSumeragiBlock,
+        deadline: Instant,
+    ) -> Result<(
+        iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1,
+        VerifiedStreamTokenCustodyStateV1,
+    )> {
         require_deadline(deadline)?;
         block
             .verify_global_scope(
@@ -1232,7 +1265,7 @@ impl ManagedStreamTokenCustody {
         read_selected_peers(&self.authority.peers, deadline, |client, deadline| {
             client
                 .with_request_deadline(deadline)
-                .get_stream_token_custody_state(
+                .get_stream_token_custody_state_with_source(
                     self.authority.provider_id()?,
                     owner,
                     binding,
@@ -1241,6 +1274,51 @@ impl ManagedStreamTokenCustody {
                 )
                 .map_err(|_| invalid("native custody candidate is unavailable or invalid"))
         })
+    }
+
+    // Retained source authenticates only the original selection. Current authorization still
+    // requires a fresh native observation and the exact unchanged predecessor predicate.
+    #[inline(never)]
+    fn verify_retained_source(
+        &self,
+        selection: &StreamTokenCustodySelection,
+        source: &[u8],
+        verifier: &FinalityVerifier,
+    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+        use iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1;
+        let block = verifier
+            .verified_tip_ref()
+            .map_err(|_| invalid("invalid retained custody tip"))?;
+        block
+            .verify_global_scope(
+                self.authority.config.network_id,
+                self.authority.config.chain.as_str(),
+            )
+            .map_err(|_| invalid("retained custody source differs from original Global scope"))?;
+        let proof = StreamTokenCustodyProofV1::decode_frame(source)
+            .map_err(|_| invalid("invalid retained custody source"))?;
+        let current = proof
+            .verify(
+                self.authority.config.network_id,
+                self.authority.provider_id()?,
+                self.authority
+                    .provider_role(StreamTokenAuthorityRole::IssuerOperator)?,
+                &selection.binding,
+                iroha_core::state::State::native_world_schema_hash_v1()
+                    .map_err(|_| invalid("native custody schema is unavailable"))?,
+                block,
+            )
+            .map_err(|_| {
+                invalid("retained custody source differs from original authority or cut")
+            })?;
+        if selection.provider_id != self.authority.provider_id()?
+            || !matches_predecessor(selection, current.current().map(
+                iroha_data_model::sorafs::stream_token_custody::proof::VerifiedStreamTokenCustodyRecordV1::record,
+            ))
+        {
+            return Err(ManagedBootstrapFailure::EnrollmentPredecessorChanged.into());
+        }
+        Ok(current)
     }
 
     fn verify_wallet(

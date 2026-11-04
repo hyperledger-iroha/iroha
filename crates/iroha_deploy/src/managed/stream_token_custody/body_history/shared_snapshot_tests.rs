@@ -129,6 +129,11 @@ fn build_history_with_bodies(
                     2,
                     &fixture.policy,
                     &current,
+                    fixture.native.bootstrap_custody_source(
+                        &fixture.owner.authority,
+                        &fixture.policy,
+                        &checkpoint,
+                    ),
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,
@@ -161,6 +166,11 @@ fn build_history_with_bodies(
                     2,
                     &fixture.policy,
                     &current,
+                    fixture.native.bootstrap_custody_source(
+                        &fixture.owner.authority,
+                        &fixture.policy,
+                        &checkpoint,
+                    ),
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,

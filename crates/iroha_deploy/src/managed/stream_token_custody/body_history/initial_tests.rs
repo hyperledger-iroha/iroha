@@ -226,7 +226,14 @@ fn prepare_expired_initial(temporary: &tempfile::TempDir) -> ExpiredInitial {
     };
     assert!(short.expires_at_unix_ms - short.issued_at_unix_ms < policy.max_validity_ms);
     let unsigned = owner
-        .unsigned_enrollment(&policy, &current, &checkpoint, short, now)
+        .unsigned_enrollment(
+            &policy,
+            &current,
+            native.bootstrap_custody_source(&owner.authority, &policy, &checkpoint),
+            &checkpoint,
+            short,
+            now,
+        )
         .unwrap();
     let original_history = owner.bootstrap_native_body(
         &native,
@@ -369,7 +376,14 @@ fn finish_initial_replacement(
         previous_current.current().unwrap().record()
     );
     let unsigned = owner
-        .unsigned_enrollment(&policy, &current, &checkpoint, interval, now)
+        .unsigned_enrollment(
+            &policy,
+            &current,
+            native.bootstrap_custody_source(&owner.authority, &policy, &checkpoint),
+            &checkpoint,
+            interval,
+            now,
+        )
         .unwrap();
     let history = BodyHistory::open(&owner, CustodyPurpose::InitialEnroll)
         .unwrap()

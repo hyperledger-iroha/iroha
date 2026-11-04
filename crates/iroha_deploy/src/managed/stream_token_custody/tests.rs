@@ -69,7 +69,18 @@ fn original() -> Original {
         action: Action::Configure(policy),
         // Codec-only fixture, never passed to a finality verifier or treated as an anchor.
         checkpoint: vec![1],
+        source: vec![1],
     }
+}
+
+#[test]
+fn retained_original_bounds_checkpoint_and_native_source_independently() {
+    let mut original = original();
+    assert!(original.validate().is_ok());
+    original.source.clear();
+    assert!(original.validate().is_err());
+    original.source = vec![0; iroha_data_model::sorafs::stream_token_custody::proof::MAX_STREAM_TOKEN_CUSTODY_PROOF_BYTES_V1 + 1];
+    assert!(original.validate().is_err());
 }
 
 #[test]
@@ -336,6 +347,7 @@ fn invalid_enrollment_interval_cannot_reserve_or_replace_original_journal() {
                 .unwrap(),
             },
             checkpoint: vec![1], // Codec/authorization fixture, never authenticated finality.
+            source: vec![1],
         }
     };
     let temporary = tempfile::tempdir().unwrap();

@@ -99,6 +99,18 @@ impl NativeFixture {
     ) -> VerifiedStreamTokenCustodyStateV1 {
         self.bootstrap_custody_snapshot(authority, policy, checkpoint, None)
             .unwrap()
+            .0
+    }
+
+    pub(in crate::managed) fn bootstrap_custody_source(
+        &self,
+        authority: &ServiceAuthority,
+        policy: &SignerCustodyPolicyV1,
+        checkpoint: &FinalityVerifier,
+    ) -> Vec<u8> {
+        self.bootstrap_custody_snapshot(authority, policy, checkpoint, None)
+            .unwrap()
+            .1
     }
 
     // Three component workers share this one executed State. Unlike four HTTP peers, its
@@ -113,6 +125,7 @@ impl NativeFixture {
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         require_deadline(deadline)?;
         self.bootstrap_custody_snapshot(authority, policy, checkpoint, Some(deadline))
+            .map(|(current, _)| current)
     }
 
     fn bootstrap_custody_snapshot(
@@ -121,7 +134,7 @@ impl NativeFixture {
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
         deadline: Option<Instant>,
-    ) -> Result<VerifiedStreamTokenCustodyStateV1> {
+    ) -> Result<(VerifiedStreamTokenCustodyStateV1, Vec<u8>)> {
         let tip = self.chain.committed(self.chain.height());
         let budget = self.chain.state().ivm_execution_budget();
         let capture = || {
@@ -157,7 +170,7 @@ impl NativeFixture {
         if let Some(deadline) = deadline {
             require_deadline(deadline)?;
         }
-        Ok(current)
+        Ok((current, bytes))
     }
 
     pub(in crate::managed) fn bootstrap_reserve(

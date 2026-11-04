@@ -1746,7 +1746,7 @@ fn independent_custody_state_decodes_authenticated_absence_on_the_selected_globa
         Some(APPLICATION_NORITO),
     );
     let (result, _) = capture_request(response, |transport| {
-        let client = client.with_test_http_transport(transport);
+        let client = client.clone().with_test_http_transport(transport);
         mark_data_model_compatible(&client);
         client.get_stream_token_custody_state(provider, &owner, &binding, schema, &verified)
     });
@@ -1754,6 +1754,19 @@ fn independent_custody_state_decodes_authenticated_absence_on_the_selected_globa
     assert!(state.current().is_none());
     assert_eq!(state.owner(), &owner);
     assert_eq!(state.context_id(), verified.context_id());
+
+    let source_bytes = norito::encode_canonical(&proof).unwrap();
+    let response = mk_response(StatusCode::OK, source_bytes.clone(), Some(APPLICATION_NORITO));
+    let (retained, _) = capture_request(response, |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_stream_token_custody_state_with_source(provider, &owner, &binding, schema, &verified)
+    });
+    let (source, state) = retained.unwrap();
+    assert_eq!(norito::encode_canonical(&source).unwrap(), source_bytes);
+    let reverified = source.verify(client.network_id, provider, &owner, &binding, schema, &verified).unwrap();
+    assert_eq!(reverified.context_id(), state.context_id());
+    assert!(reverified.current().is_none());
 }
 
 #[test]

@@ -99,11 +99,13 @@ impl EnrollmentReads for CountedReads<'_> {
         &self,
         owner: &ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
+        unsigned: &UnsignedEnrollment,
         checkpoint: &FinalityVerifier,
         deadline: Instant,
     ) -> Result<VerifiedStreamTokenCustodyStateV1> {
         self.calls.set(self.calls.get() + 1);
-        NativeEnrollmentReads(&self.fixture.native).historical(owner, policy, checkpoint, deadline)
+        NativeEnrollmentReads(&self.fixture.native)
+            .historical(owner, policy, unsigned, checkpoint, deadline)
     }
 }
 fn assert_unsigned_successor(history: &BodyHistory) {

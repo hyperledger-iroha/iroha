@@ -72,6 +72,11 @@ fn renewal_contexts_verify_configuration_and_read_initial_history_once() {
             2,
             &fixture.policy,
             &current,
+            fixture.native.bootstrap_custody_source(
+                &fixture.owner.authority,
+                &fixture.policy,
+                &checkpoint,
+            ),
             &checkpoint,
             &terms,
             deadline,
@@ -267,7 +272,19 @@ fn generated_authorization_verifies_configure_once_and_rechecks_each_call() {
     let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
     let unsigned = fixture
         .owner
-        .select_renewal_unsigned(2, &fixture.policy, &current, &checkpoint, &terms, deadline)
+        .select_renewal_unsigned(
+            2,
+            &fixture.policy,
+            &current,
+            fixture.native.bootstrap_custody_source(
+                &fixture.owner.authority,
+                &fixture.policy,
+                &checkpoint,
+            ),
+            &checkpoint,
+            &terms,
+            deadline,
+        )
         .unwrap();
     let history = BodyHistory::initialize(
         &fixture.owner,
@@ -397,7 +414,19 @@ fn renewal_selection_reuses_exact_authenticated_checkpoint_and_rejects_substitut
     let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
     let unsigned = fixture
         .owner
-        .select_renewal_unsigned(2, &fixture.policy, &current, &checkpoint, &terms, deadline)
+        .select_renewal_unsigned(
+            2,
+            &fixture.policy,
+            &current,
+            fixture.native.bootstrap_custody_source(
+                &fixture.owner.authority,
+                &fixture.policy,
+                &checkpoint,
+            ),
+            &checkpoint,
+            &terms,
+            deadline,
+        )
         .unwrap();
     assert_eq!(unsigned.checkpoint, before);
     let validate = |value: &body_history::UnsignedEnrollment, verifier: &FinalityVerifier| {

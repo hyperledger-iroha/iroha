@@ -763,6 +763,7 @@ impl ManagedStreamTokenCustody {
         &self,
         policy: &SignerCustodyPolicyV1,
         current: &VerifiedStreamTokenCustodyStateV1,
+        source: Vec<u8>,
         verifier: &FinalityVerifier,
         interval: ManagedCustodyEnrollmentInterval,
         observed: u64,
@@ -783,6 +784,7 @@ impl ManagedStreamTokenCustody {
         }
         let checkpoint = checkpoint_bytes(verifier)?;
         let selection = self.selection(&policy.binding, current)?;
+        self.verify_retained_source(&selection, &source, verifier)?;
         let statement = SignerCustodyStatementV1 {
             magic: SIGNER_CUSTODY_MAGIC_V1,
             version: SIGNER_CUSTODY_VERSION_V1,
@@ -804,6 +806,7 @@ impl ManagedStreamTokenCustody {
             statement,
             selected_at_unix_ms: observed,
             checkpoint,
+            source,
         })
     }
 }

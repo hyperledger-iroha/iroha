@@ -182,6 +182,11 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     2,
                     &fixture.policy,
                     &current,
+                    fixture.native.bootstrap_custody_source(
+                        &fixture.owner.authority,
+                        &fixture.policy,
+                        &checkpoint,
+                    ),
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,
@@ -223,6 +228,11 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     2,
                     &fixture.policy,
                     &current,
+                    fixture.native.bootstrap_custody_source(
+                        &fixture.owner.authority,
+                        &fixture.policy,
+                        &checkpoint,
+                    ),
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,

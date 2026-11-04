@@ -168,6 +168,11 @@ impl Fixture {
                 sequence,
                 &self.policy,
                 current,
+                self.native.bootstrap_custody_source(
+                    &self.owner.authority,
+                    &self.policy,
+                    checkpoint,
+                ),
                 checkpoint,
                 &terms,
                 self.options.deadline,
@@ -331,6 +336,11 @@ fixture.options.deadline,
         2,
         &fixture.policy,
         &old_current,
+        fixture.native.bootstrap_custody_source(
+            &fixture.owner.authority,
+            &fixture.policy,
+            &old_checkpoint,
+        ),
         &old_checkpoint,
         &Terms::new(selection_started + 60_000, &fixture.options).unwrap(),
         fixture.options.deadline,
@@ -447,6 +457,11 @@ fixture.options.deadline,
                 3,
                 &fixture.policy,
                 &old_current,
+                fixture.native.bootstrap_custody_source(
+                    &fixture.owner.authority,
+                    &fixture.policy,
+                    &carrier
+                ),
                 &carrier,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -460,6 +475,11 @@ fixture.options.deadline,
                 2,
                 &fixture.policy,
                 &current,
+                fixture.native.bootstrap_custody_source(
+                    &fixture.owner.authority,
+                    &fixture.policy,
+                    &carrier
+                ),
                 &carrier,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -884,6 +904,11 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
                 2,
                 &fixture.policy,
                 &revoked,
+                fixture.native.bootstrap_custody_source(
+                    &fixture.owner.authority,
+                    &fixture.policy,
+                    &revoked_checkpoint
+                ),
                 &revoked_checkpoint,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -974,6 +999,11 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
                 2,
                 &fixture.policy,
                 &revoked,
+                fixture.native.bootstrap_custody_source(
+                    &fixture.owner.authority,
+                    &fixture.policy,
+                    &revoked_checkpoint
+                ),
                 &revoked_checkpoint,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -1319,13 +1349,16 @@ impl renewal::RenewalReads for FixtureReads<'_> {
         owner: &mut ManagedStreamTokenCustody,
         policy: &SignerCustodyPolicyV1,
         deadline: Instant,
-    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1)> {
+    ) -> Result<(FinalityVerifier, VerifiedStreamTokenCustodyStateV1, Vec<u8>)> {
         require_deadline(deadline)?;
         let checkpoint = fixture_observe(self.native, &owner.authority, deadline)?;
         let current = self
             .native
             .bootstrap_custody(&owner.authority, policy, &checkpoint);
-        Ok((checkpoint, current))
+        let source = self
+            .native
+            .bootstrap_custody_source(&owner.authority, policy, &checkpoint);
+        Ok((checkpoint, current, source))
     }
     fn retain_carrier(
         &self,
