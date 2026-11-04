@@ -16661,7 +16661,9 @@ mod tests {
         assert_eq!(peer.restart_genesis_file(false), Some(later_genesis_path));
         Ok(())
     }
-    fn parse_peer_run_config(path: &Path) -> Result<iroha_config::parameters::actual::Root> {
+    fn parse_peer_run_genesis_hash(
+        path: &Path,
+    ) -> Result<HashOf<iroha_data_model::block::BlockHeader>> {
         let reader = ConfigReader::new()
             .with_env(MockEnv::default())
             .read_toml_with_extends(path)
@@ -16669,7 +16671,10 @@ mod tests {
         let user = reader
             .read_and_complete::<iroha_config::parameters::user::Root>()
             .map_err(|error| eyre!("complete peer run config {}: {error:?}", path.display()))?;
+        // Validate the complete configuration here, but keep its large value out of
+        // the async caller's frame while that caller also builds native genesis.
         user.parse()
+            .map(|config| config.genesis.expected_hash)
             .map_err(|error| eyre!("parse peer run config {}: {error:?}", path.display()))
     }
     #[tokio::test(flavor = "current_thread")]
@@ -16767,9 +16772,7 @@ mod tests {
             .write_run_config(layers.iter().map(Cow::Borrowed), None, None, 0)
             .await?;
         assert_eq!(
-            parse_peer_run_config(&no_local_genesis_config)?
-                .genesis
-                .expected_hash,
+            parse_peer_run_genesis_hash(&no_local_genesis_config)?,
             expected_hash,
             "a first start without a local artifact must still receive the operator anchor"
         );
@@ -16783,9 +16786,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            parse_peer_run_config(&bootstrap_config)?
-                .genesis
-                .expected_hash,
+            parse_peer_run_genesis_hash(&bootstrap_config)?,
             expected_hash
         );
         let genesis_path = peer
@@ -16803,9 +16804,7 @@ mod tests {
             )
             .await?;
         assert_eq!(
-            parse_peer_run_config(&restart_config)?
-                .genesis
-                .expected_hash,
+            parse_peer_run_genesis_hash(&restart_config)?,
             expected_hash,
             "restart must reuse the independently provisioned anchor"
         );
