@@ -93,6 +93,12 @@ ceiling. Source and page storage fit the combined fresh and retained admission
 leases; neither a live-State replay nor a generic producer fallback is used.
 Peers support the bounded ephemeral adapter, and `FindTriggers` and
 `FindActiveTriggerIds` follow the same unfiltered, unsorted, zero-offset shape.
+The ordinary per-row frame and resident-graph ceiling divides the configured
+source-allocation phase across a maximum page plus its overflow probe. Complete
+trigger rows therefore include executable, authority, selector and metadata
+ownership; the name-only identifier allowance is a minimum admission requirement,
+not the ceiling for a complete trigger. Source scans, decoding, page overlap and
+cursor retention remain charged to the same configured working-set and work budgets.
 Every other iterable query, and these with a predicate, offset or sorting, is
 refused before execution with the stable reason
 `signed_query_shape_not_admitted`; the refusal names the query and lists the

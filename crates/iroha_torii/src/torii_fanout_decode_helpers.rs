@@ -1027,7 +1027,16 @@ impl OrdinaryQueryServerPolicy {
             ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits,
         };
         let max_page_items = app_limits.max_fetch_size;
-        let max_source_item_bytes = ORDINARY_NAME_ID_SOURCE_BYTES;
+        // Complete trigger rows include their executable, authority, selectors and metadata.
+        // Divide the already admitted source-allocation phase across a full page plus its
+        // overflow probe, rather than applying the name-only identifier charge to every row.
+        // The same ceiling bounds each frame and its decoded resident graph; Core then charges
+        // both immutable-source passes, page overlap and retained cursor values below.
+        let source_slots = max_page_items.checked_add(1)?;
+        let max_source_item_bytes = u64::try_from(fanout.candidate_allocation_bytes)
+            .ok()?
+            .checked_div(source_slots)
+            .filter(|bytes| *bytes >= ORDINARY_NAME_ID_SOURCE_BYTES)?;
         let max_response_bytes = u64::try_from(fanout.final_body_bytes).ok()?;
         let max_cursor_retained_items = max_page_items;
         let max_cursor_value_bytes =

@@ -7,6 +7,9 @@ mod ordinary_query_memory_tests {
     };
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::time::Duration;
+    mod trigger_rows {
+        include!("ordinary_query_trigger_rows.rs");
+    }
     fn default_geometry() -> (QueryMemoryGeometry, ByteWeightedMemoryPool) {
         let geometry = query_memory_geometry(
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
