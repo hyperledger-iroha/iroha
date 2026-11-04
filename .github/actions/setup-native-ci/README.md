@@ -23,3 +23,23 @@ jobs still require their qualified immutable image; see
 Run the hosting configuration regressions with
 `python -m pytest -q scripts/tests/ci_image_preflight_test.py`. These checks do
 not replace executing Rust, Python or formal suites in CI.
+
+## Native CI fixture storage
+
+The action creates a fresh mode-0700 directory under the effective service
+account's home from the system account database. It exports that directory as
+`TEST_NETWORK_TMP_DIR` and `TAIRA_TESTNET_BEACON_FIXTURE_DIR` through `GITHUB_ENV`.
+It does not change `HOME` or `TMPDIR` and does not reuse a configured test root.
+
+`scripts/ci_private_fixture_root.py` requires direct, canonical directory
+ancestry owned by the service user or root, with no group/world write access.
+The selected home must belong to the service user. The fresh directory must
+remain outside Git and fit the native broker's complete 103-byte socket path.
+Unsafe ancestry or an oversized path fails setup without a shared-temp fallback.
+The native Rust custody checks still independently validate every use.
+
+The job retains the root for its lifetime. Existing failure-artifact paths use
+the exported `TEST_NETWORK_TMP_DIR` and retain their network-specific selection;
+do not upload the entire root containing beacon custody. The separate
+`/private/tmp` replay setup remains available for corridors that explicitly
+require it.

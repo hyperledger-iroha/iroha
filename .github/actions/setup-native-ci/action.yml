@@ -42,6 +42,10 @@ runs:
     - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: "3.12"
+    - name: Prepare private network fixture root
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: python scripts/ci_private_fixture_root.py --github-env "$GITHUB_ENV"
     - name: Install repository Python build helpers
       shell: bash
       working-directory: ${{ inputs.working-directory }}

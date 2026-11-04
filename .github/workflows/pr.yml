@@ -11,7 +11,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   IROHA_CLI_DIR: "${{ github.workspace }}/test"
-  TEST_NETWORK_TMP_DIR: /tmp
   NEXTEST_PROFILE: ci
 
 jobs:
@@ -395,7 +394,7 @@ jobs:
         run: |
           python3 -I -S scripts/check_build_efficiency_provenance.py
           python3 scripts/rust_ci.py validate
-          python3 -m pytest -q pytests/scripts/rust_ci_test.py scripts/tests/hosted_build_swap_test.py
+          python3 -m pytest -q pytests/scripts/rust_ci_test.py scripts/tests/hosted_build_swap_test.py pytests/scripts/ci_private_fixture_root_test.py
       - name: Classify the PR reverse-dependency closure
         id: classify
         env:
