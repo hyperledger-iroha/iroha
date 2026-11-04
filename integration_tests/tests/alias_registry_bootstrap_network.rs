@@ -2731,6 +2731,12 @@ async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> 
             "this retained-Kura scenario requires a real four-peer network; skipping is forbidden"
         )
     })?;
+    // Native genesis needs the ordinary test-thread stack during startup. Keep the
+    // later retained-history and replay temporaries in a separate poll frame.
+    Box::pin(run_bpng_retained_kura_lifecycle(network)).await
+}
+
+async fn run_bpng_retained_kura_lifecycle(network: sandbox::SerializedNetwork) -> Result<()> {
     ensure!(
         network.peers().len() == VALIDATOR_COUNT,
         "exactly four original validators required"
