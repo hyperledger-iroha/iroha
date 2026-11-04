@@ -424,18 +424,18 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
             // This supported bootstrap seeds only an empty chain; restoration preserves ledger ownership.
             layer
                 .write(
-                    ["governance", "sorafs_provider_owners"],
+                    ["gov", "sorafs_provider_owners"],
                     toml::Value::Table(toml::Table::from_iter([(
                         hex::encode(PROVIDER.as_bytes()),
                         toml::Value::String(owner_literal.clone()),
                     )])),
                 )
                 .write(
-                    ["governance", "sorafs_pin_fee_asset_id"],
+                    ["gov", "sorafs_pin_fee_asset_id"],
                     definition_literal.clone(),
                 )
                 .write(
-                    ["governance", "sorafs_pin_fee_treasury_account"],
+                    ["gov", "sorafs_pin_fee_treasury_account"],
                     treasury_literal.clone(),
                 );
         })

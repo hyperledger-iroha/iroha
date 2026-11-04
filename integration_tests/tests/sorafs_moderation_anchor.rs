@@ -1186,11 +1186,8 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
         .with_npos_consensus()
         .with_config_layer(move |writer| {
             writer
-                .write(["governance", "bond_escrow_account"], escrow_literal)
-                .write(
-                    ["governance", "slash_receiver_account"],
-                    slash_receiver_literal,
-                );
+                .write(["gov", "bond_escrow_account"], escrow_literal)
+                .write(["gov", "slash_receiver_account"], slash_receiver_literal);
         })
         .with_genesis_instruction(Register::domain(Domain::new(voting_domain)))
         .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(

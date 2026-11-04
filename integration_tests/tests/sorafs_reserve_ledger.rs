@@ -441,7 +441,7 @@ async fn four_peer_reserve_decisions_conserve_custody_and_survive_restart_impl()
         .with_npos_consensus()
         .with_config_layer(move |layer| {
             layer.write(
-                ["governance", "sorafs_provider_owners"],
+                ["gov", "sorafs_provider_owners"],
                 toml::Value::Table(owners.clone()),
             );
         })
