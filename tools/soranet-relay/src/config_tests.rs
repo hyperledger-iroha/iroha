@@ -2438,7 +2438,15 @@ fn token_config_merges_inline_and_file_revocations() {
             .collect(),
     );
     let json = norito::json::to_string_pretty(&json_value).expect("serialise revocations");
-    let file = NamedTempFile::new().expect("revocation file");
+    // The replay ledger must live below an owner-protected child of a shared temp root.
+    let custody = TempDir::new().expect("token fixture directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(custody.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("protect token fixture directory");
+    }
+    let file = NamedTempFile::new_in(custody.path()).expect("revocation file");
     std::fs::write(file.path(), format!("{json}\n")).expect("write revocation file");
     let mut cfg = TokenConfig {
         enabled: true,
@@ -2511,8 +2519,14 @@ fn certificate_config_requires_mldsa65_issuer_key() {
 }
 #[test]
 fn token_config_rejects_invalid_issuer_key_without_panic() {
-    let replay_file = NamedTempFile::new().expect("replay path");
-    let replay_store_path = replay_file.path().with_extension("replays.norito");
+    let custody = TempDir::new().expect("token fixture directory");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(custody.path(), std::fs::Permissions::from_mode(0o700))
+            .expect("protect token fixture directory");
+    }
+    let replay_store_path = custody.path().join("replays.norito");
     let mut cfg = TokenConfig {
         enabled: true,
         issuer_public_key_hex: Some(hex::encode([0x42; 32])),
