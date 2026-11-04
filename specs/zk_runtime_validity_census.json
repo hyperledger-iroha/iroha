@@ -6767,7 +6767,7 @@
    "sm-ffi-openssl": {"class": "validity_gate", "entry": "feature.sm_gost_bls_pqc", "cfg_sites": 4},
    "state-commitment-prototypes": {"class": "development_or_test", "reason": "Development-only prototypes (task G.2); compiled for tests and benchmarks, never on the consensus path."},
    "telemetry": {"class": "observability", "reason": "Metrics, tracing, profiling or operator alerts; no validation result depends on it."},
-   "test-network-parliament-signers": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 3},
+   "test-network-parliament-signers": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 2},
    "test-network-private-settlement-evidence": {"class": "availability_gate", "entry": "feature.test_network_hooks", "cfg_sites": 0},
    "zk-ipa-native": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 1},
    "zk-preverify": {"class": "validity_gate", "entry": "feature.zk_halo2_family", "cfg_sites": 15},
