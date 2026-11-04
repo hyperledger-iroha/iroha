@@ -155,7 +155,7 @@ fn write_observed(
     publication: WebhookPublication,
     mut observe: impl FnMut(AtomicWriteStep) -> io::Result<()>,
 ) -> io::Result<()> {
-    use rand::TryRngCore as _;
+    use rand::TryRng as _;
 
     let mut guarded_observe = |step| {
         let result = observe(step);
@@ -192,7 +192,7 @@ fn write_observed(
         }
         for _ in 0..WEBHOOK_TEMP_FILE_RETRIES {
             let mut nonce = [0_u8; 16];
-            rand::rngs::OsRng
+            rand::rngs::SysRng
                 .try_fill_bytes(&mut nonce)
                 .map_err(io::Error::other)?;
             temporary_name = Some(OsString::from(format!(
