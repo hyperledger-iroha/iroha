@@ -14,7 +14,7 @@ use iroha::data_model::{
         OfferContractOwnership, SetContractParliamentDelegation,
     },
     parameter::{
-        CustomParameter, CustomParameterId,
+        CustomParameter, CustomParameterId, SumeragiParameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
     },
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
@@ -73,12 +73,39 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     assert_eq!(callable.results, ivm::call::CallSchemaV1::unit());
 
     // Preserve all remaining compiler sections while removing only the
-    // authenticated callable descriptor; admission must reject that omission.
+    // authenticated callable descriptor. Its shorter CNTR changes the literal
+    // directory's header-relative alignment, so update only that padding.
+    let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse compiler sections");
+    let literals = parsed.literal_section.expect("compiler literal directory");
     let section_end = verified.header_len + interface.encode_section().len();
     interface.callables.clear();
     let mut missing_callable = artifact[..verified.header_len].to_vec();
     missing_callable.extend_from_slice(&interface.encode_section());
-    missing_callable.extend_from_slice(&artifact[section_end..]);
+    missing_callable.extend_from_slice(&artifact[section_end..literals.start]);
+    let literal_start = missing_callable.len();
+    missing_callable.extend_from_slice(&artifact[literals.start..literals.data_end]);
+    let padding = (4 - (missing_callable.len() - parsed.header_len) % 4) % 4;
+    missing_callable[literal_start + 8..literal_start + 12]
+        .copy_from_slice(&u32::try_from(padding).unwrap().to_le_bytes());
+    missing_callable.resize(missing_callable.len() + padding, 0);
+    missing_callable.extend_from_slice(&artifact[parsed.code_offset..]);
+    let rewritten = ivm::ProgramMetadata::parse(&missing_callable)
+        .expect("only the callable descriptor is missing; all compiler sections remain valid");
+    let rewritten_literals = rewritten
+        .literal_section
+        .expect("retained literal directory");
+    assert_eq!(rewritten.contract_debug, parsed.contract_debug);
+    assert_eq!(rewritten_literals.count, literals.count);
+    assert_eq!(
+        &missing_callable[rewritten_literals.entries_start..rewritten_literals.data_end],
+        &artifact[literals.entries_start..literals.data_end],
+        "literal descriptors and payloads retain their exact compiler bytes"
+    );
+    assert_eq!(
+        &missing_callable[rewritten.code_offset..],
+        &artifact[parsed.code_offset..],
+        "executable code retains its exact compiler bytes"
+    );
     let error = ivm::verify_contract_artifact(&missing_callable)
         .expect_err("public entrypoints require their canonical callable descriptors");
     assert!(
@@ -92,6 +119,44 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
 // The 200-entry probe uses about 3.9M gas locally. Reserve headroom for
 // instance-scoped state paths and bounded scan precharges on real validators.
 const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 5_000_000;
+const CONTRACT_STATE_PROBE_CADENCE_MS: u64 = 8_000;
+
+// Sumeragi requires the signed payload retry interval to cover the immutable
+// block cadence. Keep the existing eight-second restart fixture cadence.
+fn contract_probe_payload_retry_parameter() -> Parameter {
+    Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
+        NonZeroU64::new(CONTRACT_STATE_PROBE_CADENCE_MS).unwrap(),
+    ))
+}
+
+#[test]
+fn contract_v1_probe_cadence_has_a_valid_signed_payload_retry() {
+    let parameter = contract_probe_payload_retry_parameter();
+    let bytes = norito::to_bytes(&parameter).expect("encode signed payload retry parameter");
+    let decoded: Parameter = norito::decode_from_bytes(&bytes).expect("decode payload retry");
+    assert_eq!(decoded, parameter);
+    let Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(retry)) = decoded else {
+        panic!("the fixture must author its canonical Sumeragi payload retry parameter");
+    };
+    assert_eq!(retry.get(), CONTRACT_STATE_PROBE_CADENCE_MS);
+    let chain = iroha_sumeragi::types::ChainParams {
+        block_time: CONTRACT_STATE_PROBE_CADENCE_MS,
+        payload_retry_interval: retry.get(),
+        ..Default::default()
+    };
+    let transport = iroha_sumeragi::pacemaker::minimum_transport_frame_bytes(chain.max_block_bytes);
+    iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
+        .expect("the authored retry interval covers the original signed cadence");
+    let old = iroha_sumeragi::types::ChainParams {
+        payload_retry_interval: iroha_sumeragi::types::ChainParams::default()
+            .payload_retry_interval,
+        ..chain
+    };
+    assert_eq!(
+        iroha_sumeragi::pacemaker::validate_chain(&old, transport),
+        Err(iroha_sumeragi::api::ConfigError::BlockTimeAbovePayloadRetry)
+    );
+}
 
 // Proposal selection reserves the full signed call bound. Grant this isolated
 // workload the same block budget in genesis, without changing node defaults.
@@ -2945,7 +3010,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
         // Leave one full signed cadence between full-mesh admission and the
         // first genesis QC wave on shared runners. This matches the existing
         // four-validator multi-QC integration envelope.
-        .with_block_cadence(Duration::from_secs(8))
+        .with_block_cadence(Duration::from_millis(CONTRACT_STATE_PROBE_CADENCE_MS))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             // Nexus is selected by the canonical lane configuration; V1 has
@@ -2983,6 +3048,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
                 );
         })
         .with_genesis_instruction(SetParameter::new(contract_probe_block_gas_parameter()))
+        .with_genesis_instruction(SetParameter::new(contract_probe_payload_retry_parameter()))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             iroha_test_samples::ALICE_ID.clone(),
@@ -3022,6 +3088,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
             unreachable!("fixture helper returns a custom parameter");
         };
         let mut block_gas_parameters = Vec::new();
+        let mut payload_retry_parameters = Vec::new();
         for transaction in genesis.0.external_transactions() {
             let iroha_data_model::transaction::Executable::Instructions(instructions) =
                 transaction.instructions()
@@ -3038,6 +3105,12 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
                 {
                     block_gas_parameters.push(set_parameter.inner().clone());
                 }
+                if matches!(
+                    set_parameter.inner(),
+                    Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(_))
+                ) {
+                    payload_retry_parameters.push(set_parameter.inner().clone());
+                }
             }
         }
         assert_eq!(
@@ -3045,11 +3118,20 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
             vec![expected],
             "signed genesis must contain the exact probe block budget once in either scenario",
         );
+        assert_eq!(
+            payload_retry_parameters,
+            vec![contract_probe_payload_retry_parameter()],
+            "signed genesis must contain the exact cadence-matching payload retry once",
+        );
     }
     let handshake = signed_consensus_handshake(&network)?;
     handshake
         .validate()
         .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
+    assert_eq!(
+        handshake.block_cadence_ms.get(),
+        CONTRACT_STATE_PROBE_CADENCE_MS
+    );
     assert_eq!(
         handshake.mode,
         SumeragiConsensusMode::Npos,
