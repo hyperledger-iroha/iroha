@@ -142,7 +142,7 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
                     asset_definition_id.clone(),
                     "aitai_xor_native".to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 ))
                 .into(),
                 Mint::asset_quantity(100_u64, seller_asset_id.clone()).into(),
@@ -262,7 +262,7 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
                     asset_definition_id.clone(),
                     "aitai_xor_lock_native".to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 ))
                 .into(),
                 Mint::asset_quantity(100_u64, source_asset_id.clone()).into(),

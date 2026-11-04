@@ -1,12 +1,12 @@
 //! Miscellaneous integration coverage for status endpoints and helpers.
 use eyre::Result;
 use integration_tests::sandbox;
+use integration_tests::sync::spawn_blocking;
 use iroha::blocking;
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_torii_shared::status::Status;
 use sandbox::start_network_async_or_skip;
-use tokio::task::spawn_blocking;
 fn status_eq_excluding_uptime_and_queue(lhs: &Status, rhs: &Status) -> bool {
     lhs.peers == rhs.peers
         && lhs.blocks == rhs.blocks

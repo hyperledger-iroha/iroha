@@ -140,26 +140,6 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
                 .await
                 .map_err(|_| eyre!("timed out waiting for genesis block 1"))?;
         }
-        let asset_id = AssetId::new(
-            AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal").unwrap(),
-                "rose".parse().unwrap(),
-            ),
-            ALICE_ID.clone(),
-        );
-        for peer in network.peers() {
-            let assets = peer
-                .client()
-                .client()
-                .query(FindAssets::new())
-                .execute_all()
-                .unwrap();
-            let asset = assets
-                .into_iter()
-                .find(|a| a.id() == &asset_id)
-                .expect("asset not found");
-            assert_eq!(asset.value(), &Quantity::from(13_u32));
-        }
         Ok(())
     });
     if let Err(err) = block_result {
@@ -170,6 +150,22 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
             return Ok(());
         }
         return Err(err);
+    }
+    // Synchronous SDK reads run after leaving the network's Tokio context.
+    let asset_id = AssetId::new(
+        AssetDefinitionId::derive_from_components(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        ),
+        ALICE_ID.clone(),
+    );
+    for peer in network.peers() {
+        let asset = peer
+            .client()
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))?;
+        assert_eq!(asset.id(), &asset_id);
+        assert_eq!(asset.value(), &Quantity::from(13_u32));
     }
     Ok(())
 }

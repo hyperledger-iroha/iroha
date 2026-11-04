@@ -65,7 +65,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                     __asset_definition_id,
                     "xor_once".to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 )
             }
             .mintable_once(),
@@ -114,7 +114,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                     __asset_definition_id,
                     "xor_seeded".to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 )
             }
             .mintable_once(),

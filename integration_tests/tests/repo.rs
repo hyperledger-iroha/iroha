@@ -3,9 +3,9 @@ use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     data_model::{
         prelude::*,
-        query::repo::prelude::FindRepoAgreements,
         repo::{RepoAgreement, RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
     },
 };
@@ -152,7 +152,24 @@ fn wait_for_assets(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "assets were not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindAssets::new()).execute_all() {
+        let observed = expected
+            .iter()
+            .try_fold(Vec::new(), |mut assets, (asset_id, _)| {
+                match client
+                    .client()
+                    .query_single(FindAssetById::new((*asset_id).clone()))
+                {
+                    Ok(asset) => assets.push(asset),
+                    Err(iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::Find(
+                            iroha_data_model::query::error::FindError::Asset(missing),
+                        ),
+                    ))) if missing.as_ref() == *asset_id => (),
+                    Err(error) => return Err(error),
+                }
+                Ok(assets)
+            });
+        match observed {
             Ok(assets) => {
                 let all_match = expected.iter().all(|(asset_id, expected_value)| {
                     asset_value(&assets, asset_id).as_ref() == expected_value.as_ref()
@@ -176,6 +193,49 @@ fn wait_for_assets(
         "timed out waiting for assets after {context}; last_observed={last_observed}"
     ))
 }
+fn repo_agreement_row(mut row: norito::json::Value) -> Result<RepoAgreement> {
+    let object = row
+        .as_object_mut()
+        .ok_or_else(|| eyre!("repo collection row must be an object"))?;
+    // `status` is the collection's derived presentation field; the complete
+    // committed agreement retains its exact settlement timestamp instead.
+    object.remove("status");
+    Ok(norito::json::from_value(row)?)
+}
+
+#[test]
+fn repo_collection_row_preserves_complete_agreement_and_rejects_missing_custody() -> Result<()> {
+    let definition = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("wonderland", "universal")?,
+        "repo-row".parse()?,
+    );
+    let expected = RepoAgreement::new(
+        "repo-row".parse()?,
+        ALICE_ID.clone(),
+        BOB_ID.clone(),
+        RepoCashLeg {
+            asset_definition_id: definition.clone(),
+            quantity: Quantity::from(10_u32),
+        },
+        AssetId::new(definition.clone(), BOB_ID.clone()),
+        RepoCollateralLeg::new(definition.clone(), Quantity::from(12_u32)),
+        AssetId::new(definition, ALICE_ID.clone()),
+        25,
+        8_000,
+        2_000,
+        RepoGovernance::new(1_500, 5, false),
+        Some(ALICE_ID.clone()),
+    );
+    let mut row = norito::json::to_value(&expected)?;
+    row.as_object_mut()
+        .unwrap()
+        .insert("status".into(), norito::json::Value::from("active"));
+    assert_eq!(repo_agreement_row(row.clone())?, expected);
+    row.as_object_mut().unwrap().remove("cash_source");
+    assert!(repo_agreement_row(row).is_err());
+    Ok(())
+}
+
 fn wait_for_repo_agreement(
     client: &Client,
     agreement_id: &RepoAgreementId,
@@ -187,9 +247,12 @@ fn wait_for_repo_agreement(
     let mut last_observed = "repo agreements were not queried".to_owned();
     while Instant::now() < deadline {
         match client
-            .client()
-            .query(FindRepoAgreements::new())
-            .execute_all()
+            .list(
+                Collection::RepoAgreements,
+                ListQuery::new().filter(field("id").eq(agreement_id.to_string())),
+            )
+            .map(|row| repo_agreement_row(row?))
+            .collect::<Result<Vec<_>>>()
         {
             Ok(agreements) => {
                 last_observed = agreements
@@ -238,7 +301,7 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
                 __asset_definition_id.clone(),
                 "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -248,7 +311,7 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
                 __asset_definition_id.clone(),
                 "bond".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -521,7 +584,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
                 __asset_definition_id.clone(),
                 "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -531,7 +594,7 @@ fn repo_margin_call_enforces_cadence_and_participant_rules() -> Result<()> {
                 __asset_definition_id.clone(),
                 "bond".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -677,7 +740,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
                 __asset_definition_id.clone(),
                 "usd".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
@@ -687,7 +750,7 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
                 __asset_definition_id.clone(),
                 "bond".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         })
         .into(),
