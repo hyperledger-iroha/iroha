@@ -181,14 +181,14 @@ def test_producer_script_retains_failure_and_nonempty_no_skip_gate(
 
 
 def test_intel_and_windows_native_jobs_have_the_two_build_timeout_allowance() -> None:
-    """Intel and Windows receive two hours; Linux retains its original hour."""
+    """Intel's cold variants receive four hours; Windows and Linux retain their limits."""
 
     workflow = (ROOT / ".github/workflows/platform_native.yml").read_text()
     job = workflow.split("  native:\n", 1)[1].split("    defaults:\n", 1)[0]
     assert job.count("timeout-minutes:") == 1
     assert (
-        "    timeout-minutes: ${{ (matrix.target == 'x86_64-apple-darwin' || "
-        "matrix.target == 'x86_64-pc-windows-msvc') && 120 || 60 }}\n"
+        "    timeout-minutes: ${{ matrix.target == 'x86_64-apple-darwin' && 240 || "
+        "matrix.target == 'x86_64-pc-windows-msvc' && 120 || 60 }}\n"
         in job
     )
     assert re.findall(r"- runner: (\S+)\n\s+target: (\S+)", job) == [
