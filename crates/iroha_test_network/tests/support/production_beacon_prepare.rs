@@ -220,10 +220,7 @@ fn public_catalog_manifest(
 ) -> Result<RawGenesisTransaction> {
     let mut value = json::value::to_value(raw)?;
     short_epoch_genesis::retarget_public_catalog(&mut value, profile, Some(authority))?;
-    Ok(RawGenesisTransaction::from_json_slice_at_path(
-        &json::to_vec(&value)?,
-        path,
-    )?)
+    RawGenesisTransaction::from_json_slice_at_path(&json::to_vec(&value)?, path)
 }
 
 // Route through the existing public lane's own data space, not an unrelated alias.

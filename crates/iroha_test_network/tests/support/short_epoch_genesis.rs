@@ -74,10 +74,7 @@ fn short_epoch_scope_preserves_all_other_genesis_fields_and_refuses_ambiguous_so
         parameters: SccpParametersV1::taira_default(),
         reset_nonce: [7; 32],
     };
-    let source = before
-        .clone()
-        .append_instruction_transaction(init.clone())
-        .unwrap();
+    let source = before.clone().append_instruction_transaction(init).unwrap();
     let selected = manifest_value(&source).unwrap();
     assert_eq!(selected, json::value::to_value(&before).unwrap());
     let authored = RawGenesisTransaction::from_json_slice_at_path(

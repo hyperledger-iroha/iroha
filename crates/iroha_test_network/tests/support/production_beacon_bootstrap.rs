@@ -1763,7 +1763,7 @@ fn catalog_fixture(
             && transition
                 .dataspace_additions
                 .iter()
-                .all(|data_space| data_space.id != DataSpaceId::new(56_005))
+                .all(|data_space| data_space.descriptor.id != DataSpaceId::new(56_005))
             && first
                 .configured_dataspace_catalog
                 .entries()

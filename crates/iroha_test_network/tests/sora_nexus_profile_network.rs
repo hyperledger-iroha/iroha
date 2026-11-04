@@ -70,6 +70,7 @@ use iroha_test_network::{
 };
 use norito::json::{self, Value};
 use std::{
+    collections::BTreeSet,
     fs,
     num::NonZeroU64,
     path::{Path, PathBuf},
@@ -949,6 +950,8 @@ fn deep_merge_overlays_leaves_and_merges_tables() {
 
 #[test]
 fn taira_catalog_content_is_recognized() {
+    use short_epoch_genesis::{profile_lanes, taira_catalog_only};
+
     let lanes = BTreeSet::from([0, 1, 2, 3]);
     let register = |lane: i64| {
         json::from_str::<Value>(&format!(
