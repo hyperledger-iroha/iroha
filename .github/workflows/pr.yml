@@ -311,7 +311,7 @@ jobs:
   rust_changes:
     name: Classify affected Rust lanes
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     outputs:
       has_rust: ${{ steps.classify.outputs.has_rust }}
       full: ${{ steps.classify.outputs.full }}
