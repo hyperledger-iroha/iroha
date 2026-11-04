@@ -1,5 +1,5 @@
 //! Adversarial relay and partition scenarios for unstable networks.
-use eyre::{Result, eyre};
+use eyre::{Result, ensure, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
 use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha_config::parameters::defaults;
@@ -1007,7 +1007,7 @@ impl UnstableNetwork {
         let Some((network, mut relay)) =
             run_or_skip_on_sandbox_panic("unstable_network::run", || {
                 let guard = sandbox::serial_guard();
-                let network = self.build_network(&asset_definition_id);
+                let network = self.build_network(&asset_definition_id, &asset_owning_domain);
                 let network = sandbox::SerializedNetwork::new(network, guard);
                 let relay = P2pRelay::for_network(&network);
                 (network, relay)
@@ -1134,7 +1134,11 @@ impl UnstableNetwork {
         );
         selected
     }
-    fn build_network(&self, asset_definition_id: &AssetDefinitionId) -> Network {
+    fn build_network(
+        &self,
+        asset_definition_id: &AssetDefinitionId,
+        asset_owning_domain: &DomainId,
+    ) -> Network {
         let builder = NetworkBuilder::new()
             .with_auto_populated_trusted_peers()
             .with_peers(self.peers)
@@ -1171,7 +1175,7 @@ impl UnstableNetwork {
                 asset_definition_id.clone(),
                 "unstable".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(asset_owning_domain.clone()),
             )))
             .with_genesis_instruction(Grant::account_permission(
                 CanMintAssetWithDefinition {
@@ -1354,22 +1358,26 @@ impl UnstableNetwork {
                 .expect("valid metadata key"),
             target_height,
         );
-        let tx = Arc::new(
-            {
-                let account = builder_client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        vec![mint_asset],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        tx_metadata,
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction"),
-        );
+        let tx = Arc::new({
+            let account = builder_client.account_client();
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                    vec![mint_asset],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    tx_metadata,
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "fee quote changed the selected payer, sponsor revision, or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        });
         let partition_submit_window = relay_pause
             .min(
                 network

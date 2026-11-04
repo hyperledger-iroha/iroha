@@ -48,10 +48,14 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         let client = load_localnet_client(&out_dir)?;
         wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
         let baseline = client.client().status().get().await?.blocks_non_empty;
-        client.submit(
-            Log::new(Level::INFO, "kagami localnet smoke".to_string()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )?;
+        let submit_client = client.clone();
+        integration_tests::sync::spawn_blocking(move || {
+            submit_client.submit(
+                Log::new(Level::INFO, "kagami localnet smoke".to_string()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
+        .await??;
         let status =
             wait_for_blocks_non_empty(&client, baseline.saturating_add(1), READY_TIMEOUT).await?;
         ensure!(

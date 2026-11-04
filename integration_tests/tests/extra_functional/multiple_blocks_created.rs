@@ -1,5 +1,5 @@
 //! Stress block production with randomized mint bursts.
-use eyre::{Result, eyre};
+use eyre::{Result, ensure, eyre};
 use integration_tests::{
     sandbox,
     sync::{get_status_with_retry_async, spawn_blocking},
@@ -66,8 +66,8 @@ async fn multiple_blocks_created() -> Result<()> {
         let client = submit_client.clone();
         let tx = {
             let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [
                         create_domain,
                         InstructionBox::from(create_account),
@@ -75,10 +75,19 @@ async fn multiple_blocks_created() -> Result<()> {
                     ],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     <_>::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "fee quote changed the selected payer, sponsor revision, or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         let submit_res: eyre::Result<()> =
             spawn_blocking(move || client.submit_transaction_and_wait(&tx).map(|_| ()))
                 .await
@@ -119,8 +128,8 @@ async fn multiple_blocks_created() -> Result<()> {
             let client = submit_client.clone();
             let tx = {
                 let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                let mut payload =
+                    account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                         [Mint::asset_quantity(
                             u64::try_from(value).expect("generated quantity fits u64"),
                             AssetId::new(asset_definition_id.clone(), account_id.clone()),
@@ -130,10 +139,21 @@ async fn multiple_blocks_created() -> Result<()> {
                             None,
                         ),
                         <_>::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction");
+                    ))?;
+                let quote = account
+                    .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                        payload: &payload,
+                    })
+                    .await?;
+                ensure!(
+                    payload
+                        .fee_payment
+                        .has_same_payer_and_gas_bound(&quote.intent),
+                    "fee quote changed the selected payer, sponsor revision, or gas bound"
+                );
+                payload.fee_payment = quote.intent;
+                account.sign_transaction(payload)?
+            };
             submit_handles.push(spawn_blocking(move || {
                 client.submit_transaction_and_wait(&tx).map(|_| ())
             }));
