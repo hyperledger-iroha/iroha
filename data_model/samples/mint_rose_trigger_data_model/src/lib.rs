@@ -3,10 +3,12 @@ use iroha_data_model::prelude::Json;
 use norito::{
     Error as NoritoError,
     core::{NoritoDeserialize, NoritoSerialize},
-    json::{self, JsonDeserialize, JsonSerialize, Parser},
+    json::{self, JsonDeserialize, Parser},
 };
 /// Arguments to mint rose with args trigger
-#[derive(Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize)]
+#[derive(
+    Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::derive::JsonSerialize,
+)]
 pub struct MintRoseArgs {
     /// Amount to mint
     pub val: u32,
@@ -42,19 +44,9 @@ impl json::JsonDeserialize for MintRoseArgs {
         Ok(Self { val })
     }
 }
-impl JsonSerialize for MintRoseArgs {
-    fn json_serialize(&self, out: &mut String) {
-        out.push('{');
-        out.push_str("\"val\":");
-        json::JsonSerialize::json_serialize(&self.val, out);
-        out.push('}');
-    }
-}
 impl From<MintRoseArgs> for Json {
     fn from(details: MintRoseArgs) -> Self {
-        let json =
-            json::to_json(&details).expect("MintRoseArgs JSON serialization should not fail");
-        Json::from_raw_json(json).expect("MintRoseArgs serializer must emit valid bounded JSON")
+        Json::new(details)
     }
 }
 impl TryFrom<&Json> for MintRoseArgs {
@@ -81,5 +73,28 @@ mod tests {
         let json = Json::from(args.clone());
         let decoded = MintRoseArgs::try_from(&json).expect("decode");
         assert_eq!(args, decoded);
+    }
+
+    #[test]
+    fn mint_rose_args_checked_json_preserves_the_wire_value_and_byte_limit() {
+        for val in [0, 42, u32::MAX] {
+            let args = MintRoseArgs { val };
+            let expected = format!("{{\"val\":{val}}}");
+            assert_eq!(json::to_json(&args).expect("ordinary JSON"), expected);
+            assert_eq!(
+                json::to_json_bounded(&args, expected.len()).expect("exact byte limit"),
+                expected
+            );
+            assert_eq!(
+                json::to_json_bounded(&args, expected.len() - 1),
+                Err(json::BoundedJsonError::BodyTooLarge)
+            );
+            let payload = Json::new(args.clone());
+            assert_eq!(payload.as_ref(), expected);
+            assert_eq!(
+                MintRoseArgs::try_from(&payload).expect("checked roundtrip"),
+                args
+            );
+        }
     }
 }
