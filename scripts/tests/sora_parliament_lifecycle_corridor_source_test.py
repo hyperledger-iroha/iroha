@@ -42,7 +42,7 @@ CORE_OWNER_TESTS = (
     "beacon::parliament_test_network_signer::tests::custody_retains_only_exact_initial_and_successor_owners_without_replacement",
     "beacon::parliament_test_network_signer::tests::poisoned_fixture_custody_refuses_capability_and_signing",
     "beacon::parliament_test_network_signer::tests::invalid_provider_mode_preserves_owned_capability_but_returns_a_malformed_share",
-    "sumeragi::epoch_beacon::producer::tests::parliament_fixture_owners_drive_real_threshold_shares_and_refuse_invalid_provider_output",
+    "sumeragi::epoch_beacon::producer::tests::parliament_fixture_tests::parliament_fixture_owners_drive_real_threshold_shares_and_refuse_invalid_provider_output",
     "sumeragi::epoch_beacon::producer::tests::native_invalid_local_share_is_never_retained_or_counted",
     "sumeragi::epoch_beacon::producer::tests::wrong_source_sender_and_proof_never_change_the_owned_round",
 )

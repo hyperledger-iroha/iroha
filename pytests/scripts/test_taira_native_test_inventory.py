@@ -30,6 +30,29 @@ class NativeInventoryTests(unittest.TestCase):
     def validate(self):
         return inventory.validate_native_source_inventory(self.root, owners=self.owners)
 
+    def test_conditional_controls_keep_exact_child_module_gates_and_names(self):
+        cases = (
+            ("sumeragi/epoch_beacon/producer/tests.rs", "parliament_fixture_tests",
+             'feature = "test-network-parliament-signers"',
+             "parliament_fixture_owners_drive_real_threshold_shares_and_refuse_invalid_provider_output"),
+            ("query/native_context_archive/read/tests.rs", "windows_custody_tests", "windows",
+             "completed_native_read_rechecks_original_private_custody_at_receiver_finish"),
+        )
+        shipping = {leaf for _, _, _, _, _, names in inventory.NATIVE_CORE_TEST_OWNERS for leaf in names}
+        for parent, module, gate, name in cases:
+            with self.subTest(control=name):
+                path = ROOT / "crates/iroha_core/src" / parent
+                source = path.read_text()
+                registration = f'#[cfg({gate})]\n#[path = "{module}.rs"]\nmod {module};'
+                self.assertEqual(source.count(registration), 1)
+                self.assertNotIn(f"fn {name}(", source)
+                child = path.with_name(module + ".rs").read_text()
+                self.assertEqual(child.count(f"#[test]\nfn {name}("), 1)
+                self.assertIn("use super::*;", child)
+                self.assertNotIn(name, shipping)
+        selector = "sumeragi::epoch_beacon::producer::tests::parliament_fixture_tests::" + cases[0][3]
+        self.assertEqual((ROOT / "ci/check_sora_parliament_lifecycle.sh").read_text().count(selector), 1)
+
     def test_exact_owner_and_registered_source(self):
         self.assertEqual(self.validate(), {"owner::tests::exact_case"})
 
@@ -132,7 +155,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 633)
+        self.assertEqual(len(names), 637)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS
