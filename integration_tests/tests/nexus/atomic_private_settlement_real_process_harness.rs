@@ -8875,7 +8875,7 @@ fn run_real_process_transparent_control_benchmark(
     let _replay_error = authority
         .submit_transaction_and_wait(&replay)
         .expect_err("a fresh carrier reusing the committed settlement id was accepted");
-    wait_for_matched_replay_rejection(&network, &replay, &settlement)?;
+    wait_for_matched_replay_rejection(&network, &owner.runtime, &replay, &settlement)?;
     wait_for_transparent_control_balances(
         &network,
         shape,

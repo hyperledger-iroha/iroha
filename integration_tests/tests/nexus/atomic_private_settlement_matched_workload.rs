@@ -798,6 +798,7 @@ pub(super) fn validate_matched_replay_details(
 
 pub(super) fn wait_for_matched_replay_rejection(
     network: &Network,
+    runtime: &tokio::runtime::Runtime,
     replay: &SignedTransaction,
     settlement: &SettleAtomic,
 ) -> Result<()> {
@@ -822,7 +823,7 @@ pub(super) fn wait_for_matched_replay_rejection(
                 }
             };
             validate_matched_replay_details(&details, replay, settlement)?;
-            let blocks = client.client().query(FindBlocks::new()).execute_all()?;
+            let blocks = runtime.block_on(integration_tests::blocks::canonical_history(&client))?;
             let matching = blocks
                 .iter()
                 .filter(|block| &block.hash() == details.transaction.block_hash())
