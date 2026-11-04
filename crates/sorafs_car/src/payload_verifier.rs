@@ -3,7 +3,7 @@ use crate::{
     CarBuildPlan, CarStreamingWriter, CarWriteError, CarWriteStats, ChunkStoreError, PorMerkleTree,
 };
 use sorafs_manifest::ManifestV1;
-use std::io::{self, Read, Seek, SeekFrom};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use thiserror::Error;
 
 /// Canonical commitments reproduced from a complete payload stream.
@@ -68,7 +68,8 @@ pub fn verify_payload_reader<R: Read + Seek>(
     })
 }
 
-fn por_commitment<R: Read>(
+/// Reproduce PoR using one chunk subtree and a logarithmic frontier, checking exact payload EOF.
+pub fn por_commitment<R: Read>(
     plan: &CarBuildPlan,
     reader: &mut R,
 ) -> Result<([u8; 32], usize), PayloadVerifyError> {
@@ -145,6 +146,49 @@ fn por_commitment<R: Read>(
             context: "streamed PoR leaf count",
         })?;
     Ok((root, leaf_count))
+}
+
+/// Verify every supplied CAR byte against canonical native emission and all manifest commitments.
+///
+/// Both streams remain bounded: the comparator keeps at most 64 KiB, and the payload verifier
+/// retains one PoR chunk. The CAR must end exactly at the canonical container boundary.
+pub fn verify_car_reader<R: Read + Seek, C: Read>(
+    manifest: &ManifestV1,
+    plan: &CarBuildPlan,
+    payload: &mut R,
+    car: &mut C,
+) -> Result<PayloadVerification, PayloadVerifyError> {
+    let report = verify_payload_reader(manifest, plan, payload)?;
+    let mut comparator = CarComparator { reader: car };
+    CarStreamingWriter::new(plan).write_from_reader(payload, &mut comparator)?;
+    let mut trailing = [0u8; 1];
+    if comparator.reader.read(&mut trailing)? != 0 {
+        return Err(PayloadVerifyError::Commitment("trailing CAR bytes"));
+    }
+    payload.rewind()?;
+    Ok(report)
+}
+
+struct CarComparator<'a, R> {
+    reader: &'a mut R,
+}
+impl<R: Read> Write for CarComparator<'_, R> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let mut buffer = [0u8; 64 * 1024];
+        for expected in bytes.chunks(buffer.len()) {
+            self.reader.read_exact(&mut buffer[..expected.len()])?;
+            if buffer[..expected.len()] != *expected {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "noncanonical CAR bytes",
+                ));
+            }
+        }
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 /// Borrowed reader over eager verified chunks; rewinding never concatenates them.

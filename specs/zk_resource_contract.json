@@ -6734,13 +6734,17 @@
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "let result = if self.active_trigger_execution_depth >= max_depth {"
+          "contains": "let result = if tx.active_trigger_execution_depth >= max_depth {"
         },
         {
           "stage": "vm",
           "path": "crates/iroha_core/src/state.rs",
-          "contains": "let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());",
-          "count": 2
+          "contains": "let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());"
+        },
+        {
+          "stage": "vm",
+          "path": "crates/iroha_core/src/state.rs",
+          "contains": "let max_depth = u16::from(tx.world.parameters.smart_contract().execution_depth());"
         }
       ],
       "tests": [
@@ -19176,13 +19180,13 @@
             "exprs": {
               "MAX_LAYERS": "32",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
-              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
+              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
+              "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1": "128 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "256 * 1024",
               "PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_NESTING_DEPTH_V1": "32",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1": "256 * 1024",
-              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyProtocolIdV1::COUNT",
+              "PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_FIELD_BYTES_V1": "PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
               "PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ALLOCATION_BYTES_V1": "16 * PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1",
@@ -22663,7 +22667,7 @@
             ],
             "exprs": {
               "PRIVACY_RELEASE_PROOF_ARTIFACT_COUNT_V1": "PRIVACY_RELEASE_STAGE_COUNT_V1 + 6",
-              "PRIVACY_RELEASE_STAGE_COUNT_V1": "PrivacyProtocolIdV1::COUNT * PRIVACY_RELEASE_CASE_COUNT_V1",
+              "PRIVACY_RELEASE_STAGE_COUNT_V1": "PrivacyRuntimeProtocolIdV1::EXACT12_COUNT * PRIVACY_RELEASE_CASE_COUNT_V1",
               "PRIVACY_RELEASE_CASE_COUNT_V1": "4"
             },
             "term_of": {
@@ -25521,7 +25525,7 @@
               "canonical_instruction_box_frame_byte_limit_v1"
             ],
             "exprs": {
-              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
+              "canonical_frame_byte_limit_v1": "let flags = norito::core::default_encode_flags(); let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes; let reference_payload = 2 * field(core::mem::size_of::<u32>()); let statement_framing = crate::isi::framed_instruction_payload_len_for::<PrivacyRuntimeStatementV1>(0) .expect(\"fixed statement framing fits usize\"); let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize - statement_framing - core::mem::size_of::<u32>() + field(reference_payload); crate::isi::framed_instruction_payload_len_for::<Self>(payload) .expect(\"fixed request ceiling fits usize\")",
               "canonical_instruction_box_frame_byte_limit_v1": "let _canonical = norito::core::DecodeFlagsGuard::enter(norito::core::default_encode_flags()); let tuple = crate::isi::encoded_instruction_tuple_len( Self::WIRE_ID, Self::canonical_frame_byte_limit_v1(), ) .expect(\"fixed registered request tuple fits usize\"); crate::isi::framed_instruction_payload_len_for::<crate::isi::InstructionBox>(tuple) .expect(\"fixed instruction box ceiling fits usize\")"
             }
           }
@@ -25821,6 +25825,84 @@
             }
           }
         ]
+      },
+      {
+        "path": "crates/ivm_abi/src/metadata.rs",
+        "reason": "Fixed 49-byte IVM V1 header geometry (17 metadata bytes plus the authenticated 32-byte ABI descriptor). This is the prefix outside the separately listed guest_memory.max_program_image_bytes body bound; it is not an independent payload allowance.",
+        "symbols": [
+          "HEADER_SIZE"
+        ],
+        "exprs": {
+          "HEADER_SIZE": "49"
+        }
+      },
+      {
+        "path": "crates/iroha_data_model/src/query/parameters.rs",
+        "reason": "The default page size for an omitted read-only query fetch size. The existing MAX_FETCH_SIZE shape ceiling and committed in-VM query budget remain separately enforced; this default grants no transaction or proof budget.",
+        "symbols": [
+          "DEFAULT_FETCH_SIZE"
+        ],
+        "exprs": {
+          "DEFAULT_FETCH_SIZE": "nonzero!(100_u64)"
+        }
+      },
+      {
+        "path": "crates/iroha_torii/src/push/jwt.rs",
+        "reason": "Local push-service signing-key file parsing ceiling, checked before PEM/DER decoding. These FCM/APNs credentials are not transaction, block or proof inputs.",
+        "symbols": [
+          "MAX_PRIVATE_KEY_PEM_BYTES"
+        ],
+        "exprs": {
+          "MAX_PRIVATE_KEY_PEM_BYTES": "64 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+        "reason": "Read-only native lifecycle witness response shapes: 32 KiB conservatively accounts for a fixed-depth branch; each complete JSON response is capped at 32 MiB and further limited by the original request allocation owner. Both owned production and fixture readers retain these bounds. This transport does not authorize execution or increase the underlying finality decoder limits.",
+        "symbols": [
+          "MAX_RUNTIME_BRANCH_JSON_BYTES",
+          "MAX_BYTES"
+        ],
+        "exprs": {
+          "MAX_RUNTIME_BRANCH_JSON_BYTES": "32 * 1024",
+          "MAX_BYTES": "32 * 1024 * 1024 | 32 * 1024 * 1024"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_iterable/asset_escrow_scope.rs",
+        "reason": "Exact five-pass accounting factor for one original escrow frame (preflight, encoder recount/checksum/write and decode). Its byte demand is prepaid against the existing execution budget; the factor creates no separate resource allowance.",
+        "symbols": [
+          "FRAME_TRAVERSALS"
+        ],
+        "exprs": {
+          "FRAME_TRAVERSALS": "5"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/smartcontracts/isi/query/ordinary_iterable.rs",
+        "reason": "Composite read-only query row geometry: at most eight source-item units, also clamped to the admitted page item count. Original per-source, retained graph and complete-page budgets remain in force; this multiplier does not create a transaction/proof budget.",
+        "symbols": [
+          "COMPOSITE_ROW_SOURCE_ITEMS"
+        ],
+        "exprs": {
+          "COMPOSITE_ROW_SOURCE_ITEMS": "8"
+        }
+      },
+      {
+        "path": "crates/iroha_core/src/state/tiered.rs",
+        "reason": "Local persistent manifest layout and I/O scheduling: at most three leading hex digits select chunks, average-row hysteresis grows above 256 or shrinks below 8, and at most 16 writers sync them. These affect storage partitioning and concurrency, not committed State values or validity.",
+        "symbols": [
+          "MANIFEST_CHUNK_MAX_DIGITS",
+          "MANIFEST_CHUNK_GROW_ROWS",
+          "MANIFEST_CHUNK_SHRINK_ROWS",
+          "MANIFEST_CHUNK_WRITERS"
+        ],
+        "exprs": {
+          "MANIFEST_CHUNK_MAX_DIGITS": "3",
+          "MANIFEST_CHUNK_GROW_ROWS": "256",
+          "MANIFEST_CHUNK_SHRINK_ROWS": "8",
+          "MANIFEST_CHUNK_WRITERS": "16"
+        }
       }
     ],
     "literals": {
@@ -25939,7 +26021,7 @@
             {
               "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
               "sites": {
-                "tip.height() < 2": 2
+                "tip.height() < 2": 1
               }
             },
             {
@@ -29302,51 +29384,6 @@
         {
           "files": [
             {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "text.len() > 255": 1
-              }
-            }
-          ],
-          "reason": "Closed Action-frame scanner field shapes: one metadata Name and one executable entrypoint are limited to 255 bytes. The scanner supports only its documented incomplete canonical subset and is not installed as TriggerLifecycleActionValidatorV1. These per-field checks do not establish a generic transaction/proof ceiling or authorize missing lifecycle coverage."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "(0x20..=0x7e).contains(byte)": 1,
-                "(0x21..=0x7e).contains(&byte)": 1
-              }
-            }
-          ],
-          "reason": "ASCII code-unit ranges of the deliberately closed Action-frame scanner subset: visible ASCII for a Name and unescaped printable ASCII inside a JSON string. They reject unsupported character spellings while preserving the original frame; they are lexical ranges, not byte-count, allocation or work limits. The scanner remains incomplete and is not a lifecycle validation authority."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "bytes.len() < 2": 1
-              }
-            }
-          ],
-          "reason": "Minimum lexical shape of an unescaped JSON string in the closed Action-frame scanner: at least two bytes are required for the opening and closing quotes before indexing their positions. This minimum refuses malformed short values and supplies no size or work ceiling."
-        },
-        {
-          "files": [
-            {
-              "path": "crates/iroha_data_model/src/block/trigger_action_scanner.rs",
-              "sites": {
-                "text.len() > 20": 1
-              }
-            }
-          ],
-          "reason": "Canonical decimal spelling of the two original trigger-registration u64 metadata numbers: at most twenty digits can represent u64. The scanner additionally rejects non-digits, leading zeroes and checked-arithmetic overflow, charging the original finite digit pass. This is numeric representation geometry, not a new generic byte or work cap; registration and execution semantics remain separate."
-        },
-        {
-          "files": [
-            {
               "path": "crates/iroha_data_model/src/sumeragi_finality/compact.rs",
               "sites": {
                 "proof.height() >= 2": 2,
@@ -29446,6 +29483,149 @@
                 "proof.block.commit_qc.len() > 128 * 1024": 1,
                 "proof.block.result_preimage.len() > GAME_PARTITION_MAX_PROOF_BYTES - 140 * 1024": 1,
                 "proof.path.siblings.len() > 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Closed unavailable-reason tag geometry: lifecycle_unavailable_frame accepts only the five defined discriminants. This checks one canonical enum tag and is not a work or allocation limit.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/block/trigger_lifecycle.rs",
+              "sites": {
+                "(1..=5).contains(&reason)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Native certified-history boundaries: height two is the first successor of genesis. These predicates require an existing non-genesis original certified cut or activation provenance, and do not bound size, work or proof security.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+              "sites": {
+                "height < 2": 1,
+                "self.height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/ironwood_pool_cut.rs",
+              "sites": {
+                "*h >= 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_torii/src/sns_lease.rs",
+              "sites": {
+                "height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+              "sites": {
+                "start_height < 2": 2
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/runtime/lifecycle_activation.rs",
+              "sites": {
+                "activated_height < 2": 1
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/state/world_state_snapshot.rs",
+              "sites": {
+                "self.height() >= 2": 2
+              }
+            },
+            {
+              "path": "crates/iroha_core/src/sumeragi/certified_chain/current_cut.rs",
+              "sites": {
+                "original.height() >= 2": 1,
+                "height < 2": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The ordinary-write sparse Merkle tree has 256 bit positions. A lifecycle branch cannot contain more than 256 nonempty siblings; canonical ascending levels, nonempty hashes and the authenticated root remain mandatory.",
+          "files": [
+            {
+              "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+              "sites": {
+                "self.siblings.len() > 256": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Ironwood read-only pool selector body is at most 4096 bytes before JSON decoding. The native proof reader assigns two of its original eight request-budget units to journal bytes and clamps to NATIVE_FINALITY_MAX_JOURNAL_BYTES; original graph and frame budgets remain distinct and mandatory.",
+          "files": [
+            {
+              "path": "crates/iroha_torii/src/ironwood_pool_cut.rs",
+              "sites": {
+                "body.len() > 4096": 1,
+                "(unit * 2).min(NATIVE_FINALITY_MAX_JOURNAL_BYTES)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Offline Ironwood activation preflight accepts one qualification-evidence file up to 16 MiB. The bound limits this diagnostic tool input and does not itself install a runtime definition or authorize a live change.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/bin/ironwood_activation_preflight.rs",
+              "sites": {
+                "evidence.len() > 16 * 1024 * 1024": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Read-only lifecycle witness request/response geometry: one through 4096 consecutive cuts; at most sixteen cuts per short State view; exact header plus conservative 32-KiB branch accounting and 128 framing bytes are clamped to the caller response limit and 32-MiB transport ceiling. Original allocation, deadline, cancellation and finality checks remain required.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/query/native_receipts/lifecycle.rs",
+              "sites": {
+                "end_height - start_height >= 4096": 2,
+                "usize::try_from(end_height - start_height + 1) .ok() .and_then(|cuts| cuts.checked_mul(MAX_RUNTIME_BRANCH_JSON_BYTES)) .and_then(|branches| branches.checked_add(count.length)) .and_then(|bytes| bytes.checked_add(128)) .ok_or(LifecycleWitnessReadError::Invalid( \"lifecycle response demand overflow\", ))? .min(response_limit)": 1,
+                "first.saturating_add(15).min(end_height)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Read-only lifecycle sizing report: at most 4096 requested witness cuts, the twenty largest Actions retained for display, and an estimated sparse path capped at its fixed 256 levels. These diagnostic bounds never authorize lifecycle selection or establish capture/settlement readiness.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/runtime/lifecycle_preflight.rs",
+              "sites": {
+                "(1..=4096).contains(&witness_cuts)": 1,
+                "index < 20": 1,
+                "largest_actions.truncate(20)": 1,
+                "estimated_levels.min(256)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "The immutable selected lifecycle service limits total captured Action frame bytes to the smaller of the supplied committed maximum and 16 MiB. This is a deterministic root output bound; the original scratch, cumulative codec work, effect count, physical allocation and failure classifications stay enforced.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+              "sites": {
+                ".unwrap_or(usize::MAX) .min(16 * 1024 * 1024)": 1
+              }
+            }
+          ]
+        },
+        {
+          "reason": "Canonical u64 registration-height metadata has at most twenty decimal digits. The owner also rejects empty/non-digit strings, leading zeroes and numeric overflow; this is scalar representation geometry, not a generic resource allowance.",
+          "files": [
+            {
+              "path": "crates/iroha_core/src/smartcontracts/isi/triggers/set_lifecycle_journal.rs",
+              "sites": {
+                "text.len() > 20": 1
               }
             }
           ]

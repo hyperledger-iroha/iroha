@@ -116,12 +116,20 @@ export function nativeSourceProvenanceMatches(
   );
 }
 
+/** Select application scheduling for the local macOS debug verifier itself. */
+export function nativeVerificationInvocation(args, cargoProfile, platform = process.platform) {
+  // Darwin application scheduling is not inherited by a newly spawned child.
+  // Use the system launcher directly; callers retain every check and deadline.
+  return platform === "darwin" && cargoProfile === "debug"
+    ? { file: "/usr/sbin/taskpolicy", args: ["-a", process.execPath, ...args] }
+    : { file: process.execPath, args };
+}
+
 function assertLoadableSourceProvenance(verification, paths) {
   if (verification.sourceTreeClean === true) return;
   try {
     const repoRoot = resolve(paths.jsRoot, "..", "..");
-    execFileSync(
-      process.execPath,
+    const invocation = nativeVerificationInvocation(
       [
         join(paths.jsRoot, "scripts", NATIVE_BUILD_SOURCE_STATE_READER),
         "--verify",
@@ -133,6 +141,12 @@ function assertLoadableSourceProvenance(verification, paths) {
           sourceTreeSha256: verification.sourceTreeSha256,
         }),
       ],
+      verification.sourceTreeClean === false && verification.cargoProfile === "debug"
+        ? "debug" : undefined,
+    );
+    execFileSync(
+      invocation.file,
+      invocation.args,
       {
         env: {
           ...process.env,

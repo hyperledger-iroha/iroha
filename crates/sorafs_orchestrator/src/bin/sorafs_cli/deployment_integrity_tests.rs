@@ -2,6 +2,112 @@
 use super::*;
 
 #[test]
+fn publication_policy_requires_future_absolute_deadline_and_positive_replicas() {
+    assert!(validate_publication_policy(3, 86_400).is_err());
+    assert!(validate_publication_policy(0, 4_000_000_000).is_err());
+    assert!(validate_publication_policy(3, 4_000_000_000).is_ok());
+    assert!(
+        deploy(vec!["--payload=unused".to_owned()])
+            .unwrap_err()
+            .contains("retention")
+    );
+}
+
+#[test]
+fn deploy_preserves_reviewed_three_replica_manifest_and_streamed_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, plan, payload, mut manifest) = site_fixture(&root);
+    manifest.pin_policy = PinPolicy {
+        min_replicas: 3,
+        storage_class: StorageClass::Hot,
+        retention_epoch: 4_000_000_000,
+    };
+    let manifest_bytes = manifest.encode().unwrap();
+    let reviewed_manifest = root.join("reviewed.to");
+    let reviewed_car = root.join("reviewed.car");
+    fs::write(&reviewed_manifest, &manifest_bytes).unwrap();
+    let mut car = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut car)
+        .unwrap();
+    fs::write(&reviewed_car, &car).unwrap();
+    let out = root.join("out");
+    fs::create_dir(&out).unwrap();
+    let mut artifacts = build_deploy_artifacts(
+        &site,
+        &out.join("site.car"),
+        &out.join("plan.json"),
+        &out.join("pack.json"),
+        &out.join("manifest.to"),
+        &out.join("manifest.json"),
+        manifest.pin_policy,
+        Some((&reviewed_manifest, &reviewed_car)),
+    )
+    .unwrap();
+    assert_eq!(fs::read(out.join("manifest.to")).unwrap(), manifest_bytes);
+    assert_eq!(fs::read(out.join("site.car")).unwrap(), car);
+    assert_eq!(artifacts.plan, plan);
+    let mut actual = Vec::new();
+    artifacts.payload.read_to_end(&mut actual).unwrap();
+    assert_eq!(actual, payload);
+    assert_eq!(artifacts.manifest.pin_policy.min_replicas, 3);
+    assert_eq!(artifacts.manifest.pin_policy.retention_epoch, 4_000_000_000);
+    let mut wrong = manifest.pin_policy;
+    wrong.min_replicas = 1;
+    assert!(
+        build_deploy_artifacts(
+            &site,
+            &out.join("wrong.car"),
+            &out.join("wrong.plan"),
+            &out.join("wrong.pack"),
+            &out.join("wrong.to"),
+            &out.join("wrong.json"),
+            wrong,
+            Some((&reviewed_manifest, &reviewed_car)),
+        )
+        .is_err()
+    );
+    let mut input = prepared_storage_input(&site, &manifest).unwrap();
+    let mut changed_car = car.clone();
+    changed_car[car.len() / 2] ^= 1;
+    fs::write(&reviewed_car, &changed_car).unwrap();
+    assert!(verify_retained_car(&manifest, &mut input, &reviewed_car).is_err());
+    fs::write(&reviewed_car, &car[..car.len() - 1]).unwrap();
+    assert!(verify_retained_car(&manifest, &mut input, &reviewed_car).is_err());
+    fs::write(&reviewed_car, &car).unwrap();
+    for mutation in 0..2 {
+        let mut changed_manifest = manifest.clone();
+        if mutation == 0 {
+            changed_manifest.car_digest[0] ^= 1;
+        } else {
+            changed_manifest
+                .alias_claims
+                .push(sorafs_manifest::AliasClaim {
+                    name: "site".to_owned(),
+                    namespace: "sora".to_owned(),
+                    proof: vec![1, 2, 3],
+                });
+        }
+        fs::write(&reviewed_manifest, changed_manifest.encode().unwrap()).unwrap();
+        assert!(
+            build_deploy_artifacts(
+                &site,
+                &out.join(format!("mutation-{mutation}.car")),
+                &out.join(format!("mutation-{mutation}.plan")),
+                &out.join(format!("mutation-{mutation}.pack")),
+                &out.join(format!("mutation-{mutation}.to")),
+                &out.join(format!("mutation-{mutation}.json")),
+                manifest.pin_policy,
+                Some((&reviewed_manifest, &reviewed_car)),
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn car_pack_directory_emits_exact_archive_plan_and_summary() {
     let temp = tempfile::tempdir().expect("tempdir");
     let root = temp.path().canonicalize().expect("canonical root");

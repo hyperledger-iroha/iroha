@@ -275,6 +275,7 @@ Local SoraFS compilation and packaging run without client configuration:
 iroha app sorafs toolkit compile --source contract.ko \
   --bytecode-out artifacts/contract.to --json-out artifacts/contract.json
 iroha app sorafs toolkit pack artifacts/contract.to \
+  --pin-retention-epoch "$SORAFS_RETENTION_EPOCH" --pin-min-replicas 3 \
   --car-out artifacts/contract.car --manifest-out artifacts/contract.manifest.to
 ```
 

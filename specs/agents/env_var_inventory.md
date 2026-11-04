@@ -2,7 +2,7 @@
 
 _Last refreshed via `python3 scripts/inventory_env_toggles.py --json specs/agents/env_var_inventory.json --md specs/agents/env_var_inventory.md`_
 
-Total references: **1197** · Unique variables: **309**
+Total references: **1213** · Unique variables: **317**
 
 ## ADVICE_SCHEDULE (test: 1)
 
@@ -31,6 +31,19 @@ Total references: **1197** · Unique variables: **309**
 - test: crates/iroha_torii/tests/zk_attachments_subprocess.rs — `let sanitizer_path = PathBuf::from(env!("CARGO_BIN_EXE_attachment_sanitizer"));`
 - test: crates/iroha_torii/tests/zk_attachments_subprocess.rs — `let sanitizer_path = PathBuf::from(env!("CARGO_BIN_EXE_attachment_sanitizer"));`
 - test: crates/iroha_torii/tests/zk_attachments_subprocess.rs — `let sanitizer_path = PathBuf::from(env!("CARGO_BIN_EXE_attachment_sanitizer"));`
+
+## CARGO_BIN_EXE_generate_orderbook_fixtures (test: 1)
+
+- test: crates/sorafs_manifest/tests/orderbook_fixtures.rs — `let output = Command::new(env!("CARGO_BIN_EXE_generate_orderbook_fixtures"))`
+
+## CARGO_BIN_EXE_generate_pdp_fixtures (test: 2)
+
+- test: crates/sorafs_manifest/tests/pdp_fixtures.rs — `let output = Command::new(env!("CARGO_BIN_EXE_generate_pdp_fixtures"))`
+- test: crates/sorafs_manifest/tests/pdp_generator_cli.rs — `Command::new(env!("CARGO_BIN_EXE_generate_pdp_fixtures"))`
+
+## CARGO_BIN_EXE_generate_por_fixtures (test: 1)
+
+- test: crates/sorafs_manifest/tests/por_fixtures.rs — `Command::new(env!("CARGO_BIN_EXE_generate_por_fixtures"))`
 
 ## CARGO_BIN_EXE_iroha (test: 2)
 
@@ -146,7 +159,7 @@ Total references: **1197** · Unique variables: **309**
 
 - test: integration_tests/tests/nexus/atomic_private_settlement_real_process_harness.rs — `&& std::env::var("CARGO_INCREMENTAL").ok().as_deref() == Some("0")`
 
-## CARGO_MANIFEST_DIR (bench: 2, build: 4, example: 1, prod: 54, test: 532, tool: 6)
+## CARGO_MANIFEST_DIR (bench: 2, build: 4, example: 1, prod: 52, test: 540, tool: 6)
 
 - prod: crates/build-support/src/lib.rs — `let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").ok()?);`
 - prod: crates/connect_norito_bridge/src/bin/swift_parity_regen.rs — `Path::new(env!("CARGO_MANIFEST_DIR"))`
@@ -154,6 +167,7 @@ Total references: **1197** · Unique variables: **309**
 - test: crates/connect_norito_bridge/src/bridge_tail_tests.rs — `const BRIDGE_MANIFEST: &str = include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"));`
 - test: crates/connect_norito_bridge/src/kagemusha_wallet_ffi/background/native_maintenance_tests.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/connect_norito_bridge/src/kagemusha_wallet_load_original/tests.rs — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/connect_norito_bridge/src/platform_jni/privacy_x509_request_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/connect_norito_bridge/src/sorafs_tests.rs — `fs::read(format!("{}/../../{}", env!("CARGO_MANIFEST_DIR"), path))`
 - test: crates/connect_norito_bridge/src/validation_fee_policy_proof_bridge_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/connect_norito_bridge/src/validation_fee_policy_proof_bridge_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
@@ -274,6 +288,8 @@ Total references: **1197** · Unique variables: **309**
 - test: crates/iroha_core/src/query/provider_ingest_finalized/tests/frame_identity_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_core/src/query/reputation_finalized/tests/frame_identity_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_core/src/runtime/catalog/tests.rs — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_core/src/runtime/ironwood/tests.rs — `env!("CARGO_MANIFEST_DIR"),`
+- test: crates/iroha_core/src/runtime/merged_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_core/src/smartcontracts/isi/asset/core_numeric_mutation_tests.rs — `let source_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");`
 - test: crates/iroha_core/src/smartcontracts/isi/musubi/initial_publication_admission_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/iroha_core/src/smartcontracts/isi/musubi/rejection_allocation_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
@@ -310,8 +326,7 @@ Total references: **1197** · Unique variables: **309**
 - test: crates/iroha_core/tests/pin_registry.rs — `let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/iroha_core/tests/snapshots.rs — `let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/iroha_core/tests/sumeragi_doc_sync.rs — `Path::new(env!("CARGO_MANIFEST_DIR"))`
-- prod: crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs — `let repository = Path::new(env!("CARGO_MANIFEST_DIR"))`
-- prod: crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs — `let repository = Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs — `std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_execution_stark/src");`
 - prod: crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs — `let repository = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/iroha_core_privacy/tests/state_commitment_candidates_measurement.rs — `Path::new(env!("CARGO_MANIFEST_DIR")).join("../../specs/state_table_inventory.json");`
 - test: crates/iroha_core_zk/src/kagemusha_wallet_enrollment_v1/credential.rs — `env!("CARGO_MANIFEST_DIR"),`
@@ -664,6 +679,7 @@ Total references: **1197** · Unique variables: **309**
 - test: crates/sorafs_chunker/tests/backpressure.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_chunker/tests/vectors.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_manifest/src/gateway_compliance/captured_owner_identity_tests.rs — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/sorafs_manifest/src/gateway_fixture.rs — `let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_manifest/src/reference.rs — `let absolute = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_manifest/src/reference_ffi.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_manifest/tests/orderbook_fixtures.rs — `env!("CARGO_MANIFEST_DIR"),`
@@ -672,11 +688,13 @@ Total references: **1197** · Unique variables: **309**
 - test: crates/sorafs_manifest/tests/provider_admission_fixtures.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_manifest/tests/replication_order_fixtures.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/sorafs_node/tests/cli.rs — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/sorafs_orchestrator/src/generated_gateway_tests.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: crates/sorafs_orchestrator/src/lib.rs — `let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/sorafs_orchestrator/src/lib.rs — `let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/sorafs_orchestrator/src/lib.rs — `let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));`
 - test: crates/sorafs_orchestrator/tests/orchestrator_parity.rs — `Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_orchestrator/tests/sorafs_cli.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
+- test: crates/sorafs_orchestrator/tests/sorafs_cli.rs — `let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_orchestrator/tests/sorafs_cli.rs — `let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/sorafs_orchestrator/tests/sorafs_cli/pdp.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: crates/soranet_pq/tests/kat_vectors.rs — `env!("CARGO_MANIFEST_DIR"),`
@@ -691,6 +709,7 @@ Total references: **1197** · Unique variables: **309**
 - test: integration_tests/tests/kagemusha_network_setup/continuation/issuer/provisioning/tests.rs — `let base = Path::new(env!("CARGO_MANIFEST_DIR"))`
 - test: integration_tests/tests/kagemusha_network_setup/continuation/issuer/provisioning/tests.rs — `let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();`
 - test: integration_tests/tests/kotodama_examples.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
+- test: integration_tests/tests/lifecycle_trace_activation.rs — `Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lifecycle_trace_activation/verify.py");`
 - test: integration_tests/tests/nexus/atomic_private_settlement_localnet.rs — `env!("CARGO_MANIFEST_DIR"),`
 - test: integration_tests/tests/nexus/cbdc_rollout_bundle.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
 - test: integration_tests/tests/nexus/cbdc_whitelist.rs — `PathBuf::from(env!("CARGO_MANIFEST_DIR"))`
@@ -997,9 +1016,10 @@ Total references: **1197** · Unique variables: **309**
 
 - test: crates/iroha_fs/src/process/tests.rs — `"inspect" => { println!("{:?}", std::env::args().skip(2).collect::<Vec<_>>()); println!("{}", std::env::var("IROHA_COMMON_VALUE").unwrap()); }`
 
-## IROHA_CONF_GAS_SEED (test: 1)
+## IROHA_CONF_GAS_SEED (bench: 1, test: 1)
 
 - test: crates/iroha_test_samples/src/lib.rs — `std::env::var("IROHA_CONF_GAS_SEED").ok()`
+- bench: crates/ivm/benches/gas_calibration.rs — `if let Ok(seed) = std::env::var("IROHA_CONF_GAS_SEED") {`
 
 ## IROHA_CONNECT_ACCOUNT_SEED_HEX (example: 1)
 
@@ -1059,7 +1079,11 @@ Total references: **1197** · Unique variables: **309**
 
 ## IROHA_EXECUTION_PARITY_REQUEST (test: 1)
 
-- test: crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs — `let request = std::env::var_os("IROHA_EXECUTION_PARITY_REQUEST").map_or_else(`
+- test: crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs — `std::env::var_os("IROHA_EXECUTION_PARITY_REQUEST").map_or_else(timeout_request, |path| {`
+
+## IROHA_EXECUTION_STARK_TIMINGS (prod: 1)
+
+- prod: crates/iroha_execution_stark/src/prover.rs — `let enabled = std::env::var_os("IROHA_EXECUTION_STARK_TIMINGS").is_some();`
 
 ## IROHA_EXPLORER_PROOF_FIXTURE_OUTPUT (test: 1)
 
@@ -1076,6 +1100,10 @@ Total references: **1197** · Unique variables: **309**
 ## IROHA_FI_CONTINUATION_FIXTURE_OUTPUT_DIR (test: 1)
 
 - test: crates/connect_norito_bridge/src/fi_context_continuation_tests.rs — `if let Some(destination) = std::env::var_os("IROHA_FI_CONTINUATION_FIXTURE_OUTPUT_DIR")`
+
+## IROHA_GAS_BENCH_IVM_POLICY (bench: 1)
+
+- bench: crates/ivm/benches/support/gas_policy.rs — `let value = match std::env::var("IROHA_GAS_BENCH_IVM_POLICY") {`
 
 ## IROHA_GENESIS_FILE (test: 1)
 
@@ -1126,6 +1154,10 @@ Total references: **1197** · Unique variables: **309**
 ## IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT (test: 1)
 
 - test: crates/iroha_plonk_gadgets/src/p256/tests.rs — `let root = std::env::var_os("IROHA_KAGEMUSHA_TEST_FIXTURE_ROOT").map_or_else(`
+
+## IROHA_LIFECYCLE_TEST_PYTHON (test: 1)
+
+- test: integration_tests/tests/lifecycle_trace_activation.rs — `let python = std::env::var_os("IROHA_LIFECYCLE_TEST_PYTHON").ok_or_else(|| {`
 
 ## IROHA_LISTENER_TEST_DIRECTORY (test: 4)
 
@@ -1409,6 +1441,10 @@ Total references: **1197** · Unique variables: **309**
 ## IROHA_X509_PUBLIC_CANDIDATE (prod: 1)
 
 - prod: crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs — `std::env::var_os("IROHA_X509_PUBLIC_CANDIDATE")`
+
+## IROHA_X509_PUBLIC_OUTPUT_ROOT (prod: 1)
+
+- prod: crates/iroha_core_privacy/src/privacy_engines/zk_x509/engine_prover_diagnostic.rs — `std::env::var_os("IROHA_X509_PUBLIC_OUTPUT_ROOT").map(PathBuf::from),`
 
 ## IVM_COMPILER_DEBUG (prod: 1)
 
@@ -1942,6 +1978,10 @@ Total references: **1197** · Unique variables: **309**
 
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs — `if let Ok(cpu) = env::var("SM_PERF_CPU_LABEL") {`
 - prod: crates/iroha_crypto/src/bin/sm_perf_check.rs — `if let Ok(cpu) = env::var("SM_PERF_CPU_LABEL") {`
+
+## SNAPSHOT_CENSUS_PATH (test: 1)
+
+- test: crates/iroha_core/src/snapshot/byte_accounting_tests.rs — `let path = std::env::var_os("SNAPSHOT_CENSUS_PATH").expect("local snapshot path");`
 
 ## SORAFS_CHECKPOINT_TEST_MODE (test: 1)
 

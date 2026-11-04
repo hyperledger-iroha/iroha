@@ -1243,7 +1243,7 @@ where
     let session = &flow.session;
     let table = run.populated;
     let map = &population.map;
-    let root = map.root();
+    let root = prepare_root(session, map);
     let mut first: Vec<(String, Program)> = Vec::new();
 
     // Every statement of the native sample: its program beside the hashes of
@@ -1788,67 +1788,81 @@ fn work(record: &MeasurementRecord, phase_name: &str, name: &str) -> Option<u64>
     counter(record, phase_name, name).map(|entry| entry.total_units)
 }
 
-/// Root normalization is preparation, with exactly its own hash work, even
-/// when earlier unmeasured preparation left thread-local hash counts behind.
+/// Root preparation preserves empty and populated State roots, attributes only
+/// its own hash work, and leaves no thread-local counts for the next phase.
 #[test]
 fn sampled_root_normalization_is_scoped_preparation() {
     fn check<H: HashProfile>() {
-        let schema = PrototypeSchema::from_descriptor(&descriptor_from_rows(&[(
-            POPULATED_TABLE,
-            "norito:K@0.0.2",
-            "norito:V@0.0.2",
-        )]))
-        .expect("a canonical descriptor");
-        let map = KeyedMap::<RadixTree<H>>::empty(schema);
-        let _ = take_hash_work();
-        let expected_root = map.root();
-        let expected_work = take_hash_work();
-        assert_eq!(expected_work.compressions, 1);
-        // Deliberately leave unrelated work pending before the measured call.
-        let _ = H::hash_bytes(1, b"earlier preparation");
-        let sink = CollectingSink::new();
-        let session = Session::begin(
-            RunIdentity::new(
-                RunContext::unbound(),
-                "sampled_root_normalization",
-                FlowKind::Native,
-                EMITTER,
-            ),
-            "native_flow",
-            WorkerDeclaration {
-                workers: 1,
-                provenance: "single-thread regression",
-            },
-            Box::new(sink.clone()),
-        );
-        assert_eq!(prepare_root(&session, &map), expected_root);
-        assert_eq!(take_hash_work(), HashWork::default());
-        session.finish();
-        let records = sink.take();
-        assert_eq!(records.len(), 1);
-        let record = &records[0];
-        assert_eq!(record.outcome, RunOutcome::Succeeded);
-        let (index, preparation) = phase(record, "prepare_state").expect("root is scoped");
-        assert_eq!(preparation.parent, Some(0));
-        assert_eq!(preparation.calls, 1);
-        for (name, value) in [
-            ("hash.byte_hashes", expected_work.byte_hashes),
-            ("hash.hashed_bytes", expected_work.bytes),
-            ("hash.compressions", expected_work.compressions),
-            ("hash.permutations", expected_work.permutations),
-        ] {
-            assert_eq!(work(record, "prepare_state", name), Some(value));
+        for populated in [false, true] {
+            let schema = PrototypeSchema::from_descriptor(&descriptor_from_rows(&[(
+                POPULATED_TABLE,
+                "norito:K@0.0.2",
+                "norito:V@0.0.2",
+            )]))
+            .expect("a canonical descriptor");
+            let mut map = KeyedMap::<RadixTree<H>>::empty(schema);
+            if populated {
+                map.apply(&[(0, b"key", Some(b"value"))])
+                    .expect("one valid State entry");
+            }
+            let entries = map.entries();
+            let _ = take_hash_work();
+            let expected_root = map.root();
+            let expected_work = take_hash_work();
+            assert_eq!(expected_work.compressions, 1);
+            assert_eq!(expected_work.byte_hashes, 0);
+            // Leave unrelated work pending to catch accidental attribution.
+            let _ = H::hash_bytes(1, b"earlier preparation");
+            let sink = CollectingSink::new();
+            let session = Session::begin(
+                RunIdentity::new(
+                    RunContext::unbound(),
+                    "sampled_root_normalization",
+                    FlowKind::Native,
+                    EMITTER,
+                ),
+                "native_flow",
+                WorkerDeclaration {
+                    workers: 1,
+                    provenance: "single-thread regression",
+                },
+                Box::new(sink.clone()),
+            );
+            assert_eq!(prepare_root(&session, &map), expected_root);
+            assert_eq!(take_hash_work(), HashWork::default());
+            assert_eq!(map.entries(), entries);
+            session.finish();
+            let records = sink.take();
+            assert_eq!(records.len(), 1);
+            let record = &records[0];
+            assert_eq!(record.outcome, RunOutcome::Succeeded);
+            let (index, preparation) = phase(record, "prepare_state").expect("root is scoped");
+            assert_eq!(preparation.parent, Some(0));
+            assert_eq!(preparation.calls, 1);
+            assert_eq!(preparation.completed, 1);
+            for (name, value) in [
+                ("hash.byte_hashes", expected_work.byte_hashes),
+                ("hash.hashed_bytes", expected_work.bytes),
+                ("hash.compressions", expected_work.compressions),
+                ("hash.permutations", expected_work.permutations),
+            ] {
+                assert_eq!(work(record, "prepare_state", name), Some(value));
+            }
+            assert_eq!(record.work_counters.entries.len(), 4);
+            assert!(
+                record
+                    .work_counters
+                    .entries
+                    .iter()
+                    .all(|entry| entry.phase == index)
+            );
+            assert_eq!(map.root(), expected_root);
+            let _ = take_hash_work();
         }
-        assert_eq!(record.work_counters.entries.len(), 4);
-        assert!(
-            record
-                .work_counters
-                .entries
-                .iter()
-                .all(|entry| entry.phase == index)
-        );
     }
     check::<Blake2bProfile>();
+    check::<Blake3Profile>();
+    check::<Digest384Comparator>();
     check::<Poseidon2Profile>();
     check::<RescuePrimeProfile>();
 }
@@ -1866,6 +1880,8 @@ fn smoke_circuits<P: AirPermutation + Sync>(run: &Run, profile: &str, case: &Cas
         assert!(work(&native, "r0.cold_build", "hash.permutations").unwrap() > 0);
         let record = measure_circuit(run, construction, profile, case, &population);
         assert_eq!(record.identity.flow, FlowKind::Proof);
+        assert_eq!(work(&record, "prepare_state", "hash.compressions"), Some(1));
+        assert_eq!(work(&record, "prepare_state", "hash.byte_hashes"), Some(0));
         for kind in ["inclusion", "absence", "range_0", "range_1", "range_16"] {
             // Every statement: the program's permutations are the native
             // verifier's, plus one root normalisation per further anchor.

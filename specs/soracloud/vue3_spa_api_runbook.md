@@ -322,6 +322,7 @@ For static site packaging through SoraFS:
 
 ```bash
 iroha app sorafs toolkit pack .soracloud-docs/site/dist \
+  --pin-retention-epoch "$SORAFS_RETENTION_EPOCH" --pin-min-replicas 3 \
   --manifest-out .soracloud-docs/sorafs/site_manifest.to \
   --car-out .soracloud-docs/sorafs/site_payload.car \
   --json-out .soracloud-docs/sorafs/site_pack_report.json

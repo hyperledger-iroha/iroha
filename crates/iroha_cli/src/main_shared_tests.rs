@@ -43,6 +43,8 @@ fn local_sorafs_pack_accepts_no_config_and_rejects_transaction_globals() {
         "toolkit",
         "pack",
         "public-assets",
+        "--pin-retention-epoch",
+        "4000000000",
     ])
     .expect("parse local CAR pack");
     assert!(matches!(

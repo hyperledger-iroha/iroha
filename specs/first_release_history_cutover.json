@@ -46,6 +46,10 @@
       "path": "crates/iroha_version/src/lib.rs"
     },
     {
+      "type": "Payload",
+      "path": "crates/iroha_version/src/error_tests.rs"
+    },
+    {
       "type": "TextPayload",
       "path": "crates/iroha_torii/src/utils.rs"
     },

@@ -18,9 +18,10 @@ use kotodama_lang::{
 use norito::json::{Map, Value};
 use rand::rngs::SysRng;
 use sorafs_car::{
-    CarBuildPlan, CarChunk, CarWriteStats, CarWriter, ChunkStore, PorMerkleTree,
+    CarBuildPlan, CarChunk, CarStreamingWriter, CarWriteStats,
     fetch_plan::{TOOLKIT_PACK_REPORT_SCHEMA_V1, try_chunk_fetch_specs_to_json},
 };
+#[cfg(test)]
 use sorafs_chunker::ChunkProfile;
 use sorafs_manifest::{
     ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, ManifestV1, PinPolicy,
@@ -29,7 +30,7 @@ use sorafs_manifest::{
 };
 use std::{
     fs,
-    io::{self, Read, Write as _},
+    io::{self, Read, Seek as _, Write as _},
     path::{Path, PathBuf},
 };
 use tiny_keccak::{Hasher as _, Sha3};
@@ -295,6 +296,12 @@ fn output_identity(path: &Path) -> Result<PathBuf> {
 /// Archive, manifest, and optional hybrid-envelope publication outputs.
 #[derive(clap::Args, Debug)]
 pub struct PackArgs {
+    /// Absolute Unix-second deadline for paid pin retention; must be in the future.
+    #[arg(long = "pin-retention-epoch")]
+    pub pin_retention_epoch: u64,
+    /// Number of provider replicas requested by the manifest.
+    #[arg(long = "pin-min-replicas", default_value_t = 3)]
+    pub pin_min_replicas: u16,
     /// Payload path (file or directory) to package into a CAR archive.
     pub input: PathBuf,
     /// Path to write the Norito manifest (`.to`). If omitted, no manifest file is emitted.
@@ -334,6 +341,8 @@ impl PackArgs {
     #[allow(clippy::too_many_lines)]
     fn pack(self) -> Result<String> {
         let PackArgs {
+            pin_retention_epoch,
+            pin_min_replicas,
             input,
             manifest_out,
             car_out,
@@ -343,19 +352,25 @@ impl PackArgs {
             hybrid_recipient_x25519,
             hybrid_recipient_kyber,
         } = self;
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .wrap_err("system clock precedes Unix epoch")?
+            .as_secs();
+        if pin_retention_epoch <= now || pin_min_replicas == 0 {
+            return Err(eyre!(
+                "pin retention must be a future absolute Unix deadline and replicas must be positive"
+            ));
+        }
         let descriptor = chunker_registry::default_descriptor();
-        let (plan, payload) = build_pack_plan(&input, descriptor.profile)?;
-        if plan.chunk_profile != descriptor.profile {
-            return Err(eyre!("computed chunk plan used unexpected profile"));
-        }
-        let mut chunk_store = ChunkStore::with_profile(descriptor.profile);
-        chunk_store
-            .ingest_plan(&payload, &plan)
-            .wrap_err("failed to ingest the validated CAR plan into the PoR chunk store")?;
-        if chunk_store.por_tree().chunks().len() != plan.chunks.len() {
-            return Err(eyre!("chunk store PoR layout diverged from CAR plan"));
-        }
-        let car_stats = write_pack_car(car_out.as_ref(), &plan, &payload)?;
+        let mut prepared =
+            sorafs_car::streaming_input::PreparedCarInput::open(&input, descriptor.profile)
+                .wrap_err("failed to acquire bounded native CAR input")?;
+        let plan = prepared.plan;
+        let (por_root, _) =
+            sorafs_car::payload_verifier::por_commitment(&plan, &mut prepared.payload)
+                .wrap_err("failed to derive bounded PoR commitment")?;
+        prepared.payload.rewind()?;
+        let car_stats = write_pack_car(car_out.as_ref(), &plan, &mut prepared.payload)?;
         if car_stats.chunk_profile != descriptor.profile {
             return Err(eyre!("computed CAR used unexpected chunking profile"));
         }
@@ -398,14 +413,14 @@ impl PackArgs {
             .dag_codec(DagCodecId(car_stats.dag_codec))
             .chunking_profile(chunk_profile.clone())
             .chunk_digest_sha3_256(chunk_digest_sha3)
-            .por_root(*chunk_store.por_tree().root())
+            .por_root(por_root)
             .content_length(plan.content_length)
             .car_digest(car_archive_digest)
             .car_size(car_stats.car_size)
             .pin_policy(PinPolicy {
-                min_replicas: 3,
+                min_replicas: pin_min_replicas,
                 storage_class: ManifestStorageClass::Hot,
-                retention_epoch: 86_400,
+                retention_epoch: pin_retention_epoch,
             })
             .governance(GovernanceProofs::default());
         if !metadata.is_empty() {
@@ -474,7 +489,8 @@ impl PackArgs {
             manifest: &manifest,
             manifest_bytes: &manifest_bytes,
             manifest_digest: &manifest_digest,
-            por_tree: chunk_store.por_tree(),
+            por_root,
+            por_chunk_count: plan.chunks.len(),
         })?;
         let report_object = report
             .as_object_mut()
@@ -536,43 +552,26 @@ struct PackReportContext<'a> {
     manifest: &'a ManifestV1,
     manifest_bytes: &'a [u8],
     manifest_digest: &'a blake3::Hash,
-    por_tree: &'a PorMerkleTree,
-}
-fn build_pack_plan(input: &Path, profile: ChunkProfile) -> Result<(CarBuildPlan, Vec<u8>)> {
-    let metadata =
-        fs::metadata(input).wrap_err_with(|| format!("failed to access `{}`", input.display()))?;
-    if metadata.is_dir() {
-        CarBuildPlan::from_directory_with_profile(input, profile)
-            .map_err(|err| eyre!("car planning failed: {err}"))
-    } else if metadata.is_file() {
-        let payload = fs::read(input)
-            .wrap_err_with(|| format!("failed to read input `{}`", input.display()))?;
-        let plan = CarBuildPlan::single_file_with_profile(&payload, profile)
-            .map_err(|err| eyre!("car planning failed: {err}"))?;
-        Ok((plan, payload))
-    } else {
-        Err(eyre!("input must be a file or directory"))
-    }
+    por_root: [u8; 32],
+    por_chunk_count: usize,
 }
 fn write_pack_car(
-    car_out: Option<&PathBuf>,
+    output: Option<&PathBuf>,
     plan: &CarBuildPlan,
-    payload: &[u8],
+    payload: &mut sorafs_car::streaming_input::NativePayloadReader,
 ) -> Result<CarWriteStats> {
-    let writer = CarWriter::new(plan, payload).wrap_err("failed to prepare CAR writer")?;
-    if let Some(path) = car_out {
+    let writer = CarStreamingWriter::new(plan);
+    if let Some(path) = output {
         ensure_parent_dir(path)?;
-        let file = fs::File::create(path)
-            .wrap_err_with(|| format!("failed to create `{}`", path.display()))?;
-        let mut buf = io::BufWriter::new(file);
-        let stats = writer.write_to(&mut buf).wrap_err("failed to write CAR")?;
-        buf.flush()
-            .wrap_err_with(|| format!("failed to flush `{}`", path.display()))?;
+        let mut file = fs::File::create(path)?;
+        let stats = writer
+            .write_from_reader(payload, &mut file)
+            .wrap_err("failed to emit canonical CAR")?;
+        file.flush()?;
         Ok(stats)
     } else {
-        let mut sink = io::sink();
         writer
-            .write_to(&mut sink)
+            .write_from_reader(payload, io::sink())
             .wrap_err("failed to compute CAR metadata")
     }
 }
@@ -810,13 +809,10 @@ fn build_pack_report(ctx: &PackReportContext<'_>) -> Result<Value> {
         "chunk_count".into(),
         Value::from(ctx.plan.chunks.len() as u64),
     );
-    report_obj.insert(
-        "por_root_hex".into(),
-        Value::from(encode(ctx.por_tree.root())),
-    );
+    report_obj.insert("por_root_hex".into(), Value::from(encode(ctx.por_root)));
     report_obj.insert(
         "por_chunk_count".into(),
-        Value::from(ctx.por_tree.chunks().len() as u64),
+        Value::from(ctx.por_chunk_count as u64),
     );
     Ok(Value::Object(report_obj))
 }
@@ -827,9 +823,43 @@ mod tests {
     use super::*;
     use clap::Parser as _;
     use norito::decode_from_bytes;
+    use sorafs_car::CarWriter;
     use tempfile::TempDir;
 
     const SOURCE: &str = include_str!("../../../../kotodama_lang/src/samples/kotodama_swap.ko");
+
+    #[test]
+    fn toolkit_pack_requires_explicit_future_pin_deadline() {
+        let base = ["iroha", "app", "sorafs", "toolkit", "pack", "unopened-path"];
+        assert!(crate::Args::try_parse_from(base).is_err());
+        assert!(
+            crate::Args::try_parse_from(base.into_iter().chain([
+                "--pin-retention-epoch",
+                "4000000000",
+                "--pin-min-replicas",
+                "3"
+            ]))
+            .is_ok()
+        );
+        let args = PackArgs {
+            input: PathBuf::from("unopened-path"),
+            pin_retention_epoch: 86_400,
+            pin_min_replicas: 3,
+            manifest_out: None,
+            car_out: None,
+            json_out: None,
+            hybrid_envelope_out: None,
+            hybrid_envelope_json_out: None,
+            hybrid_recipient_x25519: None,
+            hybrid_recipient_kyber: None,
+        };
+        assert!(
+            args.pack()
+                .unwrap_err()
+                .to_string()
+                .contains("future absolute Unix")
+        );
+    }
 
     #[test]
     fn compile_file_publishes_exact_artifact_and_matching_summaries() {
@@ -1016,6 +1046,8 @@ mod tests {
         let car_path = temp.path().join("payload.car");
         let json_path = temp.path().join("report.json");
         let args = PackArgs {
+            pin_retention_epoch: 4_000_000_000,
+            pin_min_replicas: 3,
             input: payload_path,
             manifest_out: Some(manifest_path.clone()),
             car_out: Some(car_path.clone()),
@@ -1031,6 +1063,8 @@ mod tests {
         let manifest_bytes = fs::read(&manifest_path).expect("read manifest");
         let manifest: ManifestV1 = decode_from_bytes(&manifest_bytes).expect("decode manifest");
         assert_eq!(manifest.content_length, 13);
+        assert_eq!(manifest.pin_policy.min_replicas, 3);
+        assert_eq!(manifest.pin_policy.retention_epoch, 4_000_000_000);
         let car_bytes = fs::read(&car_path).expect("read CAR archive");
         assert_eq!(manifest.car_size, car_bytes.len() as u64);
         let archive_digest = *blake3::hash(&car_bytes).as_bytes();
@@ -1115,6 +1149,8 @@ mod tests {
         let car_path = temp.path().join("payload.car");
         let report_path = temp.path().join("report.json");
         let args = PackArgs {
+            pin_retention_epoch: 4_000_000_000,
+            pin_min_replicas: 3,
             input: site,
             manifest_out: Some(manifest_path.clone()),
             car_out: Some(car_path.clone()),

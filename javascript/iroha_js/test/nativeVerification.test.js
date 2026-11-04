@@ -18,6 +18,20 @@ const NATIVE_IMPLEMENTATIONS = [
   ["source", await import("../src/native.js")],
   ["package dist", await import("../dist/native.js")],
 ];
+for (const [name, implementation] of NATIVE_IMPLEMENTATIONS) {
+  test(`debug verification launch preserves exact argv and platform scope (${name})`, () => {
+    for (const platform of ["darwin", "linux", "win32"]) {
+      for (const profile of ["debug", "release", "deploy", undefined]) {
+        const args = Object.freeze(["--eval", "process.exit(0)", "a path with spaces", "--literal"]);
+        const launched = implementation.nativeVerificationInvocation(args, profile, platform);
+        assert.deepEqual(launched, platform === "darwin" && profile === "debug"
+          ? { file: "/usr/sbin/taskpolicy", args: ["-a", process.execPath, ...args] }
+          : { file: process.execPath, args });
+        assert.deepEqual(args, ["--eval", "process.exit(0)", "a path with spaces", "--literal"]);
+      }
+    }
+  });
+}
 const SOURCE_PROVENANCE = Object.freeze({
   build_execution_policy: "trusted-local-cargo-v1",
   build_provenance_version: 4,
@@ -348,8 +362,10 @@ for (const scenario of [
         assert.equal(nativeLoad.mock.callCount(), scenario.failure ? 0 : 1);
         const [executable, args, options] = verifier.mock.calls[0].arguments;
         const sdkRoot = fileURLToPath(new URL("../", import.meta.url));
-        assert.equal(executable, process.execPath);
+        const applicationPolicy = process.platform === "darwin";
+        assert.equal(executable, applicationPolicy ? "/usr/sbin/taskpolicy" : process.execPath);
         assert.deepEqual(args, [
+          ...(applicationPolicy ? ["-a", process.execPath] : []),
           path.join(sdkRoot, "scripts", "read-native-build-source-state.mjs"),
           "--verify",
           path.resolve(sdkRoot, "..", ".."),

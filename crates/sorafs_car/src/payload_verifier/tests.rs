@@ -100,6 +100,40 @@ fn streamed_verification_rejects_every_altered_commitment_and_inexact_eof() {
 }
 
 #[test]
+fn exact_car_reader_rejects_mutation_truncation_and_trailing_bytes() {
+    let (plan, payload, manifest) = fixture(3);
+    let mut car = Vec::new();
+    let expected = CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut car)
+        .unwrap();
+    let mut source = Cursor::new(&payload);
+    let report = verify_car_reader(&manifest, &plan, &mut source, &mut Cursor::new(&car)).unwrap();
+    assert_eq!(report.stats, expected);
+    assert_eq!(source.position(), 0);
+    for index in [0, car.len() / 2, car.len() - 1] {
+        let mut changed = car.clone();
+        changed[index] ^= 1;
+        assert!(
+            verify_car_reader(&manifest, &plan, &mut source, &mut Cursor::new(changed)).is_err()
+        );
+    }
+    for length in [0, 1, car.len() / 2, car.len() - 1] {
+        assert!(
+            verify_car_reader(
+                &manifest,
+                &plan,
+                &mut source,
+                &mut Cursor::new(&car[..length])
+            )
+            .is_err()
+        );
+    }
+    car.push(0);
+    assert!(verify_car_reader(&manifest, &plan, &mut source, &mut Cursor::new(&car)).is_err());
+}
+
+#[test]
 fn borrowed_chunk_reader_rewinds_without_assembly() {
     let chunks = vec![vec![1, 2], vec![], vec![3, 4, 5]];
     let mut reader = ChunkPayloadReader::new(&chunks);

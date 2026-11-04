@@ -3586,7 +3586,7 @@
    "status": "not_a_gate",
    "owner": null,
    "path": "crates/iroha_data_model/src/privacy/statements.rs",
-   "symbol": "impl PrivacyProtocolLimitsV1",
+   "symbol": "impl PrivacyRuntimeProtocolLimitsV1",
    "gates": "Statement shape and counts validated against bounded per-protocol resource limits.",
    "decided_by": "The native compiled profile and committed resource policy.",
    "attribution": "read",
@@ -3654,21 +3654,25 @@
    "gates": "Canonical wire catalog tags, public capability snapshots and retained release/deployment diagnostic evidence.",
    "decided_by": "A selected native implementation and its semantic profile; documentary release/deployment evidence does not authorize transactions.",
    "attribution": "read",
-   "note": "The fixed Exact12 catalog commitment identifies the canonical wire layout. Torii projects actual native availability and optional ordinary policy for each row; admission does not require a qualification singleton or membership in a release receipt. Retained release/deployment manifests remain signed diagnostic records with restart/canary/convergence evidence. Native implementation incompleteness and semantic identity derivations remain explicit in their own entries.",
+   "note": "The fixed Exact12 catalog commitment identifies the canonical wire layout. Torii projects actual native availability and optional ordinary policy for each row; admission does not require a qualification singleton or membership in a release receipt. Retained release/deployment manifests remain signed diagnostic records with restart/canary/convergence evidence. Native implementation incompleteness and semantic identity derivations remain explicit in their own entries. The explicit Exact12 wire module and dedicated Ironwood wire conversions preserve their distinct canonical payload grammars. PrivacySubmissionRefV1 selects the carried concrete instruction and delegates its digest/encoding; its Exact12 name is not a readiness toggle.",
    "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence.rs", "global_manifest", "exact12", 4],
+    ["crates/iroha_core/src/privacy_release_evidence.rs", "global_manifest", "exact12", 6],
     ["crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs", "global_manifest", "exact12", 4],
+    ["crates/iroha_core_privacy/src/privacy_profiles.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_crypto/src/privacy.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "capability_manifest", 2],
-    ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "exact12", 22],
+    ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "exact12", 26],
     ["crates/iroha_data_model/src/privacy.rs", "global_manifest", "release_manifest", 2],
-    ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 2],
-    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 50],
+    ["crates/iroha_data_model/src/privacy/action_role.rs", "global_manifest", "exact12", 5],
+    ["crates/iroha_data_model/src/privacy/capability_manifest.rs", "global_manifest", "exact12", 53],
+    ["crates/iroha_data_model/src/privacy/exact12_wire.rs", "global_manifest", "exact12", 14],
+    ["crates/iroha_data_model/src/privacy/ironwood_wire.rs", "global_manifest", "exact12", 17],
     ["crates/iroha_data_model/src/privacy/proofs.rs", "global_manifest", "exact12", 1],
     ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "capability_manifest", 21],
-    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 3],
-    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 130],
+    ["crates/iroha_data_model/src/privacy/protocol.rs", "global_manifest", "exact12", 12],
+    ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "exact12", 137],
     ["crates/iroha_data_model/src/privacy/release_manifest.rs", "global_manifest", "release_manifest", 13],
+    ["crates/iroha_data_model/src/transaction/signed.rs", "global_manifest", "exact12", 9],
     ["crates/iroha_kagami/src/privacy_bootstrap/release.rs", "global_manifest", "exact12", 4]
    ]
   },
@@ -3718,7 +3722,7 @@
    "attribution": "read",
    "note": "Two groups. The accurate errors of an engine or profile this binary does not complete: `EngineUnavailable`, `ProtocolUnavailable`, `CompiledProfileUnavailable`, `PrivacyCompiledProfileUnavailableReasonV1` and `UnsupportedCompression`, and the typed refusal of the single Exact12 dispatch, `PrivacyVerificationErrorV1::UnsupportedOperation` carrying `PrivacyUnsupportedOperationV1` (crates/iroha_core_privacy/src/privacy_dispatch.rs, privacy_verifier.rs; mapped to an instruction error in crates/iroha_core/src/smartcontracts/isi/privacy.rs). That refusal names the role and one concrete limitation of the typed dispatch registry, is returned before any proof byte is read, depends on no activation record, configuration or feature, and replaced the variant that existed only without the `zk-stark` feature, `PrivacyEngineUnavailableFailureV1` (P.1); the owners of the five refused roles are P.15, C.5, P.14 and X.3. Retired protocol lifecycle reasons and activation records are removed; remaining unavailable outcomes represent actual missing native constructions or invalid carried parameters. Issuance-service answers, statement validation and local entropy have their own entries (privacy.issuance_service, privacy.statement_validation, privacy.local_resource). The privacy.rs unsupported-class row aggregates two different identifiers: UnsupportedOperation is the unfinished dispatch refusal above, while TransactionSignatureError::UnsupportedImplementation preserves the original build-dependent crypto implementation cause as CryptoImplementationUnavailable/ExecutionAttemptError::Deferred. The latter is not an invalid-signature verdict; its unavailable-class hit is crypto.implementation_unavailable. The row remains conservatively unsupported because it still includes the unfinished dispatch.",
    "sites": [
-    ["crates/iroha_core/src/privacy_release_evidence.rs", "unavailable", "unavailable", 4],
+    ["crates/iroha_core/src/privacy_release_evidence.rs", "unavailable", "unavailable", 5],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions.rs", "unavailable", "unavailable", 6],
     ["crates/iroha_core/src/privacy_release_evidence/network_actions/retained.rs", "unavailable", "unavailable", 2],
     ["crates/iroha_core/src/smartcontracts/isi/privacy.rs", "unavailable", "unsupported", 2],
@@ -5538,7 +5542,7 @@
    "gates": "Python SDK: words that a detector matches in names and comments.",
    "decided_by": "Committed State already decides it.",
    "attribution": "read",
-   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_python.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there.",
+   "note": "Qualified struct identifiers (`qualifiedStruct`, `isCanonicalQualifiedStructIdentifier`, `fully-qualified`), the word `qualifier`, retail `qualifying_payments`, account onboarding and dataspace readiness, consensus seat readiness, accelerator qualification, and doc comments. A few of the comments describe the Exact12 admission of entry `sdk_python.exact12_capability` (HttpClientTransport.kt, tx.py, crypto.py, crypto.js); a comment gates nothing and the code they describe is counted there. The scheduled-execution docstring explicitly says a policy response or readiness flag cannot replace native selection and finality proofs; the token occurs only in that documentation.",
    "sites": [
     ["python/iroha_python/scripts/run_integration.py", "sdk_availability", "readiness", 1],
     ["python/iroha_python/src/iroha_python/_validation.py", "sdk_availability", "qualification", 2],
@@ -5550,6 +5554,7 @@
     ["python/iroha_python/src/iroha_python/dataspaces.py", "sdk_availability", "readiness", 2],
     ["python/iroha_python/src/iroha_python/kaigi.py", "sdk_availability", "qualification", 6],
     ["python/iroha_python/src/iroha_python/privacy_wallet_worker.py", "sdk_availability", "qualification", 1],
+    ["python/iroha_python/src/iroha_python/scheduled_execution.py", "sdk_availability", "readiness", 1],
     ["python/iroha_python/src/iroha_python/sorafs.py", "sdk_availability", "qualification", 2],
     ["python/iroha_torii_client/client.py", "sdk_availability", "qualification", 4],
     ["python/iroha_torii_client/native_sumeragi.py", "sdk_availability", "readiness", 2]
@@ -6311,6 +6316,25 @@
    "sites": [
     ["crates/iroha_crypto/src/ram_lfe/bgv_nonlinear_refresh.rs", "unavailable", "unsupported", 1]
    ]
+  },
+  {
+   "id": "runtime.lifecycle_witness",
+   "kind": "activation_lifecycle",
+   "status": "not_a_gate",
+   "owner": null,
+   "path": "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+   "symbol": "LifecycleRuntimeProofV1",
+   "gates": "Native trigger lifecycle evidence bound to the committed runtime selection and certified ordinary-write root.",
+   "decided_by": "Committed immutable service definitions, original archived native writes, and certified execution roots.",
+   "attribution": "read",
+   "note": "The query exports bounded sparse proofs of the service-owned runtime anchor. Capture charges the exact anchor allocation and records it beside canonical writes; the data-model verifier binds network, height and both selection IDs. These lifecycle names do not introduce a node-local availability switch. The read-only preflight sizes original registered Actions and optionally measures rekey capture in disposable State; its report neither activates the service nor substitutes for finality.",
+   "sites": [
+    ["crates/iroha_core/src/query/native_receipts.rs", "activation", "lifecycle", 3],
+    ["crates/iroha_core/src/query/native_receipts/lifecycle.rs", "activation", "lifecycle", 3],
+    ["crates/iroha_core/src/runtime/lifecycle_preflight.rs", "activation", "lifecycle", 4],
+    ["crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source/witness.rs", "activation", "lifecycle", 18],
+    ["crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs", "activation", "lifecycle", 17]
+   ]
   }
  ],
  "config_catalogs": [
@@ -6946,9 +6970,9 @@
   }
  },
  "summary": {
-  "entries": 241,
-  "sites": 1513,
-  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 124, "open": 40, "out_of_plan": 21, "unsupported": 19},
-  "by_owner": {"-": 145, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
+  "entries": 242,
+  "sites": 1523,
+  "by_status": {"done": 13, "local_resource": 24, "not_a_gate": 125, "open": 40, "out_of_plan": 21, "unsupported": 19},
+  "by_owner": {"-": 146, "A.3": 2, "B.2": 3, "C.2": 1, "C.5": 6, "C.6": 4, "F.4": 28, "M.2": 7, "P.11": 1, "P.12": 2, "P.13": 2, "P.14": 3, "P.15": 3, "P.16": 1, "P.17": 1, "P.18": 1, "P.19": 1, "P.20": 2, "P.5": 10, "P.8": 7, "P.9": 3, "R.12": 3, "S.1": 1, "X.3": 1, "X.4": 3}
  }
 }

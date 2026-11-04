@@ -1473,9 +1473,12 @@ fn storage_prepare_composes_large_directory_and_rejects_late_asset_substitution(
         .arg(format!("--summary-out={}", rejected_summary.display()))
         .assert()
         .failure();
+    let stderr = String::from_utf8_lossy(&refused.get_output().stderr);
     assert!(
-        String::from_utf8_lossy(&refused.get_output().stderr)
-            .contains("payload chunk-plan commitment does not match the canonical manifest")
+        stderr.contains(
+            "canonical payload writer failed: CAR plan does not match manifest field chunk_digest_sha3_256"
+        ),
+        "expected the native chunk-plan commitment rejection, got: {stderr}"
     );
     assert!(refused.get_output().stdout.is_empty());
     for path in [&rejected_payload, &rejected_files, &rejected_summary] {
@@ -1520,13 +1523,18 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
             .header("Content-Type", "application/json")
             .body(r#"{"current_epoch":7}"#);
     });
+    let unselected = MockServer::start();
+    let unselected_requests = unselected.mock(|_when, then| {
+        then.status(500)
+            .body("unselected endpoint must never be contacted");
+    });
     let discovery = primary.mock(|when, then| {
         when.method(GET).path("/v1/sorafs/storage/peers");
         then.status(200)
             .header("Content-Type", "application/json")
             .body(format!(
                 r#"{{"gateway_base_url":"{}"}}"#,
-                primary.base_url()
+                unselected.base_url()
             ));
     });
     let register = primary.mock(|when, then| {
@@ -1547,6 +1555,8 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
     let out_dir = tempdir.path().join("deploy-out");
     let assert = sorafs_cli_cmd()
         .arg("deploy")
+        .arg("--pin-retention-epoch=4000000000")
+        .arg("--pin-min-replicas=3")
         .arg(format!(
             "--finality-checkpoint={}",
             deploy_checkpoint_path().display()
@@ -1563,7 +1573,8 @@ fn deploy_gateway_readback_cannot_claim_finalized_provider_publication() {
         String::from_utf8_lossy(&assert.get_output().stderr)
     );
     status.assert_calls(0);
-    discovery.assert_calls(1);
+    discovery.assert_calls(0);
+    unselected_requests.assert_calls(0);
     register.assert_calls(1);
     gateway.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
@@ -1672,6 +1683,8 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     });
     let assert = sorafs_cli_cmd()
         .arg("deploy")
+        .arg("--pin-retention-epoch=4000000000")
+        .arg("--pin-min-replicas=3")
         .arg(format!(
             "--finality-checkpoint={}",
             deploy_checkpoint_path().display()
@@ -1699,7 +1712,7 @@ fn deploy_accepts_profile_client_config_without_account_chain_discriminant() {
     fee_quote.assert_calls(1);
 }
 #[test]
-fn deploy_falls_back_to_primary_when_peer_discovery_404() {
+fn deploy_uses_selected_primary_without_querying_discovery() {
     let tempdir = tempdir().expect("tempdir");
     let payload_path = tempdir.path().join("payload.bin");
     let payload = b"fallback deploy".to_vec();
@@ -1735,6 +1748,8 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
     });
     let assert = sorafs_cli_cmd()
         .arg("deploy")
+        .arg("--pin-retention-epoch=4000000000")
+        .arg("--pin-min-replicas=3")
         .arg(format!(
             "--finality-checkpoint={}",
             deploy_checkpoint_path().display()
@@ -1753,20 +1768,20 @@ fn deploy_falls_back_to_primary_when_peer_discovery_404() {
         String::from_utf8_lossy(&assert.get_output().stderr)
     );
     status.assert_calls(0);
-    discovery.assert_calls(1);
+    discovery.assert_calls(0);
     register.assert_calls(1);
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).expect("stdout utf8");
     let summary: Value = norito::json::from_str(stdout.trim()).expect("deploy summary json");
     assert_eq!(summary.get("success").and_then(Value::as_bool), Some(false));
-    assert!(
+    assert_eq!(
         summary
             .get("peer_discovery")
             .and_then(Value::as_object)
-            .and_then(|obj| obj.get("warning"))
-            .and_then(Value::as_str)
-            .is_some()
+            .and_then(|obj| obj.get("enabled"))
+            .and_then(Value::as_bool),
+        Some(false)
     );
-    // Publication uses the primary Torii after peer discovery refuses.
+    // Publication uses only the selected primary Torii and never queries discovery.
     preparation.assert_calls(1);
     fee_quote.assert_calls(1);
 }
@@ -1815,6 +1830,8 @@ fn deploy_does_not_fallback_or_replay_when_pin_register_route_is_unavailable() {
     });
     let output = sorafs_cli_cmd()
         .arg("deploy")
+        .arg("--pin-retention-epoch=4000000000")
+        .arg("--pin-min-replicas=3")
         .arg(format!(
             "--finality-checkpoint={}",
             deploy_checkpoint_path().display()
@@ -1886,6 +1903,8 @@ fn deploy_gateway_hash_mismatch_fails_even_when_length_matches() {
     });
     let output = sorafs_cli_cmd()
         .arg("deploy")
+        .arg("--pin-retention-epoch=4000000000")
+        .arg("--pin-min-replicas=3")
         .arg(format!(
             "--finality-checkpoint={}",
             deploy_checkpoint_path().display()
@@ -3033,9 +3052,10 @@ fn proof_verify_accepts_chunk_plan_for_directory_payloads() {
         .arg(format!("--summary-out={}", rejected_summary.display()))
         .assert()
         .failure();
+    let stderr = String::from_utf8_lossy(&changed.get_output().stderr);
     assert!(
-        String::from_utf8_lossy(&changed.get_output().stderr)
-            .contains("chunk plan does not match the authenticated source payload")
+        stderr.contains("chunk plan does not match authenticated source payload"),
+        "expected the source-plan commitment rejection, got: {stderr}"
     );
     assert!(!rejected_summary.exists());
     let original_path = assets_dir.join("app.js");
