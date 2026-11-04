@@ -2104,6 +2104,7 @@ def test_integration_shards_cover_every_default_cargo_target_and_unit_doctest() 
     assert '--test-target "${{ matrix.test_target }}"' in job
     assert "timeout-minutes: 220" in job and "timeout-minutes: 240" in job
     assert "Upload failed test-network artifacts" in job
+    assert "target/sccp-continuation/" in job
 
 
 @pytest.mark.parametrize("packages,target,workspace", [

@@ -667,7 +667,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: test-network-${{ matrix.lane }}
-          path: ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
+          path: |
+            ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
+            target/sccp-continuation/
           if-no-files-found: ignore
           retention-days: 3
 
