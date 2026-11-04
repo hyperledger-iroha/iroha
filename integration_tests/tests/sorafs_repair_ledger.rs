@@ -77,7 +77,11 @@ async fn submit_instructions(
     );
     payload.fee_payment = quote.intent;
     let transaction = account.sign_transaction(payload)?;
-    account.submit_transaction_and_wait(&transaction).await
+    let client = client.clone();
+    integration_tests::sync::spawn_blocking(move || {
+        client.submit_transaction_and_wait(&transaction)
+    })
+    .await?
 }
 
 fn client(network: &Network, peer: usize, account: &AccountId, keys: &KeyPair) -> Client {
@@ -162,16 +166,17 @@ async fn race(
     let (left, right) = tokio::join!(
         async {
             barrier.wait().await;
-            left.account_client()
-                .submit_transaction_and_wait(&left_transaction)
-                .await
+            integration_tests::sync::spawn_blocking(move || {
+                left.submit_transaction_and_wait(&left_transaction)
+            })
+            .await?
         },
         async {
             barrier.wait().await;
-            right
-                .account_client()
-                .submit_transaction_and_wait(&right_transaction)
-                .await
+            integration_tests::sync::spawn_blocking(move || {
+                right.submit_transaction_and_wait(&right_transaction)
+            })
+            .await?
         },
     );
     Ok([left, right])

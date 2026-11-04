@@ -5,7 +5,6 @@ use iroha::{blocking::Client as IrohaClient, sns::SnsNamespacePath};
 use iroha_data_model::{
     account::AccountId,
     alias_setup::{ALIAS_LEASE_YEAR_MS, AliasQuoteGuardV1, AliasTargetV1, ResolvedDomainV1},
-    asset::AssetDefinitionId,
     isi::alias_setup::RenewAliasLease,
     sns::{NameRecordV1, NameStatus},
 };
@@ -61,8 +60,9 @@ async fn sns_registrar_round_trip() -> Result<()> {
     assert_eq!(policy.suffix_key(), "domain");
     Ok(())
 }
-/// Registration increments telemetry metrics and yields deterministic gateway bindings.
+/// Finalized domain registration updates the domain gauge and deterministic gateway bindings.
 #[tokio::test]
+#[allow(clippy::float_cmp)]
 async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let Some(network) = start_sns_network(stringify!(
         sns_registration_emits_metrics_and_gateway_bindings
@@ -75,37 +75,30 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let client = network.client();
     let metrics_endpoint = client.client().endpoint().join("metrics")?;
     let http = HttpClient::new();
-    let metric_labels = [("result", "ok"), ("suffix", "domain")];
-    let baseline = read_metric_sample(
-        &http,
-        &metrics_endpoint,
-        "sns_registrar_status_total",
-        &metric_labels,
-    )
-    .await?
-    .unwrap_or(0.0);
+    // EnsureAlias is a native ledger instruction, not an HTTP registrar mutation.
+    // Its finalized domain must appear in the same state-derived telemetry scrape.
+    let metric_labels = [];
+    let baseline = read_metric_sample(&http, &metrics_endpoint, "domains", &metric_labels)
+        .await?
+        .ok_or_else(|| eyre!("the domains gauge must be present before registration"))?;
     let label = unique_label("telemetry");
     let literal = domain_literal(&label);
     setup_domain(&client, &label).await?;
     let mut observed_after = None;
     for _ in 0..METRIC_READY_RETRIES {
-        let current = read_metric_sample(
-            &http,
-            &metrics_endpoint,
-            "sns_registrar_status_total",
-            &metric_labels,
-        )
-        .await?;
-        if let Some(value) = current.filter(|value| *value >= baseline + 1.0) {
+        let current =
+            read_metric_sample(&http, &metrics_endpoint, "domains", &metric_labels).await?;
+        if let Some(value) = current.filter(|value| *value == baseline + 1.0) {
             observed_after = Some(value);
             break;
         }
         sleep(Duration::from_millis(METRIC_RETRY_DELAY_MS)).await;
     }
     let observed_after = observed_after.unwrap_or(baseline);
-    assert!(
-        observed_after >= baseline + 1.0,
-        "sns_registrar_status_total did not advance (baseline {baseline}, observed {observed_after})"
+    assert_eq!(
+        observed_after,
+        baseline + 1.0,
+        "the finalized SNS registration must add exactly one domain"
     );
     let bindings = derive_gateway_hosts(&format!("{literal}.domain"))
         .map_err(|err| eyre!("gateway host derivation failed: {err}"))?;
@@ -145,14 +138,15 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
         .checked_add(ALIAS_LEASE_YEAR_MS)
         .ok_or_else(|| eyre!("test renewal expiry overflow"))?;
     let domain = DomainId::parse_fully_qualified(&literal)?;
+    let policy = get_sns_policy(&client, record.selector.suffix_id).await?;
     let renewal = RenewAliasLease::new(
         AliasTargetV1::Domain(ResolvedDomainV1::new(domain, DataSpaceId::UNIVERSAL)),
         original_expiry,
         target_expiry,
         AliasQuoteGuardV1 {
-            expected_policy_version: 1,
-            expected_payment_asset: AssetDefinitionId::parse_address_literal(
-                "61CtjvNd9T3THAR65GsMVHr82Bjc",
+            expected_policy_version: policy.policy_version,
+            expected_payment_asset: iroha_data_model::sns::pricing::payment_asset_definition_id(
+                &policy,
             )?,
             max_amount: test_sns_lease_payment(),
             valid_until_ms: u64::MAX,

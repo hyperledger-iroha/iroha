@@ -115,7 +115,11 @@ async fn submit_instructions(
     );
     payload.fee_payment = quote.intent;
     let transaction = account.sign_transaction(payload)?;
-    account.submit_transaction_and_wait(&transaction).await
+    let client = client.clone();
+    integration_tests::sync::spawn_blocking(move || {
+        client.submit_transaction_and_wait(&transaction)
+    })
+    .await?
 }
 
 fn unix_time_ms() -> Result<u64> {
@@ -438,56 +442,24 @@ fn pop_policy(issuer: &KeyPair) -> PopIssuerPolicyV1 {
 }
 
 fn pop_batch(issuer: &KeyPair, published_at_epoch: u64) -> PopCredentialCommitmentBatchV1 {
-    let root_digest = [0x41; 32];
-    let root = sign_pop_root(
-        PopCommitmentRootV1 {
-            version: POP_COMMITMENT_ROOT_VERSION_V1,
-            root_digest,
-            tree_size: 1,
-            tree_depth: POP_CREDENTIAL_TREE_DEPTH_V1,
-            tree_version: 1,
-            issuer_id: "pop-issuer-sora-foundation".to_owned(),
-            published_at_epoch,
-            previous_root_digest: None,
-            governance_event_digest: [0x42; 32],
-            publisher_signature: empty_pop_signature(issuer),
-        },
-        issuer,
+    // Use the same signed credential and canonical Merkle witness as the proof
+    // fixture; arbitrary 32-byte hashes are not canonical field commitments.
+    valid_pop_batch(issuer, &pop_material(issuer, published_at_epoch))
+}
+
+#[test]
+fn moderation_pop_batch_uses_a_canonical_signed_membership_root() {
+    let epoch = 1_700_000_000;
+    let material = pop_material(&BOB_KEYPAIR, epoch);
+    let expected = valid_pop_batch(&BOB_KEYPAIR, &material);
+    let batch = pop_batch(&BOB_KEYPAIR, epoch);
+    assert_eq!(batch, expected);
+    verify_pop_commitment_root_signature_v1(&material.root)
+        .expect("the batch root retains its canonical scalar and publisher signature");
+    assert_eq!(
+        batch.commitments[0].commitment_root,
+        material.root.root_digest
     );
-    let revocations = sign_pop_revocations(
-        PopRevocationListV1 {
-            version: POP_REVOCATION_LIST_VERSION_V1,
-            list_version: 1,
-            commitment_root: root_digest,
-            revocation_root: pop_revocation_root_v1(&[])
-                .expect("empty PoP revocation tree has a canonical root"),
-            revocation_tree_depth: POP_REVOCATION_TREE_DEPTH_V1,
-            issuer_id: "pop-issuer-sora-foundation".to_owned(),
-            published_at_epoch,
-            entries: Vec::new(),
-            publisher_signature: empty_pop_signature(issuer),
-        },
-        issuer,
-    );
-    PopCredentialCommitmentBatchV1 {
-        version: POP_CREDENTIAL_COMMITMENT_BATCH_VERSION_V1,
-        issuer_policy_digest: pop_policy(issuer)
-            .digest()
-            .expect("fixture PoP policy digest"),
-        commitment_root_payload: norito::encode_canonical(&root)
-            .expect("encode canonical signed PoP root"),
-        revocation_list_payload: norito::encode_canonical(&revocations)
-            .expect("encode canonical signed PoP revocations"),
-        commitments: vec![PopCredentialCommitmentV1 {
-            credential_commitment: [0x51; 32],
-            revocation_nonce_commitment: [0x52; 32],
-            commitment_root: root_digest,
-            commitment_tree_version: 1,
-            revocation_list_version: 1,
-            issued_at_epoch: published_at_epoch.saturating_sub(10).max(1),
-            expires_at_epoch: published_at_epoch.saturating_add(3_600),
-        }],
-    }
 }
 
 fn valid_pop_batch(issuer: &KeyPair, material: &PopMaterial) -> PopCredentialCommitmentBatchV1 {
