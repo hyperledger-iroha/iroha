@@ -4,8 +4,10 @@
 The driver selects the typed-query dispatch and grants its existing fixture
 reader CanReadAllLedgerData before raw-response setup or timing. The exact same
 derivation applies to both revisions; every other setup byte, assertion and timed
-body is preserved. Cargo still builds the revision-native runtime and launches
-Criterion with its normal environment. This is ordinary same-job CI evidence,
+body is preserved. Cargo builds the revision-native runtime. The paired bundle
+runner captures Cargo's actual launch recipe without timing, then admits and
+executes the exact prepared bytes on one measurement VM. This is ordinary
+same-run CI evidence,
 not release signing or a sandbox against code already able to modify the runner.
 Original source/lock admission remains mandatory.
 """
@@ -28,7 +30,7 @@ import uuid
 SOURCE = Path("crates/iroha_core/benches/queries.rs")
 SCRIPT = Path(__file__).resolve()
 PLAN_ENV = "IROHA_KOTODAMA_QUERY_PLAN"
-SCHEMA = "iroha.kotodama.derived-query-driver.v2"
+SCHEMA = "iroha.kotodama.derived-query-driver.v3"
 # Bind the entire untimed fixture from the approved baseline, including its
 # authority, all five 64-entity inventories and raw QueryResponse encoding.
 SETUP_START = "fn build_state_for_typed_core_query_pages()"
@@ -91,6 +93,49 @@ CARGO_ARGS = [
     "--bench",
     "queries",
 ]
+
+
+BUILD_ENV_KEYS = (
+    "CARGO_BUILD_JOBS", "CARGO_INCREMENTAL", "RUSTUP_TOOLCHAIN", "RUSTFLAGS",
+    "CARGO_ENCODED_RUSTFLAGS", "CARGO_BUILD_TARGET", "RUSTC", "RUSTDOC",
+    "CC", "CXX", "AR", "CFLAGS", "CXXFLAGS", "LDFLAGS", "LIBCLANG_PATH",
+    "PKG_CONFIG_PATH", "PKG_CONFIG_LIBDIR", "OPENSSL_DIR", "OPENSSL_LIB_DIR",
+    "OPENSSL_INCLUDE_DIR", "OPENSSL_STATIC",
+)
+PROFILE_ENV_KEYS = tuple(
+    f"CARGO_PROFILE_{profile}_{key}"
+    for profile in ("BENCH", "RELEASE", "DEV", "TEST", "BENCH_BUILD_OVERRIDE",
+                    "RELEASE_BUILD_OVERRIDE", "DEV_BUILD_OVERRIDE", "TEST_BUILD_OVERRIDE")
+    for key in ("OPT_LEVEL", "DEBUG", "DEBUG_ASSERTIONS", "OVERFLOW_CHECKS", "LTO",
+                "PANIC", "INCREMENTAL", "CODEGEN_UNITS", "RPATH", "STRIP", "SPLIT_DEBUGINFO")
+)
+
+
+def build_environment() -> dict:
+    """Record only named Cargo/compiler controls, never arbitrary prefixed variables."""
+    return {key: os.environ[key] for key in (*BUILD_ENV_KEYS, *PROFILE_ENV_KEYS)
+            if key in os.environ}
+
+
+HOST_ENV_KEYS = (
+    "PATH", "HOME", "USER", "LOGNAME", "SHELL", "TMPDIR", "TMP", "TEMP",
+    "LANG", "LC_ALL", "LC_CTYPE", "TZ", "CARGO_HOME", "RUSTUP_HOME",
+    "LD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH", "SSL_CERT_FILE", "SSL_CERT_DIR",
+    "CARGO_TARGET_DIR", "CARGO_TERM_COLOR", "CARGO_TERM_PROGRESS_WHEN",
+    "CARGO_NET_OFFLINE", "CARGO_NET_RETRY", "CARGO_NET_GIT_FETCH_WITH_CLI",
+)
+
+
+def compiler_environment() -> dict:
+    """Admit known build controls and strip unrelated ambient inputs from children."""
+    allowed = {*BUILD_ENV_KEYS, *PROFILE_ENV_KEYS, *HOST_ENV_KEYS}
+    for key, value in os.environ.items():
+        if key.startswith(("CARGO_PROFILE_", "CARGO_BUILD_", "CARGO_TARGET_", "RUSTC_")):
+            require(key in allowed or key == "CARGO_BUILD_WARNINGS", "unreviewed compiler environment key")
+        if key in BUILD_ENV_KEYS:
+            require(re.search(r"target-cpu[=\s]+native|(?:march|mcpu|mtune)=native", value) is None,
+                    "host-native tuning cannot cross preparation VMs")
+    return {key: os.environ[key] for key in allowed if key in os.environ}
 
 
 @functools.lru_cache(maxsize=1)
@@ -440,9 +485,10 @@ def admit_sources(
         require(root == candidate, "candidate measurement root mismatch")
 
 
-def measure(
+def prepare(
     root: Path, candidate: Path, expected_candidate: str, label: str, output: Path
-) -> None:
+) -> tuple[Path, dict, dict]:
+    """Compile and attest the exact derived driver without collecting samples."""
     root, candidate = root.resolve(strict=True), candidate.resolve(strict=True)
     target = Path(os.environ["CARGO_TARGET_DIR"]).resolve(strict=True)
     output = output.resolve()
@@ -474,23 +520,9 @@ def measure(
     directory = output / nonce
     directory.mkdir(parents=True)
     (directory / "queries.rs").write_bytes(derive((root / SOURCE).read_bytes()))
-    build_environment = {
-        key: value
-        for key, value in os.environ.items()
-        if key
-        in {
-            "CARGO_BUILD_JOBS",
-            "CARGO_INCREMENTAL",
-            "RUSTUP_TOOLCHAIN",
-            "RUSTFLAGS",
-            "CARGO_ENCODED_RUSTFLAGS",
-            "CARGO_BUILD_TARGET",
-        }
-        or key.startswith("CARGO_PROFILE_")
-    }
     plan = {
         "schema": SCHEMA,
-        "build_environment": build_environment,
+        "build_environment": build_environment(),
         "nonce": nonce,
         "label": label,
         "revision_root": str(root),
@@ -504,7 +536,7 @@ def measure(
     }
     write_json(directory / "plan.json", plan)
     environment = {
-        **os.environ,
+        **compiler_environment(),
         "RUSTC": str(rustc),
         "RUSTC_WRAPPER": str(SCRIPT),
         PLAN_ENV: str(directory / "plan.json"),
@@ -525,40 +557,72 @@ def measure(
         executable.unlink()
         artifact = cargo(prepare, root, environment)
     validate_compilation(directory, plan, artifact)
-    command = [
-        *CARGO_ARGS,
-        "--message-format=json",
-        "--",
-        "typed_core_query_",
-        "--save-baseline",
-        label,
-    ]
-    measured = cargo(command, root, environment)
-    require(
-        measured.get("fresh") is True
-        and measured.get("executable") == artifact["executable"],
-        "measurement did not launch the admitted compiled artifact",
-    )
-    validate_compilation(directory, plan, artifact)
-    # Preserve the admitted bytes: the next revision may reuse the same Cargo
-    # output filename. These are explicitly derived benchmark artifacts.
+    # Preserve the exact fresh compiler output before another Cargo feature graph.
     compiled = read_json(directory / "compiler.json")
-    shutil.copyfile(compiled["executable"], directory / "measured-executable")
+    shutil.copy2(compiled["executable"], directory / "measured-executable")
     shutil.copyfile(compiled["depinfo"], directory / "measured-dep-info")
     validate_compilation(directory, plan, artifact, archived=True)
     admit_sources(root, candidate, expected_candidate, label)
     write_json(
-        output / "measurement.json",
+        output / "preparation.json",
         {
             "schema": SCHEMA,
             "nonce": nonce,
             "preparation_artifact": artifact,
-            "measurement_artifact": measured,
-            "cargo_argv": command,
+            "cargo_argv": prepare,
             "plan_sha256": sha(directory / "plan.json"),
             "compiler_receipt_sha256": sha(directory / "compiler.json"),
         },
     )
+    return directory, plan, artifact
+
+
+def validate_preparation(output: Path, root: Path, candidate: Path,
+                         expected: str, label: str) -> tuple[Path, dict, dict]:
+    """Admit every source/compiler/nonce binding before either revision is timed."""
+    prepared = read_json(output / "preparation.json")
+    nonce = prepared["nonce"]
+    require(re.fullmatch(r"[0-9a-f]{32}", nonce) is not None, "invalid driver nonce")
+    directory = output / nonce
+    plan = read_json(directory / "plan.json")
+    require(prepared["schema"] == plan["schema"] == SCHEMA, "unknown driver evidence schema")
+    require(plan["nonce"] == nonce and plan["label"] == label
+            and plan["revision_root"] == str(root)
+            and plan["target"] == str(output.parent.parent), "foreign driver preparation")
+    require(plan["revision"] == policy()["_git_head"](root)
+            and plan["lock_sha256"] == sha(root / "Cargo.lock"), "driver revision or lock drift")
+    require(plan["build_environment"] == build_environment(), "driver build environment differs")
+    require(plan["contract"] == source_contract(root, directory / "queries.rs"), "driver source drift")
+    require(prepared["cargo_argv"] == [*CARGO_ARGS, "--no-run", "--message-format=json"]
+            and prepared["plan_sha256"] == sha(directory / "plan.json")
+            and prepared["compiler_receipt_sha256"] == sha(directory / "compiler.json"),
+            "driver preparation receipt changed")
+    artifact = selected_artifact([prepared["preparation_artifact"]], root)
+    validate_compilation(directory, plan, artifact, archived=True)
+    admit_sources(root, candidate, expected, label)
+    return directory, plan, artifact
+
+
+def record_measurement(output: Path, argv: list[str], returncode: int, bundle: Path) -> None:
+    """Seal a successful direct launch against the fresh compiler's archived bytes."""
+    prepared = read_json(output / "preparation.json")
+    directory = output / prepared["nonce"]
+    plan = read_json(directory / "plan.json")
+    require(returncode == 0, "query benchmark execution failed")
+    compiled = read_json(directory / "compiler.json")
+    require(argv == [compiled["executable"], "typed_core_query_",
+                     "--save-baseline", plan["label"], "--bench"],
+            "query measurement command changed")
+    validate_compilation(directory, plan, prepared["preparation_artifact"], archived=True)
+    require(sha(Path(argv[0])) == compiled["executable_sha256"], "launched executable hash mismatch")
+    write_json(output / "measurement.json", {
+        "schema": SCHEMA, "nonce": prepared["nonce"], "argv": argv,
+        "returncode": returncode, "executable_sha256": sha(directory / "measured-executable"),
+        "preparation_sha256": sha(output / "preparation.json"),
+        "plan_sha256": sha(directory / "plan.json"),
+        "compiler_receipt_sha256": sha(directory / "compiler.json"),
+        "bundle_manifest_sha256": sha(bundle),
+    })
 
 
 def validate_pair(
@@ -574,6 +638,7 @@ def validate_pair(
         ("candidate", candidate.resolve(strict=True)),
     ):
         measured = read_json(output / label / "measurement.json")
+        prepared = read_json(output / label / "preparation.json")
         nonce = measured["nonce"]
         require(
             re.fullmatch(r"[0-9a-f]{32}", nonce) is not None, "invalid driver nonce"
@@ -581,7 +646,7 @@ def validate_pair(
         directory = output / label / nonce
         plan = read_json(directory / "plan.json")
         require(
-            plan["schema"] == measured["schema"] == SCHEMA,
+            plan["schema"] == measured["schema"] == prepared["schema"] == SCHEMA,
             "unknown driver evidence schema",
         )
         environment = plan["build_environment"]
@@ -620,22 +685,28 @@ def validate_pair(
             "driver receipt hash mismatch",
         )
         require(
-            measured["cargo_argv"]
-            == [
-                *CARGO_ARGS,
-                "--message-format=json",
-                "--",
-                "typed_core_query_",
-                "--save-baseline",
-                label,
-            ],
-            "measurement command changed",
+            prepared["cargo_argv"]
+            == [*CARGO_ARGS, "--no-run", "--message-format=json"],
+            "preparation command changed",
         )
-        artifact = selected_artifact([measured["preparation_artifact"]], root)
-        current = selected_artifact([measured["measurement_artifact"]], root)
         require(
-            current["fresh"] is True
-            and current["executable"] == artifact["executable"],
+            measured["argv"][1:]
+            == ["typed_core_query_", "--save-baseline", label, "--bench"]
+            and measured["returncode"] == 0,
+            "measurement command or result changed",
+        )
+        require(
+            prepared["nonce"] == nonce
+            and prepared["plan_sha256"] == measured["plan_sha256"]
+            and prepared["compiler_receipt_sha256"]
+            == measured["compiler_receipt_sha256"],
+            "measurement has no matching fresh preparation",
+        )
+        artifact = selected_artifact([prepared["preparation_artifact"]], root)
+        require(
+            measured["executable_sha256"] == sha(directory / "measured-executable")
+            and measured["preparation_sha256"] == sha(output / label / "preparation.json")
+            and measured["argv"][0] == read_json(directory / "compiler.json")["executable"],
             "measurement artifact mismatch",
         )
         receipt = validate_compilation(directory, plan, artifact, archived=True)
@@ -665,7 +736,7 @@ def main() -> int:
         parser.add_argument("--label", required=True, choices=("base", "candidate"))
         parser.add_argument("--output", required=True, type=Path)
         args = parser.parse_args()
-        measure(
+        prepare(
             args.revision_root,
             args.candidate_root,
             args.expected_candidate_commit,

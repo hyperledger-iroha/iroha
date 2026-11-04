@@ -36,11 +36,13 @@ on:
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
       - "scripts/kotodama_query_driver.py"
+      - "scripts/kotodama_perf_bundle.py"
       - "scripts/check_kotodama_docs.py"
       - "scripts/regenerate_kotodama_goldens.py"
       - "scripts/ivm_artifacts.tsv"
       - "pytests/scripts/check_kotodama_perf_test.py"
       - "pytests/scripts/kotodama_query_driver_test.py"
+      - "pytests/scripts/kotodama_perf_bundle_test.py"
       - "pytests/scripts/check_kotodama_docs_test.py"
       - "pytests/scripts/regenerate_kotodama_goldens_test.py"
       - "**/*.ko"
@@ -118,7 +120,116 @@ jobs:
       - name: Enforce platform-selected provenance tests with zero skips
         run: npm run test:native-provenance --prefix javascript/iroha_js
 
+  prepare-baseline:
+    # Compile only: no samples from these independent runners may qualify.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      artifact-id: ${{ steps.prepared.outputs.artifact-id }}
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-kotodama-perf
+      RUSTUP_TOOLCHAIN: "1.99.1"
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+      - name: Check out comparison base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 06912ee4f8f9423b458d72039dbd0a1c8fde7b43
+          path: baseline
+      - name: Install native benchmark prerequisites
+        uses: ./candidate/.github/actions/setup-native-ci
+        with:
+          working-directory: candidate
+          toolchain: 1.99.1
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          cache-on-failure: "true"
+          cache-workspace-crates: "true"
+          shared-key: kotodama-preparation-base
+          workspaces: |
+            baseline -> ../target-kotodama-perf
+      - name: Clear cached measurement and preparation evidence
+        run: rm -rf "$CARGO_TARGET_DIR/criterion" "$CARGO_TARGET_DIR/kotodama-query-drivers" "$CARGO_TARGET_DIR/kotodama-prepared"
+      - name: Prepare exact base benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CARGO_BUILD_WARNINGS
+          python3 candidate/scripts/kotodama_perf_bundle.py prepare \
+            --revision-root baseline --candidate-root candidate \
+            --expected-candidate-commit "${{ github.sha }}" --label base \
+            --output "$CARGO_TARGET_DIR/kotodama-prepared/base"
+      - name: Upload prepared executables
+        id: prepared
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: kotodama-prepared-base-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target-kotodama-perf/kotodama-prepared/base.tar
+          if-no-files-found: error
+          retention-days: 3
+
+  prepare-candidate:
+    # Compile only: no samples from these independent runners may qualify.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    outputs:
+      artifact-id: ${{ steps.prepared.outputs.artifact-id }}
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-kotodama-perf
+      RUSTUP_TOOLCHAIN: "1.99.1"
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+      - name: Check out comparison base
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 06912ee4f8f9423b458d72039dbd0a1c8fde7b43
+          path: baseline
+      - name: Install native benchmark prerequisites
+        uses: ./candidate/.github/actions/setup-native-ci
+        with:
+          working-directory: candidate
+          toolchain: 1.99.1
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          cache-on-failure: "true"
+          cache-workspace-crates: "true"
+          shared-key: kotodama-preparation-candidate
+          workspaces: |
+            candidate -> ../target-kotodama-perf
+      - name: Clear cached measurement and preparation evidence
+        run: rm -rf "$CARGO_TARGET_DIR/criterion" "$CARGO_TARGET_DIR/kotodama-query-drivers" "$CARGO_TARGET_DIR/kotodama-prepared"
+      - name: Prepare exact candidate benchmarks
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CARGO_BUILD_WARNINGS
+          python3 candidate/scripts/kotodama_perf_bundle.py prepare \
+            --revision-root candidate --candidate-root candidate \
+            --expected-candidate-commit "${{ github.sha }}" --label candidate \
+            --output "$CARGO_TARGET_DIR/kotodama-prepared/candidate"
+      - name: Upload prepared executables
+        id: prepared
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: kotodama-prepared-candidate-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: target-kotodama-perf/kotodama-prepared/candidate.tar
+          if-no-files-found: error
+          retention-days: 3
+
   representative-regression:
+    needs: [prepare-baseline, prepare-candidate, kotodama-artifact-gate]
     # Both revision-native runtimes are measured serially on this same hosted VM.
     # Source checkouts remain immutable; typed queries use the separately
     # attested typed dispatch and identical untimed fixture-reader grant below.
@@ -127,9 +238,8 @@ jobs:
     # zero-slowdown median policy and reports interval overlap separately.
     # This component comparison is not named-hardware release calibration.
     runs-on: ubuntu-24.04
-    # A cold serial IVM build took 31 minutes; the job reached its former
-    # 90-minute limit during the first Core build. Allow both revisions' feature
-    # graphs to complete without changing any benchmark's sampling policy.
+    # Compilation has its own bounded jobs. Both revisions are timed here,
+    # sequentially, after all transfers and executable admission have finished.
     timeout-minutes: 360
     env:
       CARGO_BUILD_JOBS: "1"
@@ -165,20 +275,12 @@ jobs:
           working-directory: candidate
           toolchain: 1.99.1
 
-      - name: Restore Rust build cache
-        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
-        with:
-          cache-on-failure: "true"
-          cache-workspace-crates: "true"
-          workspaces: |
-            candidate -> ../target-kotodama-perf
-            baseline -> ../target-kotodama-perf
-
       - name: Test regression checker
         working-directory: candidate
         run: |
           python3 pytests/scripts/check_kotodama_perf_test.py
           python3 pytests/scripts/kotodama_query_driver_test.py
+          python3 pytests/scripts/kotodama_perf_bundle_test.py
 
       # Rust build caches may retain Criterion output from an older workflow
       # run. Performance evidence must be produced by this exact base/candidate
@@ -220,19 +322,51 @@ jobs:
           )
           PY
 
-      - name: Measure base revision
-        working-directory: baseline
+      - name: Require exact same-run preparation artifact IDs
+        shell: bash
         run: |
-          # Retain the original benchmark warning policy, before shared setup.
-          # Diagnostics stay visible; the immutable baseline is never patched.
-          # The separately identified query driver preserves all original timed bodies.
+          set -euo pipefail
+          [[ "${{ needs.prepare-baseline.outputs.artifact-id }}" =~ ^[0-9]+$ ]]
+          [[ "${{ needs.prepare-candidate.outputs.artifact-id }}" =~ ^[0-9]+$ ]]
+          test "${{ needs.prepare-baseline.outputs.artifact-id }}" != "${{ needs.prepare-candidate.outputs.artifact-id }}"
+      - name: Download exact baseline preparation
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.prepare-baseline.outputs.artifact-id }}
+          path: prepared-downloads/base
+      - name: Download exact candidate preparation
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          artifact-ids: ${{ needs.prepare-candidate.outputs.artifact-id }}
+          path: prepared-downloads/candidate
+      - name: Admit both complete preparations before timing
+        shell: bash
+        run: |
+          set -euo pipefail
           unset CARGO_BUILD_WARNINGS
-          cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline base
-          cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
-          python3 ../candidate/scripts/kotodama_query_driver.py \
-            --revision-root . --candidate-root ../candidate \
+          test -n "${{ needs.prepare-baseline.outputs.artifact-id }}"
+          test -n "${{ needs.prepare-candidate.outputs.artifact-id }}"
+          for label in base candidate; do
+            python3 candidate/scripts/kotodama_perf_bundle.py unpack \
+              --archive "prepared-downloads/$label/$label.tar" \
+              --output "$CARGO_TARGET_DIR/kotodama-prepared/$label"
+            revision=candidate
+            if [[ "$label" == base ]]; then revision=baseline; fi
+            python3 candidate/scripts/kotodama_perf_bundle.py admit \
+              --revision-root "$revision" --candidate-root candidate \
+              --expected-candidate-commit "${{ github.sha }}" --label "$label" \
+              --output "$CARGO_TARGET_DIR/kotodama-prepared/$label"
+          done
+
+      - name: Measure base revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          unset CARGO_BUILD_WARNINGS
+          python3 candidate/scripts/kotodama_perf_bundle.py measure \
+            --revision-root baseline --candidate-root candidate \
             --expected-candidate-commit "${{ github.sha }}" --label base \
-            --output "$CARGO_TARGET_DIR/kotodama-query-drivers/base"
+            --output "$CARGO_TARGET_DIR/kotodama-prepared/base"
 
       # Criterion writes a `new` sample even while saving the named `base`.
       # Delete those current slots so a benchmark omitted by the candidate
@@ -251,16 +385,14 @@ jobs:
           PY
 
       - name: Measure candidate revision
-        working-directory: candidate
+        shell: bash
         run: |
-          # Use the same benchmark environment; current-source Clippy stays strict.
+          set -euo pipefail
           unset CARGO_BUILD_WARNINGS
-          cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline candidate
-          cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-          python3 scripts/kotodama_query_driver.py \
-            --revision-root . --candidate-root . \
+          python3 candidate/scripts/kotodama_perf_bundle.py measure \
+            --revision-root candidate --candidate-root candidate \
             --expected-candidate-commit "${{ github.sha }}" --label candidate \
-            --output "$CARGO_TARGET_DIR/kotodama-query-drivers/candidate"
+            --output "$CARGO_TARGET_DIR/kotodama-prepared/candidate"
 
       - name: Enforce five-percent ceiling
         working-directory: candidate
@@ -292,6 +424,8 @@ jobs:
           RUNNER_NAME_VALUE: ${{ runner.name }}
           RUNNER_OS_VALUE: ${{ runner.os }}
           RUNNER_ARCH_VALUE: ${{ runner.arch }}
+          BASE_PREPARATION_ARTIFACT_ID: ${{ needs.prepare-baseline.outputs.artifact-id }}
+          CANDIDATE_PREPARATION_ARTIFACT_ID: ${{ needs.prepare-candidate.outputs.artifact-id }}
         run: |
           set -euo pipefail
           evidence="$CARGO_TARGET_DIR/kotodama-perf-evidence"
@@ -303,6 +437,10 @@ jobs:
             uname -a
             if command -v lscpu >/dev/null 2>&1; then lscpu; fi
           } > "$evidence/toolchain-and-host.txt"
+          mkdir -p "$evidence/preparations"
+          for label in base candidate; do
+            cp "$CARGO_TARGET_DIR/kotodama-prepared/$label/manifest.json" "$evidence/preparations/$label.json"
+          done
           git -C candidate rev-parse --verify HEAD > "$evidence/candidate-head.txt"
           git -C baseline rev-parse --verify HEAD > "$evidence/baseline-head.txt"
           python3 - <<'PY'
@@ -333,6 +471,10 @@ jobs:
                   "name": os.environ["RUNNER_NAME_VALUE"],
                   "os": os.environ["RUNNER_OS_VALUE"],
                   "arch": os.environ["RUNNER_ARCH_VALUE"],
+              },
+              "preparation_artifact_ids": {
+                  "base": os.environ["BASE_PREPARATION_ARTIFACT_ID"],
+                  "candidate": os.environ["CANDIDATE_PREPARATION_ARTIFACT_ID"],
               },
               "cargo": {
                   "build_jobs": os.environ["CARGO_BUILD_JOBS"],
@@ -379,6 +521,50 @@ jobs:
           include-hidden-files: true
           retention-days: 90
 
+      # Partial samples and failed checker output are diagnostic only. They do
+      # not enter the success-only complete-evidence seal or qualify this run.
+      # An early failure may have no samples; hosted termination may prevent
+      # this best-effort upload or the cache action's post-job save entirely.
+      - name: Upload nonqualifying performance diagnostics
+        if: ${{ !success() }}
+        timeout-minutes: 5
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: kotodama-performance-nonqualifying-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            target-kotodama-perf/criterion
+            target-kotodama-perf/kotodama-perf-evidence
+            target-kotodama-perf/kotodama-query-drivers
+          if-no-files-found: warn
+          retention-days: 14
+
+  kotodama-artifact-gate:
+    # Required alongside the paired comparison; dev-profile tools have a separate budget.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      CARGO_BUILD_JOBS: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target-kotodama-perf
+      RUSTUP_TOOLCHAIN: "1.99.1"
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          path: candidate
+      - name: Install native benchmark prerequisites
+        uses: ./candidate/.github/actions/setup-native-ci
+        with:
+          working-directory: candidate
+          toolchain: 1.99.1
+      - name: Restore Rust build cache
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          cache-on-failure: "true"
+          cache-workspace-crates: "true"
+          shared-key: kotodama-artifact-gate
+          workspaces: |
+            candidate -> ../target-kotodama-perf
       - name: Build canonical Kotodama release tools
         working-directory: candidate
         run: cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --features ivm_artifact_admission/dev-tools --bin ivm_artifact_admit
@@ -396,20 +582,3 @@ jobs:
           --check
           --koto ../target-kotodama-perf/debug/koto
           --admission-tool ../target-kotodama-perf/debug/ivm_artifact_admit
-
-      # Partial samples and failed checker output are diagnostic only. They do
-      # not enter the success-only complete-evidence seal or qualify this run.
-      # An early failure may have no samples; hosted termination may prevent
-      # this best-effort upload or the cache action's post-job save entirely.
-      - name: Upload nonqualifying performance diagnostics
-        if: ${{ !success() }}
-        timeout-minutes: 5
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
-        with:
-          name: kotodama-performance-nonqualifying-diagnostics-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            target-kotodama-perf/criterion
-            target-kotodama-perf/kotodama-perf-evidence
-            target-kotodama-perf/kotodama-query-drivers
-          if-no-files-found: warn
-          retention-days: 14

@@ -1109,17 +1109,13 @@ class KotodamaPerfGateTests(unittest.TestCase):
             marker = f"      - name: Measure {revision} revision\n"
             step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
             command = textwrap.dedent(step.split("        run: |\n", 1)[1]).replace("${{ github.sha }}", "c" * 40)
-            expected = [
-                ["bench", "--locked", "--jobs", "1", "-p", "ivm", "--bench",
-                 "bench_kotodama", "--", "--save-baseline", revision],
-                ["bench", "--locked", "--jobs", "1", "-p", "iroha_core", "--bench",
-                 "kotodama_runtime_cache", "--", "--save-baseline", revision],
-                ["../candidate/scripts/kotodama_query_driver.py" if revision == "base" else "scripts/kotodama_query_driver.py",
-                 "--revision-root", ".", "--candidate-root", "../candidate" if revision == "base" else ".",
-                 "--expected-candidate-commit", "c" * 40, "--label", revision,
-                 "--output", str(self.root / "target/kotodama-query-drivers" / revision)],
-            ]
-            for failure_at in (0, 1, 2, 3):
+            expected = [[
+                "candidate/scripts/kotodama_perf_bundle.py", "measure",
+                "--revision-root", "baseline" if revision == "base" else "candidate",
+                "--candidate-root", "candidate", "--expected-candidate-commit", "c" * 40,
+                "--label", revision, "--output", str(self.root / "target/kotodama-prepared" / revision),
+            ]]
+            for failure_at in (0, 1):
                 with self.subTest(revision=revision, failure_at=failure_at):
                     root = self.root / f"{revision}-{failure_at}"
                     root.mkdir()
@@ -1162,7 +1158,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
                     result = subprocess.run(["bash", "-e", "-c", command], cwd=root,
                                             env=environment, text=True, capture_output=True)
                     calls = [json.loads(line) for line in receipt.read_text().splitlines()]
-                    count = failure_at or 3
+                    count = failure_at or 1
                     self.assertEqual(result.returncode, 23 if failure_at else 0)
                     self.assertEqual([call["argv"] for call in calls], expected[:count])
                     self.assertEqual(result.stdout, "cargo output\n" * count)
@@ -1176,16 +1172,17 @@ class KotodamaPerfGateTests(unittest.TestCase):
     def test_hosted_budget_and_partial_diagnostics_preserve_qualification(self) -> None:
         """Cold builds may finish or fail without reusing or qualifying cached samples."""
         workflow = (ROOT / ".github/workflows/kotodama_perf.yml").read_text()
-        job = workflow.split("  representative-regression:\n", 1)[1]
+        job = workflow.split("  representative-regression:\n", 1)[1].split("\n  kotodama-artifact-gate:", 1)[0]
         self.assertIn("    timeout-minutes: 360\n", job)
         self.assertIn('      CARGO_BUILD_JOBS: "1"\n', job)
-        cache = job.split("      - name: Restore Rust build cache\n", 1)[1].split(
-            "\n      - name:", 1
-        )[0]
-        self.assertIn('          cache-on-failure: "true"\n', cache)
-        self.assertIn('          cache-workspace-crates: "true"\n', cache)
-        self.assertIn("candidate -> ../target-kotodama-perf", cache)
-        self.assertIn("baseline -> ../target-kotodama-perf", cache)
+        self.assertNotIn("Restore Rust build cache", job)
+        self.assertIn("needs: [prepare-baseline, prepare-candidate, kotodama-artifact-gate]", job)
+        for name, root in (("prepare-baseline", "baseline"), ("prepare-candidate", "candidate")):
+            preparation = workflow.split(f"  {name}:\n", 1)[1].split("\n  representative-regression:", 1)[0]
+            cache = preparation.split("      - name: Restore Rust build cache\n", 1)[1].split("\n      - name:", 1)[0]
+            self.assertIn('          cache-on-failure: "true"\n', cache)
+            self.assertIn('          cache-workspace-crates: "true"\n', cache)
+            self.assertIn(f"{root} -> ../target-kotodama-perf", cache)
         self.assertLess(job.index("Clear cached benchmark evidence"), job.index("Measure base revision"))
         self.assertIn('run: rm -rf "$CARGO_TARGET_DIR/criterion"', job)
         self.assertLess(job.index("Clear base current samples"), job.index("Measure candidate revision"))
@@ -1212,7 +1209,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         representative_job = workflow.split(
             "  representative-regression:\n", 1
-        )[1]
+        )[1].split("\n  kotodama-artifact-gate:", 1)[0]
         self.assertIn('      CARGO_BUILD_JOBS: "1"', representative_job)
         self.assertIn('      RUSTUP_TOOLCHAIN: "1.99.1"', representative_job)
 
@@ -1316,20 +1313,10 @@ class KotodamaPerfGateTests(unittest.TestCase):
         base_step = workflow.split(base_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertIn(
-            "cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama",
-            base_step,
-        )
-        self.assertTrue(
-            all(
-                line.strip().startswith("cargo bench --locked --jobs 1 ")
-                for line in base_step.splitlines()
-                if line.strip().startswith("cargo bench ")
-            )
-        )
-        self.assertIn("python3 ../candidate/scripts/kotodama_query_driver.py", base_step)
+        self.assertIn("python3 candidate/scripts/kotodama_perf_bundle.py measure", base_step)
         self.assertIn("--label base", base_step)
-        self.assertIn("--revision-root . --candidate-root ../candidate", base_step)
+        self.assertIn("--revision-root baseline --candidate-root candidate", base_step)
+        self.assertNotIn("cargo bench", base_step)
 
         candidate_marker = "      - name: Measure candidate revision\n"
         self.assertEqual(workflow.count(candidate_marker), 1)
@@ -1339,16 +1326,10 @@ class KotodamaPerfGateTests(unittest.TestCase):
         candidate_step = workflow.split(candidate_marker, 1)[1].split(
             "\n      - name:", 1
         )[0]
-        self.assertTrue(
-            all(
-                line.strip().startswith("cargo bench --locked --jobs 1 ")
-                for line in candidate_step.splitlines()
-                if line.strip().startswith("cargo bench ")
-            )
-        )
-        self.assertIn("python3 scripts/kotodama_query_driver.py", candidate_step)
+        self.assertIn("python3 candidate/scripts/kotodama_perf_bundle.py measure", candidate_step)
         self.assertIn("--label candidate", candidate_step)
-        self.assertIn("--revision-root . --candidate-root .", candidate_step)
+        self.assertIn("--revision-root candidate --candidate-root candidate", candidate_step)
+        self.assertNotIn("cargo bench", candidate_step)
         self.assertNotIn("KOTODAMA_BASE_FILTER", workflow)
 
         enforcement_marker = "      - name: Enforce five-percent ceiling\n"
@@ -1432,9 +1413,10 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertLess(
             workflow.index(seal_marker), workflow.index(upload_marker)
         )
-        self.assertLess(
-            workflow.index(upload_marker), workflow.index(build_marker)
-        )
+        self.assertIn("needs: [prepare-baseline, prepare-candidate, kotodama-artifact-gate]", representative_job)
+        artifact_job = workflow.split("  kotodama-artifact-gate:\n", 1)[1]
+        self.assertIn(build_marker, artifact_job)
+        self.assertIn(marker, artifact_job)
         build_step = workflow.split(build_marker, 1)[1].split(marker, 1)[0]
         self.assertIn(
             "cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission "

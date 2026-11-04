@@ -484,7 +484,14 @@ class DerivedQueryDriverTests(unittest.TestCase):
             mock.patch.dict(DRIVER.policy(), {"_git_head": lambda _: "b" * 40}),
             mock.patch.object(DRIVER, "cargo", side_effect=cargo),
         ):
-            DRIVER.measure(self.revision, self.revision, "b" * 40, label, output)
+            DRIVER.prepare(self.revision, self.revision, "b" * 40, label, output)
+            DRIVER.validate_preparation(output, self.revision, self.revision, "b" * 40, label)
+            if tamper:
+                (self.directory / "measured-executable").write_bytes(b"tampered during timing")
+            bundle = self.root / "bundle-manifest.json"
+            bundle.write_text("{}")
+            DRIVER.record_measurement(output, [str(self.executable),
+                "typed_core_query_", "--save-baseline", label, "--bench"], 0, bundle)
         self.assertEqual(neighbour.read_bytes(), b"preserve dependency")
         self.assertEqual((self.revision / DRIVER.SOURCE).read_bytes(), self.original)
         return calls, output
@@ -494,24 +501,14 @@ class DerivedQueryDriverTests(unittest.TestCase):
         self.assertEqual(
             calls[:2], [[*DRIVER.CARGO_ARGS, "--no-run", "--message-format=json"]] * 2
         )
-        self.assertEqual(
-            calls[2],
-            [
-                *DRIVER.CARGO_ARGS,
-                "--message-format=json",
-                "--",
-                "typed_core_query_",
-                "--save-baseline",
-                "candidate",
-            ],
-        )
+        self.assertEqual(len(calls), 2, "measurement must not start another Cargo build")
         self.assertTrue((output / "measurement.json").is_file())
         self.assertTrue((self.directory / "measured-executable").is_file())
         self.assertTrue((self.directory / "measured-dep-info").is_file())
 
     def test_fresh_compiler_receipt_avoids_unnecessary_recompilation(self) -> None:
         calls, _ = self.exercise_measurement(cached=False)
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
 
     def test_missing_wrapper_invocation_never_reaches_timing(self) -> None:
         with self.assertRaisesRegex(ValueError, "not a regular file"):
@@ -528,6 +525,15 @@ class DerivedQueryDriverTests(unittest.TestCase):
         self.assertFalse(
             (self.target / "kotodama-query-drivers/candidate/measurement.json").exists()
         )
+
+    def test_failed_direct_launch_cannot_produce_measurement_receipt(self) -> None:
+        _, output = self.exercise_measurement(cached=False)
+        (output / "measurement.json").unlink()
+        argv = [str(self.executable), "typed_core_query_",
+                "--save-baseline", "candidate", "--bench"]
+        with self.assertRaisesRegex(ValueError, "execution failed"):
+            DRIVER.record_measurement(output, argv, 17, self.root / "bundle-manifest.json")
+        self.assertFalse((output / "measurement.json").exists())
 
     def test_paired_evidence_requires_both_revisions_and_unchanged_environment(
         self,
@@ -616,8 +622,8 @@ class DerivedQueryDriverTests(unittest.TestCase):
             ],
         )
         workflow = (ROOT / ".github/workflows/kotodama_perf.yml").read_text()
-        self.assertEqual(workflow.count("--label base"), 1)
-        self.assertEqual(workflow.count("--label candidate"), 1)
+        self.assertEqual(workflow.count("--label base"), 2)
+        self.assertEqual(workflow.count("--label candidate"), 2)
         self.assertIn(
             "--query-driver-root ../target-kotodama-perf/kotodama-query-drivers",
             workflow,
