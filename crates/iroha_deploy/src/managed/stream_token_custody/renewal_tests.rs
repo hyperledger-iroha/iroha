@@ -884,7 +884,9 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
         })],
     );
     assert_eq!(fixture.native.chain.commit(vec![revoke]), vec![true]);
-    let (revoked_checkpoint, revoked) = fixture.current();
+    // Keep the exact source paired with its certified revocation cut. The rejected
+    // renewal below advances the chain before the foreign-network control uses it.
+    let (revoked_checkpoint, revoked, revoked_source) = fixture.current_with_source();
     assert!(revoked.current().unwrap().control().attester_revoked);
     assert!(
         fixture
@@ -910,11 +912,7 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
                 2,
                 &fixture.policy,
                 &revoked,
-                fixture.native.bootstrap_custody_source(
-                    &fixture.owner.authority,
-                    &fixture.policy,
-                    &revoked_checkpoint
-                ),
+                revoked_source.clone(),
                 &revoked_checkpoint,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
@@ -1005,11 +1003,7 @@ fn expired_unrevoked_head_can_renew_but_real_revocation_invalidates_the_original
                 2,
                 &fixture.policy,
                 &revoked,
-                fixture.native.bootstrap_custody_source(
-                    &fixture.owner.authority,
-                    &fixture.policy,
-                    &revoked_checkpoint
-                ),
+                revoked_source,
                 &revoked_checkpoint,
                 &Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap(),
                 fixture.options.deadline
