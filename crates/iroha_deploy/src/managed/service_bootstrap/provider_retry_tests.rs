@@ -237,7 +237,11 @@ fn provider_child_admission_preserves_original_authorization_and_expired_recover
             .unwrap()
             .unwrap();
             drop(child);
-            let expired = fixture.run(Instant::now() - Duration::from_secs(1));
+            let expired = fixture.run(
+                Instant::now()
+                    .checked_sub(Duration::from_secs(1))
+                    .expect("one second precedes the test clock"),
+            );
             assert!(expired.may_submit().is_err());
             let recovered = <$owner>::open_for_bootstrap(run.authority, provider, &|| {
                 panic!(
@@ -257,7 +261,11 @@ fn provider_child_admission_preserves_original_authorization_and_expired_recover
     check_child!(ManagedInitialGatewaySetup);
     assert_eq!(calls.get(), 5);
     let absent_provider = fixture.original.policies.providers[1].provider_id;
-    let expired = fixture.run(Instant::now() - Duration::from_secs(1));
+    let expired = fixture.run(
+        Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("one second precedes the test clock"),
+    );
     assert!(
         ManagedStreamTokenCustody::open_for_bootstrap(run.authority, absent_provider, &|| expired
             .may_submit(),)

@@ -13,7 +13,7 @@ fn assert_array_bounds(schema: &Map, minimum: u64, maximum: u64, unique: Option<
 fn assert_item_ref(schema: &Map, expected: &str) {
     scalar_contracts! { schema.get("items").and_then(Value::as_object).and_then(|items| items.get("$ref")) => Text(expected); }
 }
-fn object_field_set(object: &Map) -> BTreeSet<&str> {
+pub(super) fn object_field_set(object: &Map) -> BTreeSet<&str> {
     object.keys().map(String::as_str).collect()
 }
 fn schema_string_field_set<'a>(schema: &'a Map, key: &str, context: &str) -> BTreeSet<&'a str> {
@@ -736,14 +736,14 @@ fn generated_spec_role_queries_require_canonical_global_readers() {
     }
     let schemas = component_schemas(&document);
     assert_eq!(
-        object_field_set(contract_object(
+        compact_finality_app_contracts::object_field_set(contract_object(
             contract_schema(schemas, "RoleRow").get("properties"),
             "role fields"
         )),
         contract_word_set("id permissions")
     );
     assert_eq!(
-        object_field_set(contract_object(
+        compact_finality_app_contracts::object_field_set(contract_object(
             contract_schema(schemas, "AccountRoleRow").get("properties"),
             "assignment fields"
         )),

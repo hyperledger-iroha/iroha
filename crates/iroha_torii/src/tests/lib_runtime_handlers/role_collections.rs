@@ -4,7 +4,7 @@
 #[tokio::test]
 async fn role_collections_require_signed_global_reader_and_preserve_assignments() {
     use axum::{Extension, Router, routing::post};
-    use iroha_data_model::role::Role;
+    use iroha_data_model::{Identifiable as _, role::Role};
     use tower::ServiceExt as _;
 
     let key = checked_torii_test_ed25519_keypair(0xDB, "role collection reader");
@@ -101,7 +101,7 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
                 role.permissions().collect::<Vec<_>>()
             );
         } else {
-            assert_eq!(items, &[norito::json!({"id": empty_role.id()})]);
+            assert_eq!(items, &[norito::json!({"id": (empty_role.id())})]);
         }
     }
 }
