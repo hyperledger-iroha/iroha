@@ -86,10 +86,16 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
             .headers_mut()
             .insert("content-type", HeaderValue::from_static("application/json"));
         let response = router.clone().oneshot(request).await.unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
+        let status = response.status();
         let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
             .await
             .unwrap();
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{path}: {}",
+            String::from_utf8_lossy(&bytes)
+        );
         let body: norito::json::Value = norito::json::from_slice(&bytes).unwrap();
         let items = body["items"].as_array().unwrap();
         if index == 0 {
