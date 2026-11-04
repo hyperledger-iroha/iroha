@@ -30,8 +30,8 @@ static SERIAL_NETWORK_GUARD: OnceLock<sandbox::NetworkParallelismGuard> = OnceLo
 const QUERY_RETRIES: usize = 1_200;
 const QUERY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const NON_EMPTY_BLOCK_TIMEOUT: Duration = Duration::from_secs(240);
-// DA-enabled consensus needs a wider pipeline in local test runs to avoid view-change stalls.
-const FAST_PIPELINE_TIME: Duration = Duration::from_secs(6);
+// Allow DA-enabled consensus time while remaining below the signed payload-retry interval.
+const FAST_PIPELINE_TIME: Duration = Duration::from_secs(4);
 static ASSET_NAME_COUNTER: AtomicU64 = AtomicU64::new(0);
 struct ClientPool {
     clients: Vec<Client>,
@@ -84,25 +84,27 @@ fn unique_asset_definition_id(
 fn named_numeric_asset_definition(
     id: AssetDefinitionId,
     name: String,
+    owning_domain: DomainId,
 ) -> iroha::data_model::asset::NewAssetDefinition {
     AssetDefinition::numeric(
         id,
         name,
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(owning_domain),
     )
 }
 fn named_asset_definition(
     id: AssetDefinitionId,
     name: String,
     spec: NumericSpec,
+    owning_domain: DomainId,
 ) -> iroha::data_model::asset::NewAssetDefinition {
     AssetDefinition::new(
         id,
         name,
         spec,
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(owning_domain),
     )
 }
 fn is_transient_client_error(err: &Report) -> bool {
@@ -173,25 +175,16 @@ fn wait_for_asset_definition_owner(
         let client = clients.next();
         let last_err = match client
             .client()
-            .query(FindAssetDefinitions::new())
-            .execute_all()
+            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
         {
-            Ok(definitions) => definitions
-                .into_iter()
-                .find(|asset_definition| asset_definition.id() == asset_definition_id)
-                .map_or_else(
-                    || Some(eyre!("{not_found_msg}")),
-                    |asset_definition| {
-                        if asset_definition.owned_by() == expected_owner {
-                            None
-                        } else {
-                            Some(eyre!(
-                                "{unexpected_owner_msg}: expected={expected_owner}, actual={}",
-                                asset_definition.owned_by()
-                            ))
-                        }
-                    },
-                ),
+            Ok(asset_definition) if asset_definition.id() != asset_definition_id => {
+                Some(eyre!("{not_found_msg}"))
+            }
+            Ok(asset_definition) if asset_definition.owned_by() != expected_owner => Some(eyre!(
+                "{unexpected_owner_msg}: expected={expected_owner}, actual={}",
+                asset_definition.owned_by()
+            )),
+            Ok(_) => None,
             Err(err) => Some(Report::new(err)),
         };
         if last_err.is_none() {
@@ -330,19 +323,29 @@ fn submit_or_tolerate_timeout(
     instruction: impl Into<InstructionBox>,
     context: &str,
 ) -> Result<Option<()>> {
-    let instruction = instruction.into();
-    let tx = {
-        let account = clients.current().account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [instruction.clone()],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let tx = signed_transaction(clients.current(), [instruction.into()])?;
     submit_tx_or_skip(clients, &tx, context)
+}
+fn signed_transaction(
+    client: &Client,
+    instructions: impl IntoIterator<Item = InstructionBox>,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = client
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    eyre::ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    account.sign_transaction(payload).map_err(Into::into)
 }
 fn is_tx_confirmation_timeout(err: &Report) -> bool {
     const NEEDLES: [&str; 4] = [
@@ -450,20 +453,29 @@ fn start_test_network_with_builder(
 fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();
+    let owning_domain =
+        DomainId::parse_fully_qualified("wonderland.universal").expect("fixture owning domain");
     let (asset_definition_id, asset_definition_name) =
         unique_asset_definition_id("wonderland.universal", "xor");
     let (big_asset_definition_id, big_asset_definition_name) =
         unique_asset_definition_id("wonderland.universal", "xorbig");
     let (decimal_definition_id, decimal_definition_name) =
         unique_asset_definition_id("wonderland.universal", "xorfrac");
-    let asset_definition =
-        named_numeric_asset_definition(asset_definition_id.clone(), asset_definition_name);
-    let big_asset_definition =
-        named_numeric_asset_definition(big_asset_definition_id.clone(), big_asset_definition_name);
+    let asset_definition = named_numeric_asset_definition(
+        asset_definition_id.clone(),
+        asset_definition_name,
+        owning_domain.clone(),
+    );
+    let big_asset_definition = named_numeric_asset_definition(
+        big_asset_definition_id.clone(),
+        big_asset_definition_name,
+        owning_domain.clone(),
+    );
     let decimal_definition = named_asset_definition(
         decimal_definition_id.clone(),
         decimal_definition_name,
         NumericSpec::fractional(3),
+        owning_domain,
     );
     let builder = quiet_network_builder();
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
@@ -486,22 +498,17 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
         decimal_definition.clone(),
     ] {
         let register_instruction: InstructionBox = Register::asset_definition(definition).into();
-        if let Err(err) = clients.next().submit::<InstructionBox>(
+        clients.next().submit::<InstructionBox>(
             register_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
-            eprintln!(
-                "Skipping asset mint coverage: failed to register test asset definition: {err}"
-            );
-            return Ok(());
-        }
+        )?;
     }
     for asset_definition_id in [
         &asset_definition_id,
         &big_asset_definition_id,
         &decimal_definition_id,
     ] {
-        if let Err(err) = wait_for_asset_definition_owner(
+        wait_for_asset_definition_owner(
             &mut clients,
             asset_definition_id,
             &account_id,
@@ -514,48 +521,33 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
                 "asset definition registration wait; torii={torii}, env_dir={}",
                 env_dir.display()
             ))
-        }) {
-            eprintln!("Skipping asset mint coverage: {err}");
-            return Ok(());
-        }
+        })?;
     }
     // When: mint integer asset quantity
     let quantity = Quantity::from(200_u32);
     let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
     let mint_instruction: InstructionBox =
         Mint::asset_quantity(quantity.clone(), asset_id.clone()).into();
-    if let Err(err) = clients.next().submit::<InstructionBox>(
+    clients.next().submit::<InstructionBox>(
         mint_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        eprintln!("Skipping asset mint coverage: integer mint failed: {err}");
-        return Ok(());
-    }
-    if let Err(err) = wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint asset") {
-        eprintln!("Skipping asset mint coverage: {err}");
-        return Ok(());
-    }
+    )?;
+    wait_for_asset_value(&mut clients, &asset_id, &quantity, "mint asset")?;
     // And: mint large integer asset quantity
     let big_quantity = Quantity::from(2_u128.pow(65));
     let big_asset_id = AssetId::new(big_asset_definition_id.clone(), account_id.clone());
     let mint_instruction: InstructionBox =
         Mint::asset_quantity(big_quantity.clone(), big_asset_id.clone()).into();
-    if let Err(err) = clients.next().submit::<InstructionBox>(
+    clients.next().submit::<InstructionBox>(
         mint_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        eprintln!("Skipping asset mint coverage: large integer mint failed: {err}");
-        return Ok(());
-    }
-    if let Err(err) = wait_for_asset_value(
+    )?;
+    wait_for_asset_value(
         &mut clients,
         &big_asset_id,
         &big_quantity,
         "mint large asset",
-    ) {
-        eprintln!("Skipping asset mint coverage: {err}");
-        return Ok(());
-    }
+    )?;
     // And: mint decimal asset quantity
     let decimal_quantity = "123.456"
         .parse::<Quantity>()
@@ -563,22 +555,16 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let decimal_asset_id = AssetId::new(decimal_definition_id.clone(), account_id.clone());
     let mint_instruction: InstructionBox =
         Mint::asset_quantity(decimal_quantity.clone(), decimal_asset_id.clone()).into();
-    if let Err(err) = clients.next().submit::<InstructionBox>(
+    clients.next().submit::<InstructionBox>(
         mint_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        eprintln!("Skipping asset mint coverage: decimal mint failed: {err}");
-        return Ok(());
-    }
-    if let Err(err) = wait_for_asset_value(
+    )?;
+    wait_for_asset_value(
         &mut clients,
         &decimal_asset_id,
         &decimal_quantity,
         "mint decimal asset",
-    ) {
-        eprintln!("Skipping asset mint coverage: {err}");
-        return Ok(());
-    }
+    )?;
     // Add some fractional part
     let quantity2 = "0.55"
         .parse::<Quantity>()
@@ -589,22 +575,16 @@ fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     let sum = decimal_quantity
         .checked_add(&quantity2)
         .map_err(|_| eyre::eyre!("overflow"))?;
-    if let Err(err) = clients.next().submit::<InstructionBox>(
+    clients.next().submit::<InstructionBox>(
         mint,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        eprintln!("Skipping asset mint coverage: fractional mint failed: {err}");
-        return Ok(());
-    }
-    if let Err(err) = wait_for_asset_value(
+    )?;
+    wait_for_asset_value(
         &mut clients,
         &decimal_asset_id,
         &sum,
         "mint fractional asset",
-    ) {
-        eprintln!("Skipping asset mint coverage: {err}");
-        return Ok(());
-    }
+    )?;
     Ok(())
 }
 #[allow(unused_must_use)]
@@ -621,20 +601,56 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             DomainId::try_new("exchange", "universal").expect("domain should be valid");
         let company_domain: DomainId =
             DomainId::try_new("company", "universal").expect("domain should be valid");
+        let crypto_domain =
+            DomainId::try_new("crypto", "universal").expect("domain should be valid");
         let (rate_def, rate_name) = unique_asset_definition_id("exchange.universal", "btceth");
         let (btc_def, btc_name) = unique_asset_definition_id("crypto.universal", "btc");
         let (eth_def, eth_name) = unique_asset_definition_id("crypto.universal", "eth");
         let rate = AssetId::new(rate_def.clone(), dex_id.clone());
         let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
         let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());
+        let genesis_id = AccountId::new(
+            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+                .public_key()
+                .clone(),
+        );
+        let fee_asset_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("fixture fee asset definition");
         let mut builder = quiet_network_builder();
         builder = builder
             .with_genesis_instruction(register::domain("exchange.universal"))
             .with_genesis_instruction(register::domain("company.universal"))
             .with_genesis_instruction(register::domain("crypto.universal"))
+            // Runtime registration is authorized by each domain's committed owner.
+            .with_genesis_instruction(Transfer::domain(
+                genesis_id.clone(),
+                exchange_domain.clone(),
+                ALICE_ID.clone(),
+            ))
+            .with_genesis_instruction(Transfer::domain(
+                genesis_id,
+                crypto_domain.clone(),
+                ALICE_ID.clone(),
+            ))
             .with_genesis_instruction(register::account(dex_id.clone(), exchange_domain.clone()))
             .with_genesis_instruction(register::account(seller_id.clone(), company_domain.clone()))
-            .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()));
+            .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()))
+            // Each owner pays for its permission grant, using the same fee funding as
+            // the network's standard signers after the fee asset is bootstrapped.
+            .with_genesis_post_bootstrap_isi(
+                [seller_id.clone(), buyer_id.clone()]
+                    .into_iter()
+                    .map(|owner| {
+                        Mint::asset_quantity(
+                            1_000_000_u32,
+                            AssetId::new(fee_asset_id.clone(), owner),
+                        )
+                        .into()
+                    })
+                    .collect(),
+            );
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
         };
@@ -647,45 +663,30 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             None => return Ok(()),
         };
         let mut last_non_empty_height = status.blocks_non_empty;
-        for (definition, name) in [
-            (rate_def.clone(), rate_name),
-            (btc_def.clone(), btc_name),
-            (eth_def.clone(), eth_name),
+        for (definition, name, owning_domain) in [
+            (rate_def.clone(), rate_name, exchange_domain),
+            (btc_def.clone(), btc_name, crypto_domain.clone()),
+            (eth_def.clone(), eth_name, crypto_domain),
         ] {
             let register_instruction: InstructionBox =
                 Register::asset_definition(AssetDefinition::numeric(
                     definition.clone(),
                     name,
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(owning_domain),
                 ))
                 .into();
-            if let Err(err) = clients.next().submit::<InstructionBox>(
+            clients.next().submit::<InstructionBox>(
                 register_instruction,
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            ) {
-                eprintln!(
-                    "Skipping exchange asset coverage: failed to register test asset definition: {err}"
-                );
-                return Ok(());
-            }
+            )?;
         }
         let seed_instructions: [InstructionBox; 3] = [
             Mint::asset_quantity(20_u32, rate.clone()).into(),
             Mint::asset_quantity(10_u32, seller_btc.clone()).into(),
             Mint::asset_quantity(200_u32, buyer_eth.clone()).into(),
         ];
-        let seed_tx = {
-            let account = clients.current().account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    seed_instructions,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+        let seed_tx = signed_transaction(clients.current(), seed_instructions)?;
         if submit_tx_or_skip(&mut clients, &seed_tx, "seed exchange balances")?.is_none() {
             return Ok(());
         }
@@ -723,41 +724,36 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         )?;
         let alice_id = ALICE_ID.clone();
         {
-            let mut alice_can_transfer_asset = |asset_id: AssetId,
-                                                owner_key_pair: KeyPair|
-             -> Result<()> {
-                let permission = CanTransferAsset {
-                    asset: asset_id.clone(),
-                };
-                let instruction = Grant::account_permission(permission, alice_id.clone());
-                let transaction = TransactionBuilder::new(
-                    network.network_id(),
-                    asset_id.account().clone(),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )
-                .with_instructions([instruction])
-                .sign(owner_key_pair.private_key());
-                if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
-                    .is_none()
-                {
-                    return Ok(());
-                }
-                status = match status_or_skip(
-                    sync_after_submission(
-                        &network,
-                        &rt,
-                        clients.next(),
-                        last_non_empty_height,
+            let mut alice_can_transfer_asset =
+                |asset_id: AssetId, owner_key_pair: KeyPair| -> Result<()> {
+                    let permission = CanTransferAsset {
+                        asset: asset_id.clone(),
+                    };
+                    let instruction = Grant::account_permission(permission, alice_id.clone());
+                    let owner_client = network.peers()[0]
+                        .client_for(asset_id.account(), owner_key_pair.private_key().clone());
+                    let transaction = signed_transaction(&owner_client, [instruction.into()])?;
+                    if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
+                        .is_none()
+                    {
+                        return Ok(());
+                    }
+                    status = match status_or_skip(
+                        sync_after_submission(
+                            &network,
+                            &rt,
+                            clients.next(),
+                            last_non_empty_height,
+                            "grant transfer permission",
+                        ),
                         "grant transfer permission",
-                    ),
-                    "grant transfer permission",
-                )? {
-                    Some(status) => status,
-                    None => return Ok(()),
+                    )? {
+                        Some(status) => status,
+                        None => return Ok(()),
+                    };
+                    last_non_empty_height = status.blocks_non_empty;
+                    Ok::<(), eyre::Report>(())
                 };
-                last_non_empty_height = status.blocks_non_empty;
-                Ok::<(), eyre::Report>(())
-            };
             alice_can_transfer_asset(seller_btc.clone(), seller_keypair)?;
             alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
         }
@@ -769,17 +765,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             Transfer::asset_quantity(seller_btc.clone(), 10_u32, buyer_id.clone()).into(),
             Transfer::asset_quantity(buyer_eth.clone(), 10_u32 * rate, seller_id.clone()).into(),
         ];
-        let transfer_tx = {
-            let account = clients.current().account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    transfer_instructions,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+        let transfer_tx = signed_transaction(clients.current(), transfer_instructions)?;
         if submit_tx_or_skip(&mut clients, &transfer_tx, "exchange transfers")?.is_none() {
             return Ok(());
         }
@@ -833,7 +819,6 @@ fn transfer_asset_definition() -> Result<()> {
     let domain_id: DomainId =
         DomainId::try_new("domain", "universal").expect("domain should be valid");
     builder = builder
-        .with_genesis_instruction(register::domain("domain.universal"))
         .with_genesis_instruction(register::account(new_owner_id.clone(), domain_id.clone()));
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
         return Ok(());
@@ -852,18 +837,16 @@ fn transfer_asset_definition() -> Result<()> {
             asset_definition_id.clone(),
             asset_definition_name,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(
+                DomainId::parse_fully_qualified("wonderland.universal")
+                    .expect("fixture owning domain"),
+            ),
         ))
         .into();
-    if let Err(err) = clients.next().submit::<InstructionBox>(
+    clients.next().submit::<InstructionBox>(
         register_instruction,
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
-        eprintln!(
-            "Skipping transfer asset-definition coverage: failed to register test asset definition: {err}"
-        );
-        return Ok(());
-    }
+    )?;
     wait_for_asset_definition_owner(
         &mut clients,
         &asset_definition_id,
@@ -907,13 +890,13 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             asset_definition_id.clone(),
             asset_definition_name,
             NumericSpec::integer(),
+            DomainId::parse_fully_qualified("wonderland.universal").expect("fixture owning domain"),
         );
         let mut builder = quiet_network_builder();
         let domain_id: DomainId =
             DomainId::try_new("domain", "universal").expect("domain should be valid");
-        builder = builder
-            .with_genesis_instruction(register::domain("domain.universal"))
-            .with_genesis_instruction(register::account(dest_id.clone(), domain_id.clone()));
+        builder =
+            builder.with_genesis_instruction(register::account(dest_id.clone(), domain_id.clone()));
         let Some((network, _rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
         };
@@ -936,15 +919,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         }
         let register_instruction: InstructionBox =
             Register::asset_definition(asset_definition.clone()).into();
-        if let Err(err) = clients.next().submit::<InstructionBox>(
+        clients.next().submit::<InstructionBox>(
             register_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
-            eprintln!(
-                "Skipping integer-only asset spec coverage: failed to register test asset definition: {err}"
-            );
-            return Ok(());
-        }
+        )?;
         // Seed the registered asset definition under Alice's authority.
         if submit_or_skip(
             &mut clients,
@@ -1009,13 +987,10 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             .map_err(|_| eyre!("integer transfer underflow"))?;
         let mint_instruction: InstructionBox =
             Mint::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
-        if let Err(err) = clients.next().submit::<InstructionBox>(
+        clients.next().submit::<InstructionBox>(
             mint_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
-            eprintln!("Skipping integer-only asset spec coverage: integer mint failed: {err}");
-            return Ok(());
-        }
+        )?;
         wait_for_asset_value(
             &mut clients,
             &asset_id,
@@ -1024,23 +999,17 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         )?;
         let burn_instruction: InstructionBox =
             Burn::asset_quantity(integer_quantity.clone(), asset_id.clone()).into();
-        if let Err(err) = clients.next().submit::<InstructionBox>(
+        clients.next().submit::<InstructionBox>(
             burn_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
-            eprintln!("Skipping integer-only asset spec coverage: integer burn failed: {err}");
-            return Ok(());
-        }
+        )?;
         wait_for_asset_value(&mut clients, &asset_id, &before, "integer burn")?;
         let transfer_instruction: InstructionBox =
             Transfer::asset_quantity(asset_id.clone(), integer_quantity, dest_id.clone()).into();
-        if let Err(err) = clients.next().submit::<InstructionBox>(
+        clients.next().submit::<InstructionBox>(
             transfer_instruction,
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        ) {
-            eprintln!("Skipping integer-only asset spec coverage: integer transfer failed: {err}");
-            return Ok(());
-        }
+        )?;
         // After integer ops: asset moved to destination, zero at source (purged)
         wait_for_asset_value(
             &mut clients,
@@ -1073,13 +1042,6 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         Ok(())
     })();
     if let Err(err) = result {
-        let message = err.to_string();
-        if message.contains("timed out waiting for")
-            || message.contains("asset definition not found")
-        {
-            eprintln!("Skipping fail_if_dont_satisfy_spec due stalled asset state: {err}");
-            return Ok(());
-        }
         let _ = sandbox::handle_result::<()>(Err(err), stringify!(fail_if_dont_satisfy_spec))?;
     }
     Ok(())
@@ -1102,6 +1064,7 @@ mod register {
 #[cfg(test)]
 mod helper_tests {
     use super::*;
+    use iroha_data_model::parameter::SumeragiParameters;
     #[test]
     fn tx_confirmation_timeout_includes_fallback_status() {
         let err = eyre!("transaction confirmation timed out; fallback status check failed");
@@ -1138,22 +1101,38 @@ mod helper_tests {
     fn quiet_network_builder_uses_fast_pipeline_time() {
         let builder = quiet_network_builder_base();
         assert_eq!(builder.configured_block_cadence(), Some(FAST_PIPELINE_TIME));
+        let parameters = SumeragiParameters {
+            block_cadence_ms: u64::try_from(FAST_PIPELINE_TIME.as_millis())
+                .expect("fixture cadence fits the signed millisecond field")
+                .try_into()
+                .expect("fixture cadence is nonzero"),
+            ..SumeragiParameters::default()
+        };
+        iroha_data_model::sumeragi_finality::ChainParamsRecord::from_parameters(&parameters)
+            .validate()
+            .expect("fixture cadence satisfies the signed consensus transport bounds");
     }
     #[test]
     fn asset_definition_uses_explicit_name() {
+        let owning_domain =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("fixture owning domain");
         let (numeric_id, numeric_name) =
             unique_asset_definition_id("wonderland.universal", "named");
         let numeric =
-            named_numeric_asset_definition(numeric_id, numeric_name.clone()).build(&ALICE_ID);
+            named_numeric_asset_definition(numeric_id, numeric_name.clone(), owning_domain.clone())
+                .build(&ALICE_ID);
         assert_eq!(numeric.name(), &numeric_name);
+        assert_eq!(numeric.owning_domain(), &Some(owning_domain.clone()));
         let (fractional_id, fractional_name) =
             unique_asset_definition_id("wonderland.universal", "fractional");
         let fractional = named_asset_definition(
             fractional_id,
             fractional_name.clone(),
             NumericSpec::fractional(3),
+            owning_domain.clone(),
         )
         .build(&ALICE_ID);
         assert_eq!(fractional.name(), &fractional_name);
+        assert_eq!(fractional.owning_domain(), &Some(owning_domain));
     }
 }

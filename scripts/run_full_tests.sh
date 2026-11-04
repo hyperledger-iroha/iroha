@@ -541,6 +541,9 @@ fi
 if kagami_bin="$(resolve_existing_binary "${target_root}" "kagami")"; then
     export_if_unset KAGAMI_BIN "${kagami_bin}"
 fi
+if sorafs_cli_bin="$(resolve_existing_binary "${target_root}" "sorafs_cli")"; then
+    export_if_unset TEST_NETWORK_BIN_SORAFS_CLI "${sorafs_cli_bin}"
+fi
 if [[ -z "${IROHA_TEST_NETWORK_PERMIT_DIR+x}" ]]; then
     export IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)"
 fi

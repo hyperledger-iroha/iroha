@@ -3,14 +3,7 @@
 //! C ABI:
 //! - gpu_zstd_compress(src_ptr, src_len, level, dst_ptr, dst_len)
 //! - gpu_zstd_decompress(src_ptr, src_len, dst_ptr, dst_len)
-/// Shared little-endian bitstream helpers for zstd frame coding.
-pub mod bitstream;
-/// Shared finite-state entropy helpers for zstd sequence coding.
-pub mod fse;
-/// Shared Huffman helpers for zstd literal coding.
-pub mod huffman;
-/// Shared deterministic zstd frame encoder/decoder.
-pub mod zstd_frame;
+pub use gpuzstd_codec::{GpuZstdSequence, bitstream, fse, huffman, zstd_frame};
 use std::{io::Cursor, ptr, slice};
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
@@ -29,19 +22,6 @@ const MIN_MATCH: u32 = 3;
     allow(dead_code)
 )]
 const MAX_MATCH: u32 = 64;
-/// Deterministic zstd sequence emitted by GPU match-finding kernels.
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct GpuZstdSequence {
-    /// Literal bytes preceding the match.
-    pub lit_len: u32,
-    /// Match length in bytes, or zero for the final literal-only tail.
-    pub match_len: u32,
-    /// Backward match offset in bytes.
-    pub offset: u32,
-    /// Reserved for ABI-compatible future extension; must be zero.
-    pub reserved: u32,
-}
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 unsafe extern "C" {
     fn gpuzstd_metal_count_sequences(
@@ -305,7 +285,7 @@ pub unsafe extern "C" fn gpu_zstd_decompress(
 mod tests {
     use super::*;
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    use crate::{fse, huffman};
+    use gpuzstd_codec::test_support;
     use std::time::Instant;
     fn lcg_payload(len: usize, mut seed: u64) -> Vec<u8> {
         let mut out = vec![0u8; len];
@@ -541,7 +521,7 @@ mod tests {
     #[test]
     fn gpu_huffman_parity() {
         let payload = b"gpuzstd metal huffman parity payload";
-        let (cpu_encoded, cpu_table) = huffman::encode_literals(payload).expect("cpu encode");
+        let (cpu_encoded, cpu_lengths) = test_support::huffman_encode(payload).expect("cpu encode");
         let mut gpu_out = vec![0u8; cpu_encoded.len().saturating_mul(2).saturating_add(16)];
         let mut gpu_len = gpu_out.len();
         let mut gpu_lengths = [0u8; 256];
@@ -562,21 +542,21 @@ mod tests {
         }
         assert_eq!(rc, RC_OK);
         gpu_out.truncate(gpu_len);
-        assert_eq!(gpu_lengths, cpu_table.lengths);
+        assert_eq!(gpu_lengths, cpu_lengths);
         assert_eq!(gpu_out, cpu_encoded);
     }
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     #[test]
     fn gpu_huffman_decode_roundtrip() {
         let payload = b"gpuzstd metal huffman decode roundtrip";
-        let (cpu_encoded, cpu_table) = huffman::encode_literals(payload).expect("cpu encode");
+        let (cpu_encoded, cpu_lengths) = test_support::huffman_encode(payload).expect("cpu encode");
         let mut gpu_out = vec![0u8; payload.len()];
         let rc = unsafe {
             gpuzstd_metal_huff_decode(
                 cpu_encoded.as_ptr(),
                 cpu_encoded.len(),
-                cpu_table.lengths.as_ptr(),
-                cpu_table.lengths.len(),
+                cpu_lengths.as_ptr(),
+                cpu_lengths.len(),
                 gpu_out.as_mut_ptr(),
                 gpu_out.len(),
             )
@@ -596,9 +576,8 @@ mod tests {
         for &sym in &symbols {
             counts[sym as usize] += 1;
         }
-        let norm = fse::normalize_counts(&counts, 5).expect("normalize");
-        let (ct, dt) = fse::build_tables(&norm, 3, 5).expect("tables");
-        let cpu_encoded = fse::encode_symbols(&symbols, &ct).expect("cpu encode");
+        let norm = test_support::fse_normalize(&counts, 5).expect("normalize");
+        let cpu_encoded = test_support::fse_encode(&symbols, &norm, 3, 5).expect("cpu encode");
         let mut gpu_out = vec![0u8; cpu_encoded.len().saturating_mul(2).saturating_add(16)];
         let mut gpu_len = gpu_out.len();
         let rc = unsafe {
@@ -636,7 +615,8 @@ mod tests {
         };
         assert_eq!(rc, RC_OK);
         assert_eq!(gpu_symbols, symbols);
-        let cpu_decoded = fse::decode_symbols(&cpu_encoded, symbols.len(), &dt).expect("decode");
+        let cpu_decoded =
+            test_support::fse_decode(&cpu_encoded, symbols.len(), &norm, 3, 5).expect("decode");
         assert_eq!(cpu_decoded, symbols);
     }
 }

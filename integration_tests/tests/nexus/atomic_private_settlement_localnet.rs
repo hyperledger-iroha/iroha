@@ -400,6 +400,14 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
     nexus_fee_asset_definition_id()
 }
 
+fn genesis_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    iroha_genesis::default_staking_policy(
+        stake_asset_definition_id(),
+        ALICE_ID.clone(),
+        ALICE_ID.clone(),
+    )
+}
+
 fn settlement_domain_id() -> DomainId {
     DomainId::try_new("settlement", "universal").expect("settlement domain")
 }
@@ -649,6 +657,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     genesis_post_topology(shape, &process_topology, &committee_validator_entries),
                     topology,
                     topology_entries,
+                    genesis_staking_policy(),
                 )
             },
         )

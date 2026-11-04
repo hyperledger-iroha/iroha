@@ -122,6 +122,35 @@ pub struct Pair {
     /// Complete artifact with the sole production compact emitter enabled.
     pub(crate) after: Vec<u8>,
 }
+
+// This fixture is included by consumers with different dependency sets. Admit
+// the bounded canonical alphabet before allocation, then decode with std only.
+fn decode_artifact_hex(hex_text: &str) -> Vec<u8> {
+    assert!(hex_text.len() <= MAX_ARTIFACT_BYTES * 2 && hex_text.len().is_multiple_of(2));
+    assert!(
+        hex_text
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+        "canonical lowercase hex"
+    );
+    hex_text
+        .as_bytes()
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let nibble = |byte: u8| {
+                if byte <= b'9' {
+                    byte - b'0'
+                } else {
+                    byte - b'a' + 10
+                }
+            };
+            (nibble(pair[0]) << 4) | nibble(pair[1])
+        })
+        .collect()
+}
+
 /// Load the complete native capture, rejecting missing, duplicate, oversized or altered rows.
 pub fn load_pairs(repository_root: &std::path::Path) -> std::collections::BTreeMap<String, Pair> {
     let path = repository_root.join(CAPTURE_PATH);
@@ -146,9 +175,7 @@ pub fn load_pairs(repository_root: &std::path::Path) -> std::collections::BTreeM
             "exact complete source identity"
         );
         let artifact = |hex_text: &str, expected_hash: &str| {
-            assert!(hex_text.len() <= MAX_ARTIFACT_BYTES * 2 && hex_text.len().is_multiple_of(2));
-            let bytes = hex::decode(hex_text).expect("native artifact hex");
-            assert_eq!(hex::encode(&bytes), hex_text, "canonical lowercase hex");
+            let bytes = decode_artifact_hex(hex_text);
             assert_eq!(
                 iroha_crypto::Hash::new(&bytes).to_string(),
                 expected_hash,
@@ -175,4 +202,45 @@ pub fn load_pairs(repository_root: &std::path::Path) -> std::collections::BTreeM
         "the complete native case inventory is mandatory"
     );
     pairs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_ARTIFACT_BYTES, decode_artifact_hex};
+
+    #[test]
+    fn artifact_hex_decodes_empty_and_every_canonical_byte() {
+        use std::fmt::Write as _;
+
+        assert!(decode_artifact_hex("").is_empty());
+        let expected: Vec<u8> = (0..=u8::MAX).collect();
+        let mut encoded = String::new();
+        for byte in &expected {
+            write!(&mut encoded, "{byte:02x}").unwrap();
+        }
+        assert_eq!(decode_artifact_hex(&encoded), expected);
+    }
+
+    #[test]
+    fn artifact_hex_rejects_odd_length_and_noncanonical_or_malformed_input() {
+        for malformed in [
+            "0", "abc", "0g", "gg", "AB", "abCD", "0x00", "00 ", "00\n", "é", "\0\0",
+        ] {
+            assert!(
+                std::panic::catch_unwind(|| decode_artifact_hex(malformed)).is_err(),
+                "unexpectedly admitted {malformed:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn artifact_hex_enforces_the_exact_decoded_byte_ceiling() {
+        let exact = "ff".repeat(MAX_ARTIFACT_BYTES);
+        assert_eq!(
+            decode_artifact_hex(&exact),
+            vec![u8::MAX; MAX_ARTIFACT_BYTES]
+        );
+        let oversized = format!("{exact}00");
+        assert!(std::panic::catch_unwind(|| decode_artifact_hex(&oversized)).is_err());
+    }
 }

@@ -1,36 +1,83 @@
 //! Orphaned trigger cleanup scenarios.
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::{
     blocking::Client,
-    data_model::{prelude::*, query::trigger::FindTriggers},
+    data_model::{
+        prelude::*,
+        query::{error::FindError, trigger::FindTriggerById},
+    },
+    query::QueryError,
 };
-use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_executor_data_model::permission::{
+    account::CanUnregisterAccount, trigger::CanRegisterTrigger,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use std::time::{Duration, Instant};
-use tokio::task::spawn_blocking;
 const TRIGGER_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TRIGGER_STATE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> eyre::Result<Option<sandbox::SerializedNetwork>> {
     sandbox::start_network_async_or_skip(NetworkBuilder::new(), context).await
 }
 async fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> eyre::Result<Option<Trigger>> {
-    let client = iroha.clone();
-    let trigger_id = trigger_id.clone();
-    spawn_blocking(move || {
-        Ok(client
-            .client()
-            .query(FindTriggers::new())
-            .execute_all()
-            .ok()
-            .and_then(|triggers| {
-                triggers
-                    .into_iter()
-                    .find(|trigger| trigger.id() == &trigger_id)
-            }))
-    })
-    .await?
+    match iroha
+        .account_client()
+        .query_single(FindTriggerById::new(trigger_id.clone()))
+        .await
+    {
+        Ok(trigger) => {
+            assert_eq!(trigger.id(), trigger_id);
+            Ok(Some(trigger))
+        }
+        Err(error) if is_exact_trigger_absence(&error, trigger_id) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+fn is_exact_trigger_absence(error: &QueryError, trigger_id: &TriggerId) -> bool {
+    matches!(error, QueryError::Http { status, code, message }
+        if status.as_u16() == 404
+            && code == "query_validation_failed"
+            && message == &FindError::Trigger(trigger_id.clone()).to_string())
+}
+#[test]
+fn trigger_absence_requires_exact_native_status_code_and_identity() {
+    let id: TriggerId = "missing-trigger".parse().unwrap();
+    let other: TriggerId = "other-trigger".parse().unwrap();
+    let error = |status, code: &str, message| QueryError::Http {
+        status,
+        code: code.to_owned(),
+        message,
+    };
+    let missing = FindError::Trigger(id.clone()).to_string();
+    assert!(is_exact_trigger_absence(
+        &error(
+            reqwest::StatusCode::NOT_FOUND,
+            "query_validation_failed",
+            missing.clone()
+        ),
+        &id
+    ));
+    for rejected in [
+        error(
+            reqwest::StatusCode::BAD_REQUEST,
+            "query_validation_failed",
+            missing.clone(),
+        ),
+        error(reqwest::StatusCode::NOT_FOUND, "route_not_found", missing),
+        error(
+            reqwest::StatusCode::NOT_FOUND,
+            "query_validation_failed",
+            FindError::Trigger(other).to_string(),
+        ),
+        error(
+            reqwest::StatusCode::NOT_FOUND,
+            "query_validation_failed",
+            "not found".to_owned(),
+        ),
+    ] {
+        assert!(!is_exact_trigger_absence(&rejected, &id));
+    }
 }
 async fn wait_for_trigger_state(
     iroha: &Client,
@@ -87,17 +134,25 @@ async fn set_up_trigger(
         .first()
         .expect("test network should expose at least one peer")
         .client_for(&the_one_who_fails, account_keypair.private_key().clone());
-    spawn_blocking({
+    run_on_dedicated_thread({
         let client = iroha.clone();
         let create_the_one_who_fails: InstructionBox = create_the_one_who_fails.into();
-        let grant_register_trigger_permission: InstructionBox =
-            grant_register_trigger_permission.into();
+        let the_one_who_fails = the_one_who_fails.clone();
         move || {
             client.submit_all::<InstructionBox>(
                 [
                     create_failand,
                     create_the_one_who_fails,
-                    grant_register_trigger_permission,
+                    Transfer::asset_quantity(
+                        AssetId::of(
+                            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                                .parse()?,
+                            client.client().account().clone(),
+                        ),
+                        100u32,
+                        the_one_who_fails.clone(),
+                    )
+                    .into(),
                 ],
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;
@@ -105,12 +160,26 @@ async fn set_up_trigger(
         }
     })
     .await??;
-    spawn_blocking({
+    run_on_dedicated_thread({
         let client = authority_client.clone();
-        let register_fail_on_account_events: InstructionBox =
-            register_fail_on_account_events.into();
         move || {
-            client.submit::<InstructionBox>(
+            client.submit_all::<InstructionBox>(
+                [
+                    grant_register_trigger_permission.into(),
+                    Grant::account_permission(
+                        CanUnregisterAccount {
+                            account: client.client().account().clone(),
+                        },
+                        iroha_test_samples::ALICE_ID.clone(),
+                    )
+                    .into(),
+                ],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            // Permission grants emit account events. Commit them before installing
+            // this intentionally failing account-event trigger so setup itself does
+            // not execute its missing-domain action.
+            client.submit(
                 register_fail_on_account_events,
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
@@ -141,7 +210,7 @@ async fn trigger_must_be_removed_on_action_authority_account_removal() -> eyre::
         trigger.as_ref().map(Identifiable::id),
         Some(&fail_on_account_events.clone())
     );
-    spawn_blocking({
+    run_on_dedicated_thread({
         let client = iroha.clone();
         let the_one_who_fails = the_one_who_fails.clone();
         move || {
@@ -186,7 +255,7 @@ async fn trigger_must_survive_action_authority_domain_removal() -> eyre::Result<
         trigger.as_ref().map(Identifiable::id),
         Some(&fail_on_account_events.clone())
     );
-    spawn_blocking({
+    run_on_dedicated_thread({
         let client = iroha.clone();
         let failand = failand.clone();
         move || {

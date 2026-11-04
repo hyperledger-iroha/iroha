@@ -1,0 +1,397 @@
+{
+  "historical_commit": "e954df4850",
+  "historical_source_membership_and_hashes_match_commit": true,
+  "prior_review": "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104/source-review.json",
+  "prior_review_sha256": "d98b940ba405eaa640fb839a5c154237f9267511d35f86e0be45953ae4f514f0",
+  "reviewed_differences": [
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/credential.rs",
+      "historical_sha256": "9cef899f6864c4b8517cab01b66ec66e38e0d5350d7a1ce02cfb889bdca02b34",
+      "current_sha256": "13c92a26711915fa1d23424ba881cbaf26e055a050f7e444341ada916aedee5b",
+      "review": "Test SHAKE provider import only."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/keccak_relation.rs",
+      "historical_sha256": "f757f491b81c52563b34e425a9ded20547419200c848c4ad5231ef1fd32374f5",
+      "current_sha256": "18b335a82ca5d52f55404234e70a9dd4db865cd773387d3a69dd4dfa998adef2",
+      "review": "Test SHAKE provider imports only; relation body unchanged."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/lib.rs",
+      "historical_sha256": "503a358e552e53284d8a1c8b15b2df24b2111b766dfaa004f5f4c7091b07604e",
+      "current_sha256": "00c18aca581bd5d528de22fa0413c409c58f74c89727a68168aa0b7d18901b5f",
+      "review": "Rustdoc only: current candidate/diagnostic integration and deterministic runtime Keccak backend selection; no executable body change."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/profile.rs",
+      "historical_sha256": "9cc79a448f4199b748923b8b3e6a552fb9f0aa7980a1cb6d1d89746e8b79323d",
+      "current_sha256": "1e1d5e5b40208c06934199b79a2b1b0551c362bab864f0d17ea0c4f9ab385678",
+      "review": "Comparator gated to tests/diagnostics; candidate and comparator row constants and logical geometry unchanged. Report explicitly restricts comparator build scope."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/proving.rs",
+      "historical_sha256": "717c538c088101b1759e4eb947101172c9fe71f530e10d3428aa58195c997051",
+      "current_sha256": "321e2bb2a4954a96c31357fee7e96c490b2b820d573b1f53a8eed889314a3fca",
+      "review": "Fixed-sized full chunks visited once in same order through as_chunks_mut; incomplete remainder handling unchanged. Test SHAKE import changed."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/sealed_list.rs",
+      "historical_sha256": "769eb3de9f35211bd80067f1c0669645995d603cce3aa2f0e2818699be834de0",
+      "current_sha256": "3814cf1e4cb6392b0735262960a9bbef6ab13cd5a2f39ce4102640634c415a2d",
+      "review": "Fixed-sized full chunks visited once in same order; existing multiple-of-size validation retained."
+    },
+    {
+      "path": "crates/iroha_parliament_ballot_proof/src/selector.rs",
+      "historical_sha256": "1d96fee19e79b781434580a00e355048585994c15e9210fdc62c3665ddd37d75",
+      "current_sha256": "4f56377340f5c6a218c7a8c927b63322c1b2b1371ec39eb398bc1411acab6628",
+      "review": "Fixed-sized complete chunk sequence and zip semantics unchanged; test construction updated likewise."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/bavc.rs",
+      "historical_sha256": "481b4c7027b46520e848a67d94a6dc7cdda312838e1769a93b9079260b8d4269",
+      "current_sha256": "b6cae7b82973325d3342434201188192896ad5686029f005bedbf06fc4e0f0fd",
+      "review": "Test SHAKE provider imports only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/faest/cipher.rs",
+      "historical_sha256": "744af4a7bd343e6ec9cc052585505e12b764fe4fab84599f9a39572cd8fc3d2b",
+      "current_sha256": "68b2d99c0ae6ef80b0ad8b272b709017fa8c180987e1cb03450b4628496abaa0",
+      "review": "MixColumns iterates same complete four-byte columns and take(n_st); test AES trait and Array API changed only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/field.rs",
+      "historical_sha256": "df65fd59ae7970752ec71c18212e3aee09fc8f498068dff29e3ac23da9d5e3a8",
+      "current_sha256": "6bd8298d50a513d29979928f964dcfd3f7de3d12f1950203673d694ad8ca2b1a",
+      "review": "Exact Clippy expectation only; separate GF correspondence regression proves all other bytes identical."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/field/poly.rs",
+      "historical_sha256": "b11fd7a04a20614d4780d18a05421c443130a7d554a86579766434b424a880e9",
+      "current_sha256": "d426cf1373416a8c1e7d7a2efcb671a2a9706fb7a38ee24154cd91a313be1366",
+      "review": "Nonzero polynomial degree uses ilog2, equal to 31-leading_zeros for the guarded nonzero arguments. is_irreducible rejects poly<2; rem_small divisors begin at2 and short-circuits zero value."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/hash.rs",
+      "historical_sha256": "c5a06a24722c686f0f96f875c2a0bbfc9a8021a3fedd03da4b4222ca9fd3df70",
+      "current_sha256": "62569b2c31a4d44ffd23930040af26274250fcab62460c27dd1aba9fc0ce6a6f",
+      "review": "Five existing Keccak-f1600 call sites dispatch through FnOnce API, exactly one supplied permutation call at each unchanged absorb/finalize/squeeze boundary. Rates, padding and message/output byte counts unchanged. Test SHAKE imports updated."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/lib.rs",
+      "historical_sha256": "aeb97c943cd993f7fa721e62c83c3b74d2e53626c8b470d7ebecd2eadc187f02",
+      "current_sha256": "21fd68201b734722c2b0eb122d846c2ef43fb823a3eeeeb34566f0bfc53c3979",
+      "review": "Rustdoc only: current candidate/diagnostic integration and deterministic runtime Keccak backend selection; no executable body change."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/prg.rs",
+      "historical_sha256": "58449cb9390e4ce66e71f5ea6fd3245eb69f05ee68c28c7e73a04514df13db81",
+      "current_sha256": "016859916c53283f3b017d4bf694004e7bb673e2c893a9b4e5429de974f2dee7",
+      "review": "BlockEncrypt renamed BlockCipherEncrypt; PRG encrypt_blocks input slices, batching, key-construction boundaries and block counts unchanged. Provider internals explicitly unpriced."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/randomness.rs",
+      "historical_sha256": "8d57e99b8eb555687ed2c4d82465d7242890e036d35bdca10399ef1bca7ddb26",
+      "current_sha256": "9af7f182cbfc4b2704ecd1cb7fe23a938682344ac01aa52a15df9a4b137c5e96",
+      "review": "Test SHAKE provider imports only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/transcript.rs",
+      "historical_sha256": "ea6b44d9a5c11fc80e3afdff7eaf262dd024b446001098c2f85ccdf9759bb1a2",
+      "current_sha256": "467107be728d8adbaeaaaebd895fe85fe9aa8ab157641862bc99ca454b937bb8",
+      "review": "Test SHAKE provider imports only."
+    },
+    {
+      "path": "crates/iroha_zkp_vole/src/vole.rs",
+      "historical_sha256": "5fcfe9c24e0e4a7319a0e4ed8ab99e7fbc83cd07c89f997864e393fbc9d09f31",
+      "current_sha256": "b684143fb2d9df535670e44080af932d10357fe211c5990a29782b9b91126a8e",
+      "review": "Test polynomial degree expression only; verifier body unchanged."
+    }
+  ],
+  "unchanged_model_and_budget_sha256": {
+    "scripts/check_parliament_ballot_resource_accounting.py": "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1",
+    "crates/iroha_parliament_ballot_proof/examples/resource_contract/budget.rs": "13a9440c02f6feff17dd336b6d49f90f2b95483e4fc646d3477a70726935246f"
+  },
+  "vendor_source_custody": [
+    {
+      "path": "vendor/aes/src/armv8.rs",
+      "historical_sha256": "bc8ff3cae2f799d849105b79091604e1579ae5e8a8fbe19db24c6ccbf48146a4",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/armv8/encdec.rs",
+      "historical_sha256": "54f85c5942fbb384c106321fb54aa06f29ae16be87ebce127fd4932a329a4feb",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/armv8/expand.rs",
+      "historical_sha256": "d40ee141eb7dec4ccb675455ec93fe08a75dfd228bc5339096cfa8d7270ff375",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/armv8/hazmat.rs",
+      "historical_sha256": "f6d722a53ca464b16b1bc9bb7c23a5780510252cbcb059735e2acf656c5b2cbe",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/armv8/intrinsics.rs",
+      "historical_sha256": "3192f65da7cac81f3a48601d950c66c72814fa9cacab9a9d8c8969dbae6b098c",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/armv8/test_expand.rs",
+      "historical_sha256": "7bc04e7fc5bba65f4451c86ba2e80ce98b04faa734f16d28af09660c5623d96a",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/autodetect.rs",
+      "historical_sha256": "ba7f24607973e4bb6dd07e100f70e0cf2a04e0b083020085b8d4865f02405f41",
+      "current_sha256": "e07e5a15a9d3749d48e7721d666766f08abab344d0e7fb1f257994a0a7004108",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends.rs",
+      "historical_sha256": null,
+      "current_sha256": "de1d6f3c73abc926afa8f1e13b068f872074906851f888585bb7ad080f2b15fc",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/aarch64_aes.rs",
+      "historical_sha256": null,
+      "current_sha256": "a8f440d995265f8ee53d39da05d33d5d524ccafd22766c223aea8468da842e93",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/aarch64_aes/encdec.rs",
+      "historical_sha256": null,
+      "current_sha256": "32a8e4b8d9d685c7c8d5a647fb723ae0c57447bed87427c4f468cda7b7788d1d",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/aarch64_aes/expand.rs",
+      "historical_sha256": null,
+      "current_sha256": "0bd1ed1c28e6e5164208117a647e15b058c6fdeb171c4195820780bbde25a055",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/aarch64_aes/hazmat.rs",
+      "historical_sha256": null,
+      "current_sha256": "b840e65dcbcff211f5ad10c2fa694b8c4b117ccbca43b9dbdb1b37715df70084",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/aarch64_aes/utils.rs",
+      "historical_sha256": null,
+      "current_sha256": "9346cd8c8ddf2b3c00f81fd2955aa8fa680570bebdb71c9c544a23a7f239c795",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/aes128.rs",
+      "historical_sha256": null,
+      "current_sha256": "e33dd01071622fbbc179b27349db5cb63f1dd674a3ab39896890ac89d13b73d5",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/aes192.rs",
+      "historical_sha256": null,
+      "current_sha256": "e5cda3d9a394ec25148997cc45bfc9291fef60d28648be171dd4a96ba751bb3e",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/aes256.rs",
+      "historical_sha256": null,
+      "current_sha256": "9d0b52fa3d152a2cc2b69b8d40bf7b2aed5302047f4cdb6e16e8f54b8e3df7ce",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/hazmat.rs",
+      "historical_sha256": null,
+      "current_sha256": "d1bf3681ad8fd858f82c55af40c09558d84215305627ba40e4bf3f46a96fd496",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/mix_columns.rs",
+      "historical_sha256": null,
+      "current_sha256": "fe78113def7e11a6a8449b16a8b4e54bdaf6b9aad9bfef74687bee1150a7d948",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/mod.rs",
+      "historical_sha256": null,
+      "current_sha256": "703101eb67276b982a89b944b2a7c59996dc729de6cf18035335c40ee40673b8",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/sbox.rs",
+      "historical_sha256": null,
+      "current_sha256": "5750d37d2a59cbdfa9ac5dbf488301501d1e8f6209407d6942c642a7b162bb85",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/utils.rs",
+      "historical_sha256": null,
+      "current_sha256": "48366859088eebc862e9690cfad83005df7aee4b72f90724d959d806c1172c10",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/fixslice/word.rs",
+      "historical_sha256": null,
+      "current_sha256": "d3aa2a529d07135fc1e3f3dfb45a6ddbd325c3a41e7166f7058747421422199b",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/soft.rs",
+      "historical_sha256": null,
+      "current_sha256": "105c126d69df5e739a678f448ced2e74c794965249354a1df030dfa2c4d0d6e4",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_aes.rs",
+      "historical_sha256": null,
+      "current_sha256": "8638b3faa06e0bb3428c5f44afb95cae578a7e2ddb69671b83ef6ffee97dd070",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_aes/encdec.rs",
+      "historical_sha256": null,
+      "current_sha256": "f788ca5ec2d2eae61b24c7154aed8370dce3bd075da9465ec88d5451137853b8",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_aes/expand.rs",
+      "historical_sha256": null,
+      "current_sha256": "f826cfa3a54b988d04e95c605b8211ff4a35ffb3ccb68ad5576919db1433ee86",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_aes/hazmat.rs",
+      "historical_sha256": null,
+      "current_sha256": "c2b191b59e23a8239ebdae782ed7e1e0a022b4992af32b901f00146ab3eeb49d",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_aes/utils.rs",
+      "historical_sha256": null,
+      "current_sha256": "da596d91622e029e358f4b5c72d751ff5fa3aafdb109f6faa2b5b4ea8b1522f0",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_vaes256.rs",
+      "historical_sha256": null,
+      "current_sha256": "46dbbd880984600fb4253f9b6adaa5f22063c80897787d52e07f8bed4a2114e0",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_vaes256/encdec.rs",
+      "historical_sha256": null,
+      "current_sha256": "67ef400ed7ed04741b2c24e07547e6ae107154393ba0a9b9b068e6ffa200f3fc",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_vaes512.rs",
+      "historical_sha256": null,
+      "current_sha256": "48812ed13365c03c6db1d48521764818ce869f87db1b05755c7d80e80e4a8eea",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/backends/x86_vaes512/encdec.rs",
+      "historical_sha256": null,
+      "current_sha256": "4d63fe6b8964705a9b18c08409569c1c85b6328d1128dcbc9b5cf3b713b6f133",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/hazmat.rs",
+      "historical_sha256": "120063eea58b8e6b29306ad1181624b0216b8bcb4b6557c0fa458e7bc6c28f0c",
+      "current_sha256": "d2d4c8ca5556fe4656a760f8069f5a2145f755b8da1015a331d2952517ba9c09",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/lib.rs",
+      "historical_sha256": "859930f1e982e3ff026940aa704dc91e492254ac87c709a9b176b231167f36a6",
+      "current_sha256": "5ba13c3ac1b130536ea8958ee1a6ba72ac81715957e78fcfb2c7687753e050a0",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni.rs",
+      "historical_sha256": "15b9a67dbedc3b558ddec063489be4a6607e568afddd8345506be36952fc3bde",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni/aes128.rs",
+      "historical_sha256": "88b94c99163b6b82810d7817e02374ddca4086b0896a8ebe183241a604ec92be",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni/aes192.rs",
+      "historical_sha256": "156254b46e469a20e09a1cefa22bae2afd9c10e2b68fd2bf40eaf9a05095cdda",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni/aes256.rs",
+      "historical_sha256": "f9fba1a4ac1e91fc908f3164460fc531f91cf0b0d015b3463056d0bd97981eae",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni/hazmat.rs",
+      "historical_sha256": "eeeb4a8cd92204095ecef3d40e1786dede05b63afba41c9fa3e9b871f40eb6d8",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni/test_expand.rs",
+      "historical_sha256": "6ad46711aeb49c21144ea31f801493ab87d3cb19d35bb3610657bfadfa75d044",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/ni/utils.rs",
+      "historical_sha256": "10fe6c0ad778a59cde5cef6cb6bc478cc68d21e28bda9331ced3c26b0a732426",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/soft.rs",
+      "historical_sha256": "3a84211717fdc86a2b0f0d9086f33410bee2ff9be480f50c981980f678a0c2a8",
+      "current_sha256": "a4595bae56cb37a99d127c27e3591b8137f61b81abcc6416069a0b4e2d17db55",
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/soft/fixslice32.rs",
+      "historical_sha256": "c69c0fa430cb62c4d88a13d5c3387202e1962b47978a6a7026bd34789f2d2577",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    },
+    {
+      "path": "vendor/aes/src/soft/fixslice64.rs",
+      "historical_sha256": "b071d85916e4e09da703168eb7cebc2ba4c4ab2b783713b8caf9541742b741e3",
+      "current_sha256": null,
+      "scope": "Source custody; logical accounting stops at supplied AES input blocks, not backend implementation work."
+    }
+  ],
+  "primitive_boundary_review": {
+    "Prg::fill": "Unchanged loop partitions output into128-byte batches; each supplied slice has ceil(chunk_bytes/16) blocks. Both Encryptor adapters pass that exact slice to encrypt_blocks. Key setup and zeroization are excluded, as before.",
+    "cipher-0.5.2": "encrypt_blocks converts the supplied slice to BlocksCtx without changing length; BlocksCtx partitions full parallel chunks and one tail. Parallel lane padding/internal work is deliberately excluded.",
+    "aes-0.9.3": "Portable wrapper invokes the closure once. Each mutually exclusive autodetect arm invokes one backend callback and returns; software fallback invokes the closure once. Current aarch64/x86 AES/VAES wrapper callbacks each call f once. The backend rewrite is not claimed to preserve layout, instruction cost, or cryptographic implementation qualification.",
+    "Keccak": "with_f1600 forwards to with_p1600::<F1600_ROUNDS>; its BackendClosure invokes the supplied FnOnce once with the selected permutation. This justifies source API call counts, not implementation cost or cryptographic validation."
+  },
+  "external_api_source_sha256": {
+    "/Users/takemiyamakoto/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cipher-0.5.2/src/block.rs": "5aa181063d77cd7cb45b02fc400cf05aa8f29766c4b9f32226bd79e8386a12d8",
+    "/Users/takemiyamakoto/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/cipher-0.5.2/src/block/ctx.rs": "c5e8e1599e0393b41ee601b9beedac2b1814d5d7800f046b991244c316ce7e93",
+    "/Users/takemiyamakoto/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/keccak-0.2.2/src/lib.rs": "ce94cd46d22744b05154e3a14c79e9c9ff9d9c0f067d911e64e8b9a918ed2583"
+  },
+  "formulas_changed": false,
+  "historical_numeric_cases_exactly_equal": true,
+  "all998_candidate_vote_sizes_checked": true,
+  "provider_internal_cryptography_reviewed": false,
+  "provider_layout_or_rust_allocation_policy_requalified": false,
+  "profile_qualified": false
+}

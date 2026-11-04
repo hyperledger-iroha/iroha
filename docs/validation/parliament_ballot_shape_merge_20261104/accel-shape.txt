@@ -1,0 +1,94 @@
+000000010001a65c <<iroha_zkp_vole::bavc::Shape>::new_as>:
+10001a65c:     	ldr	x9, [x2, #0x18]
+10001a660:     	ldrb	w8, [x2, #0x30]
+10001a664:     	cbz	w1, 0x10001a694 <<iroha_zkp_vole::bavc::Shape>::new_as+0x38>
+10001a668:     	cbz	w8, 0x10001a770 <<iroha_zkp_vole::bavc::Shape>::new_as+0x114>
+10001a66c:     	cmp	w8, #0x1
+10001a670:     	b.ne	0x10001a78c <<iroha_zkp_vole::bavc::Shape>::new_as+0x130>
+10001a674:     	mov	x8, #0x0                ; =0
+10001a678:     	mov	w9, #0xc0               ; =192
+10001a67c:     	mov	w10, #0xd               ; =13
+10001a680:     	stp	x10, x8, [x0]
+10001a684:     	str	x9, [x0, #0x10]
+10001a688:     	mov	w9, #0xff               ; =255
+10001a68c:     	strb	w9, [x0, #0x39]
+10001a690:     	ret
+10001a694:     	cmp	x9, #0x3
+10001a698:     	cset	w9, ne
+10001a69c:     	ldr	x10, [x2]
+10001a6a0:     	cbz	x10, 0x10001a7a0 <<iroha_zkp_vole::bavc::Shape>::new_as+0x144>
+10001a6a4:     	ldr	x12, [x2, #0x8]
+10001a6a8:     	lsl	x11, x8, #6
+10001a6ac:     	sub	x11, x11, x12
+10001a6b0:     	add	x11, x11, #0x80
+10001a6b4:     	udiv	x13, x11, x10
+10001a6b8:     	msub	x11, x13, x10, x11
+10001a6bc:     	sub	x14, x10, x11
+10001a6c0:     	add	w15, w13, #0x1
+10001a6c4:     	lsl	x11, x11, x15
+10001a6c8:     	lsl	x13, x14, x13
+10001a6cc:     	add	x11, x11, x13
+10001a6d0:     	adds	x13, x11, x10
+10001a6d4:     	cset	w14, hs
+10001a6d8:     	mov	w15, #-0x7fffffff       ; =-2147483647
+10001a6dc:     	cmp	x13, x15
+10001a6e0:     	cset	w13, lo
+10001a6e4:     	bic	w13, w13, w14
+10001a6e8:     	tbnz	w13, #0x0, 0x10001a700 <<iroha_zkp_vole::bavc::Shape>::new_as+0xa4>
+10001a6ec:     	mov	w8, #0x9                ; =9
+10001a6f0:     	stp	x8, x11, [x0]
+10001a6f4:     	mov	w9, #0xff               ; =255
+10001a6f8:     	strb	w9, [x0, #0x39]
+10001a6fc:     	ret
+10001a700:     	lsl	x13, x8, #3
+10001a704:     	add	x13, x13, #0x10
+10001a708:     	lsl	x14, x11, #1
+10001a70c:     	umulh	x14, x14, x13
+10001a710:     	cmp	xzr, x14
+10001a714:     	b.ne	0x10001a6ec <<iroha_zkp_vole::bavc::Shape>::new_as+0x90>
+10001a718:     	lsl	x14, x8, #6
+10001a71c:     	sub	x12, x14, x12
+10001a720:     	add	x12, x12, #0x80
+10001a724:     	udiv	x14, x12, x10
+10001a728:     	msub	x12, x14, x10, x12
+10001a72c:     	mov	w15, #0x1               ; =1
+10001a730:     	lsl	x14, x15, x14
+10001a734:     	adrp	x15, 0x10005b000 <_anon.7f251437f334792cf7346157e39d15b0.2+0x3a0>
+10001a738:     	add	x15, x15, #0xf58
+10001a73c:     	ldrb	w15, [x15, w9, uxtw]
+10001a740:     	adrp	x16, 0x10005b000 <_anon.7f251437f334792cf7346157e39d15b0.2+0x3a0>
+10001a744:     	add	x16, x16, #0xf60
+10001a748:     	ldrb	w16, [x16, w9, uxtw]
+10001a74c:     	ldr	x17, [x2, #0x10]
+10001a750:     	stp	x13, x10, [x0]
+10001a754:     	stp	x12, x14, [x0, #0x10]
+10001a758:     	madd	x10, x15, x8, x16
+10001a75c:     	stp	x11, x10, [x0, #0x20]
+10001a760:     	str	x17, [x0, #0x30]
+10001a764:     	strb	w8, [x0, #0x38]
+10001a768:     	strb	w9, [x0, #0x39]
+10001a76c:     	ret
+10001a770:     	mov	w9, #0x80               ; =128
+10001a774:     	mov	w10, #0xd               ; =13
+10001a778:     	stp	x10, x8, [x0]
+10001a77c:     	str	x9, [x0, #0x10]
+10001a780:     	mov	w9, #0xff               ; =255
+10001a784:     	strb	w9, [x0, #0x39]
+10001a788:     	ret
+10001a78c:     	cmp	x9, #0x3
+10001a790:     	b.ne	0x10001a7b4 <<iroha_zkp_vole::bavc::Shape>::new_as+0x158>
+10001a794:     	mov	w9, #0x2                ; =2
+10001a798:     	ldr	x10, [x2]
+10001a79c:     	cbnz	x10, 0x10001a6a4 <<iroha_zkp_vole::bavc::Shape>::new_as+0x48>
+10001a7a0:     	stp	x29, x30, [sp, #-0x10]!
+10001a7a4:     	mov	x29, sp
+10001a7a8:     	adrp	x0, 0x1000d1000 <iroha_zkp_vole::crt::generated::FAEST_EM_192F+0x30>
+10001a7ac:     	add	x0, x0, #0x480
+10001a7b0:     	bl	0x1000584a8 <core::panicking::panic_const::panic_const_rem_by_zero>
+10001a7b4:     	mov	w8, #0x1                ; =1
+10001a7b8:     	mov	w10, #0xd               ; =13
+10001a7bc:     	stp	x10, x8, [x0]
+10001a7c0:     	str	x9, [x0, #0x10]
+10001a7c4:     	mov	w9, #0xff               ; =255
+10001a7c8:     	strb	w9, [x0, #0x39]
+10001a7cc:     	ret

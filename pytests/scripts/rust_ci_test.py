@@ -611,7 +611,7 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     manifest = rust_ci.load_lane_manifest()
     assert manifest.daemon_packages == ("irohad", "irohad_lib")
     assert manifest.package_binaries == {
-        "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
+        "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami", "sorafs_cli"),
         "iroha_test_network": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
         "izanami": ("iroha", "iroha3d"),
     }
@@ -934,7 +934,7 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
     assert not result.foundation_only and not result.full
     assert result.deferred_packages == result.deferred_consumers == ()
     assert "irohad" in result.lane_packages["node"]
-    assert result.binaries == ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami")
+    assert result.binaries == ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami", "sorafs_cli")
     assert result.as_dict()["binary_matrix"]["include"] == [
         {"lane": "node", "packages": "iroha_test_network", "package_count": 1},
         {"lane": "integration", "packages": "integration_tests", "package_count": 1},
@@ -1033,6 +1033,31 @@ def test_empty_binary_union_requires_an_explicit_qualified_owner(tmp_path: Path)
     ))
     with pytest.raises(rust_ci.ClassificationError, match="binary artifacts"):
         rust_ci.load_lane_manifest(path)
+
+
+def test_publication_cli_artifact_retains_required_feature_owners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Network publication runs the actual orchestrator CLI with all binary features."""
+
+    calls = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> None:
+        calls.append(command)
+        target = Path(command[command.index("--target-dir") + 1]) / "release"
+        target.mkdir(parents=True)
+        (target / "sorafs_cli").write_bytes(b"publication CLI")
+
+    monkeypatch.setattr(rust_ci, "_run", fake_run)
+    output = tmp_path / "artifacts"
+    rust_ci.build_binaries(("sorafs_cli",), output, root=tmp_path)
+    assert calls == [[
+        "cargo", "build", "--locked", "--release", "--target-dir",
+        str(tmp_path / "target/ci-binaries/shipping"),
+        "-p", "sorafs_orchestrator", "--bin", "sorafs_cli", "--features",
+        "sorafs_orchestrator/cli-orchestrator,sorafs_orchestrator/moderation-grpc",
+    ]]
+    assert (output / "sorafs_cli").read_bytes() == b"publication CLI"
 
 
 def test_route_control_artifact_build_and_staging_preserve_shipping_identity(

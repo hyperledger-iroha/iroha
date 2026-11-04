@@ -1,6 +1,6 @@
 //! Subscription trigger integration tests.
 use eyre::{Result, WrapErr, eyre};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::data_model::subscription::{
     SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
     SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -19,10 +19,7 @@ use std::{
     collections::BTreeMap,
     time::{Duration, SystemTime},
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
 where
     F: FnOnce() -> Fut,
@@ -67,21 +64,17 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
     IvmBytecode::from_compiled(blob)
 }
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
-    let asset = assets
-        .into_iter()
-        .find(|asset| asset.id() == asset_id)
-        .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
+    let asset = client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))?;
+    assert_eq!(asset.id(), asset_id);
     Ok(asset.value().clone())
 }
 fn nft_metadata_value(client: &Client, nft_id: &NftId, key: &Name) -> Result<Option<Json>> {
     let nft = client
         .client()
-        .query(FindNfts::new())
-        .execute_all()?
-        .into_iter()
-        .find(|nft| nft.id() == nft_id)
-        .ok_or_else(|| eyre!("nft {nft_id} not found"))?;
+        .query_single(FindNftById::new(nft_id.clone()))?;
+    assert_eq!(nft.id(), nft_id);
     Ok(nft.content().get(key).cloned())
 }
 fn subscription_state_for_nft(client: &Client, nft_id: &NftId) -> Result<SubscriptionState> {
@@ -103,7 +96,7 @@ fn subscription_invoice_for_nft(
 }
 async fn tick_block(client: &Client) -> Result<()> {
     let client = client.clone();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client.submit(
             Log::new(Level::DEBUG, "subscription trigger tick".to_string()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -123,7 +116,7 @@ async fn wait_for_invoice_status(
     match timeout(sync_timeout, async {
         loop {
             tick_block(client).await?;
-            let invoice = spawn_blocking({
+            let invoice = run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 move || subscription_invoice_for_nft(&client, &nft_id)
@@ -153,7 +146,7 @@ async fn wait_for_invoice_status(
                     )
                 },
             );
-            let diagnostics = spawn_blocking({
+            let diagnostics = run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let trigger_id = trigger_id.clone();
@@ -271,7 +264,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let usage_delta = Quantity::from(3_u32);
             let amount = Quantity::from(6_u32);
             let initial_balance = Quantity::from(100_u32);
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
@@ -280,7 +273,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                             charge_def_id.clone(),
                             "usd".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -290,7 +283,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
@@ -299,7 +292,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                             plan_id.clone(),
                             "usage_plan".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -327,7 +320,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }),
             };
             let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse()?;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 let plan_key = plan_key.clone();
@@ -345,7 +338,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             .await??;
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
             let mint_amount = initial_balance.clone();
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = mint_amount;
@@ -368,7 +361,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                     asset: asset_id.clone(),
                 }
                 .into();
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = bob_client.clone();
                 let provider = provider.clone();
                 move || {
@@ -399,7 +392,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             let mut metadata = Metadata::default();
             let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse()?;
             metadata.insert(subscription_key, Json::new(subscription_state.clone()));
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let metadata = metadata.clone();
@@ -414,7 +407,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let provider = provider.clone();
@@ -440,7 +433,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                     .under_authority(provider.clone()),
             )
             .expect("trigger action fixture satisfies validation invariants");
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let usage_trigger_id = usage_trigger_id.clone();
                 let usage_action = usage_action.clone();
@@ -460,7 +453,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 unit_key: unit_key.clone(),
                 delta: usage_delta.clone(),
             };
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let usage_trigger_id = usage_trigger_id.clone();
                 move || {
@@ -474,7 +467,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                 }
             })
             .await??;
-            let usage_state = spawn_blocking({
+            let usage_state = run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 move || subscription_state_for_nft(&client, &nft_id)
@@ -502,7 +495,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             )
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let billing_trigger_id = billing_trigger_id.clone();
                 let billing_action = billing_action.clone();
@@ -538,7 +531,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             assert_eq!(invoice.asset_definition, charge_def_id);
             assert_eq!(invoice.period_start_ms, start_ms - period_ms);
             assert_eq!(invoice.period_end_ms, start_ms);
-            let billed_state = spawn_blocking({
+            let billed_state = run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 move || subscription_state_for_nft(&client, &nft_id)
@@ -550,7 +543,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
             assert_eq!(billed_state.current_period_start_ms, start_ms);
             assert_eq!(billed_state.current_period_end_ms, start_ms + period_ms);
             assert!(!billed_state.usage_accumulated.contains_key(&unit_key));
-            let final_balance = spawn_blocking({
+            let final_balance = run_on_dedicated_thread({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 move || asset_value(&client, &asset_id)
@@ -590,7 +583,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let (start_time, start_ms) = schedule_start(network);
             let amount = Quantity::from(120_u32);
             let initial_balance = Quantity::from(300_u32);
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
@@ -599,7 +592,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                             charge_def_id.clone(),
                             "usd_fixed".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -609,7 +602,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
@@ -618,7 +611,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                             plan_id.clone(),
                             "fixed_plan".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -645,7 +638,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }),
             };
             let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse()?;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 let plan_key = plan_key.clone();
@@ -663,7 +656,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             .await??;
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
             let mint_amount = initial_balance.clone();
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = mint_amount;
@@ -686,7 +679,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                     asset: asset_id.clone(),
                 }
                 .into();
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = bob_client.clone();
                 let provider = provider.clone();
                 move || {
@@ -717,7 +710,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             let mut metadata = Metadata::default();
             let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse()?;
             metadata.insert(subscription_key, Json::new(subscription_state.clone()));
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let metadata = metadata.clone();
@@ -732,7 +725,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                 }
             })
             .await??;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let provider = provider.clone();
@@ -766,7 +759,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             )
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let billing_trigger_id = billing_trigger_id.clone();
                 let billing_action = billing_action.clone();
@@ -801,7 +794,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             assert_eq!(invoice.asset_definition, charge_def_id);
             assert_eq!(invoice.period_start_ms, start_ms);
             assert_eq!(invoice.period_end_ms, start_ms + period_ms);
-            let billed_state = spawn_blocking({
+            let billed_state = run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 move || subscription_state_for_nft(&client, &nft_id)
@@ -811,7 +804,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
             assert_eq!(billed_state.current_period_start_ms, start_ms);
             assert_eq!(billed_state.current_period_end_ms, start_ms + period_ms);
             assert_eq!(billed_state.next_charge_ms, start_ms + period_ms);
-            let final_balance = spawn_blocking({
+            let final_balance = run_on_dedicated_thread({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 move || asset_value(&client, &asset_id)
@@ -852,7 +845,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let (start_time, start_ms) = schedule_start(network);
             let amount = Quantity::from(120_u32);
             let initial_balance = Quantity::from(50_u32);
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let charge_def_id = charge_def_id.clone();
                 move || {
@@ -861,7 +854,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                             charge_def_id.clone(),
                             "usd_retry".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -871,7 +864,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 move || {
@@ -880,7 +873,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                             plan_id.clone(),
                             "retry_plan".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -907,7 +900,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }),
             };
             let plan_key: Name = SUBSCRIPTION_PLAN_METADATA_KEY.parse()?;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let plan_id = plan_id.clone();
                 let plan_key = plan_key.clone();
@@ -925,7 +918,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             .await??;
             let asset_id = AssetId::new(charge_def_id.clone(), subscriber.clone());
             let mint_amount = initial_balance.clone();
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 let amount = mint_amount;
@@ -957,7 +950,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             let mut metadata = Metadata::default();
             let subscription_key: Name = SUBSCRIPTION_METADATA_KEY.parse()?;
             metadata.insert(subscription_key, Json::new(subscription_state.clone()));
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let metadata = metadata.clone();
@@ -972,7 +965,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 }
             })
             .await??;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 let provider = provider.clone();
@@ -1006,7 +999,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             )
             .expect("trigger action fixture satisfies validation invariants")
             .with_metadata(trigger_metadata);
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = client.clone();
                 let billing_trigger_id = billing_trigger_id.clone();
                 let billing_action = billing_action.clone();
@@ -1042,7 +1035,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
             assert_eq!(invoice.asset_definition, charge_def_id);
             assert_eq!(invoice.period_start_ms, start_ms - period_ms);
             assert_eq!(invoice.period_end_ms, start_ms);
-            let billed_state = spawn_blocking({
+            let billed_state = run_on_dedicated_thread({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
                 move || subscription_state_for_nft(&client, &nft_id)
@@ -1054,7 +1047,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                 billed_state.next_charge_ms,
                 invoice.attempted_at_ms.saturating_add(retry_backoff_ms)
             );
-            let final_balance = spawn_blocking({
+            let final_balance = run_on_dedicated_thread({
                 let client = client.clone();
                 let asset_id = asset_id.clone();
                 move || asset_value(&client, &asset_id)

@@ -1,0 +1,17 @@
+{
+  "analyzer_sha256": "63146df4723720655462fcf45ac935c493d161a265f9f0042b7e1260ad9ab31a",
+  "driver_sha256": "0404de2bf57c1c49b034acdacfd02c7cd18c452ba34292a2fca20a1cddf4e063",
+  "findings_closed": [
+    "All removed baseline merges must remain active deferred refusals, including a positive stack-growing loop after an omitted continuation. Fixed and covered by adversarial regression.",
+    "Whole-image error headline must include deferred frame errors. Active counter is retained; separate ordinary-only counter added.",
+    "Capture before pins must still match reviewed helpers and parsed receipt bytes. Before pins are rechecked; build/triage/reference are parsed from retained byte buffers bound to those pins."
+  ],
+  "implementation_review": "Exact complete interval, full image and range binding, SP alignment and known effects, no name/native-cost assumptions, no transitive returnability, and preserved call/depth/callee obligations reviewed.",
+  "method": "Independent read-only inspection in the shared workspace; no reviewer edits or test execution.",
+  "qualification_uplift": false,
+  "recorded_utc": "2026-11-04T07:16:54.176550+00:00",
+  "reviewer": "/root/state_runner_finish",
+  "schema": "parliament-stack-v5-independent-review-record-v1",
+  "scope": "Implementation, adversarial controls and capture driver review; capture results remain independently inspectable through exact comparison artifacts.",
+  "tests_sha256": "c3d420b45dea95468aec5361f7383ed452b70515c4f23faa8fc97d1cb4c5b820"
+}

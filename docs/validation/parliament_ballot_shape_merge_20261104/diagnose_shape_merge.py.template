@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+"""Read retained stack-v4 CFGs and reproduce the Shape merge without changing analysis.
+
+Requires Python 3.11+ and the retained stack-v4 raw/JSON captures. No environment
+variables, native worker execution, Rust builds, pytest invocation, or source
+changes. Output must be new; all stack-v4 cache/archive files are guarded.
+"""
+import argparse
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import re
+
+
+def digest(path):
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def snapshot(directories):
+    return {str(path): digest(path) for directory in directories
+            for path in sorted(directory.rglob('*')) if path.is_file()}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', required=True, type=Path)
+    parser.add_argument('--cache', required=True, type=Path)
+    parser.add_argument('--output', required=True, type=Path)
+    args = parser.parse_args()
+    root, cache, output = (path.resolve() for path in (args.root, args.cache, args.output))
+    output.mkdir(parents=True, exist_ok=False)
+    original_directories = [cache / 'stack-v4', root / 'docs/validation/parliament_ballot_stack_v4_20261104']
+    before = snapshot(original_directories)
+    analyzer_path = root / 'scripts/parliament_ballot_stack_audit.py'
+    analyzer_hash = digest(analyzer_path)
+    assert analyzer_hash == '7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab'
+    spec = importlib.util.spec_from_file_location('retained_stack_v4', analyzer_path)
+    analyzer = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(analyzer)
+    report = {
+        'schema': 'parliament-shape-stack-merge-diagnosis-v1',
+        'classification': 'conservative ordinary-return continuation at a callee whose retained ordinary CFG ends in a trap',
+        'analyzer_sha256': analyzer_hash,
+        'driver_sha256': digest(__file__),
+        'v4_files_sha256_before': before,
+        'modes': {},
+        'analyzer_changed': False,
+        'native_worker_executed': False,
+        'rust_build_executed': False,
+        'complete_stack_certificate': False,
+        'profile_qualified': False,
+    }
+    for mode in ('portable', 'accel'):
+        directory = cache / 'stack-v4' / mode
+        text = (directory / 'disassembly.txt').read_text()
+        instructions, names = analyzer.parse_disassembly(text)
+        starts = analyzer.parse_starts((directory / 'starts.txt').read_text())
+        result = json.loads((cache / 'stack-v4' / (mode + '.json')).read_text())
+        shape = next(fn for fn in result['functions'] if fn['name'] == '<iroha_zkp_vole::bavc::Shape>::new_as')
+        start, end = int(shape['address'], 16), int(shape['end'], 16)
+        assert sorted(starts)[sorted(starts).index(start) + 1] == end
+        assert all(address in instructions for address in range(start, end, 4))
+        assert end - start == 93 * 4 and shape['visited_instructions'] == 93
+        assert len(shape['calls']) == 1 and len(shape['frame_errors']) == 1
+        call = shape['calls'][0]
+        callee_start = int(call['target'], 16)
+        callee = next(fn for fn in result['functions'] if int(fn['address'], 16) == callee_start)
+        callee_end = int(callee['end'], 16)
+        assert sorted(starts)[sorted(starts).index(callee_start) + 1] == callee_end
+        entry_ops = [instructions[callee_start + 4 * i][0] for i in range(8)]
+        assert entry_ops == ['stp', 'mov', 'mov', 'adrp', 'add', 'mov', 'bl', 'udf']
+        assert instructions[callee_start + 28][1] == '#0x0'
+        assert len(callee['calls']) == 1 and not callee['frame_errors']
+        assert callee['gaps'][0]['kind'] == 'exceptional_terminal'
+        paths = {
+            'ordinary_branch': [0, 4, 8, 12, 16, 20, 0x130, 0x134, 0x158],
+            'hypothetical_panic_call_return': [0, 4, 8, 0x38, 0x3c, 0x40, 0x44,
+                                               0x144, 0x148, 0x14c, 0x150, 0x154, 0x158],
+        }
+        traces = {}
+        for label, offsets in paths.items():
+            sp, fp, trace = 0, None, []
+            for offset, following in zip(offsets, offsets[1:]):
+                address, next_address = start + offset, start + following
+                op, operands = instructions[address]
+                trace.append({'address': hex(address), 'instruction': op + ' ' + operands, 'sp_before': sp, 'fp_before': fp})
+                if op in analyzer.CONDITIONAL:
+                    target = int(re.search(r'(?:^|,\s*)(0x[0-9a-f]+)(?:\s|$)', operands)[1], 16)
+                    assert next_address in {address + 4, target}
+                elif op == 'bl':
+                    assert next_address == address + 4
+                else:
+                    assert next_address == address + 4
+                    sp, fp = analyzer.stack_effect(op, operands, sp, fp)
+            traces[label] = {'instructions': trace, 'join': hex(start + offsets[-1]),
+                             'sp_at_join': sp, 'fp_at_join': fp}
+        assert traces['ordinary_branch']['sp_at_join'] == 0
+        assert traces['hypothetical_panic_call_return']['sp_at_join'] == -16
+        for label, function in [('shape', shape), ('terminal-callee', callee)]:
+            lo, hi = int(function['address'], 16), int(function['end'], 16)
+            lines = []
+            for line in text.splitlines():
+                instruction = re.match(r'\s*([0-9a-fA-F]+):', line)
+                symbol = re.fullmatch(r'([0-9a-fA-F]+) <(.+)>:', line.strip())
+                if instruction and lo <= int(instruction[1], 16) < hi or symbol and int(symbol[1], 16) == lo:
+                    lines.append(line)
+            (output / f'{mode}-{label}.txt').write_text('\n'.join(lines) + '\n')
+        report['modes'][mode] = {
+            'shape_result_unchanged': shape, 'terminal_callee_result_unchanged': callee,
+            'paths_to_same_block': traces,
+            'shape_sp_operand_instructions': [
+                {'address': hex(address), 'instruction': op + ' ' + operands}
+                for address in range(start, end, 4) for op, operands in [instructions[address]]
+                if re.search(r'\b(?:sp|wsp)\b', operands)
+            ],
+            'lc_function_start_boundaries_match': True,
+            'all_93_shape_instructions_present_and_visited': True,
+            'callee_entry_unconditionally_reaches_trap_if_child_returns': True,
+            'callee_ordinary_return_absent_without_name_assumption': True,
+        }
+    # Neutral names: the limitation is independent of Rust/panic symbol names.
+    instructions = {
+        0x1000: ('cbz', 'w0, 0x1010'),
+        0x1004: ('stp', 'x29, x30, [sp, #-16]!'),
+        0x1008: ('mov', 'x29, sp'),
+        0x100c: ('bl', '0x2000'),
+        0x1010: ('ret', ''),
+        0x2000: ('bl', '0x3000'),
+        0x2004: ('udf', '#0'),
+    }
+    starts, stubs = {0x1000: 'fixture_root', 0x2000: 'fixture_terminal'}, {0x3000: 'opaque_endpoint'}
+    functions = {
+        0x1000: analyzer.analyze_function(0x1000, 0x1014, instructions, starts, stubs, starts[0x1000]),
+        0x2000: analyzer.analyze_function(0x2000, 0x2008, instructions, starts, stubs, starts[0x2000]),
+    }
+    region = analyzer.call_region(functions, 0x1000)
+    assert region['complete_stack_bound_bytes'] is None
+    assert region['frontier_kind_counts'] == {'exceptional_terminal': 1, 'inconsistent_sp_merge': 1, 'native_edge': 1}
+    report['minimal_reproduction'] = {
+        'instructions': [{'address': hex(address), 'opcode': op, 'operands': operands} for address, (op, operands) in instructions.items()],
+        'function_results': list(functions.values()), 'region_result': region,
+    }
+    after = snapshot(original_directories)
+    assert after == before and digest(analyzer_path) == analyzer_hash
+    report['v4_files_sha256_after'] = after
+    report['v4_files_unchanged'] = len(before)
+    report['next_step'] = ('Separately review a function-local no-ordinary-return summary from exact CFG terminals; '
+                           'only then consider suppressing caller continuation. Preserve the callee call edge, '
+                           'trap/native/indirect/recursive frontiers and hidden unwind/signal limitations. '
+                           'Do not infer noreturn from a name, assign zero callee cost, or change the v4 result.')
+    (output / 'diagnosis.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+    (output / 'diagnose_shape_merge.py.template').write_bytes(Path(__file__).read_bytes())
+    print(json.dumps({'output': str(output), 'classification': report['classification'],
+                      'v4_files_unchanged': len(before), 'complete_stack_certificate': False}))
+
+
+if __name__ == '__main__':
+    main()

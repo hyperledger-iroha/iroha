@@ -1,10 +1,18 @@
 //! Account query coverage for Torii.
 use eyre::Result;
 use integration_tests::sandbox;
+use iroha::collections::{Collection, ListQuery};
 use iroha::data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::collections::HashSet;
+#[derive(norito::JsonDeserialize)]
+struct AssetHolder {
+    id: AssetId,
+    account_id: AccountId,
+    asset: AssetDefinitionId,
+    quantity: Quantity,
+}
 #[test]
 fn find_accounts_with_asset() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -27,7 +35,7 @@ fn find_accounts_with_asset() -> Result<()> {
                 __asset_definition_id.clone(),
                 "test_coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         };
         test_client.submit(
@@ -37,10 +45,7 @@ fn find_accounts_with_asset() -> Result<()> {
         // Checking results before all
         let received_asset_definition = test_client
             .client()
-            .query(FindAssetDefinitions::new())
-            .execute_all()?
-            .into_iter()
-            .find(|asset_definition| asset_definition.id() == &definition_id)
+            .query_single(FindAssetDefinitionById::new(definition_id.clone()))
             .expect("asset definition should exist");
         assert_eq!(received_asset_definition.id(), asset_definition.id());
         let accounts: [AccountId; 5] = [
@@ -74,21 +79,35 @@ fn find_accounts_with_asset() -> Result<()> {
         // Checking results
         let received_asset_definition = test_client
             .client()
-            .query(FindAssetDefinitions::new())
-            .execute_all()?
-            .into_iter()
-            .find(|asset_definition| asset_definition.id() == &definition_id)
+            .query_single(FindAssetDefinitionById::new(definition_id.clone()))
             .expect("asset definition should exist");
         assert_eq!(received_asset_definition.id(), asset_definition.id());
         assert_eq!(received_asset_definition.spec(), NumericSpec::default());
-        let found_accounts = test_client
-            .client()
-            .query(FindAccountsWithAsset::new(definition_id))
-            .execute_all()?;
-        let found_ids = found_accounts
-            .into_iter()
-            .map(|account| account.id().clone())
-            .collect::<HashSet<_>>();
+        // The native holder collection discovers the full holder set, including
+        // unexpected accounts, within one complete bounded page.
+        let page = test_client.list_page(
+            &Collection::AssetHolders(definition_id.clone()),
+            &ListQuery::new().limit(u32::try_from(accounts.len() + 1)?),
+        )?;
+        assert!(
+            page.next_cursor.is_none(),
+            "all fixture holders fit one page"
+        );
+        assert_eq!(page.items.len(), accounts.len());
+        let mut found_ids = HashSet::new();
+        for value in page.items {
+            let holder: AssetHolder = norito::json::from_value(value)?;
+            assert_eq!(holder.asset, definition_id);
+            assert_eq!(
+                holder.id,
+                AssetId::new(definition_id.clone(), holder.account_id.clone())
+            );
+            assert_eq!(holder.quantity, Quantity::one());
+            assert!(
+                found_ids.insert(holder.account_id),
+                "holder repeated in one page"
+            );
+        }
         assert_eq!(found_ids, accounts);
         Ok(())
     })();

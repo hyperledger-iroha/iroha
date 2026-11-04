@@ -4,23 +4,37 @@ use integration_tests::sandbox::{
     self, start_network_async_or_skip as sandbox_start_network_async_or_skip,
 };
 use iroha::data_model::{
-    isi::{SetKeyValue, repo::RepoIsi},
+    isi::{
+        SetKeyValue,
+        kaigi::{CreateKaigi, RegisterKaigiRelay, ReportKaigiRelayHealth},
+        repo::RepoIsi,
+    },
     kaigi::{
-        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayHpkeSuiteV1,
-        KaigiRelayRegistration, encode_kaigi_relay_hpke_key_v1, kaigi_relay_feedback_key,
-        kaigi_relay_metadata_key,
+        KaigiId, KaigiRecord, KaigiRelayHealthStatus, KaigiRelayHop, KaigiRelayHpkeSuiteV1,
+        KaigiRelayManifest, KaigiRelayRegistration, NewKaigi, encode_kaigi_relay_hpke_key_v1,
+        kaigi_metadata_key,
     },
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
 };
 use iroha_data_model::account::address::AccountAddress;
+use iroha_data_model::alias_setup::{
+    AccountAliasRoleV1, AccountProvisionV1, ResolvedAccountAliasV1,
+};
 use iroha_data_model::prelude::RepoInstructionBox;
+use iroha_executor_data_model::permission::account::{
+    AccountAliasPermissionScope, CanManageAccountAlias,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_primitives::json::Json;
-use iroha_test_network::{NetworkBuilder, init_instruction_registry};
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
+use iroha_test_network::{
+    NetworkBuilder, account_alias_setup_instruction, init_instruction_registry,
+};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
+    SAMPLE_GENESIS_ACCOUNT_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+};
 use reqwest::Client;
 use std::{
     env,
@@ -515,7 +529,8 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
         .expect_err("dotted I105 literal must fail strict parsing")
         .code_str()
         .to_string();
-    let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
+    // GET filters use the textual grammar; JSON filter trees belong to POST queries.
+    let filter = format!(r#"id == "{literal}""#);
     let http = http_client();
     let mut url = network
         .client()
@@ -933,6 +948,51 @@ async fn asset_holders_query_rejects_dotted_i105_filter_literals() -> Result<()>
     );
     Ok(())
 }
+async fn submit_account_history_fixture(
+    network: &sandbox::SerializedNetwork,
+    metadata_label: &str,
+) -> Result<()> {
+    let client = network.client();
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        [SetKeyValue::account(
+            ALICE_ID.clone(),
+            metadata_label.parse::<Name>()?,
+            norito::json!(metadata_label),
+        )],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    eyre::ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "history fee quote must preserve the selected payer and gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    let mut submitted = false;
+    let mut last_err: Option<eyre::Report> = None;
+    for peer in network.peers() {
+        let peer_client = peer.client();
+        match peer_client
+            .account_client()
+            .submit_transaction(&transaction)
+            .await
+        {
+            Ok(_) => submitted = true,
+            Err(err) => last_err = Some(err),
+        }
+    }
+    if submitted {
+        Ok(())
+    } else {
+        Err(last_err.unwrap_or_else(|| eyre!("failed to submit transaction")))
+    }
+}
 #[tokio::test]
 async fn account_transactions_get_returns_i105_literals() -> Result<()> {
     let Some(network) = Box::pin(start_network_async_or_skip(
@@ -945,50 +1005,7 @@ async fn account_transactions_get_returns_i105_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     // Ensure the account has at least one external transaction to format.
-    let client = network.client();
-    let peer_clients: Vec<_> = network
-        .peers()
-        .iter()
-        .map(iroha_test_network::NetworkPeer::client)
-        .collect();
-    tokio::task::spawn_blocking({
-        let client = client.clone();
-        move || -> Result<()> {
-            let key: Name = "addrfmtget".parse().expect("metadata key");
-            let transaction = {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [SetKeyValue::account(
-                            ALICE_ID.clone(),
-                            key,
-                            norito::json!("addrfmtget"),
-                        )],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction");
-            let mut submitted = false;
-            let mut last_err: Option<eyre::Report> = None;
-            for peer_client in peer_clients {
-                match peer_client.submit_transaction(&transaction) {
-                    Ok(_) => submitted = true,
-                    Err(err) => last_err = Some(err),
-                }
-            }
-            if submitted {
-                Ok(())
-            } else {
-                Err(last_err.unwrap_or_else(|| eyre!("failed to submit transaction")))
-            }
-        }
-    })
-    .await??;
+    submit_account_history_fixture(&network, "addrfmtget").await?;
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
     let i105_literal = account_literal.clone();
@@ -1084,50 +1101,7 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
     };
     network.ensure_blocks(1).await?;
     // Ensure the account has at least one external transaction to format.
-    let client = network.client();
-    let peer_clients: Vec<_> = network
-        .peers()
-        .iter()
-        .map(iroha_test_network::NetworkPeer::client)
-        .collect();
-    tokio::task::spawn_blocking({
-        let client = client.clone();
-        move || -> Result<()> {
-            let key: Name = "addrfmtquery".parse().expect("metadata key");
-            let transaction = {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [SetKeyValue::account(
-                            ALICE_ID.clone(),
-                            key,
-                            norito::json!("addrfmtquery"),
-                        )],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction");
-            let mut submitted = false;
-            let mut last_err: Option<eyre::Report> = None;
-            for peer_client in peer_clients {
-                match peer_client.submit_transaction(&transaction) {
-                    Ok(_) => submitted = true,
-                    Err(err) => last_err = Some(err),
-                }
-            }
-            if submitted {
-                Ok(())
-            } else {
-                Err(last_err.unwrap_or_else(|| eyre!("failed to submit transaction")))
-            }
-        }
-    })
-    .await??;
+    submit_account_history_fixture(&network, "addrfmtquery").await?;
     let http = http_client();
     let account_literal = ALICE_ID.to_string();
     let i105_literal = account_literal.clone();
@@ -1204,8 +1178,17 @@ async fn account_transactions_query_returns_i105_literals() -> Result<()> {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn explorer_transactions_emit_i105_literals() -> Result<()> {
+    let fee_asset_id: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+    let builder = NetworkBuilder::new().with_genesis_post_bootstrap_isi(vec![
+        Mint::asset_quantity(
+            1_000_000_u32,
+            AssetId::new(fee_asset_id, SAMPLE_GENESIS_ACCOUNT_ID.clone()),
+        )
+        .into(),
+    ]);
     let Some(network) = Box::pin(start_network_async_or_skip(
-        NetworkBuilder::new(),
+        builder,
         stringify!(explorer_transactions_emit_i105_literals),
     ))
     .await?
@@ -1213,11 +1196,25 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
+    // Explorer history projects external submissions, not genesis setup instructions.
+    let client = network.peer().client_for(
+        &SAMPLE_GENESIS_ACCOUNT_ID,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+    );
+    submit_account_fixture_instruction(
+        client.account_client(),
+        SetKeyValue::account(
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            "addrexplorertx".parse()?,
+            norito::json!("canonical explorer authority"),
+        )
+        .into(),
+    )
+    .await?;
     let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let i105_literal = account_literal.clone();
-    let base = network
-        .client()
+    let base = client
         .client()
         .endpoint()
         .join("/v1/explorer/transactions")
@@ -1226,9 +1223,8 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("page", "1");
-            qp.append_pair("per_page", "8");
+            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
+            qp.append_pair("limit", "8");
         }
         url
     };
@@ -1237,16 +1233,17 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
     assert!(
-        resp.status().is_success(),
-        "expected explorer transactions to succeed (I105 default), got {}",
-        resp.status()
+        status.is_success(),
+        "expected explorer transactions to succeed (I105 default), got {status}: {body}"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+    let parsed: norito::json::Value = norito::json::from_str(&body)?;
     let authorities = extract_explorer_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
-        "expected explorer transactions for Genesis account"
+        "expected explorer transactions for Genesis account, got {body}"
     );
     assert!(
         authorities
@@ -1258,9 +1255,8 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("page", "1");
-            qp.append_pair("per_page", "8");
+            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
+            qp.append_pair("limit", "8");
         }
         url
     };
@@ -1269,12 +1265,13 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
     assert!(
-        resp.status().is_success(),
-        "expected explorer transactions with I105 response to succeed, got {}",
-        resp.status()
+        status.is_success(),
+        "expected explorer transactions with I105 response to succeed, got {status}: {body}"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+    let parsed: norito::json::Value = norito::json::from_str(&body)?;
     let authorities = extract_explorer_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
@@ -1289,9 +1286,8 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &dotted_i105_filter);
-            qp.append_pair("page", "1");
-            qp.append_pair("per_page", "8");
+            qp.append_pair("filter", &format!(r#"authority == "{dotted_i105_filter}""#));
+            qp.append_pair("limit", "8");
         }
         url
     };
@@ -1319,8 +1315,17 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn explorer_instructions_emit_i105_literals() -> Result<()> {
+    let fee_asset_id: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+    let builder = NetworkBuilder::new().with_genesis_post_bootstrap_isi(vec![
+        Mint::asset_quantity(
+            1_000_000_u32,
+            AssetId::new(fee_asset_id, SAMPLE_GENESIS_ACCOUNT_ID.clone()),
+        )
+        .into(),
+    ]);
     let Some(network) = Box::pin(start_network_async_or_skip(
-        NetworkBuilder::new(),
+        builder,
         stringify!(explorer_instructions_emit_i105_literals),
     ))
     .await?
@@ -1328,11 +1333,25 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
+    // Explorer history projects external submissions, not genesis setup instructions.
+    let client = network.peer().client_for(
+        &SAMPLE_GENESIS_ACCOUNT_ID,
+        SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+    );
+    submit_account_fixture_instruction(
+        client.account_client(),
+        SetKeyValue::account(
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            "addrexplorerisi".parse()?,
+            norito::json!("canonical explorer authority"),
+        )
+        .into(),
+    )
+    .await?;
     let http = http_client();
     let account_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
     let i105_literal = account_literal.clone();
-    let base = network
-        .client()
+    let base = client
         .client()
         .endpoint()
         .join("/v1/explorer/instructions")
@@ -1341,9 +1360,8 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("page", "1");
-            qp.append_pair("per_page", "8");
+            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
+            qp.append_pair("limit", "8");
         }
         url
     };
@@ -1352,16 +1370,17 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
     assert!(
-        resp.status().is_success(),
-        "expected explorer instructions to succeed (I105 default), got {}",
-        resp.status()
+        status.is_success(),
+        "expected explorer instructions to succeed (I105 default), got {status}: {body}"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+    let parsed: norito::json::Value = norito::json::from_str(&body)?;
     let authorities = extract_explorer_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
-        "expected explorer instructions for Genesis account"
+        "expected explorer instructions for Genesis account, got {body}"
     );
     assert!(
         authorities
@@ -1373,9 +1392,8 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         let mut url = base.clone();
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("page", "1");
-            qp.append_pair("per_page", "8");
+            qp.append_pair("filter", &format!(r#"authority == "{account_literal}""#));
+            qp.append_pair("limit", "8");
         }
         url
     };
@@ -1384,12 +1402,13 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         .header("Accept", "application/json")
         .send()
         .await?;
+    let status = resp.status();
+    let body = resp.text().await?;
     assert!(
-        resp.status().is_success(),
-        "expected explorer instructions with I105 response to succeed, got {}",
-        resp.status()
+        status.is_success(),
+        "expected explorer instructions with I105 response to succeed, got {status}: {body}"
     );
-    let parsed: norito::json::Value = norito::json::from_str(&resp.text().await?)?;
+    let parsed: norito::json::Value = norito::json::from_str(&body)?;
     let authorities = extract_explorer_authorities(&parsed);
     assert!(
         !authorities.is_empty(),
@@ -1404,9 +1423,8 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         let mut url = base;
         {
             let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &dotted_i105_filter);
-            qp.append_pair("page", "1");
-            qp.append_pair("per_page", "8");
+            qp.append_pair("filter", &format!(r#"authority == "{dotted_i105_filter}""#));
+            qp.append_pair("limit", "8");
         }
         url
     };
@@ -1623,24 +1641,33 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
     Ok(())
 }
 #[tokio::test]
-async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() -> Result<()> {
+async fn accounts_query_requires_canonical_ids_for_aliased_accounts() -> Result<()> {
     let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
-    let label = AccountAlias::new(
-        "primary".parse()?,
-        Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-            domain_id.name().clone(),
-        )),
+    let alias_literal = format!("primary@{domain_id}");
+    let alias = ResolvedAccountAliasV1::new(
+        alias_literal.parse()?,
         iroha_model_base::topology::DataSpaceId::UNIVERSAL,
     );
     let account_id = checked_random_account_id();
-    let account = Account::new(account_id.clone()).with_label(Some(label.clone()));
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
-        .with_genesis_instruction(Register::account(account));
+        .with_genesis_instruction(Register::account(Account::new(account_id.clone())))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Alias(alias),
+            }),
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        ))
+        .with_genesis_instruction(account_alias_setup_instruction(
+            &alias_literal,
+            &account_id,
+            AccountProvisionV1::Existing,
+            AccountAliasRoleV1::Primary,
+        )?);
     let Some(network) = Box::pin(start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals),
+        stringify!(accounts_query_requires_canonical_ids_for_aliased_accounts),
     ))
     .await?
     else {
@@ -1656,8 +1683,9 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
     let expected = account_id.to_string();
     let http = http_client();
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
-    let alias_literal = format!("{}@{}", label.label, domain_id);
     let i105_literal = dotted_i105_literal(&account_id.to_string());
+    // Generic account filters require canonical IDs. Resolving an alias is a
+    // separate caller-aware operation with its own resolution permission.
     let alias_body =
         format!(r#"{{"filter":{{"op":"eq","args":["id","{alias_literal}"]}},"limit":4}}"#);
     let alias_resp = http
@@ -1671,18 +1699,35 @@ async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() 
     let alias_body = alias_resp.text().await?;
     assert_eq!(
         alias_status,
-        reqwest::StatusCode::OK,
-        "alias literal should resolve to the canonical account id, got {alias_status} body={alias_body}"
+        reqwest::StatusCode::BAD_REQUEST,
+        "generic filters must reject even a bound alias, got {alias_status} body={alias_body}"
     );
     let alias_doc: norito::json::Value = norito::json::from_str(&alias_body)?;
-    let alias_ids = extract_account_ids(&alias_doc);
-    assert!(
-        alias_ids.iter().any(|id| id == &expected),
-        "alias literal should resolve to canonical account id {expected}, got {alias_ids:?}"
+    assert_eq!(
+        alias_doc.get("code").and_then(norito::json::Value::as_str),
+        Some("invalid_filter"),
+        "alias rejection must identify the invalid filter: {alias_doc:?}"
     );
     assert!(
-        alias_ids.iter().all(|id| !id.contains('@')),
-        "alias query should still return canonical ids, got {alias_ids:?}"
+        alias_body.contains("account filter requires a canonical I105 literal"),
+        "alias rejection must explain the canonical-ID requirement: {alias_body}"
+    );
+    let canonical_body =
+        format!(r#"{{"filter":{{"op":"eq","args":["id","{expected}"]}},"limit":4}}"#);
+    let canonical_resp = http
+        .post(url.clone())
+        .header("Content-Type", "application/json")
+        .header("Accept", "application/json")
+        .body(canonical_body)
+        .send()
+        .await?;
+    assert_eq!(canonical_resp.status(), reqwest::StatusCode::OK);
+    let canonical_doc = norito::json::from_str(&canonical_resp.text().await?)?;
+    let canonical_ids = extract_account_ids(&canonical_doc);
+    assert_eq!(
+        canonical_ids,
+        vec![expected],
+        "canonical filter must return exactly the bound account as a canonical ID"
     );
     let body = format!(r#"{{"filter":{{"op":"eq","args":["id","{i105_literal}"]}},"limit":4}}"#);
     let resp = http
@@ -1775,10 +1820,24 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     // environments may not ship repo instructions; skip gracefully if the binary rejects them.
     let repo_instruction_box: InstructionBox = RepoInstructionBox::from(repo_instruction).into();
     let client = network.client();
-    if let Err(err) = client.submit::<InstructionBox>(
-        repo_instruction_box,
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        [repo_instruction_box],
         iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    ) {
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    assert!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "repo fee quote must preserve the selected payer and gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    if let Err(err) = account.submit_transaction_and_wait(&transaction).await {
         eprintln!("Skipping repo i105 literal coverage: {err}");
         return Ok(());
     }
@@ -1900,43 +1959,64 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     );
     Ok(())
 }
+async fn submit_account_fixture_instruction(
+    account: &iroha::client::AccountClient,
+    instruction: InstructionBox,
+) -> Result<()> {
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        [instruction],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    eyre::ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "fixture fee quote must preserve the selected payer and gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    account.submit_transaction_and_wait(&transaction).await?;
+    Ok(())
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)] // integration coverage requires full scenario setup
 async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
-    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
-    let registration = KaigiRelayRegistration {
-        relay_id: relay_id.clone(),
-        hpke_public_key: encode_kaigi_relay_hpke_key_v1(
-            KaigiRelayHpkeSuiteV1::MlKem768AuthPsk,
-            &[0xAA; 1_184],
-        )
-        .wrap_err("frame the relay HPKE key")?,
-        bandwidth_class: 5,
-    };
-    let registration_key =
-        kaigi_relay_metadata_key(&relay_id).wrap_err("kaigi relay metadata key")?;
-    let registration_value = Json::try_new(registration)
-        .map_err(|err| eyre!("serialize Kaigi relay registration: {err}"))?;
-    let set_registration =
-        SetKeyValue::domain(domain_id.clone(), registration_key, registration_value);
-    let call_name: Name = "integration-demo".parse()?;
-    let feedback = KaigiRelayFeedback {
-        relay_id: relay_id.clone(),
-        call: KaigiId::new(domain_id.clone(), call_name),
-        reported_by: reporter_id.clone(),
-        status: KaigiRelayHealthStatus::Healthy,
-        reported_at_ms: 1_735_000,
-        notes: Some("integration test coverage".to_owned()),
-    };
-    let feedback_key = kaigi_relay_feedback_key(&relay_id).wrap_err("kaigi relay feedback key")?;
-    let feedback_value =
-        Json::try_new(feedback).map_err(|err| eyre!("serialize Kaigi relay feedback: {err}"))?;
-    let set_feedback = SetKeyValue::domain(domain_id, feedback_key, feedback_value);
-    let mut builder = NetworkBuilder::new();
-    builder = builder.with_genesis_instruction(set_registration);
-    builder = builder.with_genesis_instruction(set_feedback);
+    let domain_id = DomainId::try_new("kaigiaddress", "universal")?;
+    let relay_accounts = [BOB_ID.clone(), CARPENTER_ID.clone(), ALICE_ID.clone()];
+    let mut builder = NetworkBuilder::new()
+        .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())));
+    for (index, account) in relay_accounts.iter().enumerate() {
+        let alias_literal = format!("relay{index}@{domain_id}");
+        let alias = ResolvedAccountAliasV1::new(
+            alias_literal.parse()?,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        );
+        builder = builder
+            .with_genesis_instruction(Grant::account_permission(
+                Permission::from(CanManageAccountAlias {
+                    scope: AccountAliasPermissionScope::Alias(alias),
+                }),
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            ))
+            .with_genesis_instruction(account_alias_setup_instruction(
+                &alias_literal,
+                account,
+                AccountProvisionV1::Existing,
+                AccountAliasRoleV1::Primary,
+            )?);
+    }
+    builder = builder.with_genesis_instruction(Transfer::domain(
+        SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+        domain_id.clone(),
+        reporter_id.clone(),
+    ));
     let Some(network) = Box::pin(start_network_async_or_skip(
         builder,
         stringify!(kaigi_endpoints_emit_i105_literals),
@@ -1946,11 +2026,81 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
+    let peer = network.peer();
+    let keys = [&*BOB_KEYPAIR, &*CARPENTER_KEYPAIR, &*ALICE_KEYPAIR];
+    let mut hops = Vec::new();
+    for (index, (account_id, key)) in relay_accounts.iter().zip(keys).enumerate() {
+        let hpke_public_key = encode_kaigi_relay_hpke_key_v1(
+            KaigiRelayHpkeSuiteV1::MlKem768AuthPsk,
+            &[0xAA + u8::try_from(index)?; 1_184],
+        )
+        .wrap_err("frame the relay HPKE key")?;
+        let relay_client = peer.client_for(account_id, key.private_key().clone());
+        submit_account_fixture_instruction(
+            relay_client.account_client(),
+            RegisterKaigiRelay {
+                relay: KaigiRelayRegistration {
+                    relay_id: account_id.clone(),
+                    hpke_public_key: hpke_public_key.clone(),
+                    bandwidth_class: 5,
+                },
+            }
+            .into(),
+        )
+        .await?;
+        hops.push(KaigiRelayHop {
+            relay_id: account_id.clone(),
+            hpke_public_key,
+            weight: 1,
+        });
+    }
+    let client = peer.client();
+    let call_name: Name = "integration-demo".parse()?;
+    let call_id = KaigiId::new(domain_id.clone(), call_name.clone());
+    let mut call = NewKaigi::with_defaults(call_id.clone(), reporter_id.clone());
+    call.relay_manifest = Some(KaigiRelayManifest {
+        hops,
+        expiry_ms: u64::try_from(
+            (SystemTime::now().duration_since(UNIX_EPOCH)? + Duration::from_secs(300)).as_millis(),
+        )?,
+    });
+    submit_account_fixture_instruction(
+        client.account_client(),
+        CreateKaigi {
+            call,
+            commitment: None,
+            nullifier: None,
+            roster_root: None,
+            proof: None,
+        }
+        .into(),
+    )
+    .await?;
+    let domain = client
+        .account_client()
+        .query_single(FindDomainById::new(domain_id))
+        .await?;
+    let record: KaigiRecord = domain
+        .metadata()
+        .get(&kaigi_metadata_key(&call_name)?)
+        .ok_or_else(|| eyre!("native Kaigi creation must retain its record"))?
+        .try_into_any()?;
+    submit_account_fixture_instruction(
+        client.account_client(),
+        ReportKaigiRelayHealth {
+            call_id,
+            relay_id: relay_id.clone(),
+            status: KaigiRelayHealthStatus::Healthy,
+            reported_at_ms: record.created_at_ms,
+            notes: Some("integration test coverage".to_owned()),
+        }
+        .into(),
+    )
+    .await?;
     let seed = KaigiRelaySeed {
         relay_i105: relay_id.to_string(),
         reporter_i105: reporter_id.to_string(),
     };
-    let client = network.client();
     let http = kaigi_operator_http_client();
     let summary_resp = kaigi_operator_get(&http, &client, "/v1/kaigi/relays").await?;
     assert!(

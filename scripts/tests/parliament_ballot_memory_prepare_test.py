@@ -85,11 +85,25 @@ def test_manifest_retains_root_overrides_and_acceleration():
     original = tomllib.loads((prepare.ROOT / "Cargo.toml").read_text())
     assert result["package"]["name"] == prepare.PACKAGE
     assert result["features"]["accel"] == ["iroha_parliament_ballot_proof/accel"]
+    # Shared fixture code tests the importing package's cfg(feature), so the
+    # local diagnostic feature must agree with the dependency's comparator arm.
+    assert result["features"]["default"] == ["diagnostics"]
+    assert result["features"]["diagnostics"] == ["iroha_parliament_ballot_proof/diagnostics"]
     assert result["dependencies"]["norito"]["default-features"] is False
     assert result["dependencies"]["iroha_parliament_ballot_proof"]["features"] == ["diagnostics"]
     assert result["workspace"] == {}
     for name, entry in original["patch"]["crates-io"].items():
         assert result["patch"]["crates-io"][name]["path"] == str((prepare.ROOT / entry["path"]).resolve())
+
+
+def test_manifest_compiles_the_current_fixture_digest_and_shake_imports():
+    """The generated worker's tests include the proof crate's shared fixtures."""
+    result = tomllib.loads(prepare.manifest(prepare.ROOT))
+    proof = tomllib.loads((prepare.ROOT / "crates/iroha_parliament_ballot_proof/Cargo.toml").read_text())
+    # SHAKE moved out of sha3; both crates must use the same digest API generation.
+    # Matching the actual fixture owner's declarations also catches future drift.
+    assert result["dependencies"]["sha3"] == proof["dev-dependencies"]["sha3"]
+    assert result["dependencies"]["shake"] == proof["dependencies"]["shake"]
 
 
 def test_preparation_retains_derivation_and_preserves_root_lock(tmp_path):

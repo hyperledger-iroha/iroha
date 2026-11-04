@@ -27,6 +27,7 @@ fn observer_node_catches_up() -> Result<()> {
     let observer = NetworkPeerBuilder::new()
         .with_seed(Some(b"observer"))
         .build(network.env());
+    network.attach_peer_client_context(&observer)?;
     // Prepare a trusted_peers override including existing peers and the observer itself.
     // The observer is trusted for networking/block sync, but it is intentionally omitted
     // from `trusted_peers_pop` so the validator roster remains the four validator peers.
@@ -240,11 +241,10 @@ fn observer_node_catches_up() -> Result<()> {
         let mut last_zone_note: Option<String> = None;
         loop {
             let client = peer.client();
-            let accounts = client.client().query(FindAccounts).execute_all().unwrap();
-            let alice = accounts
-                .into_iter()
-                .find(|a| a.id() == &ALICE_ID.clone())
-                .expect("Alice account must exist");
+            let alice = client
+                .client()
+                .query_single(FindAccountById::new(ALICE_ID.clone()))?;
+            assert_eq!(alice.id(), &*ALICE_ID);
             if let Some(note) = alice.metadata().get(&note_key) {
                 last_note = Some(note.as_ref().to_string());
             }
@@ -281,6 +281,7 @@ fn observer_node_catches_up() -> Result<()> {
                 .header("Accept", "application/json")
                 .send()
                 .await?
+                .error_for_status()?
                 .text()
                 .await
         })?;
@@ -365,6 +366,7 @@ fn observer_node_catches_up() -> Result<()> {
                     .body(body)
                     .send()
                     .await?
+                    .error_for_status()?
                     .text()
                     .await
             })?;

@@ -1,11 +1,19 @@
-#[cfg(not(feature = "std"))]
-extern crate alloc;
-#[cfg(not(feature = "std"))]
-use alloc::vec::Vec;
-
 pub use crate::{CurveAffine, CurveExt};
 use ff::Field;
 use group::{GroupOpsOwned, ScalarMulOwned};
+
+#[cfg(feature = "std")]
+use rayon::join;
+
+/// Run the two independent halves in order when parallelism is disabled.
+#[cfg(not(feature = "std"))]
+fn join<A, B, RA, RB>(left: A, right: B) -> (RA, RB)
+where
+    A: FnOnce() -> RA,
+    B: FnOnce() -> RB,
+{
+    (left(), right())
+}
 
 /// This represents an element of a group with basic operations that can be
 /// performed. This allows an FFT implementation (for example) to operate
@@ -115,7 +123,7 @@ pub fn recursive_butterfly_arithmetic<Scalar: Field, G: FftGroup<Scalar>>(
         a[1] -= &t;
     } else {
         let (left, right) = a.split_at_mut(n / 2);
-        plonky2_maybe_rayon::join(
+        join(
             || recursive_butterfly_arithmetic(left, n / 2, twiddle_chunk * 2, twiddles),
             || recursive_butterfly_arithmetic(right, n / 2, twiddle_chunk * 2, twiddles),
         );

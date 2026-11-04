@@ -17,23 +17,22 @@ use integration_tests::{
 use iroha::{
     blocking::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
-    crypto::{ExposedPrivateKey, Hash, KeyPair},
+    crypto::{ExposedPrivateKey, Hash, HashOf, KeyPair},
     data_model::{
-        Encode,
+        Encode, NetworkId,
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetDefinitions, Grant, Json},
+        prelude::{FindAssetById, FindAssetDefinitionById, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
-            SoraStateMutabilityV1,
+            SoraStateEncryptionV1, SoraStateMutabilityV1,
         },
     },
 };
 use iroha_config_base::toml::WriteExt;
-use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
-use iroha_model_base::domain::DomainId;
+use iroha_model_base::chain::ChainId;
 use iroha_test_network::{NetworkBuilder, ResolvedCommand, ResolvedProgram};
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR};
 use norito::json::{self, Value};
@@ -79,6 +78,35 @@ fn program_reuse_existing_or_build() -> ResolvedProgram {
 fn soracloud_fixture(path: &str) -> PathBuf {
     workspace_root().join(path)
 }
+fn soracloud_control_plane_service() -> eyre::Result<SoraServiceManifestV1> {
+    let mut service: SoraServiceManifestV1 = norito::json::from_slice(&std::fs::read(
+        soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json"),
+    )?)?;
+    // Lifecycle tests exercise supported client-encrypted service state. The
+    // shared schema fixture also describes FHE state, whose unavailable profile
+    // is deliberately refused by native execution and tested in Core.
+    service
+        .state_bindings
+        .retain(|binding| !matches!(binding.encryption, SoraStateEncryptionV1::FheCiphertext));
+    Ok(service)
+}
+#[test]
+fn control_plane_fixture_keeps_client_encryption_without_activating_fhe() -> eyre::Result<()> {
+    let original: SoraServiceManifestV1 = norito::json::from_slice(&std::fs::read(
+        soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json"),
+    )?)?;
+    let service = soracloud_control_plane_service()?;
+    assert_eq!(service.state_bindings.len(), 1);
+    let supported = original
+        .state_bindings
+        .iter()
+        .find(|binding| matches!(binding.encryption, SoraStateEncryptionV1::ClientCiphertext))
+        .expect("client-encrypted state fixture");
+    assert_eq!(&service.state_bindings[0], supported);
+    assert_eq!(service.handlers, original.handlers);
+    assert_eq!(service.artifacts, original.artifacts);
+    Ok(())
+}
 fn install_soracloud_test_bundle(
     root: &Path,
     label: &str,
@@ -97,10 +125,14 @@ fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL)
         .expect("test lease asset definition literal should parse")
 }
-fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Result<Option<u128>> {
+async fn numeric_asset_balance_u128(
+    client: &Client,
+    asset_id: &AssetId,
+) -> eyre::Result<Option<u128>> {
     let asset = match client
-        .client()
+        .account_client()
         .query_single(FindAssetById::new(asset_id.clone()))
+        .await
     {
         Ok(asset) => asset,
         Err(err) => {
@@ -126,26 +158,24 @@ fn numeric_asset_balance_u128(client: &Client, asset_id: &AssetId) -> eyre::Resu
     }
     Ok(asset.value().as_numeric().try_mantissa_u128())
 }
-fn assert_soracloud_hf_lease_asset_ready(
+async fn assert_soracloud_hf_lease_asset_ready(
     client: &Client,
     accounts: &[AccountId],
     minimum_amount: u32,
 ) -> eyre::Result<()> {
     let asset_definition_id = soracloud_hf_lease_asset_definition();
-    let asset_definition_exists = client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .execute_all()?
-        .into_iter()
-        .any(|definition| definition.id == asset_definition_id);
-    if !asset_definition_exists {
+    let asset_definition = client
+        .account_client()
+        .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
+        .await?;
+    if asset_definition.id != asset_definition_id {
         return Err(eyre::eyre!(
             "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
         ));
     }
     for account_id in accounts {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-        let observed = numeric_asset_balance_u128(client, &asset_id)?;
+        let observed = numeric_asset_balance_u128(client, &asset_id).await?;
         let required = u128::from(minimum_amount);
         if observed.is_none_or(|balance| balance < required) {
             return Err(eyre::eyre!(
@@ -313,11 +343,17 @@ fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
 }
 fn local_program_config() -> ProgramConfig {
     let key = KeyPair::try_random().expect("generate checked local CLI config keypair");
-    let domain_id: DomainId =
-        DomainId::try_new("wonderland", "universal").expect("literal domain should parse");
+    // Offline negative cases have no running network. Give their config an explicit,
+    // deterministic synthetic identity; live cases always copy their actual client.
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"iroha-cli-offline-negative-fixture",
+    )));
     ProgramConfig {
+        chain: iroha_test_network::chain_id(),
+        network_id,
+        account_chain_discriminant: iroha_config::parameters::defaults::common::chain_discriminant(
+        ),
         torii_url: Url::parse("http://127.0.0.1:8080").expect("literal URL should parse"),
-        account_domain: domain_id,
         key,
         status_timeout: DEFAULT_TRANSACTION_STATUS_TIMEOUT,
         ttl: DEFAULT_TRANSACTION_TIME_TO_LIVE,
@@ -327,70 +363,69 @@ fn local_program_config() -> ProgramConfig {
 fn local_program_config_uses_checked_key_generation() {
     let config = local_program_config();
     assert_eq!(config.torii_url.as_str(), "http://127.0.0.1:8080/");
+    assert_eq!(config.network_id, local_program_config().network_id);
     assert_eq!(
-        config.account_domain,
-        DomainId::try_new("wonderland", "universal").expect("literal domain should parse")
+        config.account_chain_discriminant,
+        iroha_config::parameters::defaults::common::chain_discriminant(),
     );
     assert_eq!(config.status_timeout, DEFAULT_TRANSACTION_STATUS_TIMEOUT);
     assert_eq!(config.ttl, DEFAULT_TRANSACTION_TIME_TO_LIVE);
 }
-fn program_config_for_account(
-    client: &Client,
-    account_domain: &str,
-    key: &KeyPair,
-) -> ProgramConfig {
-    let account_domain = DomainId::try_new(account_domain, "universal")
-        .expect("account domain literal should parse");
+fn program_config_for_account(client: &Client, key: &KeyPair) -> ProgramConfig {
     let ttl = client
         .client()
         .transaction_ttl()
         .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
     ProgramConfig {
+        chain: client.client().chain().clone(),
+        network_id: *client.client().network_id(),
+        account_chain_discriminant: client.client().account_chain_discriminant(),
         torii_url: client.client().endpoint().clone(),
-        account_domain,
         key: key.clone(),
         status_timeout: client.client().transaction_status_timeout(),
         ttl,
     }
 }
 struct ProgramConfig {
+    chain: ChainId,
+    network_id: NetworkId,
+    account_chain_discriminant: u16,
     torii_url: Url,
-    account_domain: DomainId,
     key: KeyPair,
     status_timeout: Duration,
     ttl: Duration,
 }
 impl From<&Client> for ProgramConfig {
     fn from(value: &Client) -> Self {
-        program_config_for_account(value, "wonderland", value.client().key_pair())
+        program_config_for_account(value, value.client().key_pair())
     }
 }
 impl ProgramConfig {
     fn envs(&self) -> impl IntoIterator<Item = (&str, String)> {
         [
-            ("CHAIN", iroha_test_network::chain_id().to_string()),
+            ("CHAIN", self.chain.to_string()),
+            ("NETWORK_ID", self.network_id.to_string()),
             ("TORII_URL", self.torii_url.to_string()),
-            ("ACCOUNT_DOMAIN", self.account_domain.to_string()),
+            (
+                "ACCOUNT_CHAIN_DISCRIMINANT",
+                self.account_chain_discriminant.to_string(),
+            ),
             ("ACCOUNT_PUBLIC_KEY", self.key.public_key().to_string()),
             (
                 "ACCOUNT_PRIVATE_KEY",
                 ExposedPrivateKey(self.key.private_key().clone()).to_string(),
             ),
-            (
-                "TRANSACTION_STATUS_TIMEOUT_MS",
-                self.status_timeout.as_millis().to_string(),
-            ),
-            (
-                "TRANSACTION_TIME_TO_LIVE_MS",
-                self.ttl.as_millis().to_string(),
-            ),
         ]
     }
     fn toml(&self) -> toml::Table {
         toml::Table::new()
-            .write("chain", iroha_test_network::chain_id().to_string())
+            .write("chain", self.chain.to_string())
+            .write("network_id", self.network_id.to_string())
             .write("torii_url", self.torii_url.to_string())
-            .write(["account", "domain"], self.account_domain.to_string())
+            .write(
+                ["account", "chain_discriminant"],
+                i64::from(self.account_chain_discriminant),
+            )
             .write(
                 ["account", "private_key"],
                 ExposedPrivateKey(self.key.private_key().clone()).to_string(),
@@ -411,6 +446,62 @@ impl ProgramConfig {
             )
     }
 }
+#[test]
+fn program_config_sources_preserve_exact_client_context() {
+    use iroha_config_base::{env::MockEnv, read::ConfigReader, toml::TomlSource};
+
+    let mut expected = local_program_config();
+    expected.chain = "cli-context-regression".parse().expect("valid chain label");
+    expected.network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"iroha-cli-distinct-client-context",
+    )));
+    expected.account_chain_discriminant = 777;
+    let env = MockEnv::from(expected.envs());
+    let from_env = ConfigReader::new()
+        .with_env(env.clone())
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("fixture environment uses current client keys")
+        .parse()
+        .expect("fixture environment supplies a complete client context");
+    assert!(
+        env.unvisited().is_empty(),
+        "every fixture environment key is current"
+    );
+    let from_toml = ConfigReader::new()
+        .without_env()
+        .with_toml_source(TomlSource::inline(expected.toml()))
+        .read_and_complete::<iroha::config::UserConfig>()
+        .expect("fixture TOML uses current client keys")
+        .parse()
+        .expect("fixture TOML supplies a complete client context");
+    for parsed in [from_env, from_toml] {
+        assert_eq!(parsed.chain, expected.chain);
+        assert_eq!(parsed.network_id, expected.network_id);
+        assert_eq!(
+            parsed.account_chain_discriminant,
+            expected.account_chain_discriminant
+        );
+        assert_eq!(
+            parsed.account,
+            AccountId::new(expected.key.public_key().clone())
+        );
+        assert_eq!(parsed.transaction_status_timeout, expected.status_timeout);
+        assert_eq!(parsed.transaction_ttl, expected.ttl);
+        let client = Client::new(parsed).expect("construct client without contacting a network");
+        for copied in [
+            ProgramConfig::from(&client),
+            program_config_for_account(&client, &BOB_KEYPAIR),
+        ] {
+            assert_eq!(copied.chain, expected.chain);
+            assert_eq!(copied.network_id, expected.network_id);
+            assert_eq!(
+                copied.account_chain_discriminant,
+                expected.account_chain_discriminant
+            );
+            assert_eq!(copied.torii_url, expected.torii_url);
+        }
+    }
+}
 async fn run_soracloud_command(
     cwd: &Path,
     config: &ProgramConfig,
@@ -421,6 +512,7 @@ async fn run_soracloud_command(
     let mut command = program().command()?;
     command
         .current_dir(cwd)
+        .args(["--fee-payer", "authority"])
         .arg("soracloud")
         .args(&effective_args)
         .envs(config.envs());
@@ -439,7 +531,10 @@ impl<'a> SoracloudCli<'a> {
 
     fn command(&self) -> ResolvedCommand {
         let mut command = program().command().expect("retain selected CLI command");
-        command.current_dir(self.cwd).arg("soracloud");
+        command
+            .current_dir(self.cwd)
+            .args(["--fee-payer", "authority"])
+            .arg("soracloud");
         command
     }
 
@@ -751,6 +846,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
     let mut command = program().command()?;
     command
         .current_dir(dir.path())
+        .args(["--fee-payer", "authority"])
         .arg("ops")
         .arg("executor")
         .arg("upgrade")
@@ -842,7 +938,9 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_intent_error() -> eyre:
     let config = local_program_config();
     std::fs::write(
         dir.path().join("client.toml"),
-        toml::to_string(&config.toml())?.as_bytes(),
+        // A valid gas intent reaches the fee-quote request. Bound that expected
+        // offline failure within the assertion's five-second completion limit.
+        toml::to_string(&config.toml().write("torii_request_timeout_ms", 1_000_i64))?.as_bytes(),
     )?;
     let program_path = dir.path().join("hello.to");
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
@@ -942,7 +1040,7 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
 #[tokio::test]
 async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
-    let builder = NetworkBuilder::new()
+    let builder = super::iroha_cli_storage::builder()?
         .with_min_peers(4)
         .with_config_layer(|layer| {
             // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
@@ -956,6 +1054,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     else {
         return Ok(());
     };
+    super::iroha_cli_storage::prepare(&network).await?;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -964,11 +1063,9 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     )
     .await?;
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
-    let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
     let mut container: SoraContainerManifestV1 =
         norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
-    let mut service_v1: SoraServiceManifestV1 =
-        norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
+    let mut service_v1 = soracloud_control_plane_service()?;
     service_v1.service_version = "1.0.0".to_string();
     let bundle_path = install_soracloud_test_bundle(
         dir.path(),
@@ -978,6 +1075,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     )?;
     let mut service_v2 = service_v1.clone();
     service_v2.service_version = "1.1.0".to_string();
+    service_v2.rollout.canary_percent = 10;
     let container_path = dir.path().join("container_manifest.json");
     let service_v1_path = dir.path().join("service_v1.json");
     let service_v2_path = dir.path().join("service_v2.json");
@@ -1018,6 +1116,9 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     assert_soracloud_success(&deploy, "deploy");
     let join_payload: Value =
         json::from_slice(&deploy.stdout).expect("CLI should emit deploy JSON payload");
+    let join_payload = join_payload
+        .get("response")
+        .expect("native deploy response");
     assert_eq!(
         join_payload.get("current_version").and_then(Value::as_str),
         Some("1.0.0")
@@ -1043,19 +1144,25 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     assert_soracloud_success(&upgrade, "upgrade");
     let upgrade_payload: Value =
         json::from_slice(&upgrade.stdout).expect("CLI should emit upgrade JSON payload");
+    let upgrade_payload = upgrade_payload
+        .get("response")
+        .expect("native upgrade response");
     assert_eq!(
         upgrade_payload
             .get("current_version")
             .and_then(Value::as_str),
         Some("1.1.0")
     );
-    let rollout_handle = upgrade_payload
+    let active_rollout = upgrade_payload
+        .get("active_rollout")
+        .expect("active canary rollout");
+    let rollout_handle = active_rollout
         .get("rollout_handle")
         .and_then(Value::as_str)
         .expect("upgrade should return rollout_handle");
     assert_eq!(
-        upgrade_payload
-            .get("rollout_stage")
+        active_rollout
+            .get("stage")
             .and_then(Value::as_object)
             .and_then(|stage| stage.get("stage"))
             .and_then(Value::as_str),
@@ -1083,6 +1190,14 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
     assert_soracloud_success(&rollout, "rollout");
     let rollout_payload: Value =
         json::from_slice(&rollout.stdout).expect("CLI should emit rollout JSON payload");
+    let promoted_rollout = rollout_payload
+        .get("last_rollout")
+        .expect("completed rollout");
+    assert!(
+        rollout_payload
+            .get("active_rollout")
+            .is_some_and(Value::is_null)
+    );
     assert_eq!(
         rollout_payload
             .get("current_version")
@@ -1090,7 +1205,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("1.1.0")
     );
     assert_eq!(
-        rollout_payload
+        promoted_rollout
             .get("stage")
             .and_then(Value::as_object)
             .and_then(|stage| stage.get("stage"))
@@ -1098,7 +1213,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("Promoted")
     );
     assert_eq!(
-        rollout_payload
+        promoted_rollout
             .get("traffic_percent")
             .and_then(Value::as_u64),
         Some(100)
@@ -1193,7 +1308,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
 async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane()
 -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
-    let builder = NetworkBuilder::new()
+    let builder = super::iroha_cli_storage::builder()?
         .with_min_peers(4)
         .with_config_layer(|layer| {
             // The test-network genesis explicitly authors Ed25519, Secp256k1 and BLS.
@@ -1207,6 +1322,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     else {
         return Ok(());
     };
+    super::iroha_cli_storage::prepare(&network).await?;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1215,11 +1331,9 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     )
     .await?;
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
-    let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
     let mut container: SoraContainerManifestV1 =
         norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
-    let mut service: SoraServiceManifestV1 =
-        norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
+    let mut service = soracloud_control_plane_service()?;
     service.service_version = "1.0.0".to_string();
     let bundle_path = install_soracloud_test_bundle(
         dir.path(),
@@ -1260,7 +1374,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
         String::from_utf8_lossy(&over_cap_deploy.stderr)
     );
     assert!(
-        String::from_utf8_lossy(&over_cap_deploy.stderr).contains("returned 400"),
+        String::from_utf8_lossy(&over_cap_deploy.stderr).contains("returned HTTP 400"),
         "{}",
         String::from_utf8_lossy(&over_cap_deploy.stderr)
     );
@@ -1311,7 +1425,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
     );
     let no_write_stderr = String::from_utf8_lossy(&no_write_deploy.stderr);
     assert!(
-        no_write_stderr.contains("returned 400") || no_write_stderr.contains("\"command\""),
+        no_write_stderr.contains("returned HTTP 400") || no_write_stderr.contains("\"command\""),
         "{}",
         no_write_stderr
     );
@@ -1333,7 +1447,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
 async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane()
 -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
-    let builder = NetworkBuilder::new()
+    let builder = super::iroha_cli_storage::builder()?
         .with_min_peers(4)
         .with_npos_consensus()
         .with_config_layer(|layer| {
@@ -1348,6 +1462,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     else {
         return Ok(());
     };
+    super::iroha_cli_storage::prepare(&network).await?;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1356,11 +1471,9 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
     )
     .await?;
     let container_fixture = soracloud_fixture("fixtures/soracloud/sora_container_manifest_v1.json");
-    let service_fixture = soracloud_fixture("fixtures/soracloud/sora_service_manifest_v1.json");
     let mut container: SoraContainerManifestV1 =
         norito::json::from_slice(&std::fs::read(&container_fixture)?)?;
-    let mut service: SoraServiceManifestV1 =
-        norito::json::from_slice(&std::fs::read(&service_fixture)?)?;
+    let mut service = soracloud_control_plane_service()?;
     container.capabilities.allow_model_training = true;
     service.service_version = "2.0.0".to_string();
     let bundle_path = install_soracloud_test_bundle(
@@ -1665,7 +1778,8 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
         &network.client(),
         std::slice::from_ref(network.client().client().account()),
         100_000,
-    )?;
+    )
+    .await?;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1707,9 +1821,15 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     .await?;
     assert_soracloud_success(&deploy, "hf-join");
     let join_payload: Value = json::from_slice(&deploy.stdout).expect("hf-join json");
+    // The command label is distinct from the finalized ledger transition.
+    assert_eq!(
+        join_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
     assert_eq!(
         join_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
     );
@@ -1752,8 +1872,13 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     assert_soracloud_success(&rebind, "hf-join rebind");
     let rebind_payload: Value = json::from_slice(&rebind.stdout).expect("hf rebind json");
     assert_eq!(
+        rebind_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
+    assert_eq!(
         rebind_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
     );
@@ -1838,8 +1963,13 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     assert_soracloud_success(&leave, "hf-lease-leave");
     let leave_payload: Value = json::from_slice(&leave.stdout).expect("hf leave json");
     assert_eq!(
+        leave_payload.get("action").and_then(Value::as_str),
+        Some("LeaseLeave")
+    );
+    assert_eq!(
         leave_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Leave")
     );
@@ -1886,8 +2016,13 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     assert_soracloud_success(&renew, "hf-lease-renew");
     let renew_payload: Value = json::from_slice(&renew.stdout).expect("hf renew json");
     assert_eq!(
+        renew_payload.get("action").and_then(Value::as_str),
+        Some("LeaseRenew")
+    );
+    assert_eq!(
         renew_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Renew")
     );
@@ -1965,7 +2100,8 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
         &network.client(),
         std::slice::from_ref(network.client().client().account()),
         100_000,
-    )?;
+    )
+    .await?;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -2007,8 +2143,13 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     assert_soracloud_success(&deploy, "initial hf-join");
     let join_payload: Value = json::from_slice(&deploy.stdout).expect("initial deploy json");
     assert_eq!(
+        join_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
+    assert_eq!(
         join_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
     );
@@ -2035,8 +2176,13 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     assert_soracloud_success(&renew, "pre-expiry hf-lease-renew");
     let renew_payload: Value = json::from_slice(&renew.stdout).expect("renew json");
     assert_eq!(
+        renew_payload.get("action").and_then(Value::as_str),
+        Some("LeaseRenew")
+    );
+    assert_eq!(
         renew_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Renew")
     );
@@ -2133,8 +2279,13 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     assert_soracloud_success(&promote, "promotion hf-join");
     let promote_payload: Value = json::from_slice(&promote.stdout).expect("promote json");
     assert_eq!(
+        promote_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
+    assert_eq!(
         promote_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
     );
@@ -2256,14 +2407,11 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
             CARPENTER_ID.clone(),
         ],
         100_000,
-    )?;
+    )
+    .await?;
     let alice_config = ProgramConfig::from(&network.client());
-    let bob_config = program_config_for_account(&network.client(), "wonderland", &BOB_KEYPAIR);
-    let carpenter_config = program_config_for_account(
-        &network.client(),
-        "garden_of_live_flowers",
-        &CARPENTER_KEYPAIR,
-    );
+    let bob_config = program_config_for_account(&network.client(), &BOB_KEYPAIR);
+    let carpenter_config = program_config_for_account(&network.client(), &CARPENTER_KEYPAIR);
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
         dir.path().join("client.toml"),
@@ -2304,8 +2452,13 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let alice_join_payload: Value =
         json::from_slice(&alice_join.stdout).expect("alice hf-join json");
     assert_eq!(
+        alice_join_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
+    assert_eq!(
         alice_join_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("CreateWindow")
     );
@@ -2340,8 +2493,13 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     assert_soracloud_success(&bob_join, "bob hf-join");
     let bob_join_payload: Value = json::from_slice(&bob_join.stdout).expect("bob deploy json");
     assert_eq!(
+        bob_join_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
+    assert_eq!(
         bob_join_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
     );
@@ -2442,8 +2600,13 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     let carpenter_join_payload: Value =
         json::from_slice(&carpenter_join.stdout).expect("carpenter deploy json");
     assert_eq!(
+        carpenter_join_payload.get("action").and_then(Value::as_str),
+        Some("Join")
+    );
+    assert_eq!(
         carpenter_join_payload
-            .get("action")
+            .get("latest_audit_event")
+            .and_then(|event| event.get("action"))
             .and_then(|value| tagged_enum_label(value, "action")),
         Some("Join")
     );
@@ -2671,7 +2834,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
 async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() -> eyre::Result<()>
 {
     prepare_iroha_cli_test_environment();
-    let builder = NetworkBuilder::new()
+    let builder = super::iroha_cli_storage::builder()?
         .with_min_peers(4)
         .with_config_layer(|layer| {
             layer.write("telemetry_profile", "full");
@@ -2684,6 +2847,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     else {
         return Ok(());
     };
+    super::iroha_cli_storage::prepare(&network).await?;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -2785,6 +2949,9 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     );
     let site_join_payload: Value =
         json::from_slice(&site_deploy.stdout).expect("site deploy JSON payload");
+    let site_join_payload = site_join_payload
+        .get("response")
+        .expect("native site deploy response");
     assert_eq!(
         site_join_payload
             .get("current_version")
@@ -2803,6 +2970,9 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     );
     let webapp_join_payload: Value =
         json::from_slice(&webapp_deploy.stdout).expect("webapp deploy JSON payload");
+    let webapp_join_payload = webapp_join_payload
+        .get("response")
+        .expect("native webapp deploy response");
     assert_eq!(
         webapp_join_payload
             .get("current_version")
@@ -2811,6 +2981,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     );
     let mut site_service_v2 = site_service.clone();
     site_service_v2.service_version = "1.1.0".to_string();
+    site_service_v2.rollout.canary_percent = 10;
     let site_service_v2_path = site_dir.join("service_manifest_v2.json");
     tokio::fs::write(
         &site_service_v2_path,
@@ -2829,6 +3000,9 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
     );
     let site_upgrade_payload: Value =
         json::from_slice(&site_upgrade.stdout).expect("site upgrade JSON payload");
+    let site_upgrade_payload = site_upgrade_payload
+        .get("response")
+        .expect("native site upgrade response");
     assert_eq!(
         site_upgrade_payload
             .get("current_version")
@@ -2836,6 +3010,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         Some("1.1.0")
     );
     let rollout_handle = site_upgrade_payload
+        .get("active_rollout")
+        .expect("active site canary rollout")
         .get("rollout_handle")
         .and_then(Value::as_str)
         .expect("site upgrade should emit rollout handle");
@@ -2853,6 +3029,8 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
         json::from_slice(&site_rollout.stdout).expect("site rollout JSON payload");
     assert_eq!(
         site_rollout_payload
+            .get("last_rollout")
+            .expect("completed site rollout")
             .get("stage")
             .and_then(Value::as_object)
             .and_then(|stage| stage.get("stage"))
@@ -2993,16 +3171,12 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
     );
     let join_payload: Value = json::from_slice(&deploy.stdout).expect("agent deploy JSON payload");
     assert_eq!(
-        join_payload
-            .get("action")
-            .and_then(Value::as_object)
-            .and_then(|action| action.get("action"))
-            .and_then(Value::as_str),
+        join_payload.get("action").and_then(Value::as_str),
         Some("Deploy")
     );
     assert_eq!(
         join_payload
-            .get("budget_remaining_units")
+            .get("autonomy_budget_remaining_units")
             .and_then(Value::as_u64),
         Some(500)
     );
@@ -3017,12 +3191,14 @@ async fn soracloud_agent_autonomy_controls_use_live_torii_control_plane() -> eyr
     );
     let allow_payload: Value = json::from_slice(&allow.stdout).expect("agent allow JSON payload");
     assert_eq!(
-        allow_payload.get("allowlist_count").and_then(Value::as_u64),
+        allow_payload
+            .get("artifact_allowlist_count")
+            .and_then(Value::as_u64),
         Some(1)
     );
     assert_eq!(
         allow_payload
-            .get("budget_remaining_units")
+            .get("autonomy_budget_remaining_units")
             .and_then(Value::as_u64),
         Some(500)
     );
@@ -3232,7 +3408,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
     );
     assert_eq!(
         wallet_request_payload
-            .get("pending_request_count")
+            .get("pending_wallet_request_count")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -3248,7 +3424,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
         json::from_slice(&wallet_approve.stdout).expect("wallet approve JSON payload");
     assert_eq!(
         wallet_approve_payload
-            .get("pending_request_count")
+            .get("pending_wallet_request_count")
             .and_then(Value::as_u64),
         Some(0)
     );
@@ -3450,7 +3626,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
     );
     assert_eq!(
         wallet_request_payload
-            .get("pending_request_count")
+            .get("pending_wallet_request_count")
             .and_then(Value::as_u64),
         Some(1)
     );
@@ -3542,7 +3718,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         apartment
             .get("lease_remaining_blocks")
             .and_then(Value::as_u64)
-            .is_some_and(|ticks| ticks > 0)
+            .is_some_and(|blocks| blocks > 0)
     );
     let process_generation_before_manual_restart = apartment
         .get("process_generation")
@@ -3647,7 +3823,7 @@ async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_co
         json::from_slice(&wallet_approve_after_restart.stdout).expect("wallet approve payload");
     assert_eq!(
         wallet_approve_after_restart_payload
-            .get("pending_request_count")
+            .get("pending_wallet_request_count")
             .and_then(Value::as_u64),
         Some(0)
     );

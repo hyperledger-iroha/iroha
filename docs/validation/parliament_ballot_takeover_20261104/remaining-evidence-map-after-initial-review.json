@@ -1,0 +1,106 @@
+{
+  "baseline_historical_failures": 160,
+  "verified_repaired": 37,
+  "remaining_at_inventory": 123,
+  "simple_path_rebinding_alone_sufficient": false,
+  "current_producer_artifact": "docs/validation/parliament_ballot_current_candidate_20261104",
+  "entries": [
+    {
+      "suite": "check_parliament_ballot_resource_accounting_test.py",
+      "historical_failures_remaining": 3,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_adapter_bound_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_allocator_activation_test.py",
+      "historical_failures_remaining": 5,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_arena_backend_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_arena_frontend_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_arena_oracle_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_arena_sufficiency_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_current_correspondence_test.py",
+      "historical_failures_remaining": 47,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_free_predicates_test.py",
+      "historical_failures_remaining": 27,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_frontend_accounting_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_frontend_bound_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_noreturn_frontiers_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_opaque_field_bound_test.py",
+      "historical_failures_remaining": 14,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_profile_bound_test.py",
+      "historical_failures_remaining": 13,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    },
+    {
+      "suite": "parliament_ballot_prover_accounting_test.py",
+      "historical_failures_remaining": 1,
+      "repair_class": "substantive source/provider/allocator formula review required",
+      "next_action": "Review Rust1.99 allocation semantics and AES0.9.3 provider layout plus current source changes. Existing worker receipts/campaign show finite behavior only and cannot establish these complete resource formulas."
+    },
+    {
+      "suite": "parliament_ballot_typed_decoder_bound_test.py",
+      "historical_failures_remaining": 2,
+      "repair_class": "current compiled-image proof or genuinely retained historical artifact required",
+      "next_action": "Use current_candidate_20261104 build receipts and stack-v2 disassembly as fresh inputs. Derive current symbol extents, control flow, call targets and custody assertions; preserve unresolved frontiers. Fixed historical addresses/tool identities cannot be relabeled."
+    }
+  ],
+  "scope": "Worklist after current GF, ideal-sampler, oracle-overlay, framing and logical request repairs. Original baseline node IDs remain in triage.json; these are historical failures without verified repairs, not an asserted current full-suite count."
+}

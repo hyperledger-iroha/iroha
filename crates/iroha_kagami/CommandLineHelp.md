@@ -1359,12 +1359,3 @@ Generate the schema used for code generation in Iroha SDKs
 ###### **Options:**
 
 * `--genesis-out <GENESIS_OUT>` — Optional path to output genesis schema
-
-
-
-<hr/>
-
-<small><i>
-    This document was generated automatically by
-    <a href="https://crates.io/crates/clap-markdown"><code>clap-markdown</code></a>.
-</i></small>

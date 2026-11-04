@@ -1,0 +1,242 @@
+diff --git a/crates/iroha_torii/Cargo.toml b/crates/iroha_torii/Cargo.toml
+index bac40911fb..894f08720a 100644
+--- a/crates/iroha_torii/Cargo.toml
++++ b/crates/iroha_torii/Cargo.toml
+@@ -185,7 +185,10 @@ parking_lot = { workspace = true }
+ flate2 = "1.1.5"
+ zstd = { workspace = true }
+ futures-util = "0.3.31"
+-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["use_pem", "aws_lc_rs"] }
++# Push tokens use the existing TLS cryptographic backend directly. The private
++# module owns only provider-specific JWT framing and key-format admission.
++aws-lc-rs = { version = "1.18.2", default-features = false, features = ["alloc", "non-fips"] }
++rustls-pki-types = { version = "1.15.1", features = ["std"] }
+ 
+ [target.'cfg(unix)'.dependencies]
+ rustix = { version = "1.1.4", features = ["fs", "process"] }
+diff --git a/crates/iroha_torii/src/push.rs b/crates/iroha_torii/src/push.rs
+index ffbd0fc083..c4dc5f7f6d 100644
+--- a/crates/iroha_torii/src/push.rs
++++ b/crates/iroha_torii/src/push.rs
+@@ -7,7 +7,6 @@
+ //! under one source-coupled ceiling, and successful delivery responses are not buffered.
+ use crate::{account_activity::AccountActivityRole, secure_file_metadata};
+ use async_trait::async_trait;
+-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as BASE64_URL_SAFE_NO_PAD};
+ use dashmap::DashMap;
+ use iroha_allocation::{AllocationRefusal, PrepaidSharedError, release::ReleaseRegistration};
+ use iroha_config::parameters::actual;
+@@ -32,7 +31,6 @@ use iroha_data_model::{
+ use iroha_futures::supervisor::ShutdownSignal;
+ #[cfg(test)]
+ use iroha_primitives::nonzero;
+-use jsonwebtoken::{Algorithm, EncodingKey};
+ use parking_lot::Mutex as StorageMutex;
+ use reqwest::StatusCode as HttpStatusCode;
+ use sha2::{Digest as _, Sha256};
+@@ -47,6 +45,8 @@ use std::{
+     sync::Arc,
+     time::Duration,
+ };
++mod jwt;
++
+ const PUSH_DIR: &str = "push";
+ const PUSH_INITIALIZATION_DIR: &str = ".push-initialize-v1";
+ const DEVICES_DIR: &str = "devices";
+@@ -2400,50 +2400,6 @@ fn http_client(settings: &DispatchSettings) -> Result<reqwest::Client, String> {
+         .build()
+         .map_err(|error| error.to_string())
+ }
+-fn jwt_algorithm_name(algorithm: Algorithm) -> Result<&'static str, &'static str> {
+-    Ok(match algorithm {
+-        Algorithm::HS256 => "HS256",
+-        Algorithm::HS384 => "HS384",
+-        Algorithm::HS512 => "HS512",
+-        Algorithm::ES256 => "ES256",
+-        Algorithm::ES384 => "ES384",
+-        Algorithm::RS256 => "RS256",
+-        Algorithm::RS384 => "RS384",
+-        Algorithm::RS512 => "RS512",
+-        Algorithm::PS256 => "PS256",
+-        Algorithm::PS384 => "PS384",
+-        Algorithm::PS512 => "PS512",
+-        Algorithm::EdDSA => "EdDSA",
+-        // A new upstream algorithm needs an explicit protocol name and review.
+-        _ => return Err("unsupported push JWT signing algorithm"),
+-    })
+-}
+-fn encode_jwt_claims(
+-    algorithm: Algorithm,
+-    key_id: Option<&str>,
+-    claims: &norito::json::Value,
+-    key: &EncodingKey,
+-) -> Result<String, String> {
+-    let mut header = norito::json::Map::new();
+-    header.insert("typ".to_string(), norito::json::Value::from("JWT"));
+-    header.insert(
+-        "alg".to_string(),
+-        norito::json::Value::from(jwt_algorithm_name(algorithm)?),
+-    );
+-    if let Some(key_id) = key_id {
+-        header.insert("kid".to_string(), norito::json::Value::from(key_id));
+-    }
+-    let encoded_header = BASE64_URL_SAFE_NO_PAD.encode(
+-        norito::json::to_vec(&norito::json::Value::Object(header))
+-            .map_err(|error| error.to_string())?,
+-    );
+-    let encoded_claims = BASE64_URL_SAFE_NO_PAD
+-        .encode(norito::json::to_vec(claims).map_err(|error| error.to_string())?);
+-    let message = format!("{encoded_header}.{encoded_claims}");
+-    let signature = jsonwebtoken::crypto::sign(message.as_bytes(), key, algorithm)
+-        .map_err(|error| error.to_string())?;
+-    Ok(format!("{message}.{signature}"))
+-}
+ async fn read_push_provider_response_bounded(
+     mut response: reqwest::Response,
+     source: &'static str,
+@@ -2512,12 +2468,7 @@ async fn mint_fcm_access_token(
+         "exp".to_string(),
+         norito::json::Value::from(issued_at.saturating_add(3600)),
+     );
+-    let jwt = encode_jwt_claims(
+-        Algorithm::RS256,
+-        None,
+-        &(norito::json::Value::Object(claims)),
+-        &EncodingKey::from_rsa_pem(private_key.as_bytes()).map_err(|error| error.to_string())?,
+-    )?;
++    let jwt = jwt::encode_fcm(&norito::json::Value::Object(claims), private_key.as_bytes())?;
+     let response = client
+         .post(FCM_TOKEN_ENDPOINT)
+         .timeout(settings.request_timeout)
+@@ -2550,12 +2501,7 @@ fn mint_apns_provider_token(
+     let mut claims = norito::json::Map::new();
+     claims.insert("iss".to_string(), norito::json::Value::from(team_id));
+     claims.insert("iat".to_string(), norito::json::Value::from(issued_at));
+-    encode_jwt_claims(
+-        Algorithm::ES256,
+-        Some(key_id),
+-        &(norito::json::Value::Object(claims)),
+-        &EncodingKey::from_ec_pem(&private_key).map_err(|error| error.to_string())?,
+-    )
++    jwt::encode_apns(key_id, &norito::json::Value::Object(claims), &private_key)
+ }
+ fn json_string_field(value: &norito::json::Value, field: &str) -> Result<String, String> {
+     value
+@@ -4519,70 +4465,58 @@ mod tests {
+         );
+     }
+     #[test]
+-    fn jwt_algorithm_names_preserve_explicit_protocol_labels() {
+-        for (algorithm, expected) in [
+-            (Algorithm::HS256, "HS256"),
+-            (Algorithm::HS384, "HS384"),
+-            (Algorithm::HS512, "HS512"),
+-            (Algorithm::ES256, "ES256"),
+-            (Algorithm::ES384, "ES384"),
+-            (Algorithm::RS256, "RS256"),
+-            (Algorithm::RS384, "RS384"),
+-            (Algorithm::RS512, "RS512"),
+-            (Algorithm::PS256, "PS256"),
+-            (Algorithm::PS384, "PS384"),
+-            (Algorithm::PS512, "PS512"),
+-            (Algorithm::EdDSA, "EdDSA"),
+-        ] {
+-            assert_eq!(jwt_algorithm_name(algorithm), Ok(expected));
+-        }
+-    }
++    fn mint_apns_provider_token_reads_the_key_and_preserves_provider_claims() {
++        use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+ 
+-    #[test]
+-    fn encode_jwt_claims_builds_verifiable_compact_token() {
+-        let mut claims = norito::json::Map::new();
+-        claims.insert("iss".to_string(), norito::json::Value::from("issuer"));
+-        claims.insert(
+-            "iat".to_string(),
+-            norito::json::Value::from(1_700_000_000_u64),
+-        );
+-        let key = EncodingKey::from_secret(b"shared-secret");
+-        let token = encode_jwt_claims(
+-            Algorithm::HS256,
+-            Some("test-key"),
+-            &(norito::json::Value::Object(claims)),
+-            &key,
+-        )
+-        .expect("JWT should encode");
++        let directory = tempfile::tempdir().expect("APNs credential directory");
++        let path = directory.path().join("test-key.p8");
++        fs::write(&path, include_bytes!("push/jwt/fixtures/ec-p256-pkcs8.pem"))
++            .expect("write disposable APNs fixture");
++        let before = now_ms() / 1000;
++        let token =
++            mint_apns_provider_token("team-id", "key-id", &path).expect("mint APNs provider token");
++        let after = now_ms() / 1000;
+         let parts: Vec<_> = token.split('.').collect();
+         assert_eq!(parts.len(), 3);
+-        let header: norito::json::Value = norito::json::from_slice(
+-            &BASE64_URL_SAFE_NO_PAD
+-                .decode(parts[0])
+-                .expect("header should be base64url"),
+-        )
+-        .expect("header should decode");
+-        assert_eq!(header["typ"].as_str(), Some("JWT"));
+-        assert_eq!(header["alg"].as_str(), Some("HS256"));
+-        assert_eq!(header["kid"].as_str(), Some("test-key"));
+-        let payload: norito::json::Value = norito::json::from_slice(
+-            &BASE64_URL_SAFE_NO_PAD
+-                .decode(parts[1])
+-                .expect("payload should be base64url"),
+-        )
+-        .expect("payload should decode");
+-        assert_eq!(payload["iss"].as_str(), Some("issuer"));
+-        assert_eq!(payload["iat"].as_u64(), Some(1_700_000_000));
+-        assert!(
+-            jsonwebtoken::crypto::verify(
+-                parts[2],
+-                format!("{}.{}", parts[0], parts[1]).as_bytes(),
+-                &jsonwebtoken::DecodingKey::from_secret(b"shared-secret"),
+-                Algorithm::HS256,
+-            )
+-            .expect("signature should verify")
++        let header: norito::json::Value =
++            norito::json::from_slice(&URL_SAFE_NO_PAD.decode(parts[0]).unwrap()).unwrap();
++        assert_eq!(header["alg"].as_str(), Some("ES256"));
++        assert_eq!(header["kid"].as_str(), Some("key-id"));
++        let claims: norito::json::Value =
++            norito::json::from_slice(&URL_SAFE_NO_PAD.decode(parts[1]).unwrap()).unwrap();
++        assert_eq!(claims["iss"].as_str(), Some("team-id"));
++        assert!((before..=after).contains(&claims["iat"].as_u64().unwrap()));
++        assert_eq!(URL_SAFE_NO_PAD.decode(parts[2]).unwrap().len(), 64);
++    }
++
++    #[tokio::test]
++    async fn mint_fcm_access_token_rejects_an_ec_key_before_requesting_access() {
++        let directory = tempfile::tempdir().expect("FCM credential directory");
++        let path = directory.path().join("test-service-account.json");
++        let private_key = include_str!("push/jwt/fixtures/ec-p256-pkcs8.pem");
++        let service_account = norito::json!({
++            "client_email": "fixture@example.invalid",
++            "private_key": private_key,
++        });
++        fs::write(&path, norito::json::to_vec(&service_account).unwrap())
++            .expect("write invalid-family FCM fixture");
++        let settings = DispatchSettings {
++            connect_timeout: Duration::from_millis(10),
++            request_timeout: Duration::from_millis(10),
++        };
++        let client = reqwest::Client::builder()
++            .no_proxy()
++            .resolve("oauth2.googleapis.com", ([127, 0, 0, 1], 1).into())
++            .build()
++            .unwrap();
++        assert_eq!(
++            mint_fcm_access_token(&client, &path, &settings)
++                .await
++                .unwrap_err(),
++            "invalid FCM RSA private key"
+         );
+     }
++
+     #[test]
+     fn bounded_push_file_read_accepts_exact_limit_and_rejects_limit_plus_one() {
+         let directory = tempfile::tempdir().expect("push read directory");

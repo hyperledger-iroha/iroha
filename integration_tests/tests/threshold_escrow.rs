@@ -4,13 +4,13 @@ use integration_tests::sandbox;
 use iroha::query::QueryError;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     data_model::{
         account::Account,
         asset::{AssetDefinition, AssetId},
         prelude::*,
     },
 };
-use iroha_data_model::query::dsl::IntoPredicate as _;
 use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
@@ -18,6 +18,7 @@ use iroha_data_model::{
 use iroha_executor_data_model::permission::{
     asset::CanTransferAsset, smart_contract::CanManageSmartContractCode,
 };
+use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::json::Json;
@@ -114,6 +115,7 @@ async fn deploy_threshold_escrow(
         let client = client.clone();
         let address = contract_address.clone();
         move || {
+            let contract_subject = address.subject_id();
             client.submit_all(
                 [
                     Grant::account_permission(
@@ -130,11 +132,31 @@ async fn deploy_threshold_escrow(
                         }),
                         client.client().account().clone(),
                     ),
+                    Grant::account_permission(
+                        Permission::from(CanTransferAsset {
+                            asset: AssetId::new(sample_asset_definition_id(), ALICE_ID.clone()),
+                        }),
+                        contract_subject.clone(),
+                    ),
                 ],
+                FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            // Native contract execution uses its registered subject. Each asset
+            // owner delegates only its exact balance to that subject.
+            let mut bob = client.client().to_builder();
+            bob.account = BOB_ID.clone();
+            bob.key_pair = BOB_KEYPAIR.clone();
+            Client::from_client(bob.build()?)?.submit_all(
+                [Grant::account_permission(
+                    CanTransferAsset {
+                        asset: AssetId::new(sample_asset_definition_id(), BOB_ID.clone()),
+                    },
+                    contract_subject,
+                )],
                 FeePaymentIntent::authority(Vec::new(), None),
             )
         }
-    }).await.wrap_err("grant exact constructor and scoped escrow role task")?;
+    }).await.wrap_err("grant exact constructor, scoped role, and subject asset permissions")?;
     call_contract_expect_status(
         client,
         client.client().account(),
@@ -175,6 +197,40 @@ async fn call_contract_expect_status(
     let tx_hash_hex = hex::encode(hash.as_ref());
     let observed = wait_for_tx_terminal_status(client, &tx_hash_hex, TX_TIMEOUT, stage).await?;
     if observed.0 != expected_status {
+        if observed.0 == "Rejected" {
+            let client = client.clone();
+            let rejection = read_on_dedicated_thread(move || -> Result<_> {
+                let details = client.client().get_transaction_details(
+                    iroha_crypto::HashOf::from_untyped_unchecked(hash.into()),
+                )?;
+                let iroha_data_model::transaction::TransactionEntrypoint::External(committed) =
+                    details.transaction.entrypoint()
+                else {
+                    return Err(eyre!(
+                        "contract call rejection is not an external transaction"
+                    ));
+                };
+                eyre::ensure!(
+                    committed.hash() == hash,
+                    "contract rejection does not match the submitted transaction"
+                );
+                details
+                    .transaction
+                    .result()
+                    .0
+                    .as_ref()
+                    .err()
+                    .cloned()
+                    .ok_or_else(|| {
+                        eyre!("rejected contract call has a successful committed result")
+                    })
+            })
+            .await
+            .wrap_err_with(|| format!("{stage}: read exact committed rejection"))?;
+            return Err(eyre::Report::new(rejection).wrap_err(format!(
+                "{stage}: expected `{expected_status}`, observed `Rejected`"
+            )));
+        }
         return Err(eyre!(
             "{stage}: expected `{expected_status}`, observed `{}` for tx `{tx_hash_hex}`; payload={}",
             observed.0,
@@ -407,18 +463,27 @@ async fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Option<Quant
 }
 async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool> {
     let client = client.clone();
-    let account_id = account_id.clone();
+    let expected = account_id.to_string();
     read_on_dedicated_thread(move || {
-        let found = client
-            .client()
-            .query(FindAccounts)
-            .filter_with(|item| item.equals("id", account_id.clone()).into_predicate())
-            .execute_single_opt()?;
-        match found {
-            Some(account) if account.id() == &account_id => Ok(true),
-            Some(_) => Err(eyre!("exact account query returned a different account")),
-            None => Ok(false),
-        }
+        let page = client.list_page(
+            &Collection::Accounts,
+            &ListQuery::new()
+                .filter(field("id").eq(expected.clone()))
+                .select(["id"])
+                .limit(2),
+        )?;
+        eyre::ensure!(
+            page.next_cursor.is_none()
+                && page.total.is_none()
+                && page.items.len() <= 1
+                && page
+                    .items
+                    .iter()
+                    .all(|row| row.get("id").and_then(norito::json::Value::as_str)
+                        == Some(expected.as_str())),
+            "exact account collection returned an incomplete or mismatched result"
+        );
+        Ok(!page.items.is_empty())
     })
     .await
     .wrap_err("account query worker failed")
@@ -428,23 +493,27 @@ async fn asset_definition_exists(
     asset_definition_id: &AssetDefinitionId,
 ) -> Result<bool> {
     let client = client.clone();
-    let asset_definition_id = asset_definition_id.clone();
+    let expected = asset_definition_id.to_string();
     read_on_dedicated_thread(move || {
-        let found = client
-            .client()
-            .query(FindAssetDefinitions)
-            .filter_with(|item| {
-                item.equals("id", asset_definition_id.clone())
-                    .into_predicate()
-            })
-            .execute_single_opt()?;
-        match found {
-            Some(definition) if definition.id() == &asset_definition_id => Ok(true),
-            Some(_) => Err(eyre!(
-                "exact definition query returned a different asset definition"
-            )),
-            None => Ok(false),
-        }
+        let page = client.list_page(
+            &Collection::AssetDefinitions,
+            &ListQuery::new()
+                .filter(field("id").eq(expected.clone()))
+                .select(["id"])
+                .limit(2),
+        )?;
+        eyre::ensure!(
+            page.next_cursor.is_none()
+                && page.total.is_none()
+                && page.items.len() <= 1
+                && page
+                    .items
+                    .iter()
+                    .all(|row| row.get("id").and_then(norito::json::Value::as_str)
+                        == Some(expected.as_str())),
+            "exact asset definition collection returned an incomplete or mismatched result"
+        );
+        Ok(!page.items.is_empty())
     })
     .await
     .wrap_err("asset definition query worker failed")
@@ -467,7 +536,7 @@ async fn setup_ledger_for_sample(
                 asset_definition_id.clone(),
                 "threshold_escrow_asset".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             ))
             .into(),
         );
@@ -490,27 +559,6 @@ async fn setup_ledger_for_sample(
     })
     .await
     .wrap_err("setup ledger task")?;
-    let escrow_asset = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
-    read_on_dedicated_thread({
-        let client = client.clone();
-        move || {
-            let grant_transfer = Grant::account_permission(
-                CanTransferAsset {
-                    asset: escrow_asset,
-                },
-                ALICE_ID.clone(),
-            );
-            let mut bob = client.client().to_builder();
-            bob.account = BOB_ID.clone();
-            bob.key_pair = BOB_KEYPAIR.clone();
-            Client::from_client(bob.build()?)?.submit_all(
-                [grant_transfer],
-                FeePaymentIntent::authority(Vec::new(), None),
-            )
-        }
-    })
-    .await
-    .wrap_err("grant escrow transfer permission task")?;
     Ok(())
 }
 fn threshold_state_paths() -> [&'static str; 9] {
@@ -534,6 +582,10 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         .with_block_cadence(Duration::from_secs(4))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            super::contracts::contract_alias_management_permission("threshold_escrow"),
             ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -823,6 +875,10 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         .with_block_cadence(Duration::from_secs(4))
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            super::contracts::contract_alias_management_permission("threshold_escrow"),
             ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(

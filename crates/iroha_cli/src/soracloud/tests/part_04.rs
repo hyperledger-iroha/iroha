@@ -1701,7 +1701,7 @@ fn signed_soracloud_mutation_graph_requires_explicit_optional_keys() {
 
     let agent_deploy = AgentDeployPayload {
         manifest: fixture_agent_apartment(),
-        lease_ticks: 120,
+        lease_blocks: 120,
         autonomy_budget_units: 500,
     };
     let mut missing_budget = json::to_value(&agent_deploy).expect("serialize agent deploy");
@@ -1796,17 +1796,78 @@ fn signed_soracloud_mutation_graph_requires_explicit_optional_keys() {
         "model-weight register payload"
     );
 }
+#[test]
+fn agent_lease_requests_use_exact_committed_block_schema() {
+    let key_pair = soracloud_fixture_key_pair(117);
+    let authority = AccountId::new(key_pair.public_key().clone());
+    let deploy =
+        signed_agent_deploy_request(fixture_agent_apartment(), 120, 500, &authority, &key_pair)
+            .expect("signed agent deploy");
+    let renew = signed_agent_lease_renew_request("ops_agent", 80, &authority, &key_pair)
+        .expect("signed agent lease renewal");
+    let deploy_json = json::to_value(&deploy.payload).expect("deploy JSON");
+    let renew_json = json::to_value(&renew.payload).expect("renewal JSON");
+    for (payload, expected_blocks) in [(&deploy_json, 120), (&renew_json, 80)] {
+        assert_eq!(
+            payload.get("lease_blocks").and_then(json::Value::as_u64),
+            Some(expected_blocks)
+        );
+        assert!(payload.get("lease_ticks").is_none());
+    }
+    let mut retired_deploy = deploy_json;
+    let object = retired_deploy.as_object_mut().expect("deploy object");
+    let blocks = object
+        .remove("lease_blocks")
+        .expect("committed block lease");
+    object.insert("lease_ticks".to_owned(), blocks);
+    json::from_value::<AgentDeployPayload>(retired_deploy)
+        .expect_err("retired tick leases must not decode");
+    let mut retired_renew = renew_json;
+    let object = retired_renew.as_object_mut().expect("renewal object");
+    let blocks = object
+        .remove("lease_blocks")
+        .expect("committed block lease");
+    object.insert("lease_ticks".to_owned(), blocks);
+    json::from_value::<AgentLeaseRenewPayload>(retired_renew)
+        .expect_err("retired tick renewals must not decode");
+}
+
+#[test]
+fn agent_cli_accepts_only_committed_block_lease_flags() {
+    use clap::Parser as _;
+
+    #[derive(clap::Parser, Debug)]
+    struct AgentParser {
+        #[command(subcommand)]
+        command: AgentCommand,
+    }
+    for operation in ["deploy", "lease-renew"] {
+        let mut arguments = vec!["agent", operation, "--lease-blocks", "80"];
+        if operation == "lease-renew" {
+            arguments.extend(["--apartment-name", "ops_agent"]);
+        }
+        let parsed = AgentParser::try_parse_from(&arguments).expect("committed block lease flag");
+        match parsed.command {
+            AgentCommand::Deploy(args) => assert_eq!(args.lease_blocks, 80),
+            AgentCommand::LeaseRenew(args) => assert_eq!(args.lease_blocks, 80),
+            _ => panic!("expected lease mutation"),
+        }
+        arguments[2] = "--lease-ticks";
+        AgentParser::try_parse_from(&arguments).expect_err("retired tick flag must be rejected");
+    }
+}
+
 signature_payload_layout_case!(
     agent_deploy_signature_payload_layout_is_canonical_tuple,
     payload = AgentDeployPayload {
         manifest: fixture_agent_apartment(),
-        lease_ticks: 120,
+        lease_blocks: 120,
         autonomy_budget_units: 500,
     },
     encode_agent_deploy_signature_payload,
     (
         payload.manifest.clone(),
-        payload.lease_ticks,
+        payload.lease_blocks,
         payload.autonomy_budget_units,
     )
 );
@@ -1814,10 +1875,10 @@ signature_payload_layout_case!(
     agent_lease_renew_signature_payload_layout_is_canonical_tuple,
     payload = AgentLeaseRenewPayload {
         apartment_name: "ops_agent".to_owned(),
-        lease_ticks: 120,
+        lease_blocks: 120,
     },
     encode_agent_lease_renew_signature_payload,
-    (payload.apartment_name.as_str(), payload.lease_ticks)
+    (payload.apartment_name.as_str(), payload.lease_blocks)
 );
 signature_payload_layout_case!(
     agent_restart_signature_payload_layout_is_canonical_tuple,

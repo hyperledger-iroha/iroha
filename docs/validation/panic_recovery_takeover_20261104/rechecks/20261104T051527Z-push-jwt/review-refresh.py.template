@@ -1,0 +1,41 @@
+from pathlib import Path
+import json,hashlib,base64,re,subprocess,datetime,shutil
+root=Path('/Users/takemiyamakoto/dev/iroha');failed=Path('/tmp/iroha-panic-recheck-20261104T051527Z');r=json.loads((failed/'receipt.json').read_text());sha=lambda p:hashlib.sha256(p.read_bytes()).hexdigest();changes=r['inventory_changes_from_reviewed'];assert len(changes)==14
+inputs={p:sha(root/p) for p in sorted(changes)};readme='crates/iroha_torii/src/push/jwt/README.md';assert inputs[readme]=='97cbdeb34f1aa6bbeaf5bb291891ead1fc6f902cc9102b5fb709a64246dd6695'
+assert all(inputs[p]==v['observed'] for p,v in changes.items() if p!=readme)
+records=[]
+for line in (failed/'observed.inventory').read_text().splitlines():
+ p,h,kind=line.split('\t')
+ if p==readme:h=inputs[p]
+ assert sha(root/p)==h,p
+ records.append('\t'.join((p,h,kind)))
+observed=('\n'.join(records)+'\n').encode();digest=hashlib.sha256(observed).hexdigest()
+fixture_info=[]
+for p,h in inputs.items():
+ if '/fixtures/' not in p or p.endswith('README.md'):continue
+ data=(root/p).read_bytes()
+ if p.endswith('.pem'):
+  m=re.fullmatch(rb'-----BEGIN ([A-Z0-9 ]+)-----\r?\n([A-Za-z0-9+/=\r\n]+)-----END \1-----\r?\n?',data);assert m,p
+  der=base64.b64decode(re.sub(rb'\s',b'',m[2]),validate=True);assert der.startswith(b'\x30'),p
+  fixture_info.append({'path':p,'sha256':h,'kind':'public disposable PEM test fixture','label':m[1].decode(),'der_bytes':len(der),'runtime_credentials':False})
+ else:
+  assert p.endswith('fcm-token.txt');parts=data.strip().split(b'.');assert len(parts)==3
+  decode=lambda b:base64.urlsafe_b64decode(b+b'='*(-len(b)%4))
+  assert json.loads(decode(parts[0]))=={'alg':'RS256','typ':'JWT'} and json.loads(decode(parts[1]))=={'iat':1700000000,'iss':'issuer'} and len(decode(parts[2]))==256
+  fixture_info.append({'path':p,'sha256':h,'kind':'synthetic known-answer token for issuer fixture','runtime_credentials':False})
+assert len(fixture_info)==8
+for p in ['crates/iroha_torii/Cargo.toml','crates/iroha_torii/src/push.rs']:
+ old=subprocess.check_output(['git','show','HEAD:'+p],cwd=root);assert hashlib.sha256(old).hexdigest()==changes[p]['reviewed'],p
+base=root/'docs/validation/panic_recovery_takeover_20261104';out=base/'rechecks'/'20261104T051527Z-push-jwt';out.mkdir(parents=True,exist_ok=False)
+for name in ['receipt.json','guard.log','observed.inventory']:shutil.copy2(failed/name,out/('before-refresh-'+name))
+shutil.copy2(root/'scripts/panic_recovery_boundaries.inventory',out/'prior-reviewed.inventory');shutil.copy2(base/'receipt.json',out/'prior-capture-receipt.json')
+(out/'push-jwt-reviewed.diff').write_bytes(subprocess.check_output(['git','diff','--','crates/iroha_torii/Cargo.toml','crates/iroha_torii/src/push.rs'],cwd=root))
+review={'observed_utc':datetime.datetime.now(datetime.timezone.utc).isoformat(),'scope':'Panic recovery boundary inventory and complete repository source/input closure only; not cryptographic audit, provider qualification or runtime validation of another owner\'s JWT implementation.','source_sha256_before_review':inputs,'source_sha256_after_review':{p:sha(root/p) for p in inputs},'added_input_count':12,'added_rust_sources':['crates/iroha_torii/src/push/jwt.rs','crates/iroha_torii/src/push/jwt/tests.rs'],'review':{'manifest':'Replaces jsonwebtoken with direct existing AWS-LC backend and rustls-pki-types. No Cargo target path, build script, or source root escapes added. External provider internals are outside this repository-source audit.','push':'Adds private synchronous jwt module and replaces the two synchronous encoding calls; all six original task_spawn sites and their ownership/recovery code unchanged. Added minting tests use public fixtures; no new recovery/task/blocking calls.','jwt':'Reviewed all139lines: synchronous Norito/base64/key parsing/signing functions return Result errors. No catch_unwind, task/thread spawn, blocking workers, hidden aliases, include! or dynamic module paths. The debug assertion checks the PEM prefix already selected by exact first-line matching. Tests use a literal path inside the sealed Torii root.','tests':'Reviewed all260lines: fixture includes, pure verification/admission tests and ignored timing loop; no recovery or spawned-worker boundaries. All referenced data inputs are sealed records.','docs':'Read both JWT and fixture READMEs; fixtures are explicitly public disposable material, never provider credentials. Re-read the revised JWT README that now recommends the whole push-module test filter. No executable source-input mechanism or recovery boundary is introduced by these documents.'},'readme_changed_since_failed_capture':{'path':readme,'captured_sha256':changes[readme]['observed'],'reviewed_current_sha256':inputs[readme]},'fixture_inputs':fixture_info,'boundary_counts_unchanged':r['observed_counts'],'closure_or_semantic_failures_in_prior_recheck':[],'coverage_gap_found':False,'new_regression_required':False,'regression_rationale':'The existing guard correctly refused both changed existing files and all12 newly added repository inputs. No mechanism change is required; existing closure/inventory mutation tests exercise this refusal.','prior_inventory_sha256':sha(out/'prior-reviewed.inventory'),'reviewed_current_inventory_sha256':digest,'profile_qualified':False}
+assert review['source_sha256_before_review']==review['source_sha256_after_review']
+(out/'source-review.json').write_text(json.dumps(review,indent=2)+'\n');shutil.copy2(__file__,out/'review-refresh.py.template')
+for line in records:
+ p,h,_=line.split('\t');assert sha(root/p)==h,p
+assert sha(root/'scripts/panic_recovery_boundaries.inventory')==review['prior_inventory_sha256']
+(root/'scripts/panic_recovery_boundaries.inventory').write_bytes(observed)
+(out/'reviewed-current.inventory').write_bytes(observed)
+Path('/tmp/iroha-panic-reviewed-recheck-path.txt').write_text(str(out)+'\n');print('Reviewed all14 changed/added inputs; no coverage gap; refreshed only inventory to',digest);print('Archive:',out)

@@ -1373,6 +1373,269 @@ mod tests {
         );
     }
 
+    fn escrow_scope_test_limits(
+        source_bytes: u64,
+        budget: super::super::QueryExecutionBudget,
+    ) -> OrdinaryQueryExecutionLimits {
+        let items = 1;
+        let response = source_bytes;
+        let archive = 1024;
+        let decode = norito::DecodeLimits::new(64, 4096, 256, 16 * 1024, 16);
+        let execution = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
+            items,
+            source_bytes,
+            response,
+            4096,
+            archive,
+            decode,
+        )
+        .unwrap();
+        let cursor = OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
+            items,
+            source_bytes,
+            source_bytes,
+            archive,
+        )
+        .unwrap();
+        OrdinaryQueryExecutionLimits::try_new(
+            1,
+            budget,
+            items,
+            execution,
+            source_bytes,
+            response,
+            items,
+            source_bytes,
+            cursor,
+            4096,
+            archive,
+            decode,
+        )
+        .expect("scope fixture reserves one complete row with a valid work envelope")
+    }
+
+    fn escrow_scope_fixture(
+        matching: usize,
+        unrelated: usize,
+    ) -> (
+        crate::state::State,
+        iroha_data_model::query::asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1,
+        Vec<iroha_data_model::escrow::AssetEscrowRecord>,
+        Vec<u8>,
+    ) {
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World},
+        };
+        use iroha_data_model::{
+            asset::AssetBalancePolicy,
+            escrow::scoped::{AssetEscrowScopeV1, scope_key},
+            nexus::AxtAssetIncarnationV1,
+            prelude::*,
+            query::asset_escrow_scope::FindAssetEscrowsByAssetDefinitionV1,
+        };
+        let owner = iroha_test_samples::ALICE_ID.clone();
+        let buyer = iroha_test_samples::BOB_ID.clone();
+        let definition: AssetDefinitionId = "61CtjvNd9T3THAR65GsMVHr82Bjc".parse().unwrap();
+        let incarnation =
+            AxtAssetIncarnationV1::try_from_bytes(*Hash::new("one-record-scope").as_ref()).unwrap();
+        let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+            Hash::new("scope-fixture-genesis"),
+        ));
+        let id = EscrowId::new(Hash::new("one-record-escrow"));
+        let record = AssetEscrowRecord {
+            id,
+            seller: owner.clone(),
+            buyer: Some(buyer.clone()),
+            asset_definition: definition.clone(),
+            amount: Quantity::from(40_u32),
+            custody: crate::smartcontracts::isi::escrow::escrow_custody_account_id(
+                &network,
+                &id,
+                &definition,
+            ),
+            status: AssetEscrowStatus::Released,
+            kind: AssetEscrowKind::Marketplace,
+            remaining_amount: Quantity::zero(),
+            release_authority: None,
+            expires_at_ms: None,
+            evidence_hashes: vec![Hash::new("fiat-invoice")],
+            conditions: Vec::new(),
+            created_at_ms: 1,
+            accepted_at_ms: Some(2),
+            payment_sent_at_ms: Some(3),
+            disputed_at_ms: None,
+            closed_at_ms: Some(4),
+            resolution: None,
+        };
+        let scope = AssetEscrowScopeV1 {
+            asset_definition_id: definition.clone(),
+            asset_incarnation: incarnation,
+            revision: 5,
+            record_count: u64::try_from(matching).unwrap(),
+        };
+        let mut world =
+            World::with(
+                [],
+                [
+                    Account::new(owner.clone()).build(&owner),
+                    Account::new(buyer).build(&owner),
+                ],
+                [AssetDefinition::numeric(
+                    definition.clone(),
+                    "DS",
+                    AssetBalancePolicy::Global,
+                    None,
+                )
+                .build(&owner)],
+            );
+        world
+            .axt_asset_incarnations
+            .insert(definition.clone(), incarnation);
+        let mut expected = Vec::with_capacity(matching);
+        for index in 0..matching {
+            let mut item = record.clone();
+            item.id = EscrowId::new(Hash::new(format!("matching-escrow-{index}")));
+            item.custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
+                &network,
+                &item.id,
+                &definition,
+            );
+            world.asset_escrows.insert(item.id, item.clone());
+            expected.push(item);
+        }
+        expected.sort_by_key(|record| record.id);
+        let unrelated_definition = AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("unrelated", "universal").unwrap(),
+            "coin".parse().unwrap(),
+        );
+        for index in 0..unrelated {
+            let mut item = record.clone();
+            item.id = EscrowId::new(Hash::new(format!("unrelated-escrow-{index}")));
+            item.asset_definition = unrelated_definition.clone();
+            item.custody = crate::smartcontracts::isi::escrow::escrow_custody_account_id(
+                &network,
+                &item.id,
+                &unrelated_definition,
+            );
+            world.asset_escrows.insert(item.id, item);
+        }
+        let key = scope_key(&definition, &incarnation).unwrap();
+        let scope_original = norito::encode_canonical(&scope).unwrap();
+        world
+            .smart_contract_state
+            .insert(key, scope_original.clone());
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let query = FindAssetEscrowsByAssetDefinitionV1 {
+            asset_definition_id: definition,
+            expected_incarnation: incarnation,
+        };
+        (state, query, expected, scope_original)
+    }
+
+    fn one_scope_query_params() -> QueryParams {
+        QueryParams {
+            fetch_size: iroha_data_model::query::parameters::FetchSize::new(
+                std::num::NonZeroU64::new(1),
+            ),
+            ..QueryParams::default()
+        }
+    }
+
+    #[test]
+    fn bounded_escrow_scope_one_record_requires_its_complete_source_budget() {
+        let (state, query, expected, scope_original) = escrow_scope_fixture(1, 0);
+        let params = one_scope_query_params();
+        let budget = super::super::QueryExecutionBudget::from_weighted_limit(256 * 1024, 1, 1);
+        // A complete scope includes retained nested records, not merely its index row.
+        assert!(matches!(
+            asset_escrow_scope::collect(
+                &query,
+                &params,
+                OrdinaryCursorMode::Ephemeral,
+                escrow_scope_test_limits(1_024, budget),
+                &state.view()
+            ),
+            Err(QueryAttemptError::Rejected(Error::CapacityLimit))
+        ));
+        let (mut rows, _) = asset_escrow_scope::collect(
+            &query,
+            &params,
+            OrdinaryCursorMode::Ephemeral,
+            escrow_scope_test_limits(16 * 1_024, budget),
+            &state.view(),
+        )
+        .expect("reserved source space fits one complete escrow record");
+        let original = rows.next().unwrap();
+        assert_eq!(original.scope_original, scope_original);
+        assert_eq!(original.records, expected);
+        assert!(
+            rows.next().is_none(),
+            "complete scope cannot offer a partial continuation"
+        );
+    }
+
+    #[test]
+    fn bounded_escrow_scope_charges_actual_matching_frames_and_fixed_unrelated_scans() {
+        // More than four matching records and many unrelated rows must fit the
+        // one-row aggregate reservation when their actual retained bytes fit.
+        let (state, query, expected, scope_original) = escrow_scope_fixture(6, 64);
+        let params = one_scope_query_params();
+        let budget = super::super::QueryExecutionBudget::from_weighted_limit(256 * 1024, 1, 1);
+        let (mut rows, _) = asset_escrow_scope::collect(
+            &query,
+            &params,
+            OrdinaryCursorMode::Ephemeral,
+            escrow_scope_test_limits(16 * 1024, budget),
+            &state.view(),
+        )
+        .expect("small records must not pay the aggregate ceiling per scan");
+        let original = rows.next().unwrap();
+        assert_eq!(original.scope_original, scope_original);
+        assert_eq!(original.records, expected);
+        assert!(rows.next().is_none());
+
+        // This still admits the standard one-row geometry, but not seventy scans.
+        let item_budget = super::super::QueryExecutionBudget::from_weighted_limit(64, 1, 0);
+        assert!(
+            matches!(
+                asset_escrow_scope::collect(
+                    &query,
+                    &params,
+                    OrdinaryCursorMode::Ephemeral,
+                    escrow_scope_test_limits(16 * 1024, item_budget),
+                    &state.view()
+                ),
+                Err(QueryAttemptError::Rejected(Error::GasBudgetExceeded))
+            ),
+            "cumulative item exhaustion must refuse the complete result"
+        );
+    }
+
+    #[test]
+    fn bounded_escrow_scope_unrelated_scans_exhaust_byte_work_without_partial_output() {
+        let (state, query, _, _) = escrow_scope_fixture(0, 8192);
+        let budget = super::super::QueryExecutionBudget::from_weighted_limit(256 * 1024, 0, 1);
+        assert!(
+            matches!(
+                asset_escrow_scope::collect(
+                    &query,
+                    &one_scope_query_params(),
+                    OrdinaryCursorMode::Ephemeral,
+                    escrow_scope_test_limits(16 * 1024, budget),
+                    &state.view()
+                ),
+                Err(QueryAttemptError::Rejected(Error::GasBudgetExceeded))
+            ),
+            "unrelated records still consume the cumulative bounded scan work"
+        );
+    }
+
     pub(super) fn fi_context_test_limits(source_bytes: u64) -> OrdinaryQueryExecutionLimits {
         let items = 2;
         let response = 16 * 1024;

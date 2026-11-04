@@ -1,0 +1,24 @@
+from pathlib import Path
+import ast,json,gzip,hashlib
+root=Path('/Users/takemiyamakoto/dev/iroha');p=root/'docs/validation/parliament_ballot_arena_current_20261104';sha=lambda b:hashlib.sha256(b).hexdigest()
+review=json.loads((p/'source-review.json').read_text());run=json.loads((p/'run-receipt.json').read_text());current=json.loads((p/'source-model.json').read_text());old=json.loads((root/'docs/validation/parliament_ballot_arena_sufficiency/source-model.json').read_text())
+assert run['before']==run['after'] and run['inputs_stable'] and run['exit_code']==2
+assert current['profile_qualified'] is False and not current['complete_arena_certificate'] and not current['complete_workspace_certificate'] and not current['source_to_compiled_allocation_correspondence_proved']
+for name,h in run['after'].items():assert sha((root/name).read_bytes())==h,name
+assert sha((p/'source-model.json').read_bytes())==run['report_sha256']
+for group in ('current_backend','current_frontend'):
+ for name,h in review[group].items():assert sha((root/name).read_bytes())==h,name
+for name in ('prior_exact_source_review','provider'):
+ r=review[name];assert sha((root/r['path']).read_bytes())==r['sha256'],name
+for r in review['rust_allocation_review']:assert sha(gzip.decompress((p/'rust-sources'/(r['path']+'.gz')).read_bytes()))==r['current_sha256'],r['path']
+def functions(text):return {n.name:ast.dump(n,include_attributes=False) for n in ast.parse(text).body if isinstance(n,(ast.FunctionDef,ast.AsyncFunctionDef,ast.ClassDef))}
+changes={}
+for name in ['parliament_ballot_arena_backend.py','parliament_ballot_arena_frontend.py','check_parliament_ballot_arena_sufficiency.py']:
+ before=functions((p/(name+'.before.template')).read_text());after=functions((root/'scripts'/name).read_text());changes[name]=sorted(k for k in set(before)|set(after) if before.get(k)!=after.get(k))
+assert changes=={'parliament_ballot_arena_backend.py':['main','trace_assumptions'],'parliament_ballot_arena_frontend.py':['trace_assumptions'],'check_parliament_ballot_arena_sufficiency.py':[]}
+# Metadata-only differences above were manually inspected; the trace/event functions are byte-AST equal.
+keys=['classes_checked','domain','frontend_spatial_proof','groups','registration_class_argument','rejection_argument']
+comparison={k:current[k]==old[k] for k in keys}
+assert all(comparison.values()),comparison
+receipt={'reviewer':'handoff_inventory independent review','scope':'Conditional source-level requested-allocation grammar; no compiler/binary/provider-internal allocation or native-memory/stack qualification','current_run_inputs_rechecked':len(run['after']),'backend_sources':len(review['current_backend']),'frontend_sources':len(review['current_frontend']),'archived_rust_source_hashes_verified':12,'source_and_provider_review_hashes_verified':True,'trace_and_event_function_asts_unchanged':True,'metadata_only_function_changes':changes,'prior_source_model_numeric_and_domain_equality':comparison,'classes_checked':current['classes_checked'],'qualification_false_flags_verified':True,'exit_code':run['exit_code'],'findings':[], 'notes':['Inspected default GlobalAlloc::realloc typed Alignment change: alloc new, copy min(old,new), dealloc old remains. Routed directly implements GlobalAlloc and has no realloc override, so new GlobalAllocator blanket impl does not apply.','Inspected TrivialClone to_vec zero-length branch, map/flatten constructor and UncheckedIterator removals, and slice iterator changes; modeled exact-count/TrustedLen allocation schedules unchanged.','Provider receipt is a declared premise bound by SHA and focused regression, not an automatically verified runtime geometry or compiled-allocation correspondence claim.','Historical source-model numeric groups, all 135064 classes, spatial proof and rejection/domain arguments equal exactly; source metadata changes remain explicit.'],'reviewed_artifact_sha256':{x:sha((p/x).read_bytes()) for x in ['source-review.json','run-receipt.json','source-model.json','additional-rust-source-review.diff']}}
+Path('/tmp/iroha-arena-independent-review.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps(receipt,indent=2))

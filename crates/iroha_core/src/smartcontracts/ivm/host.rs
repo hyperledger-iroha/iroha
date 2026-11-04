@@ -6324,6 +6324,9 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 .min(CREATE_NFTS_FOR_ALL_MAX_RECIPIENTS)
                 .saturating_mul(2),
         );
+        // Registration executes as the queued effect authority. Its paired transfer
+        // must name that same owner, including inside a bound contract frame.
+        let authority = self.effect_authority();
         let mut sequence = self.nft_seq;
         for account_id in self.accounts_snapshot.iter() {
             if instructions.len() / 2 >= CREATE_NFTS_FOR_ALL_MAX_RECIPIENTS {
@@ -6348,7 +6351,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
                 Metadata::default(),
             ))));
             let transfer = InstructionBox::from(TransferBox::from(Transfer::nft(
-                self.authority.clone(),
+                authority.clone(),
                 nft_id,
                 account_id.clone(),
             )));

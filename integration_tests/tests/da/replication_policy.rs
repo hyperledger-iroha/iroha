@@ -76,6 +76,7 @@ async fn da_replication_policy_is_enforced() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
+    crate::da::admission::install(&network, 7).await?;
     let caller_policy = RetentionPolicy {
         hot_retention_secs: 60,
         cold_retention_secs: 120,

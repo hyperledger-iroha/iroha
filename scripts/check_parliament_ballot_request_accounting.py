@@ -22,8 +22,10 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL_PATH = Path("scripts/check_parliament_ballot_resource_accounting.py")
 INTERCEPT = 4096
 SLOPE = Fraction(2_750_672 + 65_536, 740)
-# A pin records a source review, not a proof automatically extracted from Rust.
-REVIEWED_SOURCE_SHA256 = "24d191a973854c05337f9fe8ccfa571cc8cebda1d3de984630c12594f0f8d9a3"
+# The current review preserves the logical PRG-input/hash-dispatch schedule.
+# Provider bytes remain guarded custody inputs, not a provider-cost certificate.
+# See docs/validation/parliament_ballot_request_accounting_20261104.
+REVIEWED_SOURCE_SHA256 = "d3906c1b7255bb20415ffcbda9ee5ecb8edf590532ec98dacd6b696f6742ddac"
 
 
 def source_inventory(root: Path) -> dict[str, str]:
@@ -147,6 +149,14 @@ def report(root: Path = ROOT) -> dict:
             "pointwise_4096_preparation_bound_valid": False,
             "comparator_scope_countercheck": comparator,
             "candidate_coefficient_covers_comparator": comparator_covered,
+            "row_build_scope": {
+                "candidate": "ordinary and diagnostic builds",
+                "comparator": "unit tests or the non-default diagnostics feature only"},
+            "primitive_accounting_scope": {
+                "AES256_blocks": "input blocks supplied by Prg::fill; provider-internal batching, key schedules and implementation work are not counted",
+                "keccak_f1600": "one permutation per source dispatch call; runtime backend implementation work is not counted",
+                "provider_or_compiler_qualified": False,
+                "allocation_or_layout_bound": False},
             "interpretation": "W_request <= 4096 + C*q_backend; additive logical primitive units only",
             "excluded": ["runtime abort, cancellation and resource failures",
                          "provider key schedules, unused SIMD lanes and elementary-gate conversion",

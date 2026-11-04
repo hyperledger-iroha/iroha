@@ -71,7 +71,7 @@ thiserror = { workspace = true }
 error-stack = { workspace = true, features = ["eyre"] }
 eyre = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-clap-markdown = "0.1.5"
+iroha_cli_docs = { workspace = true }
 humantime = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 tokio = { workspace = true, features = ["rt"] }

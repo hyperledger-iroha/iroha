@@ -5,10 +5,7 @@
 //! a body cap and an absolute deadline; dropping the fetcher cancels pending requests.
 use eyre::Result;
 use norito::{derive::JsonDeserialize, json};
-use std::{
-    collections::HashMap,
-    time::Duration,
-};
+use std::{collections::HashMap, time::Duration};
 use tokio::{sync::mpsc, task::JoinHandle};
 
 mod http;
@@ -40,7 +37,6 @@ pub enum NoticeKind {
     MetricsFetchFailed,
     MetricsPayloadTooLarge,
     MetricsParseFailed,
-    InternalFetchFailure,
     SmHelpersAdvertised,
     SmOpensslPreviewEnabled,
 }
@@ -209,7 +205,10 @@ struct StatusFetch {
     payload: Option<StatusPayload>,
     latency: Option<Duration>,
 }
-async fn fetch_status(client: &PollingClient, url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
+async fn fetch_status(
+    client: &PollingClient,
+    url: &str,
+) -> std::result::Result<StatusFetch, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/status") {
         let payload = stub_status_payload(descriptor.peer_index, descriptor.total_peers);
         return Ok(StatusFetch {
@@ -217,9 +216,15 @@ async fn fetch_status(client: &PollingClient, url: &str) -> std::result::Result<
             latency: Some(Duration::from_millis(5)),
         });
     }
-    let response = client.get(url, STATUS_BODY_LIMIT, STATUS_HTTP_TIMEOUT).await.map_err(|err| {
-        PeerNotice::critical(NoticeKind::StatusFetchFailed, format!("GET {url} failed: {err}"))
-    })?;
+    let response = client
+        .get(url, STATUS_BODY_LIMIT, STATUS_HTTP_TIMEOUT)
+        .await
+        .map_err(|err| {
+            PeerNotice::critical(
+                NoticeKind::StatusFetchFailed,
+                format!("GET {url} failed: {err}"),
+            )
+        })?;
     let latency = Some(response.latency);
     if response.truncated {
         return Err(PeerNotice::warning(
@@ -245,13 +250,22 @@ async fn fetch_status(client: &PollingClient, url: &str) -> std::result::Result<
         latency,
     })
 }
-async fn fetch_metrics(client: &PollingClient, url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> {
+async fn fetch_metrics(
+    client: &PollingClient,
+    url: &str,
+) -> std::result::Result<MetricsSnapshot, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/metrics") {
         return Ok(stub_metrics_snapshot(descriptor.peer_index));
     }
-    let response = client.get(url, METRICS_BODY_LIMIT, METRICS_HTTP_TIMEOUT).await.map_err(|err| {
-        PeerNotice::warning(NoticeKind::MetricsFetchFailed, format!("GET {url} failed: {err}"))
-    })?;
+    let response = client
+        .get(url, METRICS_BODY_LIMIT, METRICS_HTTP_TIMEOUT)
+        .await
+        .map_err(|err| {
+            PeerNotice::warning(
+                NoticeKind::MetricsFetchFailed,
+                format!("GET {url} failed: {err}"),
+            )
+        })?;
     if response.truncated {
         return Err(PeerNotice::warning(
             NoticeKind::MetricsPayloadTooLarge,
@@ -383,7 +397,9 @@ mod tests {
     #[tokio::test]
     async fn stub_fetch_status_returns_payload() {
         let client = PollingClient::new().unwrap();
-        let fetch = fetch_status(&client, "stub://peer/3/4/status").await.expect("stub status should succeed");
+        let fetch = fetch_status(&client, "stub://peer/3/4/status")
+            .await
+            .expect("stub status should succeed");
         let payload = fetch.payload.expect("payload expected");
         assert_eq!(payload.alias.as_deref(), Some("祭りノード"));
         assert_eq!(payload.peers, Some(4));
@@ -393,9 +409,13 @@ mod tests {
     #[tokio::test]
     async fn stub_fetch_metrics_returns_synthetic_values() {
         let client = PollingClient::new().unwrap();
-        let metrics =
-            fetch_metrics(&client, "stub://peer/1/4/metrics").await.expect("stub metrics should succeed");
+        let metrics = fetch_metrics(&client, "stub://peer/1/4/metrics")
+            .await
+            .expect("stub metrics should succeed");
         assert_eq!(metrics.gas_used, Some(117));
         assert_eq!(metrics.fee_units, Some(57));
     }
 }
+
+#[cfg(test)]
+mod lifecycle_tests;

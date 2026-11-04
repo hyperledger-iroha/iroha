@@ -1,8 +1,17 @@
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
+#[path = "support/contract_deployment.rs"]
+mod contract_deployment;
 #[path = "contracts/ivm_proved.rs"]
 mod ivm_proved;
+pub(crate) use contract_deployment::{
+    contract_alias_management_permission, deploy_contract_locally_signed,
+};
+use contract_deployment::{
+    contract_deployment_instructions, deploy_contract_locally_signed_with_registration,
+};
 use eyre::{Result, eyre};
 use integration_tests::{manifest::ManifestEncodingBudget, sandbox};
+use iroha::collections::{Collection, ListQuery};
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
@@ -11,7 +20,7 @@ use iroha::data_model::{
         OfferContractOwnership, SetContractParliamentDelegation,
     },
     parameter::{
-        CustomParameter, CustomParameterId,
+        CustomParameter, CustomParameterId, SumeragiParameter,
         system::{ConsensusHandshakeMetadata, SumeragiConsensusMode, consensus_metadata},
     },
     smart_contract::{ContractAddress, ContractLifecycleOwnerV1},
@@ -45,6 +54,7 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     let verified = ivm::verify_contract_artifact(&artifact).expect("admit minimal contract");
     assert_eq!(verified.metadata.abi_version, 1);
     assert_eq!(verified.metadata.max_cycles, 1_000);
+    let literal_section = verified.literal_section();
     let mut interface = verified.contract_interface;
     assert_eq!(interface.seiyaku_name, "TestContract");
     assert_eq!(interface.entrypoints.len(), 1);
@@ -71,11 +81,32 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
 
     // Preserve all remaining compiler sections while removing only the
     // authenticated callable descriptor; admission must reject that omission.
+    // The shorter CNTR section changes the literal table's alignment padding.
     let section_end = verified.header_len + interface.encode_section().len();
     interface.callables.clear();
     let mut missing_callable = artifact[..verified.header_len].to_vec();
     missing_callable.extend_from_slice(&interface.encode_section());
-    missing_callable.extend_from_slice(&artifact[section_end..]);
+    if let Some(literals) = literal_section {
+        let literal_start = missing_callable.len() + literals.start - section_end;
+        missing_callable.extend_from_slice(&artifact[section_end..literals.data_end]);
+        let post_pad = (4 - (missing_callable.len() - verified.header_len) % 4) % 4;
+        missing_callable[literal_start + 8..literal_start + 12].copy_from_slice(
+            &u32::try_from(post_pad)
+                .expect("literal padding is at most three bytes")
+                .to_le_bytes(),
+        );
+        missing_callable.resize(missing_callable.len() + post_pad, 0);
+        missing_callable.extend_from_slice(&artifact[verified.code_offset..]);
+    } else {
+        missing_callable.extend_from_slice(&artifact[section_end..]);
+    }
+    let parsed = ivm::ProgramMetadata::parse(&missing_callable)
+        .expect("negative fixture must retain valid metadata and literal alignment");
+    assert_eq!(
+        &missing_callable[parsed.code_offset..],
+        &artifact[verified.code_offset..],
+        "removing a callable descriptor must preserve the original executable"
+    );
     let error = ivm::verify_contract_artifact(&missing_callable)
         .expect_err("public entrypoints require their canonical callable descriptors");
     assert!(
@@ -86,9 +117,10 @@ fn minimal_contract_artifact_binds_unit_entrypoint_to_canonical_callable() {
     );
 }
 
-// The 200-entry probe uses about 3.9M gas locally. Reserve headroom for
-// instance-scoped state paths and bounded scan precharges on real validators.
-const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 5_000_000;
+// The complete 200-entry probe consumes about 6.1M gas on validators.
+// Reserve bounded headroom for its state writes and paginated reads while
+// retaining the artifact's independent 1M cycle cap.
+const CONTRACT_STATE_PROBE_GAS_LIMIT: u64 = 10_000_000;
 
 // Proposal selection reserves the full signed call bound. Grant this isolated
 // workload the same block budget in genesis, without changing node defaults.
@@ -116,7 +148,7 @@ fn contract_v1_probe_block_gas_budget_matches_signed_call_limit() {
     assert_eq!(custom.id().name().as_ref(), "ivm_gas_limit_per_block");
     assert_eq!(
         custom.payload().get(),
-        "5000000",
+        "10000000",
         "canonical numeric u64 JSON"
     );
     let budget: u64 = norito::json::from_str(custom.payload().get())
@@ -536,39 +568,6 @@ fn contract_probe_genesis_registration(
     ])
 }
 
-fn contract_probe_alias_management_permission() -> CanManageAccountAlias {
-    CanManageAccountAlias {
-        scope: AccountAliasPermissionScope::Alias(
-            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                "contract_state_probe@universal"
-                    .parse()
-                    .expect("canonical contract probe alias permission"),
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-            ),
-        ),
-    }
-}
-
-fn contract_deployment_instructions(
-    commit: iroha_data_model::isi::smart_contract_code::CommitContractDeployment,
-    hajimari_grantee: Option<&AccountId>,
-) -> Vec<InstructionBox> {
-    let contract_address = commit.contract_address.clone();
-    let mut instructions = vec![InstructionBox::from(commit)];
-    if let Some(grantee) = hajimari_grantee {
-        // Deployment stages the hook; its caller still needs an exact invocation grant.
-        // Keep that grant after Commit in the same ordinary ordered transaction.
-        let permission: Permission =
-            iroha_executor_data_model::permission::smart_contract::CanInvokeContractEntrypoint {
-                contract: contract_address,
-                entrypoint: "hajimari".to_owned(),
-            }
-            .into();
-        instructions.push(Grant::account_permission(permission, grantee.clone()).into());
-    }
-    instructions
-}
-
 #[test]
 fn contract_v1_deployment_grants_only_the_exact_hajimari_invocation() {
     use iroha_data_model::isi::smart_contract_code::CommitContractDeployment;
@@ -662,15 +661,22 @@ fn contract_v1_deployment_grants_only_the_exact_hajimari_invocation() {
 
 #[test]
 fn contract_v1_alias_permission_is_exact() {
-    let permission = contract_probe_alias_management_permission();
-    let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
-        panic!("contract probe must not receive a domain- or dataspace-wide alias grant");
-    };
-    assert_eq!(alias.canonical_text(), "contract_state_probe@universal");
-    assert_eq!(
-        alias.dataspace_id,
-        iroha_model_base::topology::DataSpaceId::UNIVERSAL
-    );
+    for name in [
+        "contract_state_probe",
+        "owner_lifecycle_four_peer",
+        "deploy_test",
+        "dynamic_access_counter",
+    ] {
+        let permission = contract_alias_management_permission(name);
+        let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
+            panic!("contract fixture must not receive a domain- or dataspace-wide alias grant");
+        };
+        assert_eq!(alias.canonical_text(), format!("{name}@universal"));
+        assert_eq!(
+            alias.dataspace_id,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL
+        );
+    }
 }
 
 #[test]
@@ -745,6 +751,10 @@ fn contract_v1_genesis_registration_preserves_artifact_and_registrar() {
 fn contract_v1_four_validator_probe_compiles_final_syntax() {
     let artifact = contract_state_probe_artifact();
     let parsed = ivm::ProgramMetadata::parse(&artifact).expect("parse V1 network probe");
+    assert_eq!(
+        parsed.metadata.max_cycles, 1_000_000,
+        "the fixture gas allowance must retain the bounded artifact cycle cap"
+    );
     let interface = parsed.contract_interface.expect("signed V1 interface");
     assert!(interface.states.iter().any(|state| state.name == "Entries"));
     assert!(
@@ -888,15 +898,18 @@ fn typed_core_query_page_payload(offset: i64, limit: i64) -> norito::json::Value
 }
 async fn post_typed_core_query_page(
     http: &reqwest::Client,
-    torii_url: &reqwest::Url,
+    client: &iroha::blocking::Client,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     payload: norito::json::Value,
 ) -> Result<(StatusCode, norito::json::Value)> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NONCE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+    let bound_client = client.client();
     let request = norito::json::object([
         (
             "authority",
-            norito::json::Value::from(iroha_test_samples::ALICE_ID.to_string()),
+            norito::json::Value::from(bound_client.account().to_string()),
         ),
         (
             "contract_address",
@@ -909,11 +922,43 @@ async fn post_typed_core_query_page(
         ("payload", payload),
         ("gas_limit", norito::json::Value::from(1_000_000_u64)),
     ])?;
+    // Retain raw status/error access for semantic-negative assertions, while
+    // authenticating the same exact network, target and body as the SDK.
+    let body = norito::json::to_vec(&request)?;
+    let url = bound_client.endpoint().join("v1/contracts/view")?;
+    let timestamp_ms: u64 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    let nonce = format!(
+        "typed-query-view-{timestamp_ms}-{}",
+        NONCE_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+    );
+    let message = iroha::client::canonical_network_request_signature_message(
+        bound_client.network_id(),
+        &iroha::http::Method::POST,
+        &url,
+        &body,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature =
+        iroha_crypto::Signature::try_new(bound_client.key_pair().private_key(), &message)?;
     let response = http
-        .post(torii_url.join("v1/contracts/view")?)
+        .post(url)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
-        .body(norito::json::to_vec(&request)?)
+        .header(
+            iroha_torii::HEADER_ACCOUNT,
+            iroha::client::canonical_request_account_header_value(bound_client.account())?,
+        )
+        .header(
+            iroha_torii::HEADER_SIGNATURE,
+            iroha::client::canonical_request_signature_header_value(&signature)?,
+        )
+        .header(iroha_torii::HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(iroha_torii::HEADER_NONCE, nonce)
+        .body(body)
         .send()
         .await?;
     let status = response.status();
@@ -1124,6 +1169,57 @@ where
         "the ledger {entity_name} query must expose canonical ID order"
     );
 }
+
+async fn bounded_core_collection_ids<T>(
+    account: &iroha::client::AccountClient,
+    collection: Collection,
+) -> Result<Vec<T>>
+where
+    T: norito::json::JsonDeserialize + Ord,
+{
+    let mut query = ListQuery::new().limit(3);
+    let mut cursors = std::collections::BTreeSet::new();
+    let mut ids = Vec::new();
+    // The fixture contains at most 64 visible entities per family. Retain a
+    // finite scan bound while following even empty pages with a continuation.
+    for _ in 0..64 {
+        let page = account.list_page(&collection, &query).await?;
+        eyre::ensure!(
+            page.items.len() <= 3,
+            "{} page exceeded its limit",
+            collection.name()
+        );
+        for row in &page.items {
+            let id: T = norito::json::from_value(
+                row.get("id")
+                    .ok_or_else(|| eyre!("{} row is missing its ID", collection.name()))?
+                    .clone(),
+            )?;
+            eyre::ensure!(
+                ids.last().is_none_or(|previous| previous < &id),
+                "{} collection IDs must advance in canonical order without duplicates",
+                collection.name(),
+            );
+            ids.push(id);
+            eyre::ensure!(
+                ids.len() <= 64,
+                "{} fixture exceeds 64 entities",
+                collection.name()
+            );
+        }
+        let Some(next) = query.next_page(&page) else {
+            return Ok(ids);
+        };
+        eyre::ensure!(
+            cursors.insert(page.next_cursor.expect("continuation has a cursor")),
+            "{} collection cursor repeated",
+            collection.name(),
+        );
+        query = next;
+    }
+    Err(eyre!("{} collection exceeded 64 pages", collection.name()))
+}
+
 fn signed_consensus_handshake(
     network: &sandbox::SerializedNetwork,
 ) -> Result<ConsensusHandshakeMetadata> {
@@ -1222,7 +1318,6 @@ fn dynamic_counter_args(key: i64, delta: i64) -> norito::json::Value {
 fn dynamic_counter_call_intent(
     artifact: &[u8],
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
     entrypoint: &str,
     payload: &norito::json::Value,
 ) -> iroha::client::ContractCallDraftIntent {
@@ -1256,10 +1351,6 @@ fn dynamic_counter_call_intent(
             iroha_primitives::json::Json::new(verified.code_hash.to_string()),
         ),
         (
-            "contract_alias",
-            iroha_primitives::json::Json::new(contract_alias.to_string()),
-        ),
-        (
             "contract_entrypoint",
             iroha_primitives::json::Json::new(entrypoint.to_owned()),
         ),
@@ -1281,6 +1372,60 @@ fn dynamic_counter_call_intent(
             arguments: Some(arguments),
         },
         metadata,
+    }
+}
+
+#[test]
+fn dynamic_counter_intent_binds_address_without_alias_metadata() {
+    let artifact = dynamic_access_counter_artifact();
+    let verified = ivm::verify_contract_artifact(&artifact).expect("verify counter artifact");
+    let network_id = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"dynamic-counter-intent-network",
+    )));
+    let address = ContractAddress::derive(
+        &network_id,
+        &iroha_test_samples::ALICE_ID,
+        0,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive counter address");
+    for (entrypoint, delta) in [("bump_direct", 3), ("bump_via_helper", 5)] {
+        let payload = dynamic_counter_args(7, delta);
+        let intent = dynamic_counter_call_intent(&artifact, &address, entrypoint, &payload);
+        assert_eq!(intent.invocation.contract_address, address);
+        assert_eq!(intent.invocation.expected_code_hash, verified.code_hash);
+        assert_eq!(intent.invocation.entrypoint, entrypoint);
+        assert!(intent.invocation.arguments.is_some());
+        assert_eq!(intent.metadata.iter().count(), 4);
+        assert!(
+            intent
+                .metadata
+                .get(&Name::from_str("contract_alias").unwrap())
+                .is_none()
+        );
+        for (key, expected) in [
+            (
+                "contract_address",
+                iroha_primitives::json::Json::new(address.to_string()),
+            ),
+            (
+                "contract_code_hash",
+                iroha_primitives::json::Json::new(verified.code_hash.to_string()),
+            ),
+            (
+                "contract_entrypoint",
+                iroha_primitives::json::Json::new(entrypoint),
+            ),
+            (
+                "contract_payload",
+                iroha_primitives::json::Json::from(payload),
+            ),
+        ] {
+            assert_eq!(
+                intent.metadata.get(&Name::from_str(key).unwrap()),
+                Some(&expected)
+            );
+        }
     }
 }
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
@@ -1384,149 +1529,6 @@ pub(super) async fn wait_for_tx_applied(
         }
         tokio::time::sleep(Duration::from_millis(250)).await;
     }
-}
-pub fn deploy_contract_locally_signed(
-    client: &iroha::blocking::Client,
-    artifact: &[u8],
-    contract_alias: iroha_data_model::smart_contract::ContractAlias,
-) -> Result<(
-    iroha_data_model::smart_contract::ContractAddress,
-    String,
-    String,
-    HashOf<iroha_data_model::transaction::SignedTransaction>,
-)> {
-    deploy_contract_locally_signed_with_registration(client, artifact, contract_alias, false, None)
-}
-
-fn deploy_contract_locally_signed_with_registration(
-    client: &iroha::blocking::Client,
-    artifact: &[u8],
-    contract_alias: iroha_data_model::smart_contract::ContractAlias,
-    registered_in_genesis: bool,
-    hajimari_grantee: Option<&AccountId>,
-) -> Result<(
-    iroha_data_model::smart_contract::ContractAddress,
-    String,
-    String,
-    HashOf<iroha_data_model::transaction::SignedTransaction>,
-)> {
-    use iroha_data_model::isi::smart_contract_code::{
-        CommitContractDeployment, FinalizeSmartContractCodeUpload, RegisterSmartContractCode,
-        SMART_CONTRACT_CODE_CHUNK_BYTES, UploadSmartContractCodeChunk,
-    };
-    let verified = ivm::verify_contract_artifact(artifact)
-        .map_err(|error| eyre!("verify contract artifact: {error}"))?;
-    let authority: Account = client
-        .client()
-        .query_single(FindAccountById::new(client.client().account().clone()))?;
-    let nonce_key =
-        Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)?;
-    let deploy_nonce = authority
-        .metadata()
-        .get(&nonce_key)
-        .map(|value| {
-            value
-                .try_into_any_norito::<u64>()
-                .map_err(|_| eyre!("contract deployment nonce metadata is not a canonical u64"))
-        })
-        .transpose()?
-        .unwrap_or(0);
-    let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-        client.client().network_id(),
-        client.client().account(),
-        deploy_nonce,
-        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-    )
-    .map_err(|error| eyre!("derive contract address: {error}"))?;
-    let mut metadata = Metadata::default();
-    for key in ["gov_contract_address", "contract_address"] {
-        metadata.insert(
-            Name::from_str(key)?,
-            iroha_primitives::json::Json::new(contract_address.to_string()),
-        );
-    }
-    if !registered_in_genesis {
-        let encoding = ManifestEncodingBudget::new()?;
-        let manifest = verified
-            .manifest
-            .try_signed(
-                encoding.context(),
-                encoding.max_frame_bytes(),
-                client.client().key_pair(),
-            )
-            .map_err(|error| eyre!("sign contract manifest locally: {error}"))?;
-        let total_size = u64::try_from(artifact.len())?;
-        let chunk_count = u32::try_from(artifact.len().div_ceil(SMART_CONTRACT_CODE_CHUNK_BYTES))?;
-        if chunk_count == 0 {
-            return Err(eyre!("contract artifact must not be empty"));
-        }
-        for (index, chunk) in artifact.chunks(SMART_CONTRACT_CODE_CHUNK_BYTES).enumerate() {
-            let chunk_index = u32::try_from(index)?;
-            let mut instructions = vec![InstructionBox::from(UploadSmartContractCodeChunk {
-                artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                    iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                    verified.code_hash,
-                ),
-                total_size,
-                chunk_index,
-                chunk_count,
-                chunk: chunk.to_vec(),
-            })];
-            if chunk_index + 1 == chunk_count {
-                instructions.push(InstructionBox::from(FinalizeSmartContractCodeUpload {
-                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                        verified.code_hash,
-                    ),
-                    total_size,
-                    chunk_count,
-                }));
-            }
-            client.submit_all_with_metadata(
-                instructions,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                metadata.clone(),
-            )?;
-        }
-        client.submit_with_metadata(
-            {
-                let scoped_manifest = manifest;
-                RegisterSmartContractCode {
-                    artifact_id: iroha_data_model::smart_contract::ContractArtifactId::new(
-                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                        scoped_manifest.code_hash.unwrap_or_else(|| {
-                            iroha_crypto::Hash::new(b"missing test manifest hash")
-                        }),
-                    ),
-                    manifest: scoped_manifest,
-                }
-            },
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            metadata.clone(),
-        )?;
-    }
-    let deployment_instructions = contract_deployment_instructions(
-        CommitContractDeployment {
-            expected_deploy_nonce: deploy_nonce,
-            contract_address: contract_address.clone(),
-            code_hash: verified.code_hash,
-            contract_alias,
-            lease_expiry_ms: None,
-            expected_previous_contract_address: None,
-        },
-        hajimari_grantee,
-    );
-    let deployment_tx_hash = client.submit_all_with_metadata(
-        deployment_instructions,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        metadata,
-    )?;
-    Ok((
-        contract_address,
-        hex::encode(verified.code_hash.as_ref()),
-        hex::encode(verified.abi_hash.as_ref()),
-        deployment_tx_hash,
-    ))
 }
 async fn deploy_contract_artifact(
     client: &iroha::blocking::Client,
@@ -1811,6 +1813,12 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         .with_npos_consensus()
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(contract_alias_management_permission(
+                "owner_lifecycle_four_peer",
+            )),
             iroha_test_samples::ALICE_ID.clone(),
         ));
     let context = stringify!(contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers);
@@ -2151,6 +2159,10 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         .with_genesis_instruction(Grant::account_permission(
             permission,
             iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            Permission::from(contract_alias_management_permission("deploy_test")),
+            iroha_test_samples::ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2164,6 +2176,10 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
     // Wait for genesis to be committed before submitting additional transactions
     network.ensure_blocks(1).await?;
     let code_bytes = minimal_contract_artifact();
+    let artifact_id = iroha_data_model::smart_contract::ContractArtifactId::new(
+        DataSpaceId::UNIVERSAL,
+        iroha_data_model::smart_contract::contract_code_hash(&code_bytes),
+    );
     let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
         "deploy_test",
         None,
@@ -2175,7 +2191,6 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         move || deploy_contract_locally_signed(&client, &code_bytes, contract_alias)
     })
     .await?;
-    let http = integration_tests::http::client();
     // Poll status until we see the deploy transaction committed
     let deadline = Instant::now() + std::time::Duration::from_secs(120);
     let mut status = None;
@@ -2216,47 +2231,17 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
             last_status_error.as_deref().unwrap_or("none")
         ));
     }
-    // GET by code hash
-    let get_url = client
-        .client()
-        .endpoint()
-        .join(&format!("/v1/contracts/code/{code_hash_hex}"))
-        .unwrap();
-    let get_deadline = Instant::now() + std::time::Duration::from_secs(120);
-    let mut got_txt = None;
-    let mut last_get_error: Option<String> = None;
-    while Instant::now() < get_deadline {
-        let resp = http
-            .get(get_url.clone())
-            .header("Accept", "application/json")
-            .send()
-            .await?;
-        let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
-        if status == StatusCode::NOT_FOUND {
-            last_get_error = Some("manifest not found".to_owned());
-        } else if !status.is_success() {
-            return Err(eyre!(
-                "GET /v1/contracts/code/{code_hash_hex} returned {status}: {body}"
-            ));
-        } else if body.trim().is_empty() {
-            last_get_error = Some("empty response body".to_owned());
-        } else {
-            got_txt = Some(body);
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-    }
-    let got_txt = got_txt.ok_or_else(|| {
-        eyre!(
-            "manifest GET did not return JSON before deadline{}",
-            last_get_error
-                .as_deref()
-                .map(|err| format!("; last error: {err}"))
-                .unwrap_or_default()
-        )
-    })?;
-    let got: norito::json::Value = norito::json::from_str(&got_txt)?;
+    // Deployment has applied on this peer. Read its exact data space artifact
+    // through the bounded, account-signed manifest endpoint.
+    let expected_network = norito::json::to_value(client.client().network_id())?;
+    let expected_artifact = norito::json::to_value(&artifact_id)?;
+    let got = read_on_dedicated_thread({
+        let client = client.clone();
+        move || client.client().get_contract_manifest_json(&artifact_id)
+    })
+    .await?;
+    assert_eq!(got.get("network_id"), Some(&expected_network));
+    assert_eq!(got.get("artifact_id"), Some(&expected_artifact));
     // Validate manifest present and code_bytes absent
     let (got_manifest, got_bytes) = match &got {
         norito::json::Value::Object(m) => (
@@ -2297,6 +2282,12 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
             iroha_test_samples::ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
+            Permission::from(contract_alias_management_permission(
+                "dynamic_access_counter",
+            )),
+            iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
             alice_enact_permission,
             iroha_test_samples::ALICE_ID.clone(),
         ))
@@ -2326,24 +2317,13 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         "deploy dynamic-access counter",
     )
     .await?;
-    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-        "dynamic_access_counter",
-        None,
-        "universal",
-    )
-    .expect("dynamic counter alias");
     network.ensure_blocks(deploy_height).await?;
     let alice_submission = {
         let client = alice_client.clone();
         let contract_address = contract_address.clone();
         let payload = dynamic_counter_args(7, 3);
-        let intent = dynamic_counter_call_intent(
-            &artifact,
-            &contract_address,
-            &contract_alias,
-            "bump_direct",
-            &payload,
-        );
+        let intent =
+            dynamic_counter_call_intent(&artifact, &contract_address, "bump_direct", &payload);
         async move {
             client
                 .account_client()
@@ -2367,13 +2347,8 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         let client = bob_client.clone();
         let contract_address = contract_address.clone();
         let payload = dynamic_counter_args(7, 5);
-        let intent = dynamic_counter_call_intent(
-            &artifact,
-            &contract_address,
-            &contract_alias,
-            "bump_via_helper",
-            &payload,
-        );
+        let intent =
+            dynamic_counter_call_intent(&artifact, &contract_address, "bump_via_helper", &payload);
         async move {
             client
                 .account_client()
@@ -2612,55 +2587,22 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
     .await?;
     network.ensure_blocks(deploy_height).await?;
     verify_contract_finality_everywhere(&network, deploy_height, Some(deployment_tx_hash)).await?;
-    let (account_ids, asset_ids, asset_definition_ids, domain_ids, nft_ids) =
-        read_on_dedicated_thread({
-            let client = deploy_client.clone();
-            move || -> Result<_> {
-                let account_ids = client
-                    .client()
-                    .query(FindAccounts)
-                    .execute_all()?
-                    .into_iter()
-                    .map(|account| account.id().clone())
-                    .collect::<Vec<_>>();
-                let asset_ids = client
-                    .client()
-                    .query(FindAssets::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|asset| asset.id().clone())
-                    .collect::<Vec<_>>();
-                let asset_definition_ids = client
-                    .client()
-                    .query(FindAssetDefinitions::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|definition| definition.id().clone())
-                    .collect::<Vec<_>>();
-                let domain_ids = client
-                    .client()
-                    .query(FindDomains::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|domain| domain.id().clone())
-                    .collect::<Vec<_>>();
-                let nft_ids = client
-                    .client()
-                    .query(FindNfts::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|nft| nft.id().clone())
-                    .collect::<Vec<_>>();
-                Ok((
-                    account_ids,
-                    asset_ids,
-                    asset_definition_ids,
-                    domain_ids,
-                    nft_ids,
-                ))
-            }
-        })
-        .await?;
+    // Bounded Explorer collections use the native typed-key order and signed
+    // account visibility, providing an independent remote reference for the
+    // contract's five typed page projections.
+    let account = deploy_client.account_client();
+    let account_ids =
+        bounded_core_collection_ids::<AccountId>(&account, Collection::ExplorerAccounts).await?;
+    let asset_ids =
+        bounded_core_collection_ids::<AssetId>(&account, Collection::ExplorerAssets).await?;
+    let asset_definition_ids = bounded_core_collection_ids::<AssetDefinitionId>(
+        &account,
+        Collection::ExplorerAssetDefinitions,
+    )
+    .await?;
+    let domain_ids =
+        bounded_core_collection_ids::<DomainId>(&account, Collection::ExplorerDomains).await?;
+    let nft_ids = bounded_core_collection_ids::<NftId>(&account, Collection::ExplorerNfts).await?;
     assert_canonical_query_order(&account_ids, "account");
     assert_canonical_query_order(&asset_ids, "asset");
     assert_canonical_query_order(&asset_definition_ids, "asset-definition");
@@ -2692,6 +2634,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                 "description",
                 "owned_by",
                 "total_quantity",
+                "numeric_scale",
                 "metadata",
             ],
         ),
@@ -2824,10 +2767,9 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
             let mut peer_rejections = Vec::with_capacity(network.peers().len());
             for peer in network.peers() {
                 let peer_client = peer.client();
-                let torii_url = peer_client.client().endpoint().clone();
                 let (status, body) = post_typed_core_query_page(
                     &http,
-                    &torii_url,
+                    &peer_client,
                     &contract_address,
                     entrypoint,
                     typed_core_query_page_payload_literals(offset, limit),
@@ -2958,6 +2900,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
     registered_in_genesis: bool,
     context: &'static str,
 ) -> Result<()> {
+    const BLOCK_CADENCE_MS: u64 = 8_000;
     let encoding = ManifestEncodingBudget::new()?;
     let register_permission: Permission = CanManageSmartContractCode.into();
     let enact_permission: Permission = CanEnactGovernance.into();
@@ -2967,7 +2910,13 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
         // Leave one full signed cadence between full-mesh admission and the
         // first genesis QC wave on shared runners. This matches the existing
         // four-validator multi-QC integration envelope.
-        .with_block_cadence(Duration::from_secs(8))
+        .with_block_cadence(Duration::from_millis(BLOCK_CADENCE_MS))
+        // The signed payload retry interval must cover the signed cadence (§9.4).
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::PayloadRetryIntervalMs(
+                NonZeroU64::new(BLOCK_CADENCE_MS).expect("nonzero contract probe cadence"),
+            ),
+        )))
         .with_npos_consensus()
         .with_config_layer(|layer| {
             // Nexus is selected by the canonical lane configuration; V1 has
@@ -3014,7 +2963,7 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
             iroha_test_samples::ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
-            Permission::from(contract_probe_alias_management_permission()),
+            Permission::from(contract_alias_management_permission("contract_state_probe")),
             iroha_test_samples::ALICE_ID.clone(),
         ));
     // Genesis can register an artifact without an instance address. Its registrar signs the
@@ -3037,13 +2986,14 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
     };
     assert_eq!(network.peers().len(), 4, "test requires four voting peers");
     {
-        // Both registration modes must carry the exact budget in their signed genesis.
+        // Both registration modes must carry the exact budget and retry interval in genesis.
         let genesis = network.genesis();
         let expected = contract_probe_block_gas_parameter();
         let Parameter::Custom(expected_custom) = &expected else {
             unreachable!("fixture helper returns a custom parameter");
         };
         let mut block_gas_parameters = Vec::new();
+        let mut payload_retry_intervals = Vec::new();
         for transaction in genesis.0.external_transactions() {
             let iroha_data_model::transaction::Executable::Instructions(instructions) =
                 transaction.instructions()
@@ -3060,6 +3010,11 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
                 {
                     block_gas_parameters.push(set_parameter.inner().clone());
                 }
+                if let Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(interval)) =
+                    set_parameter.inner()
+                {
+                    payload_retry_intervals.push(interval.get());
+                }
             }
         }
         assert_eq!(
@@ -3067,11 +3022,21 @@ async fn contract_v1_four_peer_native_finality_restart_impl(
             vec![expected],
             "signed genesis must contain the exact probe block budget once in either scenario",
         );
+        assert_eq!(
+            payload_retry_intervals,
+            vec![BLOCK_CADENCE_MS],
+            "signed genesis must contain the cadence-matched payload retry interval once",
+        );
     }
     let handshake = signed_consensus_handshake(&network)?;
     handshake
         .validate()
         .map_err(|error| eyre!("invalid signed consensus handshake: {error}"))?;
+    assert_eq!(
+        handshake.block_cadence_ms.get(),
+        BLOCK_CADENCE_MS,
+        "contract V1 restart gate must retain its signed block cadence"
+    );
     assert_eq!(
         handshake.mode,
         SumeragiConsensusMode::Npos,

@@ -1,0 +1,11 @@
+{
+  "historical_report_sha256": "ff29e50f73308a8cb3db3345b9416cc4028752da25ee7a6a9dff7d9c7b2525b5",
+  "current_report_sha256": "274d1738cb70b86d2a1a3d0b7728afc096d5856a405def4d7e53fec0125fda21",
+  "equal": {
+    "groups": true,
+    "domain": true,
+    "frontend_spatial_proof": true,
+    "registration_class_argument": true,
+    "rejection_argument": true
+  }
+}

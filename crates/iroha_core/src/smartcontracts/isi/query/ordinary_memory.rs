@@ -498,6 +498,9 @@ pub struct OrdinaryQueryCursorBinding {
     policy: OrdinaryQueryCursorPolicy,
 }
 impl OrdinaryQueryCursorBinding {
+    pub(crate) const fn execution_limits(self) -> OrdinaryQueryExecutionLimits {
+        self.policy.limits
+    }
     #[cfg(any(test, feature = "iroha-core-tests"))]
     pub(crate) const fn retained_bytes(self) -> u64 {
         self.retained_bytes

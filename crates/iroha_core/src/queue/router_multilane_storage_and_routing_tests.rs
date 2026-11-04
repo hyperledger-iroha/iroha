@@ -298,6 +298,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         configured_lane_catalog: lane_catalog.clone(),
         lane_config: lane_config.clone(),
         dataspace_catalog: dataspace_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         routing_policy: policy.clone(),
         ..Default::default()
     })?;

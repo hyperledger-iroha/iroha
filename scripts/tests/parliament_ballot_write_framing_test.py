@@ -275,6 +275,16 @@ class FramingTest(unittest.TestCase):
             return iter(found)
         with patch.object(Path, "rglob", extra), self.assertRaises(ValueError): M.sources(ROOT)
 
+    def test_current_receipts_preserve_historical_framing_counts(self):
+        old = json.loads((ROOT / "docs/validation/parliament_ballot_write_framing/report.json").read_text())
+        current = M.report(ROOT, old["request_cap"], old["length_bits"])
+        for key in ("frames", "schedules", "lifetime"):
+            # JSON normalizes the field-layout tuples to arrays.
+            self.assertEqual(json.loads(json.dumps(current[key])), old[key])
+        self.assertNotEqual(current["source_sha256_before"], old["source_sha256_before"])
+        self.assertIn("diagnostics", current["row_build_scope"]["comparator"])
+        self.assertFalse(current["profile_qualified"])
+
     def test_report_exact_upper_units_zero_and_false_flags(self):
         r = M.report(ROOT, 3, 64)
         self.assertEqual(len(r["frames"]), 12)

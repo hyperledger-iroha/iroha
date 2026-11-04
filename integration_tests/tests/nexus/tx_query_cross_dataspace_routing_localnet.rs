@@ -1,5 +1,5 @@
 //! Focused wrong-dataspace Torii ingress regression for transaction and query routing.
-use super::localnet_npos::npos_override_transactions;
+use super::localnet_npos::npos_override_instruction;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::query::QueryError;
@@ -35,6 +35,10 @@ use iroha_crypto::{Algorithm, KeyPair, Signature};
 use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
+    sumeragi_lanes::{
+        SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy, SumeragiLaneRoute,
+        SumeragiLaneStatus,
+    },
 };
 use iroha_genesis::GenesisTopologyEntry;
 use iroha_model_base::domain::DomainId;
@@ -74,8 +78,10 @@ const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
 const VALIDATORS_PER_LANE: usize = 4;
 const LANE_VALIDATOR_COUNT: usize = VALIDATORS_PER_LANE * 3;
-// Keep the global permissioned committee at exact revision-4 geometry while
-// assigning only the first twelve peers to the three disjoint lane committees.
+// Keep the signed global committee at exact 3f+1 geometry while assigning only
+// the first twelve peers to the three disjoint lane committees. This routing
+// fixture runs within the initial 3,600-block epoch: lane-zero's four candidates
+// are not a replacement thirteen-validator global election pool.
 const TOTAL_PEERS: usize = 13;
 const VALIDATOR_STAKE: u64 = 2_000;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
@@ -88,6 +94,13 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+fn genesis_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    iroha_genesis::default_staking_policy(
+        stake_asset_definition_id(),
+        routing_probe_gas_account_id(),
+        routing_probe_gas_account_id(),
+    )
 }
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
@@ -139,28 +152,29 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
     }
 }
 fn localnet_builder() -> NetworkBuilder {
-    let gas_account_str = routing_probe_gas_account_id()
-        .canonical_i105()
-        .expect("canonical I105 gas account literal");
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
+        .with_npos_consensus()
         .without_npos_genesis_bootstrap()
         .with_genesis_block(|topology, topology_entries| {
             let post_topology = npos_multilane_genesis_post_topology_transactions(
                 topology.as_ref(),
                 &topology_entries,
             );
-            let mut genesis = unexecuted_genesis_factory_with_post_topology(
-                npos_override_transactions(VALIDATORS_PER_LANE),
+            // The builder binds configured DA policies before re-signing the
+            // normalized carrier. Mutating this signed source invalidates it.
+            unexecuted_genesis_factory_with_post_topology(
+                Vec::new(),
                 post_topology,
                 topology,
                 topology_entries,
-            );
-            genesis
-                .0
-                .set_da_proof_policies(Some(multilane_da_proof_policy_bundle()));
-            genesis
+                genesis_staking_policy(),
+            )
         })
+        // Bind NPoS after selecting the custom source, which resets extra
+        // instructions. Its source factory starts with a permissioned carrier;
+        // normalization signs this exact thirteen-validator election policy.
+        .with_genesis_instruction(npos_override_instruction(TOTAL_PEERS))
         .with_config_layer(move |layer| {
             let mut lane_nexus = Table::new();
             lane_nexus.insert("index".into(), TomlValue::Integer(0));
@@ -290,18 +304,6 @@ fn localnet_builder() -> NetworkBuilder {
                     "stake_elected",
                 )
                 .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id_literal(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
                     ["nexus", "staking", "max_validators"],
                     i64::try_from(VALIDATORS_PER_LANE).expect("validator count fits TOML integer"),
                 );
@@ -336,6 +338,61 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
     let lane_config = ActualLaneConfig::from_catalog(&catalog);
     proof_policy_bundle(&lane_config)
 }
+fn restricted_lane_policy(
+    topology: &[PeerId],
+    topology_entries: &[GenesisTopologyEntry],
+) -> SumeragiLanePolicy {
+    assert_eq!(topology.len(), TOTAL_PEERS);
+    let policy = SumeragiLanePolicy {
+        da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
+        anchor_freshness: 64,
+        max_merge_blocks: 16,
+        stall_window: 10_000,
+        lane_params: iroha_data_model::parameter::system::SumeragiParameters::default(),
+        fixed: [(DS1_LANE_INDEX, DS1_ID_U64), (DS2_LANE_INDEX, DS2_ID_U64)]
+            .into_iter()
+            .enumerate()
+            .map(|(offset, (lane, dataspace))| {
+                let start = (offset + 1) * VALIDATORS_PER_LANE;
+                let mut committee = topology[start..start + VALIDATORS_PER_LANE]
+                    .iter()
+                    .map(|peer| {
+                        let entry = topology_entries
+                            .iter()
+                            .find(|entry| &entry.peer == peer)
+                            .expect("signed topology contains each lane member");
+                        SumeragiLaneMember {
+                            peer: peer.clone(),
+                            pop: entry
+                                .pop_bytes()
+                                .expect("well-formed PoP")
+                                .expect("lane PoP"),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                // The signed policy pins the native record's canonical peer order,
+                // independently of each validator's position in the global topology.
+                committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+                SumeragiFixedLane {
+                    lane: LaneId::new(lane),
+                    dataspace: DataSpaceId::new(dataspace),
+                    committee,
+                }
+            })
+            .collect(),
+        routes: [(DS1_LANE_INDEX, &*ALICE_ID), (DS2_LANE_INDEX, &*BOB_ID)]
+            .into_iter()
+            .map(|(lane, account)| SumeragiLaneRoute {
+                lane: LaneId::new(lane),
+                account: Some(account.to_string()),
+                instruction: None,
+            })
+            .collect(),
+        autoscale: None,
+    };
+    policy.validate().expect("native restricted lane policy");
+    policy
+}
 fn npos_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
     topology_entries: &[GenesisTopologyEntry],
@@ -363,7 +420,7 @@ fn npos_multilane_genesis_post_topology_transactions(
     );
     let mut bootstrap_tx = vec![
         Register::domain(Domain::new(nexus_domain.clone())).into(),
-        Register::domain(Domain::new(universal_domain)).into(),
+        Register::domain(Domain::new(universal_domain.clone())).into(),
         Register::domain(Domain::new(ds1_domain)).into(),
         Register::domain(Domain::new(ds2_domain)).into(),
         Register::asset_definition({
@@ -373,7 +430,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 "XOR".to_owned(),
                 NumericSpec::fractional(9),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(universal_domain.clone()),
             )
         })
         .into(),
@@ -383,7 +440,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 __asset_definition_id.clone(),
                 "ds1coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(nexus_domain.clone()),
             )
         })
         .into(),
@@ -393,7 +450,7 @@ fn npos_multilane_genesis_post_topology_transactions(
                 __asset_definition_id.clone(),
                 "ds2coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(nexus_domain.clone()),
             )
         })
         .into(),
@@ -461,7 +518,74 @@ fn npos_multilane_genesis_post_topology_transactions(
         );
         bootstrap_tx.push(ActivatePublicLaneValidator::new(lane_id, validator_id).into());
     }
+    // A node-local catalog cannot create native committees. Commit the exact
+    // two restricted committees and authority routes in the signed genesis.
+    bootstrap_tx.push(
+        iroha_data_model::isi::SetParameter::new(iroha_data_model::parameter::Parameter::Custom(
+            restricted_lane_policy(topology, topology_entries).into_custom_parameter(),
+        ))
+        .into(),
+    );
     vec![bootstrap_tx]
+}
+fn restricted_lane_records_match(
+    statuses: &[SumeragiLaneStatus],
+    policy: &SumeragiLanePolicy,
+    network_id: &NetworkId,
+) -> bool {
+    statuses.len() == policy.fixed.len()
+        && policy.fixed.iter().enumerate().all(|(ordinal, fixed)| {
+            statuses
+                .iter()
+                .find(|status| status.record.lane == fixed.lane)
+                .is_some_and(|status| {
+                    let record = &status.record;
+                    record.dataspace == fixed.dataspace
+                        && record.incarnation
+                            == iroha_core::sumeragi::lanes::step::incarnation(
+                                network_id,
+                                fixed.lane,
+                                fixed.dataspace,
+                                1,
+                                ordinal as u64,
+                            )
+                        && record.committee == fixed.committee
+                        && record.params == policy.lane_params
+                        && record.da_layout == policy.da_layout
+                        && record.anchor_freshness == policy.anchor_freshness
+                        && record.created_at == 1
+                        && record.active_from == 3
+                        && record.closing.is_none()
+                })
+        })
+}
+fn wait_for_restricted_lane_instances(client: &Client, policy: &SumeragiLanePolicy) -> Result<()> {
+    let started = Instant::now();
+    let mut observed = String::new();
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match client.client().get_sumeragi_lanes() {
+            Ok(statuses)
+                if restricted_lane_records_match(
+                    &statuses,
+                    policy,
+                    client.client().network_id(),
+                ) && statuses.iter().all(|status| {
+                    status
+                        .instance
+                        .as_ref()
+                        .is_some_and(|instance| instance.halted.is_none())
+                }) =>
+            {
+                return Ok(());
+            }
+            Ok(statuses) => observed = format!("{statuses:?}"),
+            Err(error) => observed = error.to_string(),
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+    Err(eyre!(
+        "native restricted lane membership/readiness timed out: {observed}"
+    ))
 }
 fn lane_validator_snapshot(
     snapshot: &JsonValue,
@@ -1110,7 +1234,107 @@ fn account_assets_response_contains(
 #[test]
 fn tx_query_cross_dataspace_routing_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
-    let _network = localnet_builder().build();
+    let network = localnet_builder().build();
+    let genesis = network.genesis();
+    let authority = AccountId::new(
+        iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+            .public_key()
+            .clone(),
+    );
+    iroha_core::block::check_genesis_block(&genesis.0, &authority)
+        .expect("configured routing genesis authenticates after executing its staking plans");
+    assert_eq!(
+        genesis.0.da_proof_policies(),
+        Some(&multilane_da_proof_policy_bundle()),
+        "the configured three-lane policy is part of the authenticated genesis"
+    );
+    let instructions = genesis
+        .0
+        .external_transactions()
+        .filter_map(|tx| match tx.instructions() {
+            iroha_data_model::transaction::Executable::Instructions(instructions) => {
+                Some(instructions.iter())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect::<Vec<_>>();
+    let policies = instructions
+        .iter()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
+            (custom.id() == &PublicLaneStakingPolicy::parameter_id()).then(|| {
+                PublicLaneStakingPolicy::from_custom_parameter(custom)
+                    .expect("canonical original signed staking policy")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies,
+        vec![genesis_staking_policy()],
+        "one signed staking policy preserves the fixture's XOR and ALICE custody"
+    );
+    let (epoch, _) = iroha_data_model::sumeragi_finality::authenticated_genesis(&genesis.0)
+        .expect("signed global genesis authority")
+        .into_parts();
+    assert_eq!(
+        epoch.committee.len(),
+        TOTAL_PEERS,
+        "the global genesis roster retains thirteen validators"
+    );
+    let npos = instructions
+        .iter()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            iroha_data_model::parameter::system::SumeragiNposParameters::from_custom_parameter(
+                custom,
+            )
+            .expect("valid signed parameters")
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(npos.len(), 1, "one original network XOR selection");
+    assert_eq!(
+        npos[0].max_validators(),
+        u32::try_from(TOTAL_PEERS).unwrap()
+    );
+    assert_eq!(npos[0].epoch_length_blocks().get(), 3_600);
+    assert_eq!(npos[0].xor_asset_definition_id, stake_asset_definition_id());
+    let policies = instructions
+        .iter()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            SumeragiLanePolicy::from_custom_parameter(custom)
+                .map(|policy| policy.expect("signed lane policy"))
+        })
+        .collect::<Vec<_>>();
+    let topology = network
+        .peers()
+        .iter()
+        .map(|peer| peer.id())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies,
+        vec![restricted_lane_policy(
+            &topology,
+            network.topology_entries()
+        )]
+    );
 }
 #[test]
 fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models() -> Result<()>
@@ -1138,38 +1362,58 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         .take(VALIDATORS_PER_LANE)
         .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
         .collect();
-    let expected_ds1_validators: BTreeSet<_> = peers
-        .iter()
-        .enumerate()
-        .skip(VALIDATORS_PER_LANE)
-        .take(VALIDATORS_PER_LANE)
-        .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
-        .collect();
-    let expected_ds2_validators: BTreeSet<_> = peers
-        .iter()
-        .enumerate()
-        .skip(VALIDATORS_PER_LANE * 2)
-        .take(VALIDATORS_PER_LANE)
-        .map(|(index, peer)| expected_lane_binding_for_peer(index, &peer.id()))
-        .collect();
     wait_for_active_lane_validators(
         &alice,
         LaneId::new(NEXUS_LANE_INDEX),
         &expected_nexus_validators,
         "nexus lane validator activation",
     )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS1_LANE_INDEX),
-        &expected_ds1_validators,
-        "ds1 lane validator activation",
-    )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS2_LANE_INDEX),
-        &expected_ds2_validators,
-        "ds2 lane validator activation",
-    )?;
+    // Native lanes created in genesis become active at height three. Pay for
+    // two real global transactions with the already funded validator account;
+    // ALICE/BOB's committed routes are reserved for their restricted lanes.
+    let activation_key = KeyPair::try_from_seed(validator_authority_seed(0), Algorithm::Ed25519)?;
+    let activation_client = peers[0].client_for(
+        &validator_authority_account_for_peer(0),
+        activation_key.private_key().clone(),
+    );
+    for ordinal in 0..2 {
+        activation_client.submit(
+            Log::new(
+                Level::INFO,
+                format!("activate restricted routing lanes {ordinal}"),
+            ),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+    }
+    let topology = peers.iter().map(|peer| peer.id()).collect::<Vec<_>>();
+    let policy = restricted_lane_policy(&topology, network.topology_entries());
+    wait_for_restricted_lane_instances(&alice, &policy)?;
+    // Restricted membership is deliberately absent from the public API, even
+    // though the operator-authenticated endpoint verifies the exact committee.
+    for lane in [DS1_LANE_INDEX, DS2_LANE_INDEX] {
+        let hidden = rt.block_on(torii_json_get(
+            &alice,
+            &[
+                "v1".into(),
+                "nexus".into(),
+                "public-lanes".into(),
+                lane.to_string(),
+                "validators".into(),
+            ],
+            &[],
+        ))?;
+        ensure!(
+            hidden.status == HttpStatusCode::NOT_FOUND,
+            "restricted lane membership leaked: {} {}",
+            hidden.status,
+            hidden.body_text
+        );
+        ensure!(
+            hidden.body.get("code").and_then(JsonValue::as_str) == Some("query_validation_failed"),
+            "unexpected restricted lane refusal: {}",
+            hidden.body_text
+        );
+    }
     let lane_sync_height = alice
         .client()
         .get_sumeragi_status()
@@ -1240,18 +1484,27 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     rt.block_on(async {
         let alice_probe = {
             let account = alice_via_ds2.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [InstructionBox::from(Log::new(
                         Level::INFO,
                         "wrong ingress route probe ds1".to_owned(),
                     ))],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "route-probe quote changed payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         submit_transaction_and_expect_route(
             &alice_via_ds2,
             &alice_on_ds1,
@@ -1263,18 +1516,27 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         .await?;
         let bob_probe = {
             let account = bob_via_ds1.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [InstructionBox::from(Log::new(
                         Level::INFO,
                         "wrong ingress route probe ds2".to_owned(),
                     ))],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "route-probe quote changed payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         submit_transaction_and_expect_route(
             &bob_via_ds1,
             &bob_on_ds2,
@@ -1489,19 +1751,28 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "bob should not expose ds2 manifest publish permission before grant"
     );
-    let unauthorized_publish_tx = {
+    let unauthorized_publish_tx = rt.block_on(async {
         let account = bob_via_ds1.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [InstructionBox::from(PublishSpaceDirectoryManifest {
                     manifest: ds2_manifest.clone(),
                 })],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "manifest quote changed payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        Ok::<_, eyre::Report>(account.sign_transaction(payload)?)
+    })?;
     rt.block_on(submit_transaction_and_expect_route(
         &bob_via_ds1,
         &bob_on_ds2,
@@ -1517,6 +1788,15 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         ds2_lane_id,
         "manifest must remain absent after unauthorized publish through wrong ingress",
     ))?;
+    ensure!(
+        alice
+            .client()
+            .get_sumeragi_status()
+            .map_err(|err| eyre!(err))?
+            .committed_height
+            < 3_600,
+        "routing coverage must remain within the initial signed global committee epoch"
+    );
     Ok(())
 }
 #[cfg(test)]
@@ -1672,7 +1952,7 @@ mod tests {
         assert_eq!(transactions.len(), 1);
         assert_eq!(
             transactions[0].len(),
-            11 + LANE_VALIDATOR_COUNT * 5 + (LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE + 2)
+            12 + LANE_VALIDATOR_COUNT * 5 + (LANE_VALIDATOR_COUNT - VALIDATORS_PER_LANE + 2)
         );
         let committee_registrations = transactions[0]
             .iter()
@@ -1753,6 +2033,124 @@ mod tests {
         let first = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         let second = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
         assert_eq!(format!("{first:?}"), format!("{second:?}"));
+    }
+    #[test]
+    fn restricted_lane_policy_and_records_bind_exact_native_membership() {
+        use iroha_data_model::sumeragi_lanes::{
+            SumeragiLaneFrontier, SumeragiLaneRecord, SumeragiLaneStatus,
+        };
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let policy = super::restricted_lane_policy(&topology, &entries);
+        assert_eq!(policy.fixed.len(), 2);
+        for (ordinal, fixed) in policy.fixed.iter().enumerate() {
+            let start = (ordinal + 1) * VALIDATORS_PER_LANE;
+            let mut expected_peers = topology[start..start + VALIDATORS_PER_LANE]
+                .iter()
+                .collect::<Vec<_>>();
+            expected_peers.sort();
+            assert_eq!(
+                fixed
+                    .committee
+                    .iter()
+                    .map(|member| &member.peer)
+                    .collect::<Vec<_>>(),
+                expected_peers
+            );
+            assert!(
+                fixed
+                    .committee
+                    .windows(2)
+                    .all(|pair| pair[0].peer < pair[1].peer)
+            );
+            for member in &fixed.committee {
+                assert_eq!(
+                    member.pop,
+                    entries
+                        .iter()
+                        .find(|entry| entry.peer == member.peer)
+                        .unwrap()
+                        .pop_bytes()
+                        .unwrap()
+                        .unwrap()
+                );
+            }
+        }
+        assert_eq!(
+            policy.routes[0].account.as_deref(),
+            Some(ALICE_ID.to_string().as_str())
+        );
+        assert_eq!(
+            policy.routes[1].account.as_deref(),
+            Some(super::BOB_ID.to_string().as_str())
+        );
+        let network_id = NetworkId::from_genesis_hash(
+            iroha_crypto::HashOf::<BlockHeader>::from_untyped_unchecked(Hash::new(
+                b"native restricted lane record regression",
+            )),
+        );
+        let records = policy
+            .fixed
+            .iter()
+            .enumerate()
+            .map(|(ordinal, fixed)| SumeragiLaneStatus {
+                record: SumeragiLaneRecord {
+                    da_layout: policy.da_layout,
+                    lane: fixed.lane,
+                    dataspace: fixed.dataspace,
+                    incarnation: iroha_core::sumeragi::lanes::step::incarnation(
+                        &network_id,
+                        fixed.lane,
+                        fixed.dataspace,
+                        1,
+                        ordinal as u64,
+                    ),
+                    params: policy.lane_params.clone(),
+                    committee: fixed.committee.clone(),
+                    created_at: 1,
+                    active_from: 3,
+                    closing: None,
+                    anchor_freshness: policy.anchor_freshness,
+                    merged: SumeragiLaneFrontier::default(),
+                    merged_at: 3,
+                    rescued: 0,
+                },
+                instance: None,
+            })
+            .collect::<Vec<_>>();
+        assert!(super::restricted_lane_records_match(
+            &records,
+            &policy,
+            &network_id
+        ));
+        assert!(!super::restricted_lane_records_match(
+            &records[..1],
+            &policy,
+            &network_id
+        ));
+        for mutation in 0..11 {
+            let mut changed = records.clone();
+            match mutation {
+                0 => changed[0].record.committee = records[1].record.committee.clone(),
+                1 => changed[0].record.committee[0].pop[0] ^= 1,
+                2 => changed[0]
+                    .record
+                    .committee
+                    .push(records[0].record.committee[0].clone()),
+                3 => changed[0].record.dataspace = DataSpaceId::new(2),
+                4 => changed[0].record.incarnation[0] ^= 1,
+                5 => changed[0].record.created_at = 2,
+                6 => changed[0].record.active_from = 4,
+                7 => changed[0].record.closing = Some(10),
+                8 => changed[0].record.anchor_freshness += 1,
+                9 => changed[0].record.lane = LaneId::new(2),
+                10 => changed[0].record.committee.swap(0, 1),
+                _ => unreachable!(),
+            }
+            assert!(
+                !super::restricted_lane_records_match(&changed, &policy, &network_id),
+                "mutation {mutation}"
+            );
+        }
     }
     #[test]
     fn routing_probe_gas_account_uses_alice_subject() {

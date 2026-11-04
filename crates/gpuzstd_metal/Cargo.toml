@@ -11,7 +11,11 @@ default = ["c-abi"]
 c-abi = []
 
 [dependencies]
+gpuzstd_codec = { path = "../gpuzstd_codec" }
 zstd = { workspace = true }
 
 [build-dependencies]
 cc = "1.2.45"
+
+[dev-dependencies]
+gpuzstd_codec = { path = "../gpuzstd_codec", features = ["test-support"] }

@@ -1,0 +1,835 @@
+{
+  "all_ten_complete_stack_bounds_unknown": true,
+  "analyzer_tests_passed": 203,
+  "binary_sha256": {
+    "accel": "350f2634f2a0d56d37650657874e3b02bbd156036fed1ab3c1ece01afc2ff717",
+    "portable": "7e9227ea785265bcae0e4bc4c61efc9ebec2d9d1a46574669ec966b497a1fb84"
+  },
+  "capture_passed": true,
+  "captures": {
+    "accel": {
+      "binary_sha256": "350f2634f2a0d56d37650657874e3b02bbd156036fed1ab3c1ece01afc2ff717",
+      "function_count": 860,
+      "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel.json",
+      "prior_capture_comparisons": [
+        {
+          "address": "0x100000b40",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 39,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 27,
+            "native_edge": 119,
+            "unsupported_instruction": 5
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 66,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 119
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000030ec",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 40,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 27,
+            "native_edge": 126,
+            "unsupported_instruction": 5
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "parliament_memory_entry::workspace::worker",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 67,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 126
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000050a0",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "missing_instruction": 1,
+            "native_edge": 1
+          },
+          "prior_positive_weight_recursive_components": 0,
+          "root": "parliament_memory_entry::fatal::exhausted",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "v4_positive_weight_recursive_components": 0
+        },
+        {
+          "address": "0x10000770c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 37,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 27,
+            "native_edge": 82,
+            "unsupported_instruction": 2
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 82
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x10000858c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 37,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 27,
+            "native_edge": 83,
+            "unsupported_instruction": 2
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 83
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x100000b40",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 66,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 119,
+            "unsupported_instruction": 1
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 66,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 119
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000030ec",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 67,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 126,
+            "unsupported_instruction": 1
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "parliament_memory_entry::workspace::worker",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 67,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 126
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000050a0",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "prior_positive_weight_recursive_components": 0,
+          "root": "parliament_memory_entry::fatal::exhausted",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "v4_positive_weight_recursive_components": 0
+        },
+        {
+          "address": "0x10000770c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 82,
+            "unsupported_instruction": 1
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 82
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x10000858c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 83,
+            "unsupported_instruction": 1
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 83
+          },
+          "v4_positive_weight_recursive_components": 1
+        }
+      ],
+      "roots": [
+        {
+          "address": "0x100000b40",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 241,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 66,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 119
+          },
+          "resolved_region_stack_bytes": 12864,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify"
+        },
+        {
+          "address": "0x1000030ec",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 242,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 67,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 126
+          },
+          "resolved_region_stack_bytes": 13056,
+          "root": "parliament_memory_entry::workspace::worker"
+        },
+        {
+          "address": "0x1000050a0",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 1,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "resolved_region_stack_bytes": 144,
+          "root": "parliament_memory_entry::fatal::exhausted"
+        },
+        {
+          "address": "0x10000770c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 195,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 82
+          },
+          "resolved_region_stack_bytes": 6800,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+        },
+        {
+          "address": "0x10000858c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 197,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 83
+          },
+          "resolved_region_stack_bytes": 6800,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+        }
+      ],
+      "sha256": "82d3c21a045abbf4d0d038784d07a0868f4b7f48893a7c85ed6ccbf6945bc0ee",
+      "text_instructions": 89887,
+      "v3_raw_bytes_identical": {
+        "disassembly": true,
+        "starts": true,
+        "stubs": true,
+        "unwind": true
+      },
+      "whole_image_frame_error_count": 1,
+      "whole_image_frame_error_kinds": {
+        "inconsistent_sp_merge": 1
+      }
+    },
+    "portable": {
+      "binary_sha256": "7e9227ea785265bcae0e4bc4c61efc9ebec2d9d1a46574669ec966b497a1fb84",
+      "function_count": 870,
+      "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable.json",
+      "prior_capture_comparisons": [
+        {
+          "address": "0x100000b40",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 38,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 26,
+            "native_edge": 124,
+            "unsupported_instruction": 6
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 125
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000030ec",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 39,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 26,
+            "native_edge": 131,
+            "unsupported_instruction": 6
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "parliament_memory_entry::workspace::worker",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 65,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 132
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000050a0",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "missing_instruction": 1,
+            "native_edge": 1
+          },
+          "prior_positive_weight_recursive_components": 0,
+          "root": "parliament_memory_entry::fatal::exhausted",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "v4_positive_weight_recursive_components": 0
+        },
+        {
+          "address": "0x10000770c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 36,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 26,
+            "native_edge": 87,
+            "unsupported_instruction": 3
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 88
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x10000858c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v2",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 36,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "missing_instruction": 26,
+            "native_edge": 88,
+            "unsupported_instruction": 3
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 89
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x100000b40",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 124,
+            "unsupported_instruction": 2
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 125
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000030ec",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 65,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 131,
+            "unsupported_instruction": 2
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "parliament_memory_entry::workspace::worker",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 65,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 132
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x1000050a0",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "prior_positive_weight_recursive_components": 0,
+          "root": "parliament_memory_entry::fatal::exhausted",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "v4_positive_weight_recursive_components": 0
+        },
+        {
+          "address": "0x10000770c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 87,
+            "unsupported_instruction": 2
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 88
+          },
+          "v4_positive_weight_recursive_components": 1
+        },
+        {
+          "address": "0x10000858c",
+          "previous_native_trap_indirect_merge_frontiers_preserved": true,
+          "previous_recursive_frontier_nodes_preserved": true,
+          "prior_capture": "stack-v3",
+          "prior_frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 88,
+            "unsupported_instruction": 2
+          },
+          "prior_positive_weight_recursive_components": 1,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>",
+          "v4_frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 89
+          },
+          "v4_positive_weight_recursive_components": 1
+        }
+      ],
+      "roots": [
+        {
+          "address": "0x100000b40",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 248,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 125
+          },
+          "resolved_region_stack_bytes": 15808,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify"
+        },
+        {
+          "address": "0x1000030ec",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 249,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 65,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 132
+          },
+          "resolved_region_stack_bytes": 16000,
+          "root": "parliament_memory_entry::workspace::worker"
+        },
+        {
+          "address": "0x1000050a0",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 1,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "resolved_region_stack_bytes": 144,
+          "root": "parliament_memory_entry::fatal::exhausted"
+        },
+        {
+          "address": "0x10000770c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 202,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 88
+          },
+          "resolved_region_stack_bytes": 9744,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+        },
+        {
+          "address": "0x10000858c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 204,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 89
+          },
+          "resolved_region_stack_bytes": 9744,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+        }
+      ],
+      "sha256": "4964faf01959f9f69bef55cf100f39fd2102a6ee1c4c008f6b36fddcfadc0dea",
+      "text_instructions": 91775,
+      "v3_raw_bytes_identical": {
+        "disassembly": true,
+        "starts": true,
+        "stubs": true,
+        "unwind": true
+      },
+      "whole_image_frame_error_count": 1,
+      "whole_image_frame_error_kinds": {
+        "inconsistent_sp_merge": 1
+      }
+    }
+  },
+  "complete_stack_certificate": false,
+  "complete_workspace_certificate": false,
+  "historical_evidence_rebound": false,
+  "input_changes": [],
+  "latest_source_build_validated": false,
+  "limitations": [
+    "Ordinary ABI-conditional direct-CFG regions only; full physical stack bounds remain unknown.",
+    "Zero unsupported-instruction frontiers concerns analyzed function-entry CFGs, not a proof of every possible execution path or all-input resource use.",
+    "Latest working-tree build not validated; prior review observed different rustup and Cargo.lock hashes. Only retained binary bytes are analyzed.",
+    "Native costs/continuations, indirect targets, traps, function fallthroughs, stack merges, recursion, hidden exception/signal/unwind paths and memory aliases remain unproved.",
+    "The historical 160-node suite result remains 47 passed and 113 failed; this diagnostic does not repair any historical certificate.",
+    "Binary/tool bytes and the Arm PDF remain at guarded cache paths. The cache is not permanent release custody."
+  ],
+  "newly_exposed_worker_frontiers": {
+    "accel": [],
+    "portable": [
+      {
+        "address": "0x10001d134",
+        "caller_depth_bytes": 1264,
+        "detail": "_memcpy",
+        "function": "aes::backends::soft::fixslice::aes192::key_schedule::<u64>",
+        "kind": "native_edge"
+      }
+    ]
+  },
+  "no_build_or_worker_execution": true,
+  "observed_utc": "2026-11-04T06:33:23.985038+00:00",
+  "original_capture_changes": [],
+  "original_v2_v3_cache_and_archive_files_unchanged": 71,
+  "physical_cost_calibrated": false,
+  "prior_native_trap_indirect_merge_and_recursive_frontiers_preserved": true,
+  "profile_qualified": false,
+  "release_qualified": false,
+  "remaining_frame_errors_per_image": {
+    "accel": 1,
+    "portable": 1
+  },
+  "retained_files": [
+    {
+      "archived_path": "accel/disassembly.txt.gz",
+      "archived_sha256": "27e17385eef704988b6b04f58ac06a3247132191091ad97bb2088e74d2919e49",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/disassembly.txt",
+      "original_sha256": "00ff8bbe858e96d109e516601372788abbc92c692eb8a503968ab290f3b6a925"
+    },
+    {
+      "archived_path": "accel/starts.txt",
+      "archived_sha256": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/starts.txt",
+      "original_sha256": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f"
+    },
+    {
+      "archived_path": "accel/stubs.txt",
+      "archived_sha256": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/stubs.txt",
+      "original_sha256": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43"
+    },
+    {
+      "archived_path": "accel/unwind.txt",
+      "archived_sha256": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/unwind.txt",
+      "original_sha256": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad"
+    },
+    {
+      "archived_path": "accel.json.gz",
+      "archived_sha256": "063c5d2f5193a2f386237bac6e90574f57bc60db9c4987cbae6d81cbdcb68530",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel.json",
+      "original_sha256": "82d3c21a045abbf4d0d038784d07a0868f4b7f48893a7c85ed6ccbf6945bc0ee"
+    },
+    {
+      "archived_path": "capture_retained_stack_v4.py.template",
+      "archived_sha256": "7f516ff5e896b42071ea3a73af2cbf074d1acbf926c8dabd9f8f94d4372d9acc",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/capture_retained_stack_v4.py.template",
+      "original_sha256": "7f516ff5e896b42071ea3a73af2cbf074d1acbf926c8dabd9f8f94d4372d9acc"
+    },
+    {
+      "archived_path": "parliament_ballot_stack_audit.py.template",
+      "archived_sha256": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/parliament_ballot_stack_audit.py.template",
+      "original_sha256": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab"
+    },
+    {
+      "archived_path": "parliament_ballot_stack_audit_test.py.template",
+      "archived_sha256": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/parliament_ballot_stack_audit_test.py.template",
+      "original_sha256": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf"
+    },
+    {
+      "archived_path": "portable/disassembly.txt.gz",
+      "archived_sha256": "649f06656e760f6a6b395f2d99e3d0813bb8134dfc45d3180514f6e803cd5f08",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/disassembly.txt",
+      "original_sha256": "237de91b1490b0192b80710c5f0d6ceb4ea6dc6d6d99e6ab0d51eb854091e5a7"
+    },
+    {
+      "archived_path": "portable/starts.txt",
+      "archived_sha256": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/starts.txt",
+      "original_sha256": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a"
+    },
+    {
+      "archived_path": "portable/stubs.txt",
+      "archived_sha256": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/stubs.txt",
+      "original_sha256": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14"
+    },
+    {
+      "archived_path": "portable/unwind.txt",
+      "archived_sha256": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/unwind.txt",
+      "original_sha256": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d"
+    },
+    {
+      "archived_path": "portable.json.gz",
+      "archived_sha256": "c00cfbc725a5bb7e1627938862e27e8ab620298f42dffd7ca00e581608186a2e",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable.json",
+      "original_sha256": "4964faf01959f9f69bef55cf100f39fd2102a6ee1c4c008f6b36fddcfadc0dea"
+    },
+    {
+      "archived_path": "receipt.json",
+      "archived_sha256": "b759a54a086ff103fea1f4095886085d2f8ec9a0dfaaddc01aaf65b85fd0370c",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/receipt.json",
+      "original_sha256": "b759a54a086ff103fea1f4095886085d2f8ec9a0dfaaddc01aaf65b85fd0370c"
+    },
+    {
+      "archived_path": "tests.txt",
+      "archived_sha256": "86228b156e0f71a75832f1a8305bc90316ebe5fd0f5f53fe63e047619021b3b1",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/tests.txt",
+      "original_sha256": "86228b156e0f71a75832f1a8305bc90316ebe5fd0f5f53fe63e047619021b3b1"
+    }
+  ],
+  "schema": "parliament-retained-image-stack-v4-summary-v1",
+  "scope": "Artifact-bound static analysis of retained November 4 workers; not latest working-tree or live candidate qualification.",
+  "unsupported_instruction_frontiers_in_analyzed_function_entry_cfgs": 0,
+  "v3_raw_capture_bytes_identical": true
+}

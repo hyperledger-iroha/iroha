@@ -1,0 +1,96 @@
+{
+  "helpers": [
+    {
+      "current_sha256": "dea334da1192d8d13a6068d0b10c2874ff8b07e1eddd0434e18205f8c9197ce8",
+      "historical_path": "docs/validation/parliament_ballot_component_families/record/capture/source/scripts/parliament_ballot_write_framing.py.template",
+      "historical_sha256": "ad5230fdcd01b52588b40d29a2e766625050ef530dfba4cb529350f993a21617",
+      "path": "scripts/parliament_ballot_write_framing.py",
+      "report_change": "Only row_build_scope diagnostic field added; all body ASTs identical after removing that field.",
+      "unchanged_functions_and_classes": [
+        "encode_record",
+        "framing_counts",
+        "integer",
+        "layout",
+        "load_circuit",
+        "main",
+        "require_disjoint_append",
+        "scatter",
+        "schedule_counts",
+        "sha",
+        "shape",
+        "sources"
+      ]
+    },
+    {
+      "current_sha256": "8a9231ebc700f0b2628420a101825aa87d5cfe51714de0a7e5db4c95f74e3c58",
+      "historical_path": "docs/validation/parliament_ballot_component_families/record/capture/source/scripts/parliament_ballot_oracle_log_circuit.py.template",
+      "historical_sha256": "d045f66581f7a50bcb4e696b0346a192724f5d0858a21c23343bb35478d5c558",
+      "path": "scripts/parliament_ballot_oracle_log_circuit.py",
+      "report_change": "Only row_build_scope diagnostic field added; all body ASTs identical after removing that field.",
+      "unchanged_functions_and_classes": [
+        "Wires",
+        "and_xor",
+        "append_circuit",
+        "gate_counts",
+        "integer",
+        "lookup_circuit",
+        "main",
+        "resource_vector",
+        "sha",
+        "simulate",
+        "sources",
+        "toy_layout"
+      ]
+    }
+  ],
+  "observed_utc": "2026-11-04T05:09:51.527548+00:00",
+  "ordinary_and_refusal_bytes_identical": true,
+  "ordinary_exit": 0,
+  "production_gate_changed": false,
+  "profile_qualified": false,
+  "reports": [
+    {
+      "all_other_fields_identical": true,
+      "changed_fields": [
+        "source_sha256_before",
+        "source_sha256_after"
+      ],
+      "current_sha256": "523d0e813d342cc7023524c9cf38c7c725223ceff634d4d617a0bfdd751c05ef",
+      "historical_sha256": "c6c2d3f7f1bd2d25a4db34e449b5627c9fa78bd5f722bc198b98241512d9ac57",
+      "report": "candidate-registration.json"
+    },
+    {
+      "all_other_fields_identical": true,
+      "changed_fields": [
+        "source_sha256_before",
+        "source_sha256_after"
+      ],
+      "current_sha256": "645b9a43cb79d32c6d87b1ae4ae188d3617777f7195c9bc872b3f8f757fd5fbc",
+      "historical_sha256": "2698c88caf6bcf4206205e7646623e2f0315081c3c7de7a9d5c0ce572e12b8ca",
+      "report": "candidate-vote.json"
+    },
+    {
+      "all_other_fields_identical": true,
+      "changed_fields": [
+        "source_sha256_before",
+        "source_sha256_after"
+      ],
+      "current_sha256": "28e7577ee9a6426fef2a3b1f6d5f87357df204ec0d4cb0dbe97ddfbd66c35cfd",
+      "historical_sha256": "ec5c8ebce374cba26e6d0c63d29eb671eae0149c1fcd6f37cf45fa22383b5792",
+      "report": "comparator-registration.json"
+    },
+    {
+      "all_other_fields_identical": true,
+      "changed_fields": [
+        "source_sha256_before",
+        "source_sha256_after"
+      ],
+      "current_sha256": "72b1c35e82c693649671401b4a90c79d7ff24d162caa32c748cbe03d3aa44f4d",
+      "historical_sha256": "318cdfeef501ebda4a2d4ddd61f737d2a75a6a78a9dff516ce15030a0096bb38",
+      "report": "comparator-vote.json"
+    }
+  ],
+  "require_qualified_exit": 2,
+  "scope": "Exact fixed-slot writer dependency review; mathematical component only, no full source/build/physical custody.",
+  "writer_function_class_AST_unchanged": true
+}

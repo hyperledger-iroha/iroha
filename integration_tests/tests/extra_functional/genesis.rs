@@ -1,5 +1,5 @@
 //! Integration tests covering multi-peer genesis submissions.
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::{NetworkBuilder, ensure_domain_setup_for_network};
 #[tokio::test]
@@ -45,7 +45,11 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
         return Ok(());
     }
     let domain_id: DomainId = DomainId::try_new("foo", "universal").expect("Valid");
-    let submit_result = ensure_domain_setup_for_network(&network, &domain_id);
+    let (_network, submit_result) = run_on_dedicated_thread(move || {
+        let result = ensure_domain_setup_for_network(&network, &domain_id);
+        (network, result)
+    })
+    .await?;
     if sandbox::handle_result(submit_result, stringify!(multiple_genesis_peers))?.is_none() {
         return Ok(());
     }

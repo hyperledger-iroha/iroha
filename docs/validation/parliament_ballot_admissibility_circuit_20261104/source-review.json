@@ -1,0 +1,13 @@
+{
+  "changed_correspondence_sources": [
+    "crates/iroha_zkp_vole/src/bavc.rs",
+    "crates/iroha_parliament_ballot_proof/src/profile.rs"
+  ],
+  "source_review_path": "docs/validation/parliament_ballot_zero_challenge_20261104/source-review.json",
+  "source_review_sha256": "306a01267a593dd1019544c38b3b19dfac83b15cd3488d8b37ace267355c6b83",
+  "formula_or_emitter_changes": false,
+  "scope_change": "Report identifies comparator as test/diagnostic-only; candidate row remains compiled in production and diagnostics. Neither row is qualified.",
+  "validation": "Three previously failing source/report/CLI controls pass; unchanged emitted-circuit controls passed in the fresh baseline suite.",
+  "profile_qualified": false,
+  "historical_artifacts_modified": false
+}

@@ -1,7 +1,17 @@
-//! Stress block production with randomized mint bursts.
+//! Exercise seeded concurrent mint bursts and balance convergence across all peers.
 use eyre::{Result, eyre};
-use integration_tests::{sandbox, sync::get_status_with_retry_async};
-use iroha::data_model::{parameter::BlockParameter, prelude::*};
+use integration_tests::{
+    sandbox,
+    sync::{get_status_with_retry_async, run_on_dedicated_thread},
+};
+use iroha::{
+    data_model::{
+        parameter::BlockParameter,
+        prelude::*,
+        query::error::{FindError, QueryExecutionFail},
+    },
+    query::QueryError,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
@@ -11,9 +21,9 @@ use std::{
     num::NonZero,
     time::{Duration, Instant},
 };
-use tokio::{task::spawn_blocking, time::sleep};
-/// Bombard random peers with random mints in multiple rounds, ensuring they all have
-/// a consistent total amount in the end.
+use tokio::time::sleep;
+/// Send seeded concurrent mint bursts through the selected ingress and require
+/// every peer to converge to the exact accumulated amount.
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn multiple_blocks_created() -> Result<()> {
@@ -23,6 +33,18 @@ async fn multiple_blocks_created() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_block_cadence(std::time::Duration::from_secs(2))
+        .with_config_layer(|layer| {
+            // All burst submissions use one selected ingress. Its finite local
+            // compute capacity must admit the declared maximum burst of ten.
+            layer.write(
+                [
+                    "torii",
+                    "transaction_ingress",
+                    "max_concurrent_compute_jobs",
+                ],
+                i64::try_from(N_MAX_TXS_PER_BLOCK).expect("fixture concurrency fits i64"),
+            );
+        })
         .with_genesis_instruction(SetParameter::new(Parameter::Block(
             BlockParameter::MaxTransactions(NonZero::new(N_MAX_TXS_PER_BLOCK).expect("valid")),
         )));
@@ -42,44 +64,37 @@ async fn multiple_blocks_created() -> Result<()> {
             client.transaction_status_timeout = sync_timeout;
             client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
         });
-    let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
+    // The default genesis already owns `domain` and its XOR definition.
+    let domain_id: DomainId = DomainId::try_new("multipleblocks", "universal")?;
     let create_domain = domain_setup_instruction(&domain_id, submit_client.client().account())?;
-    let (account_id, _account_keypair) = gen_account_in("domain");
+    let (account_id, _account_keypair) = gen_account_in(domain_id.name());
     let create_account = Register::account(Account::new(account_id.clone()));
-    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal")?,
-        "xor".parse()?,
-    );
+    let asset_definition_id: AssetDefinitionId =
+        AssetDefinitionId::derive_from_components(domain_id.clone(), "xor".parse()?);
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
         AssetDefinition::numeric(
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         )
     });
     {
         let client = submit_client.clone();
-        let tx = {
-            let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let submit_res: eyre::Result<()> = run_on_dedicated_thread(move || {
+            client
+                .submit_all::<InstructionBox>(
                     [
                         create_domain,
                         InstructionBox::from(create_account),
                         InstructionBox::from(create_asset),
                     ],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    <_>::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
-        let submit_res: eyre::Result<()> =
-            spawn_blocking(move || client.submit_transaction_and_wait(&tx).map(|_| ()))
-                .await
-                .map_err(eyre::Report::from)?;
+                )
+                .map(|_| ())
+        })
+        .await?;
         if sandbox::handle_result(submit_res, stringify!(multiple_blocks_created))?.is_none() {
             return Ok(());
         }
@@ -106,7 +121,7 @@ async fn multiple_blocks_created() -> Result<()> {
         let txs = (1..=N_MAX_TXS_PER_BLOCK)
             .choose(&mut rng)
             .expect("there is a room to choose from");
-        println!("submitting {txs} transactions to random peers");
+        println!("submitting {txs} concurrent transactions through the selected ingress");
         let mut submit_handles = Vec::new();
         for _ in 0..txs {
             let value = (0..999_999)
@@ -114,25 +129,25 @@ async fn multiple_blocks_created() -> Result<()> {
                 .expect("there is quite a room to choose from");
             total += value;
             let client = submit_client.clone();
-            let tx = {
-                let account = client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [Mint::asset_quantity(
-                            u64::try_from(value).expect("generated quantity fits u64"),
-                            AssetId::new(asset_definition_id.clone(), account_id.clone()),
-                        )],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        <_>::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
-            }
-            .expect("build integration-test transaction");
-            submit_handles.push(spawn_blocking(move || {
-                client.submit_transaction_and_wait(&tx).map(|_| ())
+            let mint = Mint::asset_quantity(
+                u64::try_from(value).expect("generated quantity fits u64"),
+                AssetId::new(asset_definition_id.clone(), account_id.clone()),
+            );
+            // Keep every burst concurrent while each synchronous SDK operation
+            // obtains its fee quote outside Tokio's runtime context.
+            submit_handles.push(tokio::spawn(async move {
+                run_on_dedicated_thread(move || {
+                    client
+                        .submit(
+                            mint,
+                            iroha_data_model::transaction::FeePaymentIntent::authority(
+                                Vec::new(),
+                                None,
+                            ),
+                        )
+                        .map(|_| ())
+                })
+                .await?
             }));
         }
         for handle in submit_handles {
@@ -168,20 +183,25 @@ async fn multiple_blocks_created() -> Result<()> {
         let mut all_ok = true;
         for peer in network.peers() {
             let client = peer.client();
-            let account_id = account_id.clone();
-            let definition = asset_definition_id.clone();
-            let assets: Vec<Asset> = match sandbox::handle_result(
-                spawn_blocking(move || client.client().query(FindAssets::new()).execute_all())
-                    .await?
-                    .map_err(eyre::Report::from),
-                stringify!(multiple_blocks_created),
-            )? {
+            let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+            let found = match client
+                .account_client()
+                .query_single(FindAssetById::new(asset_id.clone()))
+                .await
+            {
+                Ok(asset) => {
+                    assert_eq!(asset.id(), &asset_id);
+                    Ok(Some(asset))
+                }
+                Err(QueryError::Validation(ValidationFail::QueryFailed(
+                    QueryExecutionFail::Find(FindError::Asset(id)),
+                ))) if *id == asset_id => Ok(None),
+                Err(error) => Err(eyre::Report::from(error)),
+            };
+            let asset = match sandbox::handle_result(found, stringify!(multiple_blocks_created))? {
                 Some(v) => v,
                 None => return Ok(()),
             };
-            let asset = assets.into_iter().find(|asset| {
-                *asset.id().account() == account_id && *asset.id().definition() == definition
-            });
             if let Some(asset) = asset {
                 if *asset.value() != expected_value {
                     all_ok = false;

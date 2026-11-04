@@ -2387,7 +2387,7 @@ fn run_replay_scenario(id: &str, policy: &PinPolicyConstraints) -> GatewayResult
         "B4" => verify_full_replay(&CorruptedCarGatewayClient::new(), policy),
         "B5" => return GatewayResult::refusal(412),
         "B6" => return GatewayResult::refusal(429),
-        "C1" | "C2" | "C3" | "C4" | "C5" | "C6" | "C7" => {
+        "C1" | "C2" | "C3" | "C4" | "C5" | "C6" => {
             let detail = capability_refusal_detail(id)
                 .unwrap_or_else(|| panic!("no capability refusal detail for scenario {id}"));
             return GatewayResult::capability_refusal(detail);

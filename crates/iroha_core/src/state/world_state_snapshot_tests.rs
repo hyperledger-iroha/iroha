@@ -919,15 +919,32 @@ fn sns_lease_snapshot_authenticates_native_record_and_refuses_changed_or_unfunde
     let authenticated = verifier
         .verify(&crate::sumeragi::finality::build_proof(&chain.state().view(), 2).unwrap())
         .unwrap();
-    let tip = chain.committed(2);
+    let source_limits = crate::sumeragi::certified_chain::CurrentCutSourceLimits::new(
+        iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_BLOCK_BYTES,
+        iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_JOURNAL_BYTES,
+        3,
+    )
+    .unwrap();
+    let frames = AllocationBudget::new(
+        iroha_data_model::sumeragi::finality::NATIVE_FINALITY_MAX_JOURNAL_BYTES,
+    );
+    let graphs = AllocationBudget::new(240_000_000);
+    let tip = crate::sumeragi::certified_chain::read_current_certified_cut(
+        &chain.state().view(),
+        2,
+        chain.root_scope(),
+        source_limits,
+        &frames,
+        &graphs,
+    )
+    .unwrap();
+    assert_eq!(frames.reserved_bytes(), 0);
+    assert_eq!(graphs.reserved_bytes(), 0);
     let budget = AllocationBudget::new(32 * 1024 * 1024);
     let bytes = chain
         .state()
-        .with_native_sns_lease_snapshot_v1(&tip, &selector, &budget, |world, bytes| {
-            assert_eq!(
-                world.root().unwrap(),
-                tip.commitment().execution.world_state_root
-            );
+        .with_native_sns_lease_cut_v1(&tip, &selector, &budget, |world, bytes| {
+            assert_eq!(world.root().unwrap(), tip.world_state_root());
             norito::encode_canonical(&SnsLeaseProofRefV1::new(world, bytes))
                 .map_err(|e| e.to_string())
         })
@@ -952,15 +969,10 @@ fn sns_lease_snapshot_authenticates_native_record_and_refuses_changed_or_unfunde
     assert!(
         chain
             .state()
-            .with_native_sns_lease_snapshot_v1(
-                &tip,
-                &selector,
-                &AllocationBudget::new(0),
-                |_, _| {
-                    called.set(true);
-                    Ok(())
-                }
-            )
+            .with_native_sns_lease_cut_v1(&tip, &selector, &AllocationBudget::new(0), |_, _| {
+                called.set(true);
+                Ok(())
+            })
             .is_err()
     );
     let missing = iroha_data_model::sns::NameSelectorV1::new(
@@ -971,7 +983,7 @@ fn sns_lease_snapshot_authenticates_native_record_and_refuses_changed_or_unfunde
     assert!(
         chain
             .state()
-            .with_native_sns_lease_snapshot_v1(&tip, &missing, &budget, |_, _| {
+            .with_native_sns_lease_cut_v1(&tip, &missing, &budget, |_, _| {
                 called.set(true);
                 Ok(())
             })
@@ -981,7 +993,7 @@ fn sns_lease_snapshot_authenticates_native_record_and_refuses_changed_or_unfunde
     assert!(
         chain
             .state()
-            .with_native_sns_lease_snapshot_v1(&tip, &selector, &budget, |_, _| {
+            .with_native_sns_lease_cut_v1(&tip, &selector, &budget, |_, _| {
                 called.set(true);
                 Ok(())
             })

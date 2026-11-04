@@ -1,0 +1,98 @@
+{
+  "reviewer": "docs_recovery",
+  "utc": "2026-11-04T04:13:55.957435+00:00",
+  "old": "1.93.1",
+  "new": "1.99.1",
+  "verdict": "Existing requested-Layout Vec growth and conservative overlap formulas remain valid for the inspected runtime call paths; no formula change indicated by these alloc-source differences. This does not certify the complete allocation_schedule or production resources.",
+  "alloc_sha256": {
+    "1.93.1": {
+      "raw_vec/mod.rs": "7f94665b803a970d83f99d3a451a92af6b210baaa8c9685b1f50d265c836f38b",
+      "vec/mod.rs": "98ed44ed3e17e41c6048b2057cdf44443ddb5f7462fbf9c48e7e62fc7ace286e",
+      "vec/spec_extend.rs": "5673f04327502716ba5774e2067f9c1a179290e0cde92fe72ddfc5475ab34396",
+      "vec/spec_from_iter.rs": "584c9018149f930b5cd56ca3ba7a7d70f48583b2dfc32b243926a6ae4cb10566",
+      "vec/spec_from_iter_nested.rs": "f3c1a06f43734a65e102b6a107e2fd5adadd7d94d9a226d6ffe1610d1e7e1466",
+      "alloc.rs": "cd8a5946b4c44338c451d1bb4c47e3109ea08ae7e3c58397e0879e4fe099572b"
+    },
+    "1.99.1": {
+      "raw_vec/mod.rs": "cda0e96514e65a55b8ed559b02b7bc5f2dcb7854695a501ac0b03b0eeab0361c",
+      "vec/mod.rs": "e0c798ff16cf1770ef3266d28440d93dd65402b3afe1df4e184f15af17fb1e3e",
+      "vec/spec_extend.rs": "a0816ad0f39b947889771bf06930bf8e0c4ce794846d83863349697ec7c415ec",
+      "vec/spec_from_iter.rs": "393d1f28cfc8d28d80e142cef6b612aae9b484160969cfa0c9f97bb894534807",
+      "vec/spec_from_iter_nested.rs": "f3c1a06f43734a65e102b6a107e2fd5adadd7d94d9a226d6ffe1610d1e7e1466",
+      "alloc.rs": "3949baaebc3310d1a88a097d3b31b02445bfcad74b196ea4f6ea776de368ab97"
+    }
+  },
+  "reviewed_repo_sha256": {
+    "scripts/check_parliament_ballot_resource_accounting.py": "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1",
+    "crates/iroha_parliament_ballot_proof/src/framing.rs": "784c28ba9a115cb2775d78f7147fdcbd1fac5835affd1ef9938a7f1a2c2fc0a0",
+    "crates/iroha_parliament_ballot_proof/src/profile.rs": "1e1d5e5b40208c06934199b79a2b1b0551c362bab864f0d17ea0c4f9ab385678",
+    "crates/iroha_zkp_vole/src/crt/codec.rs": "9da70396e4e6aa637f8033e95855eeaccae276c10ae4576469da42139349a68a"
+  },
+  "evidence": [
+    {
+      "claim": "RawVec minimum capacities and amortized growth unchanged: 8 for1-byte elements,4 for size<=1024,1 otherwise; new=max(2*old,len+additional,minimum). Runtime reserve forwards unchanged. Functions moved into const-capable impls without changing this arithmetic.",
+      "new_locations": [
+        "raw_vec/mod.rs:158",
+        "raw_vec/mod.rs:503",
+        "raw_vec/mod.rs:544",
+        "vec/mod.rs:1460"
+      ]
+    },
+    {
+      "claim": "extend_from_slice on u8/u64 selects trivial-clone slice specialization; append_elements still calls reserve(slice.len()) exactly once. 1.99 factors copying into append_elements_unreserved and adds fallible helpers; unchanged successful requested capacities.",
+      "new_locations": [
+        "vec/mod.rs:2959",
+        "vec/mod.rs:3605",
+        "vec/spec_extend.rs:50"
+      ]
+    },
+    {
+      "claim": "Generic extend reserves lower.size_hint+1 only on full buffer; TrustedLen reserves exact additional. SpecFromIterNested is byte-for-byte unchanged. SpecFromIter changes only core::ptr import. IntoIter extension now accepts any allocator and eagerly deallocates source after append; it does not increase requested output capacity.",
+      "new_locations": [
+        "vec/mod.rs:4092",
+        "vec/mod.rs:4119",
+        "vec/spec_from_iter_nested.rs:18",
+        "vec/spec_extend.rs:31",
+        "vec/spec_from_iter.rs:38"
+      ]
+    },
+    {
+      "claim": "Global runtime allocate returns requested Layout size; runtime grow with same alignment forwards new Layout size to realloc_nonnull. Different-alignment branch allocates new then copies/deallocates old. Const/runtime dispatch additions do not change these runtime branches. RawVec keeps element alignment fixed.",
+      "new_locations": [
+        "alloc.rs:290",
+        "alloc.rs:328",
+        "alloc.rs:423",
+        "alloc.rs:447",
+        "raw_vec/mod.rs:544"
+      ]
+    },
+    {
+      "claim": "frame_bytes starts empty; Vec Sink uses extend_from_slice for begin prefixes(2,taglen,2), and each field(4,len). This is exactly frame_allocation parts.",
+      "repo_locations": [
+        "crates/iroha_parliament_ballot_proof/src/framing.rs:100",
+        "crates/iroha_parliament_ballot_proof/src/framing.rs:133",
+        "crates/iroha_parliament_ballot_proof/src/framing.rs:160",
+        "crates/iroha_parliament_ballot_proof/src/framing.rs:224",
+        "crates/iroha_parliament_ballot_proof/src/framing.rs:240"
+      ]
+    },
+    {
+      "claim": "encode_words begins with5 words then exact map/slice appends; final capacity <=max(minimum,2*final_length), including initial capacity5. crt_bytes borrows that word Vec while collecting bytes, so both serializations coexist. Generic/TrustedLen collection both stay within grow-only bound because valid size-hint reservation never exceeds final length. Borrowed iterator does not reuse owning-Vec allocation.",
+      "repo_locations": [
+        "crates/iroha_zkp_vole/src/crt/codec.rs:38",
+        "crates/iroha_parliament_ballot_proof/src/profile.rs:259"
+      ]
+    }
+  ],
+  "proof_notes": [
+    "For every growing reserve, new>=2*old and new<=max(minimum,2*final_length), since old<required<=final_length. Therefore old<=floor(new/2), and C+floor(C/2) upper-bounds concurrent old/new requested layouts for C=max(minimum,2*final_length).",
+    "vec_append_schedule models exact successful reserve requests for the specified append sequence, with initial representing an initially full buffer(length=capacity), not arbitrary spare capacity. Its sum_requested_bytes is cumulative request volume and must not be described as peak or physical allocation.",
+    "No dynamic allocation benchmark or compiler test was run by this reviewer. Root owns separate current-toolchain provider layout probes."
+  ],
+  "limitations": [
+    "Only allocator policy assumptions of allocation_schedule were reviewed here; remaining protocol phase counts/lifetimes and source pin coverage require their existing independent reviews.",
+    "64-bit usize, nonzero element sizes, successful valid Layout sizes, ordinary runtime Vec with Global, no reserve beyond known final length. No arbitrary custom allocator guarantee.",
+    "Requested Layout bytes exclude malloc rounding, allocator metadata/internal realloc scratch, stack, process memory, provider scratch, instruction/cycle/deadline or production envelope guarantee.",
+    "All relevant Rust-source hashes/revision and stated version must move together after complete review; accepting new hashes alone is insufficient."
+  ]
+}

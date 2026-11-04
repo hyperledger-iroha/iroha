@@ -1,26 +1,34 @@
 //! Tests covering Torii transaction history pagination and filters.
 use eyre::{Result, WrapErr, bail, ensure, eyre};
 use futures_util::{StreamExt, TryStreamExt, stream};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery},
     data_model::{
+        parameter::SumeragiParameter,
         prelude::*,
-        query::parameters::Pagination,
         transaction::signed::{
             SealedTransactionCommitmentPayload, SealedTransactionReveal,
             SignedSealedTransactionCommitment, compute_sealed_transaction_commitment,
         },
     },
 };
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, Signature};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_primitives::nonzero;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use std::time::Duration;
+use iroha_torii::{
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
+    canonical_network_request_signature_message, signature_header_value,
+};
+use std::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 use tokio::time::{Instant, sleep};
 #[test]
 fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()> {
@@ -44,7 +52,7 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         )
     });
     client.submit(
@@ -66,59 +74,110 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
         ),
     );
     let transactions_count = 10;
+    let mut expected = Vec::new();
     for i in 0..transactions_count {
         let mint_asset = if i % 2 == 0 {
             &mint_existed_asset
         } else {
             &mint_not_existed_asset
         };
-        let instructions: Vec<InstructionBox> = vec![mint_asset.clone().into()];
-        let transaction = {
-            let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    instructions,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
+        let transaction =
+            _rt.block_on(quoted_transaction(&client, vec![mint_asset.clone().into()]))?;
+        let succeeded = i % 2 == 0;
+        expected.push((
+            transaction.hash_as_entrypoint(),
+            transaction.creation_time().as_millis(),
+            succeeded,
+        ));
+        let result = client.submit_transaction_and_wait(&transaction);
+        if succeeded {
+            result?;
+        } else {
+            let error = result.expect_err("mint into the missing definition must reject");
+            ensure!(
+                error
+                    .chain()
+                    .any(|cause| cause.to_string().contains(&format!(
+                        "Failed to find asset definition: `{}`",
+                        mint_not_existed_asset.destination().definition()
+                    ))),
+                "unexpected rejected history transaction: {error:?}"
+            );
         }
-        .expect("build integration-test transaction");
-        let _ = client.submit_transaction_and_wait(&transaction);
     }
-    let transactions = client
-        .client()
-        .query(FindTransactions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(5_u64)), 1))
-        .execute_all()?
+    // Native history uses opaque continuation, so offset one is one real row
+    // followed by the original five-row window. Limits are cursor-independent.
+    let skipped = client.list_page(&Collection::Transactions, &ListQuery::new().limit(1))?;
+    assert_eq!(skipped.items.len(), 1);
+    assert_eq!(skipped.total, None);
+    let first: HistoryRow = norito::json::from_value(skipped.items.into_iter().next().unwrap())?;
+    assert_eq!(
+        first.entrypoint_hash,
+        expected.last().unwrap().0.to_string()
+    );
+    let cursor = skipped
+        .next_cursor
+        .expect("history continues after offset one");
+    let page = client.list_page(
+        &Collection::Transactions,
+        &ListQuery::new().limit(5).cursor(cursor),
+    )?;
+    assert_eq!(page.items.len(), 5);
+    assert_eq!(page.total, None);
+    assert!(
+        page.next_cursor.is_some(),
+        "the original ten-row history continues"
+    );
+    let mut previous_timestamp = u64::MAX;
+    for (value, (hash, timestamp, succeeded)) in page
+        .items
         .into_iter()
-        .filter(|tx| tx.entrypoint().authority_opt() == Some(&account_id))
-        .collect::<Vec<_>>();
-    assert_eq!(transactions.len(), 5);
-    transactions
-        .iter()
-        .fold(Duration::MAX, |prev_timestamp, tx| {
-            assert_eq!(tx.entrypoint().authority_opt(), Some(&account_id));
-            match tx.entrypoint() {
-                TransactionEntrypoint::External(entrypoint) => {
-                    let curr_timestamp = entrypoint.creation_time();
-                    // FindTransactions returns transactions in descending order.
-                    assert!(prev_timestamp > curr_timestamp);
-                    curr_timestamp
-                }
-                TransactionEntrypoint::SealedCommitment(_) => {
-                    panic!("unexpected sealed commitment entrypoint");
-                }
-                TransactionEntrypoint::SealedReveal(_) => {
-                    panic!("unexpected sealed reveal entrypoint");
-                }
-                TransactionEntrypoint::AnonymousBallot(_) => {
-                    panic!("signerless ballot matched an account-authority filter");
-                }
-            }
-        });
+        .zip(expected.iter().rev().skip(1).take(5))
+    {
+        let transaction: HistoryRow = norito::json::from_value(value)?;
+        assert_eq!(transaction.authority, account_id);
+        assert_eq!(transaction.entrypoint_kind, "external");
+        assert_eq!(transaction.entrypoint_hash, hash.to_string());
+        assert_eq!(u128::from(transaction.timestamp_ms), *timestamp);
+        assert_eq!(transaction.result_ok, *succeeded);
+        assert!(previous_timestamp > transaction.timestamp_ms);
+        previous_timestamp = transaction.timestamp_ms;
+    }
     Ok(())
 }
+#[derive(norito::JsonDeserialize)]
+struct HistoryRow {
+    // The Transactions collection exposes the raw hash selector, not the
+    // checksum-prefixed Norito Hash DTO used by native instruction rows.
+    entrypoint_hash: String,
+    authority: AccountId,
+    timestamp_ms: u64,
+    entrypoint_kind: String,
+    result_ok: bool,
+}
+async fn quoted_transaction(
+    client: &Client,
+    instructions: Vec<InstructionBox>,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "history quote changed payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    account.sign_transaction(payload).map_err(Into::into)
+}
+
 fn encode_versioned_entrypoint(entrypoint: &TransactionEntrypoint) -> Vec<u8> {
     let mut bytes = vec![1];
     bytes.extend(norito::codec::encode_adaptive(entrypoint));
@@ -268,7 +327,7 @@ async fn wait_for_entrypoint_applied(
     let mut last_status = None;
     while Instant::now() < deadline {
         let poll_client = client.clone();
-        let status = tokio::task::spawn_blocking(move || {
+        let status = run_on_dedicated_thread(move || {
             poll_client.client().get_transaction_status_response(hash)
         })
         .await??;
@@ -298,7 +357,7 @@ async fn wait_for_entrypoint_rejected(
     let mut last_status = None;
     while Instant::now() < deadline {
         let poll_client = client.clone();
-        let status = tokio::task::spawn_blocking(move || {
+        let status = run_on_dedicated_thread(move || {
             poll_client.client().get_transaction_status_response(hash)
         })
         .await??;
@@ -363,7 +422,7 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
         }
         let submit_client = tick_clients[next_tick_client % tick_clients.len()].clone();
         next_tick_client = next_tick_client.wrapping_add(1);
-        let submitted = tokio::task::spawn_blocking(move || {
+        let submitted = run_on_dedicated_thread(move || {
             submit_client.submit(
                 Log::new(Level::INFO, "sealed reveal height tick".to_owned()),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -382,20 +441,14 @@ async fn advance_to_height(network: &Network, target: u64) -> Result<()> {
         sleep(Duration::from_secs(1)).await;
     }
 }
-fn sealed_entrypoints_for_instructions(
+async fn sealed_entrypoints_for_instructions(
     client: &Client,
     instructions: Vec<InstructionBox>,
     salt: [u8; 32],
     reveal_after_height: u64,
     reveal_deadline_height: u64,
-) -> (Hash, TransactionEntrypoint, TransactionEntrypoint) {
-    let inner_tx = TransactionBuilder::new(
-        *client.client().network_id(),
-        client.client().account().clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions(instructions)
-    .sign(client.client().key_pair().private_key());
+) -> Result<(Hash, TransactionEntrypoint, TransactionEntrypoint)> {
+    let inner_tx = quoted_transaction(client, instructions).await?;
     let commitment_hash = compute_sealed_transaction_commitment(
         client.client().network_id(),
         &inner_tx,
@@ -415,30 +468,28 @@ fn sealed_entrypoints_for_instructions(
         client.client().key_pair().private_key(),
     );
     let reveal = SealedTransactionReveal::new(commitment_hash, inner_tx, salt);
-    (
+    Ok((
         commitment_hash,
         TransactionEntrypoint::SealedCommitment(commitment),
         TransactionEntrypoint::SealedReveal(reveal),
-    )
+    ))
 }
-fn account_has_metadata(client: &Client, key: &Name) -> Result<bool> {
+async fn account_has_metadata(client: &Client, key: &Name) -> Result<bool> {
+    let id = client.client().account().clone();
     let account = client
-        .client()
-        .query(FindAccounts)
-        .execute_all()?
-        .into_iter()
-        .find(|account| account.id() == client.client().account())
-        .ok_or_else(|| eyre!("test account {} was not found", client.client().account()))?;
+        .account_client()
+        .query_single(FindAccountById::new(id.clone()))
+        .await?;
+    assert_eq!(account.id(), &id);
     Ok(account.metadata().contains(key))
 }
-fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
-    Ok(client
-        .client()
-        .query_single(FindAssetById {
-            id: asset_id.clone(),
-        })?
-        .value()
-        .clone())
+async fn numeric_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
+    let asset = client
+        .account_client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+        .await?;
+    assert_eq!(asset.id(), asset_id);
+    Ok(asset.value().clone())
 }
 async fn wait_for_all_peers_to_observe_reveals(
     clients: &[Client],
@@ -452,20 +503,21 @@ async fn wait_for_all_peers_to_observe_reveals(
     loop {
         let mut all_observed = true;
         for (index, client) in clients.iter().enumerate() {
-            let peer_result = (|| -> Result<()> {
+            let peer_result = async {
                 for marker in marker_keys {
                     ensure!(
-                        account_has_metadata(client, marker)?,
+                        account_has_metadata(client, marker).await?,
                         "metadata marker {marker} is missing"
                     );
                 }
-                let amount = numeric_asset_value(client, asset_id)?;
+                let amount = numeric_asset_value(client, asset_id).await?;
                 ensure!(
                     amount == *expected_amount,
                     "asset amount is {amount}, expected {expected_amount}"
                 );
-                Ok(())
-            })();
+                Ok::<(), eyre::Report>(())
+            }
+            .await;
             if let Err(error) = peer_result {
                 all_observed = false;
                 last_gap = format!("peer {index}: {error}");
@@ -497,37 +549,21 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     let reveal_after_height = starting_height + 2;
     let reveal_deadline_height = starting_height + 100;
     let marker = "sealed_reveal_marker".parse::<Name>()?;
-    let inner_tx = TransactionBuilder::new(
-        *client.client().network_id(),
-        client.client().account().clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([SetKeyValue::account(
-        client.client().account().clone(),
-        marker,
-        Json::new("revealed"),
-    )])
-    .sign(client.client().key_pair().private_key());
-    let salt = [0xC3; 32];
-    let commitment_hash = compute_sealed_transaction_commitment(
-        client.client().network_id(),
-        &inner_tx,
-        salt,
-        reveal_deadline_height,
-    );
-    let commitment_payload = SealedTransactionCommitmentPayload::new(
-        *client.client().network_id(),
-        client.client().account().clone(),
-        commitment_hash,
+    let (_, commitment_entrypoint, reveal_entrypoint) = sealed_entrypoints_for_instructions(
+        &client,
+        vec![
+            SetKeyValue::account(
+                client.client().account().clone(),
+                marker,
+                Json::new("revealed"),
+            )
+            .into(),
+        ],
+        [0xC3; 32],
         reveal_after_height,
         reveal_deadline_height,
-        None,
-    );
-    let commitment = SignedSealedTransactionCommitment::sign(
-        commitment_payload,
-        client.client().key_pair().private_key(),
-    );
-    let commitment_entrypoint = TransactionEntrypoint::SealedCommitment(commitment);
+    )
+    .await?;
     let commitment_entrypoint_hash = submit_entrypoint(
         &http,
         &client,
@@ -542,8 +578,6 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     )
     .await?;
     advance_to_height(&network, reveal_after_height).await?;
-    let reveal = SealedTransactionReveal::new(commitment_hash, inner_tx, salt);
-    let reveal_entrypoint = TransactionEntrypoint::SealedReveal(reveal);
     let reveal_entrypoint_hash =
         submit_entrypoint(&http, &client, reveal_entrypoint, network.sync_timeout()).await?;
     wait_for_entrypoint_applied(
@@ -555,8 +589,7 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
     let detail_url = client.client().endpoint().join(&format!(
         "/v1/explorer/transactions/{reveal_entrypoint_hash}"
     ))?;
-    let response = http
-        .get(detail_url)
+    let response = authenticated_get(&http, &client, detail_url)?
         .header("accept", "application/json")
         .send()
         .await?;
@@ -583,6 +616,9 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         NetworkBuilder::new()
             .with_min_peers(4)
             .with_block_cadence(Duration::from_secs(10))
+            .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+                SumeragiParameter::PayloadRetryIntervalMs(nonzero!(10_000_u64)),
+            )))
             .with_sync_timeout(Duration::from_secs(480)),
         stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
     )
@@ -605,15 +641,22 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         asset_definition_id.clone(),
         client.client().account().clone(),
     );
-    client.submit(
-        Register::asset_definition(AssetDefinition::numeric(
-            asset_definition_id.clone(),
-            "sealeddupmint".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        )),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
+    read_on_dedicated_thread({
+        let client = client.clone();
+        let asset_definition_id = asset_definition_id.clone();
+        move || {
+            client.submit(
+                Register::asset_definition(AssetDefinition::numeric(
+                    asset_definition_id.clone(),
+                    "sealeddupmint".to_owned(),
+                    iroha_data_model::asset::AssetBalancePolicy::Global,
+                    Some(DomainId::try_new("wonderland", "universal")?),
+                )),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
+    })
+    .await?;
     let starting_height = client.client().status().get().await?.blocks;
     let reveal_after_height = starting_height + 3;
     let reveal_deadline_height = starting_height + 30;
@@ -638,7 +681,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
             [0x80 + idx; 32],
             reveal_after_height,
             reveal_deadline_height,
-        );
+        )
+        .await?;
         commitment_entrypoints.push(commitment);
         reveal_entrypoints.push(reveal);
         marker_keys.push(marker);
@@ -650,7 +694,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         [0xA5; 32],
         reveal_after_height,
         reveal_deadline_height,
-    );
+    )
+    .await?;
     commitment_entrypoints.push(mint_commitment);
     reveal_entrypoints.push(mint_reveal.clone());
     let expired_marker = "sealed_expired_marker".parse::<Name>()?;
@@ -669,7 +714,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         [0xE1; 32],
         expired_reveal_height,
         expired_deadline_height,
-    );
+    )
+    .await?;
     commitment_entrypoints.push(expired_commitment);
     let commitment_hashes = submit_entrypoints_round_robin(
         &http,
@@ -725,7 +771,7 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         submit_entrypoint_once_maybe_rejected(&http, duplicate_replay_client, mint_reveal).await?;
     assert_duplicate_reveal_outcome(duplicate_outcome, mint_reveal_hash)?;
     assert_eq!(
-        numeric_asset_value(&client, &asset_id)?,
+        numeric_asset_value(&client, &asset_id).await?,
         mint_amount,
         "duplicate reveal must not execute the sealed inner transaction twice"
     );
@@ -742,14 +788,49 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
         }
     }
     ensure!(
-        !account_has_metadata(&client, &expired_marker)?,
+        !account_has_metadata(&client, &expired_marker).await?,
         "expired delayed reveal must not execute its inner transaction"
     );
     for peer_client in &peer_clients {
         ensure!(
-            !account_has_metadata(peer_client, &expired_marker)?,
+            !account_has_metadata(peer_client, &expired_marker).await?,
             "expired delayed reveal must not execute on any peer"
         );
     }
     Ok(())
+}
+
+fn authenticated_get(
+    http: &reqwest::Client,
+    client: &Client,
+    url: reqwest::Url,
+) -> Result<reqwest::RequestBuilder> {
+    static NONCE: AtomicU64 = AtomicU64::new(0);
+    let uri: Uri = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()).parse()?,
+        None => url.path().parse()?,
+    };
+    let timestamp_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let nonce = format!(
+        "sealed-history-{timestamp_ms}-{}",
+        NONCE.fetch_add(1, Ordering::Relaxed)
+    );
+    let message = canonical_network_request_signature_message(
+        client.client().network_id(),
+        &Method::GET,
+        &uri,
+        &[],
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(client.client().key_pair().private_key(), &message)?;
+    Ok(http
+        .get(url)
+        .header(
+            HEADER_ACCOUNT,
+            client.account_client().authority().to_canonical_hex()?,
+        )
+        .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
+        .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(HEADER_NONCE, nonce))
 }

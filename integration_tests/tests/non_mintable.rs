@@ -6,7 +6,6 @@ use iroha::{
     data_model::{isi::InstructionBox, prelude::*},
 };
 use iroha_model_base::domain::DomainId;
-use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::{Duration, Instant};
@@ -52,6 +51,15 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
     };
     let test_client = network.client();
     let account_id = ALICE_ID.clone();
+    let assert_unmintable = |error: eyre::Report| {
+        assert!(
+            error.chain().any(|cause| matches!(
+                cause.downcast_ref::<iroha_data_model::isi::error::MintabilityError>(),
+                Some(iroha_data_model::isi::error::MintabilityError::MintUnmintable)
+            )),
+            "repeat mint must fail mintability after fee admission: {error:?}"
+        );
+    };
     // Case 1: mintable once can be minted once, but not twice.
     {
         let asset_definition_id = AssetDefinitionId::derive_from_components(
@@ -65,40 +73,31 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                     __asset_definition_id,
                     "xor_once".to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 )
             }
             .mintable_once(),
         );
-        let metadata = Metadata::default();
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let mint = Mint::asset_quantity(200_u32, asset_id.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), mint.clone().into()];
-        let tx = {
-            let account = test_client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    instructions,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    metadata,
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
-        test_client.submit_transaction_and_wait(&tx)?;
+        test_client.submit_all(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
         wait_for_asset_value(
             &test_client,
             &asset_id,
             &Quantity::from(200_u32),
             "first mint",
         )?;
-        assert!(
+        assert_unmintable(
             test_client
                 .submit_all(
                     [mint],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .is_err()
+                .expect_err("mintable-once asset cannot be minted twice"),
         );
     }
     // Case 2: if registered with non-zero value, it cannot be minted again.
@@ -114,7 +113,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
                     __asset_definition_id,
                     "xor_seeded".to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 )
             }
             .mintable_once(),
@@ -126,22 +125,22 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         wait_for_asset_value(&test_client, &asset_id, &Quantity::one(), "seeded mint")?;
-        assert!(
+        assert_unmintable(
             test_client
                 .submit(
                     register_asset,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .is_err()
+                .expect_err("seeded mintable-once asset cannot repeat its initial mint"),
         );
         let mint = Mint::asset_quantity(1u32, asset_id);
-        assert!(
+        assert_unmintable(
             test_client
                 .submit(
                     mint,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .is_err()
+                .expect_err("seeded mintable-once asset cannot accept another mint"),
         );
     }
     Ok(())

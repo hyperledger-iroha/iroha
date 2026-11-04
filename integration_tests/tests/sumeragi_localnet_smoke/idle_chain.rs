@@ -1,6 +1,83 @@
 //! Four-validator qualification for bounded progress, clean idle, and proposal work.
 use super::*;
 use iroha::data_model::{block::execution_output::ExecutionOutputV1, prelude::FindAccountById};
+
+/// Bind the governed fee quote before fixing the transaction's entrypoint identity.
+async fn paid_transaction(
+    client: &iroha::blocking::Client,
+    instruction: InstructionBox,
+) -> Result<iroha::data_model::transaction::SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        [instruction],
+        iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "proposal-work fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    Ok(account.sign_transaction(payload)?)
+}
+
+/// Replay this small fixture's canonical blocks through the authorized, bounded stream.
+async fn read_peer_blocks(
+    peer: &iroha_test_network::NetworkPeer,
+) -> Result<Vec<iroha::data_model::block::SignedBlock>> {
+    tokio::time::timeout(STATUS_POLL_TIMEOUT, async {
+        let height = status_retry::read(|| peer.status()).await?.blocks;
+        ensure!(
+            (1..=64).contains(&height),
+            "idle-chain fixture has an unexpected replay height: {height}"
+        );
+        let client = peer.client();
+        let mut stream = client
+            .account_client()
+            .blocks()
+            .subscribe(nonzero!(1_u64))
+            .await?;
+        let mut blocks = Vec::<iroha::data_model::block::SignedBlock>::new();
+        for expected_height in 1..=height {
+            let block = stream
+                .try_next()
+                .await?
+                .ok_or_else(|| eyre!("block replay ended before height {expected_height}"))?;
+            ensure!(
+                block.header().height().get() == expected_height,
+                "block replay returned height {} instead of {expected_height}",
+                block.header().height()
+            );
+            if let Some(previous) = blocks.last() {
+                ensure!(
+                    block.header().prev_block_hash() == Some(previous.hash()),
+                    "block replay changed canonical ancestry at height {expected_height}"
+                );
+            } else {
+                ensure!(
+                    block.header().prev_block_hash().is_none(),
+                    "genesis replay has a predecessor"
+                );
+            }
+            blocks.push(block);
+        }
+        stream.close().await?;
+        blocks.reverse();
+        Ok(blocks)
+    })
+    .await
+    .map_err(|_| {
+        eyre!(
+            "canonical block replay from {} exceeded {STATUS_POLL_TIMEOUT:?}",
+            peer.mnemonic()
+        )
+    })?
+}
 #[allow(clippy::too_many_lines)]
 pub(super) async fn run_permissioned_progress() -> Result<()> {
     init_instruction_registry();
@@ -44,8 +121,14 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
         let warmup_height = baseline_height.saturating_add(1);
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            let client = peer.client();
+            read_on_dedicated_thread(move || {
+                client.submit::<InstructionBox>(
+                    Log::new(Level::INFO, message).into(),
+                    iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            })
+                .await
                 .wrap_err_with(|| {
                     format!("failed to submit warmup log instruction to {}", peer.mnemonic())
                 })?;
@@ -68,8 +151,14 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
         ensure!(!network.peers().is_empty(), "network must have at least one peer");
         for peer in network.peers() {
             let message = format!("localnet bounded block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            let client = peer.client();
+            read_on_dedicated_thread(move || {
+                client.submit::<InstructionBox>(
+                    Log::new(Level::INFO, message).into(),
+                    iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            })
+                .await
                 .wrap_err_with(|| {
                     format!("failed to submit log instruction to {}", peer.mnemonic())
                 })?;
@@ -156,22 +245,15 @@ pub(super) async fn run() -> Result<()> {
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         wait_for_converged_height(&network, 1, PROGRESS_TIMEOUT).await?;
-        let query_tips = || -> Result<Vec<(u64, HashOf<Header>)>> {
-            network
-                .peers()
-                .iter()
-                .map(|peer| {
-                    let blocks = peer
-                        .client()
-                        .client().query(FindBlocks)
-                        .execute_all()
-                        .wrap_err_with(|| format!("query blocks from {}", peer.mnemonic()))?;
-                    let latest = blocks
-                        .first()
-                        .ok_or_else(|| eyre!("peer {} returned an empty chain", peer.mnemonic()))?;
-                    Ok((latest.header().height().get(), latest.hash()))
-                })
-                .collect()
+        let query_tips = || async {
+                try_join_all(network.peers().iter().map(|peer| async move {
+                        let blocks = read_peer_blocks(peer).await
+                            .wrap_err_with(|| format!("replay blocks from {}", peer.mnemonic()))?;
+                        let latest = blocks
+                            .first()
+                            .ok_or_else(|| eyre!("peer {} returned an empty chain", peer.mnemonic()))?;
+                        Ok::<_, eyre::Report>((latest.header().height().get(), latest.hash()))
+                    })).await
         };
         let block_sync_gossip_period = network.block_sync_gossip_period();
         let retransmit_observation = block_sync_gossip_period.saturating_mul(2);
@@ -195,7 +277,7 @@ pub(super) async fn run() -> Result<()> {
             }),
             "validators did not begin the idle observation at one empty-queue height: {baseline_statuses:?}"
         );
-        let mut baseline_tips = query_tips()?;
+        let mut baseline_tips = query_tips().await?;
         let mut canonical_baseline_tip = baseline_tips
             .first()
             .copied()
@@ -218,7 +300,7 @@ pub(super) async fn run() -> Result<()> {
         loop {
             sleep(TIP_POLL).await;
             let statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-            let tips = query_tips()?;
+            let tips = query_tips().await?;
             let canonical_tip = tips
                 .first()
                 .copied()
@@ -241,11 +323,8 @@ pub(super) async fn run() -> Result<()> {
             if canonical_tip != canonical_baseline_tip
                 || observed_non_empty != baseline_non_empty
             {
-                let blocks = network
-                    .client()
-                    .client().query(FindBlocks)
-                    .execute_all()
-                    .wrap_err("query delayed baseline work")?;
+                let blocks = read_peer_blocks(network.peer()).await
+                .wrap_err("query delayed baseline work")?;
                 let delayed = blocks
                     .iter()
                     .filter(|block| block.header().height().get() > baseline_height)
@@ -289,35 +368,27 @@ pub(super) async fn run() -> Result<()> {
                 }),
                 "clean idle height manufactured a block within {idle_observation:?}: baseline={baseline_statuses:?}, observed={statuses:?}"
             );
-            let tips = query_tips()?;
+            let tips = query_tips().await?;
             ensure!(
                 tips == baseline_tips,
                 "clean idle height changed canonical tip within {idle_observation:?}: baseline={baseline_tips:?}, observed={tips:?}"
             );
         }
         let client = network.client();
-        let external_transaction ={
-    let account = client.account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            [InstructionBox::from(Log::new(
+        let external_transaction = paid_transaction(&client, InstructionBox::from(Log::new(
                 Level::INFO,
                 "proposal-work external transaction".to_owned(),
-            ))],
-            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        ))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
+            ))).await?;
         let external_entrypoint = external_transaction.hash_as_entrypoint();
-        client
-            .submit_transaction(&external_transaction)
+        let submission_client = client.clone();
+        read_on_dedicated_thread(move || submission_client.submit_transaction(&external_transaction))
+            .await
             .wrap_err("submit explicit proposal-work transaction")?;
         let external_height = baseline_height.saturating_add(1);
         wait_for_converged_height(&network, external_height, PROGRESS_TIMEOUT).await?;
         let mut external_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {
-            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
+            let blocks = read_peer_blocks(peer).await?;
             let matches = blocks
                 .iter()
                 .filter(|block| {
@@ -348,9 +419,19 @@ pub(super) async fn run() -> Result<()> {
             }
         }
         let trigger_id: iroha::data_model::trigger::TriggerId =
-            "proposal_work_precommit_once".parse()?;
-        let marker_key: Name = "proposal_work_precommit_marker".parse()?;
+            "proposal_work_scheduled_once".parse()?;
+        let marker_key: Name = "proposal_work_scheduled_marker".parse()?;
         let marker_value = Json::new("executed");
+        // Sumeragi §4.5 authorizes native carriers only for opted-in committed
+        // schedules. PreCommit callbacks cannot wake an idle chain. A periodic
+        // schedule avoids losing the due interval while registration commits;
+        // both the success count and autonomous attempt allowance are exactly one.
+        let schedule = iroha::data_model::events::time::Schedule::starting_at(
+            SystemTime::now().duration_since(UNIX_EPOCH)?,
+        )
+        .with_period(SMOKE_PIPELINE_TIME);
+        let mut metadata = Metadata::default();
+        metadata.insert("native_progress_attempts".parse()?, Json::new(1_u32));
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -361,31 +442,25 @@ pub(super) async fn run() -> Result<()> {
                 ))],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
+                TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
             )
-            .expect("one-shot PreCommit trigger is a valid action"),
+            .expect("single-attempt scheduled trigger is a valid action")
+            .with_metadata(metadata),
         );
-        let registration_transaction ={
-    let account = client.account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            [InstructionBox::from(Register::trigger(trigger))],
-            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        ))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
+        let registration_transaction = paid_transaction(&client,
+            InstructionBox::from(Register::trigger(trigger))).await?;
         let registration_entrypoint = registration_transaction.hash_as_entrypoint();
-        client
-            .submit_transaction(&registration_transaction)
-            .wrap_err("register one-shot proposal-work PreCommit trigger")?;
+        let submission_client = client.clone();
+        read_on_dedicated_thread(move || submission_client.submit_transaction(&registration_transaction))
+            .await
+            .wrap_err("register single-attempt proposal-work scheduled trigger")?;
         let registration_height = external_height.saturating_add(1);
         let internal_height = registration_height.saturating_add(1);
         wait_for_converged_height(&network, internal_height, PROGRESS_TIMEOUT).await?;
         let mut registration_block_hash = None;
         let mut internal_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {
-            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
+            let blocks = read_peer_blocks(peer).await?;
             let registration_matches = blocks
                 .iter()
                 .filter(|block| {
@@ -420,16 +495,49 @@ pub(super) async fn run() -> Result<()> {
                 .collect::<Vec<_>>();
             ensure!(
                 trigger_blocks.len() == 1,
-                "peer {index} recorded the one-shot PreCommit trigger in {} blocks",
+                "peer {index} recorded the single-attempt scheduled trigger in {} blocks",
                 trigger_blocks.len()
             );
             let trigger_block = trigger_blocks[0];
             ensure!(
                 trigger_block.header().height().get() == internal_height
                     && !trigger_block.is_empty()
-                    && trigger_block.external_entrypoint_count() == 0
+                    && trigger_block.external_entrypoint_count() == 1
                     && trigger_block.execution_outputs().iter().filter(|output| matches!(output, ExecutionOutputV1::Time(_))).count() == 1,
-                "peer {index} did not commit one internal-only trigger carrier: {trigger_block:?}"
+                "peer {index} did not commit one native scheduled trigger carrier: {trigger_block:?}"
+            );
+            let [iroha::data_model::transaction::TransactionEntrypoint::External(carrier)] =
+                trigger_block.external_entrypoints_slice()
+            else {
+                bail!("peer {index} scheduled carrier is not one signed transaction");
+            };
+            ensure!(
+                iroha_core::smartcontracts::isi::sccp::keepalive::valid_shape(carrier.payload()),
+                "peer {index} scheduled work lacks its standalone signed Keepalive"
+            );
+            carrier.verify_signature()?;
+            let keeper = carrier
+                .payload()
+                .authority
+                .try_signatory()
+                .ok_or_else(|| eyre!("native carrier has no single keeper signatory"))?
+                .to_string();
+            // A validator's native duty has separate Ed25519 custody. Bind the
+            // carrier to the public key reported by an actual node at startup,
+            // without reading or exporting its private keeper-key file.
+            let mut keeper_belongs_to_node = false;
+            for validator in network.peers() {
+                let log_path = validator
+                    .latest_stdout_log_path()
+                    .ok_or_else(|| eyre!("validator has no startup log"))?;
+                let log = tokio::fs::read_to_string(log_path).await?;
+                keeper_belongs_to_node |= log.lines().any(|line| {
+                    line.contains("SCCP keeper key loaded") && line.contains(&keeper)
+                });
+            }
+            ensure!(
+                keeper_belongs_to_node,
+                "peer {index} scheduled carrier was not signed by a native node keeper"
             );
             if let Some(expected) = internal_block_hash {
                 ensure!(
@@ -440,10 +548,14 @@ pub(super) async fn run() -> Result<()> {
                 internal_block_hash = Some(trigger_block.hash());
             }
         }
-        let alice = client.client().query_single(FindAccountById::new(ALICE_ID.clone()))?;
+        let query_client = client.clone();
+        let alice = read_on_dedicated_thread(move || {
+            Ok(query_client.client().query_single(FindAccountById::new(ALICE_ID.clone()))?)
+        })
+        .await?;
         ensure!(
             alice.metadata().get(&marker_key) == Some(&marker_value),
-            "one-shot PreCommit carrier did not apply its queryable state effect"
+            "single-attempt scheduled carrier did not apply its queryable state effect"
         );
         let post_work_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let expected_non_empty = baseline_non_empty.saturating_add(3);
@@ -453,9 +565,9 @@ pub(super) async fn run() -> Result<()> {
                     && status.blocks_non_empty == expected_non_empty
                     && status.queue_size == 0
             }),
-            "external, registration, and internal-only carriers did not converge exactly: {post_work_statuses:?}"
+            "external, registration, and native scheduled carriers did not converge exactly: {post_work_statuses:?}"
         );
-        let post_work_tips = query_tips()?;
+        let post_work_tips = query_tips().await?;
         let expected_internal_hash = internal_block_hash
             .ok_or_else(|| eyre!("four-peer gate observed no internal carrier hash"))?;
         ensure!(
@@ -476,7 +588,7 @@ pub(super) async fn run() -> Result<()> {
                 }),
                 "one-shot internal work did not return to a clean idle height: expected={post_work_statuses:?}, observed={statuses:?}"
             );
-            let tips = query_tips()?;
+            let tips = query_tips().await?;
             ensure!(
                 tips == post_work_tips,
                 "canonical tip advanced again after one-shot internal work: expected={post_work_tips:?}, observed={tips:?}"

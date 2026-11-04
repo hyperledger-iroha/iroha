@@ -7011,6 +7011,8 @@ async fn admit_ordinary_query_execution(
 ) -> Result<AdmittedOrdinaryQueryExecution, Error> {
     let plan = routing::ordinary_query_execution_plan(
         app.state.as_ref(),
+        &app.query_service,
+        &request.authority,
         &request.request,
         opts,
         app.ordinary_query_policy,
@@ -7019,8 +7021,12 @@ async fn admit_ordinary_query_execution(
     admit_signed_query_authority(app.as_ref(), &request.authority).await?;
     let physical_admission = acquire_signed_query_physical_admission(app.as_ref(), request).await?;
     // Fail-fast promotion cannot pin ingress/proxy body-reading slots.
-    let memory_lease =
-        try_acquire_ordinary_query_memory(app, stored_start, plan.requires_singular_execution())?;
+    let memory_lease = try_acquire_ordinary_query_memory(
+        app,
+        plan.ordinary_limits(),
+        stored_start,
+        plan.requires_singular_execution(),
+    )?;
     Ok(AdmittedOrdinaryQueryExecution {
         plan,
         physical_admission,
@@ -17881,6 +17887,8 @@ fn torii_read_fanout_request(
 #[cfg(feature = "app_api")]
 include!("torii_app_routed_read_execute.rs");
 include!("torii_collection_routes.rs");
+#[cfg(feature = "app_api")]
+mod role_collection_routes;
 #[cfg(test)]
 include!("tests/ordinary_query_memory.rs");
 include!("torii_proxy_signed_query_validation.rs");
@@ -19867,6 +19875,8 @@ fn torii_read_http_method(endpoint: ToriiReadEndpointV1) -> reqwest::Method {
         | ToriiReadEndpointV1::AccountTransactionsQuery
         | ToriiReadEndpointV1::AccountHistoryQuery
         | ToriiReadEndpointV1::AccountPermissionsQuery
+        | ToriiReadEndpointV1::RolesQuery
+        | ToriiReadEndpointV1::AccountRolesQuery
         | ToriiReadEndpointV1::UaidManifestsQuery
         | ToriiReadEndpointV1::TransactionsQuery
         | ToriiReadEndpointV1::AccountsQuery
@@ -19935,6 +19945,14 @@ fn torii_external_read_path(request: &ToriiReadProxyRequestV1) -> Result<String,
         ToriiReadEndpointV1::AccountAssetsQuery => format!(
             "/v1/accounts/{}/assets/query",
             torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::RolesList => "/v1/roles".to_owned(),
+        ToriiReadEndpointV1::RolesQuery => "/v1/roles/query".to_owned(),
+        ToriiReadEndpointV1::AccountRolesGet => format!(
+            "/v1/accounts/{}/roles", torii_read_path_arg_encoded(request, 0, "account_id")?
+        ),
+        ToriiReadEndpointV1::AccountRolesQuery => format!(
+            "/v1/accounts/{}/roles/query", torii_read_path_arg_encoded(request, 0, "account_id")?
         ),
         ToriiReadEndpointV1::AccountPermissionsGet => format!(
             "/v1/accounts/{}/permissions",
@@ -20436,6 +20454,10 @@ async fn execute_torii_read_request_locally_admitted(
         | ToriiReadEndpointV1::AccountHistoryQuery
         | ToriiReadEndpointV1::AccountPermissionsGet
         | ToriiReadEndpointV1::AccountPermissionsQuery
+        | ToriiReadEndpointV1::RolesList
+        | ToriiReadEndpointV1::RolesQuery
+        | ToriiReadEndpointV1::AccountRolesGet
+        | ToriiReadEndpointV1::AccountRolesQuery
         | ToriiReadEndpointV1::SpaceDirectoryManifestsGet
         | ToriiReadEndpointV1::UaidManifestsQuery
         | ToriiReadEndpointV1::TransactionsQuery => {
@@ -20459,6 +20481,12 @@ async fn execute_torii_read_request_locally_admitted(
                 } else {
                     visibility.clone()
                 };
+            let visibility = match role_collection_routes::authorize_routed(
+                app, &request, routing_decision, &target, visibility,
+            ) {
+                Ok(visibility) => visibility,
+                Err(error) => return error.into_response(),
+            };
             execute_routed_collection_read(
                 app,
                 &request,
@@ -38388,6 +38416,7 @@ impl Torii {
         );
         mount_account_assets_query(builder, app_state.clone(), transaction_max_content_len);
         mount_account_permissions_query(builder, app_state.clone(), transaction_max_content_len);
+        role_collection_routes::mount(builder, app_state.clone(), transaction_max_content_len);
         mount_uaid_manifests_query(builder, app_state.clone(), transaction_max_content_len);
         mount_catalog_route_rows!(
             builder, application_api;

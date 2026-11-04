@@ -4,12 +4,13 @@ use integration_tests::{kagami::resolve_kagami_bin, process as test_process, san
 use iroha::{
     blocking::Client,
     config::{Config, LoadPath},
+    crypto::{ExposedPrivateKey, KeyPair},
     data_model::{Level, isi::Log},
 };
 use iroha_fs::ProcessStdio as Stdio;
 use iroha_test_network::{
     Program, ResolvedChild, ResolvedProgram, fslock_ports::AllocatedPortBlock,
-    init_instruction_registry, repo_root,
+    init_instruction_registry, read_on_dedicated_thread, repo_root,
 };
 use std::{
     any::Any,
@@ -19,6 +20,7 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::time::sleep;
+use zeroize::Zeroizing;
 const LOCALNET_PEERS: u16 = 4;
 const READY_TIMEOUT: Duration = Duration::from_secs(180);
 const READY_POLL: Duration = Duration::from_millis(200);
@@ -48,10 +50,14 @@ async fn kagami_localnet_bootstrap_produces_blocks() -> Result<()> {
         let client = load_localnet_client(&out_dir)?;
         wait_for_status_ready(&client, &mut localnet, READY_TIMEOUT).await?;
         let baseline = client.client().status().get().await?.blocks_non_empty;
-        client.submit(
-            Log::new(Level::INFO, "kagami localnet smoke".to_string()),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )?;
+        let submit_client = client.clone();
+        read_on_dedicated_thread(move || {
+            submit_client.submit(
+                Log::new(Level::INFO, "kagami localnet smoke".to_string()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+        })
+        .await?;
         let status =
             wait_for_blocks_non_empty(&client, baseline.saturating_add(1), READY_TIMEOUT).await?;
         ensure!(
@@ -113,12 +119,6 @@ impl KagamiLocalnet {
         let mut children = Vec::with_capacity(peers as usize);
         for idx in 0..peers {
             let config_path = out_dir.join(format!("peer{idx}.toml"));
-            let snapshot_dir = out_dir
-                .join("storage")
-                .join(format!("peer{idx}"))
-                .join("snapshot");
-            fs::create_dir_all(&snapshot_dir)
-                .wrap_err_with(|| format!("create snapshot dir {}", snapshot_dir.display()))?;
             let log_path = out_dir.join(format!("peer{idx}.log"));
             let log_file = fs::File::create(&log_path)
                 .wrap_err_with(|| format!("create log file {}", log_path.display()))?;
@@ -130,7 +130,9 @@ impl KagamiLocalnet {
             // Every validator of a fresh chain anchors its key with a first safety record.
             cmd.arg("--sumeragi-assert-fresh-key");
             cmd.current_dir(out_dir);
-            cmd.env("SNAPSHOT_STORE_DIR", &snapshot_dir);
+            // Kagami configures snapshots outside Kura. Keep its fresh Kura root
+            // pristine so startup can establish the configured-catalog baseline.
+            cmd.env_remove("SNAPSHOT_STORE_DIR");
             if std::env::var_os("RUST_LOG").is_none() {
                 cmd.env("RUST_LOG", "info");
             }
@@ -236,7 +238,71 @@ fn load_localnet_client(out_dir: &Path) -> Result<Client> {
         )
     })?;
     config.transaction_status_timeout = READY_TIMEOUT;
-    Client::new(config)
+    let operator = load_localnet_operator_key(&out_dir.join("runtime/operator-signer.key"))?;
+    ensure!(
+        operator.public_key() != config.key_pair.public_key(),
+        "Kagami's operator signer must remain separate from its funded account signer"
+    );
+    let mut builder = iroha::client::Client::builder(config);
+    builder.operator_key_pair = Some(operator);
+    Client::from_client(builder.build()?)
+}
+fn load_localnet_operator_key(path: &Path) -> Result<KeyPair> {
+    let bytes = iroha_fs::read_private(path, 4_096)
+        .wrap_err("read generated private localnet operator sidecar")?;
+    let text =
+        std::str::from_utf8(&bytes).map_err(|_| eyre!("localnet operator sidecar is not UTF-8"))?;
+    let literal = text
+        .strip_suffix('\n')
+        .ok_or_else(|| eyre!("localnet operator sidecar must end with one newline"))?;
+    let exposed: ExposedPrivateKey = literal
+        .parse()
+        .map_err(|_| eyre!("localnet operator sidecar contains an invalid private key"))?;
+    let canonical = Zeroizing::new(
+        exposed
+            .try_to_multihash_string()
+            .map_err(|_| eyre!("localnet operator key cannot be encoded canonically"))?,
+    );
+    ensure!(
+        canonical.as_str() == literal,
+        "localnet operator sidecar is not canonical"
+    );
+    KeyPair::from_private_key(exposed.0)
+        .map_err(|_| eyre!("localnet operator key cannot derive its public identity"))
+}
+#[test]
+fn localnet_operator_key_uses_canonical_private_sidecar() -> Result<()> {
+    let directory = tempfile::tempdir()?;
+    let private_path = directory.path().join("private");
+    let custody = iroha_fs::PrivateDirectory::open_or_create(&private_path)?;
+    let key = KeyPair::try_from_seed(vec![19; 32], iroha::crypto::Algorithm::Ed25519)?;
+    let literal =
+        Zeroizing::new(ExposedPrivateKey(key.private_key().clone()).try_to_multihash_string()?);
+    let canonical = Zeroizing::new(format!("{}\n", literal.as_str()));
+    let path = private_path.join("operator-signer.key");
+    custody.write_atomic(
+        "operator-signer.key",
+        canonical.as_bytes(),
+        iroha_fs::PublishMode::CreateNew,
+    )?;
+    assert_eq!(
+        load_localnet_operator_key(&path)?.public_key(),
+        key.public_key()
+    );
+    for invalid in [
+        Zeroizing::new(literal.to_string()),
+        Zeroizing::new(format!("{}\n\n", literal.as_str())),
+        Zeroizing::new("invalid-key\n".to_owned()),
+        Zeroizing::new("x".repeat(4_097)),
+    ] {
+        custody.write_atomic(
+            "operator-signer.key",
+            invalid.as_bytes(),
+            iroha_fs::PublishMode::Replace,
+        )?;
+        assert!(load_localnet_operator_key(&path).is_err());
+    }
+    Ok(())
 }
 async fn wait_for_status_ready(
     client: &Client,
@@ -304,12 +370,16 @@ async fn wait_for_validator_count_and_reducer(
         if let Ok(status) = client.client().status().get().await {
             last_status_peers = Some(status.peers);
             // Status.peers excludes the reporting peer, so add 1 for the validator count.
-            if status.peers.saturating_add(1) == expected_peers
-                && let Ok(sumeragi) = client.client().get_sumeragi_status()
-            {
-                reducer_available = sumeragi.halted.is_none();
-                if reducer_available {
-                    return Ok(());
+            if status.peers.saturating_add(1) == expected_peers {
+                let status_client = client.clone();
+                if let Ok(sumeragi) =
+                    read_on_dedicated_thread(move || status_client.client().get_sumeragi_status())
+                        .await
+                {
+                    reducer_available = sumeragi.halted.is_none();
+                    if reducer_available {
+                        return Ok(());
+                    }
                 }
             }
         }

@@ -1,0 +1,30 @@
+--- docs/validation/parliament_ballot_component_families/record/capture/source/scripts/parliament_ballot_write_framing.py.template
++++ scripts/parliament_ballot_write_framing.py
+@@ -14,13 +14,13 @@
+ import types
+ 
+ CIRCUIT = "scripts/parliament_ballot_oracle_log_circuit.py"
+-ACCOUNTING = "docs/validation/parliament_ballot_ideal_sampler_accounting/report.json"
+-RECEIPT = "docs/validation/parliament_ballot_oracle_log_circuit/receipt.json"
++ACCOUNTING = "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104_model_refresh/report.json"
++RECEIPT = "docs/validation/parliament_ballot_oracle_log_circuit_20261104_model_refresh/receipt.json"
+ PINS = {
+-    CIRCUIT: "d045f66581f7a50bcb4e696b0346a192724f5d0858a21c23343bb35478d5c558",
+-    ACCOUNTING: "32f13e842ac39f7f3c3d08ae2135a8ebdffd442acc776002e2229c36610ad043",
+-    RECEIPT: "216843ae4c5c60d9aeca12f23fc7ec48e84b87dff35c0a68e354dedc5fc129c4",
+-    "docs/validation/parliament_ballot_oracle_log_circuit/report.json": "dad7ce8147caa2de70adcfabfb03911e396fd21b76828fa2dce0ab6e9b2b735b",
++    CIRCUIT: "8a9231ebc700f0b2628420a101825aa87d5cfe51714de0a7e5db4c95f74e3c58",
++    ACCOUNTING: "28f9f50f376d1aee6f03738744acfbba27e4c6cab6a40555b64d983803e96805",
++    RECEIPT: "f993f057e1fae4dcd5e28b55e298b683cff0712f5a7259714d10ce890343aed4",
++    "docs/validation/parliament_ballot_oracle_log_circuit_20261104_model_refresh/report.json": "90c734609ff9bc7ab080a42b7e415bd3ed995f430ceacc23ae62475d2fa65203",
+     "specs/parliament_ballot_b6_oracle_log_circuit.md": "de33b603bfc281238b348f082a2316a645f1d236894e7837ee95078ddbc1d673",
+ }
+ PREFIX = b"PARL/FAEST/v1"
+@@ -301,6 +301,7 @@
+                          "existing_staging_wires_reused": length_bits+8*(MAX_KEY_BYTES+VALUE_BYTES) if requests else 0,
+                          "append_operations_upper_bound": requests*(MAX_TRIALS+2)},
+             "source_sha256_before": before, "source_sha256_after": after,
++            "row_build_scope": accounting["row_build_scope"],
+             "explicit_supplied_canonical_field_register_boundary": True,
+             "prior_combined_interface_honest_read_envelope_bytes": honest_read_envelope,
+             "shared_length_width_satisfies_prior_honest_envelope": (1 << length_bits) > honest_read_envelope,

@@ -128,6 +128,21 @@ class VectorTests(unittest.TestCase):
         opening = M.selected_opening(M.geometry(row), value.to_bytes(32, "little"))
         return M.run_vector(self.model, ROOT, row, role, 1000, opening, M.schedule(a, b, outcome))
 
+    def test_current_logical_counts_match_retained_cases_without_provider_qualification(self):
+        historical = json.loads((ROOT / "docs/validation/parliament_ballot_ideal_sampler_accounting/report.json").read_text())
+        current = M.report(ROOT)
+        self.assertEqual(current["cases"], historical["cases"])
+        self.assertEqual(current["all_opening_lifetime_envelope"], historical["all_opening_lifetime_envelope"])
+        self.assertNotEqual(current["source_manifest_sha256"], historical["source_manifest_sha256"])
+        # The provider-layout receipt and Rust allocation pins were refreshed;
+        # imported logical formula ASTs and the exact cases above are unchanged.
+        self.assertEqual(current["loaded_model_sha256"], M.MODEL_DIGEST)
+        self.assertNotEqual(current["loaded_model_sha256"], historical["loaded_model_sha256"])
+        self.assertIn("diagnostics", current["row_build_scope"]["comparator"])
+        self.assertFalse(current["primitive_accounting_scope"]["provider_or_compiler_qualified"])
+        self.assertFalse(current["compiled_memory_or_allocator_bound"])
+        self.assertFalse(current["profile_qualified"])
+
     def test_four_exact_aes_counts_independent_block_walk(self):
         expected = {("candidate", "registration"): 1871854,
                     ("candidate", "vote"): 2750500,

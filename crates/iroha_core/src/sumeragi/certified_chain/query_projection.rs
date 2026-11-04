@@ -79,6 +79,44 @@ mod tests {
     }
 
     #[test]
+    fn certificate_sources_borrow_the_same_frame_and_wire_identity() {
+        assert!(
+            std::mem::size_of::<CertificateSource<'_>>() <= 2 * std::mem::size_of::<usize>(),
+            "source dispatch must stay a tag and one borrowed pointer"
+        );
+        let mut chain =
+            CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
+        chain.commit(Vec::new());
+        let pool = AllocationBudget::new(32 * 1024 * 1024);
+        let original = original(&chain, &pool);
+        let source = CertificateSource::Original(&original);
+        let parent = source.frame().parent;
+        let previous = source.frame().previous_iroha_hash;
+        let active = source.frame().active_result;
+        let wire = source.wire_identity().unwrap();
+        let projection = CheckedFrameProjection::from_original(original, &pool).unwrap();
+        let header = projection.reconstruct_header().unwrap();
+        let descriptor = ProjectedCertificateSource {
+            frame: &projection,
+            header: header.as_ref(),
+            payload: None,
+            wire,
+            admit_payload: false,
+        };
+        let reserved = pool.reserved_bytes();
+        let projected = CertificateSource::Projected(&descriptor);
+        assert_eq!(projected.wire_identity(), Some(wire));
+        assert_eq!(projected.frame().parent, parent);
+        assert_eq!(projected.frame().previous_iroha_hash, previous);
+        assert_eq!(projected.frame().active_result, active);
+        assert!(CommitCertificate::ptr_eq(
+            projected.frame().certificate.unwrap(),
+            &projection.certificate,
+        ));
+        assert_eq!(pool.reserved_bytes(), reserved);
+    }
+
+    #[test]
     fn query_payload_capture_matches_original_stream_and_enclosing_frame() {
         let mut chain =
             CertifiedTestChain::start(TestChainConfig::new(World::new(), 10_000)).unwrap();
@@ -183,26 +221,32 @@ pub(super) struct CheckedFrameRef<'a> {
 #[derive(Clone, Copy)]
 pub(super) enum CertificateSource<'a> {
     Original(&'a CommittedBlock),
-    Projected {
-        frame: &'a CheckedFrameProjection,
-        header: Option<&'a PrefixHeader>,
-        payload: Option<&'a iroha_sumeragi::availability::PayloadBytes>,
-        wire: (u64, Hash),
-    },
+    Projected(&'a ProjectedCertificateSource<'a>),
+}
+
+/// Stack-owned descriptor borrowed for the duration of certificate verification.
+/// Keeping both source variants borrowed avoids allocating or copying this descriptor.
+#[derive(Clone, Copy)]
+pub(super) struct ProjectedCertificateSource<'a> {
+    pub(super) frame: &'a CheckedFrameProjection,
+    pub(super) header: Option<&'a PrefixHeader>,
+    pub(super) payload: Option<&'a iroha_sumeragi::availability::PayloadBytes>,
+    pub(super) wire: (u64, Hash),
+    pub(super) admit_payload: bool,
 }
 
 impl<'a> CertificateSource<'a> {
     pub(super) fn frame(self) -> CheckedFrameRef<'a> {
         match self {
             Self::Original(original) => CheckedFrameRef::from_original(original),
-            Self::Projected { frame, header, .. } => frame.borrowed(header),
+            Self::Projected(source) => source.frame.borrowed(source.header),
         }
     }
 
     pub(super) fn wire_identity(self) -> Option<(u64, Hash)> {
         match self {
             Self::Original(original) => original.block.canonical_wire_identity().ok(),
-            Self::Projected { wire, .. } => Some(wire),
+            Self::Projected(source) => Some(source.wire),
         }
     }
 }
@@ -285,10 +329,57 @@ impl CheckedFrameProjection {
                 retained_query_authority::invariant(),
             ));
         }
+        let certificate = certificate.clone();
+        Self::from_original_certificate(original, certificate)
+    }
+
+    /// Move a State-authenticated original into the same closed query projection.
+    /// Its ordinary decoded certificate gains exact request-pool custody before
+    /// the full body retires. Keep the original header, avoiding a second decode.
+    pub(super) fn from_current_original(
+        mut original: CommittedBlock,
+        budget: &AllocationBudget,
+    ) -> Result<(Self, Option<PrefixHeader>), ExecutionAttemptError<ChainReadError>> {
+        use iroha_data_model::block::CertificateAdmissionError;
+        if !original.block.belongs_to(budget) {
+            return Err(ExecutionAttemptError::Deferred(
+                retained_query_authority::invariant(),
+            ));
+        }
+        let certificate = original
+            .block
+            .commit_certificate()
+            .ok_or(ChainReadError::MissingCertificate {
+                height: original.height,
+            })?
+            .admit(budget)
+            .map_err(|error| {
+                ExecutionAttemptError::Deferred(match error {
+                    CertificateAdmissionError::ForeignBudget => {
+                        retained_query_authority::invariant()
+                    }
+                    CertificateAdmissionError::Buffer(error) => {
+                        retained_query_authority::buffer_refusal(error)
+                    }
+                    CertificateAdmissionError::ControlAdmission(error) => error.into(),
+                    CertificateAdmissionError::ControlAllocation(error) => {
+                        retained_query_authority::shared_refusal(error)
+                    }
+                })
+            })?;
+        let header = original.header.take();
+        Ok((
+            Self::from_original_certificate(original, certificate)?,
+            header,
+        ))
+    }
+
+    fn from_original_certificate(
+        original: CommittedBlock,
+        certificate: CommitCertificate,
+    ) -> Result<Self, ExecutionAttemptError<ChainReadError>> {
         let source_header = original.block.header();
         let iroha_hash = original.block_hash();
-        // Sharing is allocation-free and retains all four original charged byte leaves.
-        let certificate = certificate.clone();
         let CommittedBlock {
             height: _,
             block,

@@ -18,20 +18,24 @@ import re
 import check_parliament_ballot_security_ledger as ledger
 
 ROOT = Path(__file__).resolve().parents[1]
+# Reviewed against e954df4850: comparator compilation is restricted to tests and
+# diagnostics; both row geometries and the role-independent context are unchanged.
+# The BAVC and VOLE differences are confined to test helpers, not this predicate.
 PINNED = {
-    "crates/iroha_parliament_ballot_proof/src/profile.rs": "9cc79a448f4199b748923b8b3e6a552fb9f0aa7980a1cb6d1d89746e8b79323d",
+    "crates/iroha_parliament_ballot_proof/src/profile.rs": "1e1d5e5b40208c06934199b79a2b1b0551c362bab864f0d17ea0c4f9ab385678",
     "crates/iroha_zkp_vole/src/params.rs": "41d18d1bf137496db8bd858bc291e48684c11122c03834828d54d3b6ae8cabba",
-    "crates/iroha_zkp_vole/src/bavc.rs": "481b4c7027b46520e848a67d94a6dc7cdda312838e1769a93b9079260b8d4269",
+    "crates/iroha_zkp_vole/src/bavc.rs": "b6cae7b82973325d3342434201188192896ad5686029f005bedbf06fc4e0f0fd",
     "crates/iroha_zkp_vole/src/proof.rs": "f87a7282a56dd75e774edd7082aad132b7267ca075132003c597123d310cf1cc",
-    "crates/iroha_zkp_vole/src/vole.rs": "5fcfe9c24e0e4a7319a0e4ed8ab99e7fbc83cd07c89f997864e393fbc9d09f31",
+    "crates/iroha_zkp_vole/src/vole.rs": "b684143fb2d9df535670e44080af932d10357fe211c5990a29782b9b91126a8e",
     "crates/iroha_zkp_vole/src/variant.rs": "50d8c414309f5ccc315181abefbdabe79ed092f0644dc72e04596c93c58059b9",
     "scripts/check_parliament_ballot_security_ledger.py": "910e958898c465e70cda88e52cf8f61af05ba8cd343a82812fa1ba103600a359",
     "specs/parliament_ballot_b6_hybrid_driver.md": "a95739b192f2a431cbf2a95c6964817137a6c5e0856121b20d4465a036f5835a",
 }
 REFERENCES = [
-    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 90, 108, "both roles"),
-    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 173, 184, "row geometry"),
-    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 397, 402, "role-independent extended context geometry"),
+    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 92, 104, "candidate and diagnostic comparator build scope"),
+    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 106, 118, "both roles"),
+    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 187, 208, "row geometry and compiled row sets"),
+    ("crates/iroha_parliament_ballot_proof/src/profile.rs", 418, 426, "role-independent extended context geometry"),
     ("crates/iroha_zkp_vole/src/params.rs", 169, 219, "validated parameter limits"),
     ("crates/iroha_zkp_vole/src/params.rs", 267, 317, "depths and leaf counts"),
     ("crates/iroha_zkp_vole/src/params.rs", 580, 590, "three-block AES leaf scheme"),
@@ -188,6 +192,8 @@ def certificate(root: Path = ROOT) -> dict:
                 or shape_guards["largest_checked_node_key_buffer_bytes"] >= 1 << 32):
             raise ValueError("source shape bounds failed")
         rows[label] = {**shape, "n_mult": gates, "n_leafcom": 3, "d_zk": 7,
+                       "build_scope": "production and diagnostic builds" if label == "candidate"
+                                      else "tests and diagnostic builds only",
                        "challenge_hex": zero.hex(), "decoded_indices": hidden, **direct,
                        "revealed_count": count, "opening_slack_nodes": limit - count,
                        "grinding_bit_positions": list(range(shape["n_delta"], 256)),
@@ -212,7 +218,7 @@ def certificate(root: Path = ROOT) -> dict:
             "checker_sha256": digest(Path(__file__)), "rows": rows, "source_references": references,
             "loaded_leaf_listing_source": {"path": str(Path(ledger.__file__).resolve()),
                                            "sha256": digest(Path(ledger.__file__).resolve())},
-            "scope": "Membership of 0^256 in each actual row's grinding/decode/opening admissibility set; source correspondence is a reviewed mathematical model, not a compiled-code proof",
+            "scope": "Membership of 0^256 in the candidate and diagnostic comparator rows' grinding/decode/opening admissibility sets; source correspondence is a reviewed mathematical model, not a compiled-code proof",
             "counter_preimage_or_valid_proof_claim": False, "uniform_H5_lemma_proved": False,
             "simulator_distribution_proved": False, "complete_simulator_resource_bound": False,
             "independent_cryptographic_review": False, "profile_qualified": False}
