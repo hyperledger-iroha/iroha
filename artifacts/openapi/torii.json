@@ -1820,6 +1820,45 @@
         ],
         "type": "object"
       },
+      "AccountRolePage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountRoleRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Exact match count; present only with `include_total`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "AccountRoleRow": {
+        "additionalProperties": false,
+        "description": "Exact assigned role identifier. Fields may be omitted by select projections.",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
       "AccountRow": {
         "additionalProperties": true,
         "description": "Account row; `id` is the canonical I105 account id. With `select`, items carry only the selected fields; with `aggregate`, items are aggregate rows.",
@@ -38998,6 +39037,64 @@
         ],
         "type": "object"
       },
+      "RolePage": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RoleRow"
+            },
+            "type": "array"
+          },
+          "next_cursor": {
+            "description": "Pass as `cursor` to read the next page; `null` on the last page.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total": {
+            "description": "Exact match count; present only with `include_total`.",
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "items",
+          "next_cursor"
+        ],
+        "type": "object"
+      },
+      "RoleRow": {
+        "additionalProperties": false,
+        "description": "Canonical role JSON. Fields may be omitted by select projections.",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "permissions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "payload": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              },
+              "required": [
+                "name",
+                "payload"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
       "RollbackPayload": {
         "additionalProperties": false,
         "properties": {
@@ -63790,6 +63887,82 @@
           "authentication": "optional_canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "application.accounts_by_account_id_permissions_query_post"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/accounts/{account_id}/roles/query": {
+      "post": {
+        "description": "Exact role identifiers assigned to the account in the contacted root's authoritative World. Requires canonical account request authentication and a current CanReadAllLedgerData grant. Accepts CollectionQuery controls; cursors bind to the canonical account identifier. Independent roots are not aggregated.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountRolePage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Canonical account request authentication is required."
+          },
+          "403": {
+            "description": "The authenticated account lacks CanReadAllLedgerData."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query account role assignments.",
+        "tags": [
+          "Roles"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.accounts_by_account_id_roles_query_post"
         },
         "x-iroha-tool-effect": "read"
       }
@@ -95431,6 +95604,71 @@
           "authentication": "canonical_account_signature",
           "schemaVersion": 1,
           "stableRouteId": "retail.recipient.route"
+        },
+        "x-iroha-tool-effect": "read"
+      }
+    },
+    "/v1/roles/query": {
+      "post": {
+        "description": "Complete role objects from the contacted root's authoritative World. Requires canonical account request authentication and a current CanReadAllLedgerData grant. Accepts CollectionQuery controls, with bounded source, scan and response memory. Independent roots are not aggregated.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CollectionQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RolePage"
+                }
+              }
+            },
+            "description": "Successful response",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Canonical account request authentication is required."
+          },
+          "403": {
+            "description": "The authenticated account lacks CanReadAllLedgerData."
+          }
+        },
+        "security": [
+          {
+            "IrohaCanonicalAccount": [],
+            "IrohaCanonicalNonce": [],
+            "IrohaCanonicalSignature": [],
+            "IrohaCanonicalTimestampMs": []
+          },
+          {
+            "IrohaCanonicalWitness": []
+          }
+        ],
+        "summary": "Query roles.",
+        "tags": [
+          "Roles"
+        ],
+        "x-iroha-route-auth": {
+          "admission": "authenticated_account",
+          "authentication": "canonical_account_signature",
+          "schemaVersion": 1,
+          "stableRouteId": "application.roles_query_post"
         },
         "x-iroha-tool-effect": "read"
       }

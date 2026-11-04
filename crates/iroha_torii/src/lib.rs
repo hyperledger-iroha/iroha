@@ -1235,6 +1235,8 @@ mod panic_recovery;
 mod private_settlement;
 #[cfg(feature = "test-network-private-settlement-route-control")]
 mod private_settlement_route_control;
+#[cfg(feature = "app_api")]
+mod role_collections;
 mod router;
 pub(crate) mod routing;
 mod runtime;
@@ -38406,6 +38408,8 @@ impl Torii {
             ACCOUNTS_GET => optional_canonical_signature_get(handler_accounts_list);
             ACCOUNTS_CAPABILITIES_GET => limited_public_get(handler_accounts_capabilities, 0);
             ACCOUNTS_INSPECT_POST => limited_public_post(account_inspection::handler, account_inspection::MAX_REQUEST_BYTES);
+            ROLES_QUERY_POST => limited_canonical_account_post(role_collections::roles, app_state, transaction_max_content_len, transaction_max_content_len);
+            ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST => limited_canonical_account_post(role_collections::account_roles, app_state, transaction_max_content_len, transaction_max_content_len);
         );
         mount_accounts_query(builder, app_state.clone(), transaction_max_content_len);
         mount_transactions_query(builder, app_state.clone(), transaction_max_content_len);

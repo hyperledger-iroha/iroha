@@ -4097,6 +4097,10 @@ pub mod application_api {
         ACCOUNTS_CAPABILITIES_GET => app_get("application.accounts_capabilities_get", "/v1/accounts/capabilities");
         ACCOUNTS_INSPECT_POST => account_inspection_post("application.accounts_inspect_post", "/v1/accounts/inspect");
         ACCOUNTS_QUERY_POST => dataspace_post("application.accounts_query_post", "/v1/accounts/query");
+        /// Complete roles in the current root, requiring `CanReadAllLedgerData`.
+        ROLES_QUERY_POST => account_read_post("application.roles_query_post", "/v1/roles/query");
+        /// Exact account role assignments, requiring `CanReadAllLedgerData`.
+        ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST => account_read_post("application.accounts_by_account_id_roles_query_post", "/v1/accounts/{account_id}/roles/query");
         TRANSACTIONS_QUERY_POST => dataspace_post("application.transactions_query_post", "/v1/transactions/query");
         ACCOUNTS_ONBOARD_PLAN_POST => onboarding_compute_post("application.accounts_onboard_plan_post", "/v1/accounts/onboard/plan");
         ACCOUNTS_ONBOARD_PREPARE_POST => onboarding_compute_post("application.accounts_onboard_prepare_post", "/v1/accounts/onboard/prepare");

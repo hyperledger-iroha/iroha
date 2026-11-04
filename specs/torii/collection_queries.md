@@ -2,7 +2,7 @@
 
 Every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
 account assets, asset holders, transactions, account transactions, repo
-agreements, effective account permissions, subscription plans, subscriptions,
+agreements, roles, account role assignments, effective account permissions, subscription plans, subscriptions,
 and UAID manifests) is read with one query language and returns one page envelope. The same language is
 used by the SDKs, the `iroha` CLI and the event-stream `filter` parameter.
 The Rust reference implementation is
@@ -38,6 +38,8 @@ Design rules:
 | account transactions | `GET /v1/accounts/{account_id}/transactions` | `POST /v1/accounts/{account_id}/transactions/query` |
 | repo agreements | `GET /v1/repo/agreements` | `POST /v1/repo/agreements/query` |
 | account permissions | `GET /v1/accounts/{account_id}/permissions` | `POST /v1/accounts/{account_id}/permissions/query` |
+| roles | — | `POST /v1/roles/query` |
+| account role assignments | — | `POST /v1/accounts/{account_id}/roles/query` |
 | subscription plans | `GET /v1/subscriptions/plans` | `POST /v1/subscriptions/plans/query` |
 | subscriptions | `GET /v1/subscriptions` | `POST /v1/subscriptions/query` |
 | UAID manifests | `GET /v1/space-directory/uaids/{uaid}/manifests` | `POST /v1/space-directory/uaids/{uaid}/manifests/query` |
@@ -51,6 +53,16 @@ Design rules:
 `aggregate` and avoids URL length limits. Responses are JSON. Transactions, account movements, asset movements, contract activity and events
 are [history collections](#history-collections) with a few
 restrictions.
+
+Role collections require canonical account request authentication and a current
+`CanReadAllLedgerData` grant. They read the contacted root's authoritative World,
+without aggregating independent roots. Role rows contain `id` and `permissions`
+in the canonical `Role` JSON representation; account role rows contain `id`.
+Both support the ordinary filter, projection, order, total and cursor controls.
+Account role cursors bind to the canonical account identifier in the path.
+Role sources use the same source-frame, decoded-row, retained-memory, scan and
+response ceilings as other collections. Role identifiers use indexed keyset
+seeks; account role assignments use a bounded scan of that account's bindings.
 
 Collection planning, source scans, filtering, projection and final JSON encoding
 run on a blocking worker under the request's original query-memory owner.

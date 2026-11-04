@@ -497,6 +497,8 @@ fn generated_spec_documents_collection_pages_and_queries() {
         &response_rows! {
         "/v1/accounts", "get", "200", "#/components/schemas/AccountPage";
         "/v1/accounts/query", "post", "200", "#/components/schemas/AccountPage";
+        "/v1/roles/query", "post", "200", "#/components/schemas/RolePage";
+        "/v1/accounts/{account_id}/roles/query", "post", "200", "#/components/schemas/AccountRolePage";
         "/v1/domains", "get", "200", "#/components/schemas/DomainPage";
         "/v1/domains/query", "post", "200", "#/components/schemas/DomainPage";
         "/v1/accounts/{account_id}/assets", "get", "200", "#/components/schemas/AccountAssetPage";
@@ -523,14 +525,14 @@ fn generated_spec_documents_collection_pages_and_queries() {
     },
     );
     let schemas = component_schemas(&document);
-    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage AccountHistoryPage ContractActivityPage ContractEventPage") {
+    for page in contract_words("AccountPage AccountAssetPage AssetDefinitionPage AssetHolderPage DomainPage NftPage RepoAgreementPage RwaPage TransactionPage AccountHistoryPage ContractActivityPage ContractEventPage RolePage AccountRolePage") {
         let schema = contract_schema(schemas, page);
         let required = schema_fields(schema, "required", page);
         string_members! { required; Present => &["items", "next_cursor"]; };
         let properties = contract_object(schema.get("properties"), page);
         member_contracts! { properties; Absent => &["has_more", "count_mode", "offset"]; }
     }
-    for path in contract_words("/v1/accounts/query /v1/domains/query /v1/repo/agreements/query") {
+    for path in contract_words("/v1/accounts/query /v1/domains/query /v1/repo/agreements/query /v1/roles/query /v1/accounts/{account_id}/roles/query") {
         text_contracts! { operation_request_schema_ref(openapi_operation(&document, path, "post"), path) => "#/components/schemas/CollectionQuery"; }
     }
     text_contracts! { operation_request_schema_ref(openapi_operation(&document, "/v1/transactions/query", "post"), "/v1/transactions/query") => "#/components/schemas/HistoryQuery"; }
@@ -710,4 +712,41 @@ fn scoped_artifact_openapi_binds_network_full_dataspace_and_content() {
     ] {
         assert!(document.get("paths").unwrap().get(retired).is_none());
     }
+}
+
+#[test]
+fn generated_spec_role_queries_require_canonical_global_readers() {
+    let document = generate_spec();
+    for path in ["/v1/roles/query", "/v1/accounts/{account_id}/roles/query"] {
+        let operation = openapi_operation(&document, path, "post");
+        let security = operation.get("security").and_then(Value::as_array).unwrap();
+        assert!(!security.is_empty());
+        assert!(
+            security
+                .iter()
+                .all(|entry| !entry.as_object().unwrap().is_empty())
+        );
+        assert!(
+            operation
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap()
+                .contains("CanReadAllLedgerData")
+        );
+    }
+    let schemas = component_schemas(&document);
+    assert_eq!(
+        object_field_set(contract_object(
+            contract_schema(schemas, "RoleRow").get("properties"),
+            "role fields"
+        )),
+        contract_word_set("id permissions")
+    );
+    assert_eq!(
+        object_field_set(contract_object(
+            contract_schema(schemas, "AccountRoleRow").get("properties"),
+            "assignment fields"
+        )),
+        contract_word_set("id")
+    );
 }

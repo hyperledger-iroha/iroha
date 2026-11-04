@@ -1,7 +1,7 @@
 //! Tests queries for retrieving roles and their identifiers.
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::{collections::Collection, data_model::prelude::*};
 use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
@@ -54,11 +54,7 @@ fn find_roles() -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(20);
     loop {
         let found_role_ids = match sandbox::handle_result(
-            test_client
-                .client()
-                .query(FindRoles::new())
-                .execute_all()
-                .map_err(Into::into),
+            super::collections::roles(&test_client),
             stringify!(find_roles),
         )? {
             Some(found_role_ids) => found_role_ids
@@ -107,11 +103,7 @@ fn find_role_ids() -> Result<()> {
     let role_ids = HashSet::from(role_ids);
     // Checking results
     let found_role_ids = match sandbox::handle_result(
-        test_client
-            .client()
-            .query(FindRoleIds::new())
-            .execute_all()
-            .map_err(Into::into),
+        super::collections::role_ids(&test_client, Collection::Roles),
         stringify!(find_role_ids),
     )? {
         Some(found_role_ids) => found_role_ids,
@@ -143,11 +135,7 @@ fn find_role_by_id() -> Result<()> {
         return Ok(());
     }
     let found_role = match sandbox::handle_result(
-        test_client
-            .client()
-            .query(FindRoles::new())
-            .execute_all()
-            .map_err(Into::into), // lightweight DSL: filter in client
+        super::collections::roles(&test_client), // lightweight DSL: filter in client
         stringify!(find_role_by_id),
     )? {
         Some(found_roles) => found_roles
@@ -167,10 +155,7 @@ fn find_unregistered_role_by_id() {
     };
     let test_client = network.client();
     let role_id: RoleId = "root".parse().expect("Valid");
-    let found_role = test_client
-        .client()
-        .query(FindRoles::new())
-        .execute_all()
+    let found_role = super::collections::roles(&test_client)
         .unwrap()
         .into_iter()
         .find(|role| role.id() == &role_id);
@@ -211,11 +196,7 @@ fn find_roles_by_account_id() -> Result<()> {
     let role_ids = HashSet::from(role_ids);
     // Checking results
     let found_role_ids = match sandbox::handle_result(
-        test_client
-            .client()
-            .query(FindRolesByAccountId::new(alice_id))
-            .execute_all()
-            .map_err(Into::into),
+        super::collections::role_ids(&test_client, Collection::AccountRoles(alice_id)),
         stringify!(find_roles_by_account_id),
     )? {
         Some(ids) => ids,

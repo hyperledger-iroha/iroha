@@ -112,6 +112,8 @@ pub fn default_columns(collection: &Collection) -> &'static [&'static str] {
         Collection::Rwas | Collection::ExplorerRwas => &["id", "owned_by", "quantity", "status"],
         Collection::AccountAssets(_) => &["asset", "asset_alias", "scope", "quantity"],
         Collection::AccountPermissions(_) => &["name", "payload"],
+        Collection::Roles => &["id", "permissions"],
+        Collection::AccountRoles(_) => &["id"],
         Collection::AssetHolders(_) => &["account_id", "scope", "quantity"],
         Collection::Transactions | Collection::AccountTransactions(_) => {
             &["timestamp_ms", "entrypoint_hash", "result_ok", "authority"]
@@ -345,6 +347,18 @@ mod tests {
             default_columns(&Collection::Transactions),
             default_columns(&Collection::AccountTransactions(account))
         );
+    }
+
+    #[test]
+    fn role_collections_show_objects_and_exact_assignments() {
+        let account = iroha::data_model::account::AccountId::new(
+            iroha_crypto::KeyPair::try_random()
+                .expect("role column fixture key")
+                .public_key()
+                .clone(),
+        );
+        assert_eq!(default_columns(&Collection::Roles), &["id", "permissions"]);
+        assert_eq!(default_columns(&Collection::AccountRoles(account)), &["id"]);
     }
 
     #[test]

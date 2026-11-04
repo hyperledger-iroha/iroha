@@ -44,6 +44,20 @@ pub(super) fn definitions(client: &Client) -> Result<Vec<AssetDefinition>> {
         .collect()
 }
 
+pub(super) fn roles(client: &Client) -> Result<Vec<Role>> {
+    client
+        .list(Collection::Roles, ListQuery::new())
+        .map(|row| Ok(norito::json::from_value(row?)?))
+        .collect()
+}
+
+pub(super) fn role_ids(client: &Client, collection: Collection) -> Result<Vec<RoleId>> {
+    client
+        .list(collection, ListQuery::new().select(["id"]))
+        .map(|row| field(&row?, "id"))
+        .collect()
+}
+
 pub(super) fn field<T: JsonDeserialize>(row: &Value, name: &str) -> Result<T> {
     let value = row
         .get(name)

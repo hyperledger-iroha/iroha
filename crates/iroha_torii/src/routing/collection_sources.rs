@@ -12,6 +12,7 @@ mod account_history_multisig_tests;
 mod account_aliases;
 #[cfg(test)]
 mod account_aliases_tests;
+mod roles;
 use account_aliases::AccountAliasJoin;
 
 use crate::collections::{self, CollectionError, CollectionSpec, Limits, RowPage, specs};
@@ -50,6 +51,10 @@ pub enum CollectionTarget {
     RepoAgreements,
     /// `/v1/accounts/{account_id}/permissions`
     AccountPermissions(String),
+    /// `/v1/roles/query`, restricted to authenticated global readers.
+    Roles,
+    /// `/v1/accounts/{account_id}/roles/query`, restricted to global readers.
+    AccountRoles(String),
     /// `/v1/subscriptions/plans`
     SubscriptionPlans,
     /// `/v1/subscriptions`
@@ -81,6 +86,8 @@ impl CollectionTarget {
             Self::ContractEvents => &specs::CONTRACT_EVENTS,
             Self::RepoAgreements => &specs::REPO_AGREEMENTS,
             Self::AccountPermissions(_) => &specs::ACCOUNT_PERMISSIONS,
+            Self::Roles => &specs::ROLES,
+            Self::AccountRoles(_) => &specs::ACCOUNT_ROLES,
             Self::SubscriptionPlans => &specs::SUBSCRIPTION_PLANS,
             Self::Subscriptions => &specs::SUBSCRIPTIONS,
             Self::UaidManifests(_) => &specs::UAID_MANIFESTS,
@@ -99,6 +106,7 @@ impl CollectionTarget {
             | Self::AccountTransactions(literal)
             | Self::AccountHistory(literal)
             | Self::AccountPermissions(literal)
+            | Self::AccountRoles(literal)
             | Self::UaidManifests(literal)
             | Self::BondEntitlements(literal) => literal,
             Self::Domains
@@ -112,7 +120,8 @@ impl CollectionTarget {
             | Self::RepoAgreements
             | Self::SubscriptionPlans
             | Self::Subscriptions
-            | Self::Bonds => "",
+            | Self::Bonds
+            | Self::Roles => "",
         }
     }
 
@@ -134,6 +143,8 @@ impl CollectionTarget {
             Self::ContractEvents => ENDPOINT_CONTRACTS_EVENTS,
             Self::RepoAgreements => ENDPOINT_REPO_AGREEMENTS_QUERY,
             Self::AccountPermissions(_) => ENDPOINT_ACCOUNTS_PERMISSIONS,
+            Self::Roles => "/v1/roles/query",
+            Self::AccountRoles(_) => "/v1/accounts/{account_id}/roles/query",
             Self::SubscriptionPlans => ENDPOINT_SUBSCRIPTION_PLANS_LIST,
             Self::Subscriptions => ENDPOINT_SUBSCRIPTIONS_LIST,
             Self::UaidManifests(_) => ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
@@ -453,6 +464,11 @@ fn execute_prepared_collection_local(
     .then(|| collection_history_read_budget(app.is_none(), limits.bytes))
     .transpose()?;
     let page = match target {
+        CollectionTarget::Roles | CollectionTarget::AccountRoles(_) => {
+            return roles::execute(
+                state, target, query, telemetry, visibility, prepared, limits,
+            );
+        }
         // Identity-ordered reads seek in storage order from the cursor; exact
         // `id` (and alias) constraints become direct lookups. The engine still
         // applies the whole filter.

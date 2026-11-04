@@ -184,6 +184,34 @@ async fn account_page_carries_a_verifiable_canonical_signature() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn role_collections_sign_the_exact_path_and_projection() {
+    let (client, requests) = public_client(vec![
+        page(&["auditor"], None, None),
+        page(&["auditor"], None, None),
+    ]);
+    let account = client.account_client().expect("role reader account");
+    let target = AccountId::new(client.key_pair.public_key().clone());
+    let query = ListQuery::new().select(["id"]).limit(2);
+    for collection in [Collection::Roles, Collection::AccountRoles(target)] {
+        let result = account.list_page(&collection, &query).await.unwrap();
+        assert_eq!(ids(&result.items), ["auditor"]);
+        let requests = requests.lock().unwrap();
+        let request = requests.last().unwrap();
+        assert_eq!(
+            request.url.path(),
+            collection
+                .query_path(client.account_chain_discriminant)
+                .unwrap()
+        );
+        assert_eq!(body(request), query.to_json_value());
+        super::tests::assert_canonical_account_signed_request(
+            &client,
+            &RequestSnapshot::from(request),
+        );
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn multisig_member_reads_stay_public() {
     let base = client_with_base_url(base_url());
     let mut builder = base.to_builder();
