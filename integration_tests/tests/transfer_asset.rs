@@ -77,7 +77,7 @@ fn wait_for_asset_value(
             Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
                 FindError::Asset(missing),
             )))) if missing.as_ref() == &asset_id => {
-                last_observed = "asset is not visible yet".to_owned();
+                "asset is not visible yet".clone_into(&mut last_observed);
             }
             Err(err) => {
                 last_observed = format!("query failed: {err}");
