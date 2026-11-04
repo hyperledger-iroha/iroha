@@ -237,10 +237,10 @@ async fn assert_no_global_beacon_pulse_at(
     label: &str,
     network: &iroha_test_network::Network,
 ) -> Result<()> {
-    let block = exact_block(client, height, network)
+    let (_, authenticated) = finality::certified_block(network, client, height)
         .await
-        .wrap_err_with(|| format!("{label}: exact finalized block is unavailable"))?;
-    if block.global_beacon_pulse().is_some() {
+        .wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;
+    if authenticated.commitment().beacon.is_some() {
         return Err(eyre!(
             "{label}: finalized block {height} unexpectedly carries a global beacon pulse"
         ));
@@ -1563,6 +1563,7 @@ fn parliament_network_corridor_has_no_legacy_or_consensus_bypass_surface() {
         concat!(".", "submit("),
         concat!(".", "submit_all("),
         concat!("client.", "status()"),
+        concat!("global_beacon_", "pulse()"),
         concat!("tokio::task::", "block_in_place"),
         concat!("tokio::task::", "spawn_blocking"),
         concat!("Cast", "PlainBallot"),

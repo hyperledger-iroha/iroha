@@ -2738,9 +2738,10 @@ state creates no pulse obligation: Parliament sortition waits governance-locally
 consensus-native pulse at its frozen slot (`specs/parliament_private_ballot_design.md` §9), and
 a pending governance slot never makes a pulse mandatory, admissible or a condition of a block.
 A pulse is bound to the exact network, active public DKG session, scheduled
-validator roster, height, and committed parent. It is committed by the block header's dedicated
-`global_beacon_pulse_hash` and carried in `global_beacon_pulse`; it never authorizes a block
-without transaction work.
+validator roster, height, and committed parent. It is carried in the native consensus header's signed
+`control_witness` and bound to the certified execution commitment's `beacon` field (§12.7).
+The transaction payload does not own the pulse; a pulse never authorizes a block without
+transaction work.
 
 The node starts pulse production after selecting real work, or after receiving a cryptographically
 valid partial from that slot's authenticated validator. Idle polling and malformed traffic do

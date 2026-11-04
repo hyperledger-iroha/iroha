@@ -423,11 +423,11 @@ pub async fn pulse_at(
     height: u64,
     network: &iroha_test_network::Network,
 ) -> Result<iroha::data_model::consensus::FinalizedGlobalThresholdBeaconPulseV1> {
-    exact_block(client, height, network)
-        .await?
-        .global_beacon_pulse()
-        .copied()
-        .ok_or_else(|| eyre!("block {height} does not carry a finalized global beacon pulse"))
+    let (_, authenticated) = finality::certified_block(network, client, height).await?;
+    authenticated
+        .commitment()
+        .beacon
+        .ok_or_else(|| eyre!("block {height} does not certify a finalized global beacon pulse"))
 }
 
 pub fn public_finding_root(attempt_id: GovernanceAttemptId, body: ParliamentBody) -> [u8; 32] {
