@@ -24,7 +24,6 @@ use iroha::{
         nexus::UniversalAccountId,
         parameter::{BlockParameter, Parameter, system::SumeragiNposParameters},
         prelude::{Action, FindAssetById, Quantity, Repeats},
-        query::block::prelude::FindBlocks,
         ram_lfe::{
             RamLfeExecutionReceiptPayload, RamLfeOutputOpening, RamLfeOutputOpeningPayload,
             RamLfeProgramId, RamLfeReceiptAttestation,
@@ -36,7 +35,7 @@ use iroha_crypto::{
     Hash, RamLfeBackend, RamLfeVerificationMode, Signature, SignatureOf,
     identifier_hashes_from_output_hash, ram_lfe_output_hash,
 };
-use iroha_data_model::{HasMetadata, prelude::QueryBuilderExt};
+use iroha_data_model::HasMetadata;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;

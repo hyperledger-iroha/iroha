@@ -44,11 +44,12 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
         let warmup_height = baseline_height.saturating_add(1);
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
-                })?;
+            let client = peer.client();
+            integration_tests::sync::spawn_blocking(move || {
+                client.submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            })
+            .await?
+            .wrap_err_with(|| format!("failed to submit warmup log instruction to {}", peer.mnemonic()))?;
         }
         wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
         let warmup_statuses = collect_statuses(&network, SOAK_STATUS_POLL_TIMEOUT).await?;
@@ -68,11 +69,12 @@ pub(super) async fn run_permissioned_progress() -> Result<()> {
         ensure!(!network.peers().is_empty(), "network must have at least one peer");
         for peer in network.peers() {
             let message = format!("localnet bounded block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit log instruction to {}", peer.mnemonic())
-                })?;
+            let client = peer.client();
+            integration_tests::sync::spawn_blocking(move || {
+                client.submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
+            })
+            .await?
+            .wrap_err_with(|| format!("failed to submit log instruction to {}", peer.mnemonic()))?;
         }
         let target_height = baseline_height.saturating_add(1);
         let start = Instant::now();
@@ -156,23 +158,6 @@ pub(super) async fn run() -> Result<()> {
     let result: Result<()> = async {
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         wait_for_converged_height(&network, 1, PROGRESS_TIMEOUT).await?;
-        let query_tips = || -> Result<Vec<(u64, HashOf<Header>)>> {
-            network
-                .peers()
-                .iter()
-                .map(|peer| {
-                    let blocks = peer
-                        .client()
-                        .client().query(FindBlocks)
-                        .execute_all()
-                        .wrap_err_with(|| format!("query blocks from {}", peer.mnemonic()))?;
-                    let latest = blocks
-                        .first()
-                        .ok_or_else(|| eyre!("peer {} returned an empty chain", peer.mnemonic()))?;
-                    Ok((latest.header().height().get(), latest.hash()))
-                })
-                .collect()
-        };
         let block_sync_gossip_period = network.block_sync_gossip_period();
         let retransmit_observation = block_sync_gossip_period.saturating_mul(2);
         let commit_quorum_observation = network.da_commit_quorum_timeout().saturating_mul(2);
@@ -195,7 +180,7 @@ pub(super) async fn run() -> Result<()> {
             }),
             "validators did not begin the idle observation at one empty-queue height: {baseline_statuses:?}"
         );
-        let mut baseline_tips = query_tips()?;
+        let mut baseline_tips = query_tips(&network).await?;
         let mut canonical_baseline_tip = baseline_tips
             .first()
             .copied()
@@ -218,7 +203,7 @@ pub(super) async fn run() -> Result<()> {
         loop {
             sleep(TIP_POLL).await;
             let statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
-            let tips = query_tips()?;
+            let tips = query_tips(&network).await?;
             let canonical_tip = tips
                 .first()
                 .copied()
@@ -241,10 +226,8 @@ pub(super) async fn run() -> Result<()> {
             if canonical_tip != canonical_baseline_tip
                 || observed_non_empty != baseline_non_empty
             {
-                let blocks = network
-                    .client()
-                    .client().query(FindBlocks)
-                    .execute_all()
+                let blocks = integration_tests::blocks::canonical_history(&network.client())
+                    .await
                     .wrap_err("query delayed baseline work")?;
                 let delayed = blocks
                     .iter()
@@ -289,35 +272,43 @@ pub(super) async fn run() -> Result<()> {
                 }),
                 "clean idle height manufactured a block within {idle_observation:?}: baseline={baseline_statuses:?}, observed={statuses:?}"
             );
-            let tips = query_tips()?;
+            let tips = query_tips(&network).await?;
             ensure!(
                 tips == baseline_tips,
                 "clean idle height changed canonical tip within {idle_observation:?}: baseline={baseline_tips:?}, observed={tips:?}"
             );
         }
         let client = network.client();
-        let external_transaction ={
-    let account = client.account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            [InstructionBox::from(Log::new(
-                Level::INFO,
-                "proposal-work external transaction".to_owned(),
-            ))],
-            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        ))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
+        let external_transaction = {
+            let account = client.account_client();
+            let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(Log::new(
+                    Level::INFO,
+                    "proposal-work external transaction".to_owned(),
+                ))],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent),
+                "proposal-work fee quote changed payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         let external_entrypoint = external_transaction.hash_as_entrypoint();
-        client
-            .submit_transaction(&external_transaction)
+        let submitter = client.clone();
+        integration_tests::sync::spawn_blocking(move || submitter.submit_transaction(&external_transaction))
+            .await?
             .wrap_err("submit explicit proposal-work transaction")?;
         let external_height = baseline_height.saturating_add(1);
         wait_for_converged_height(&network, external_height, PROGRESS_TIMEOUT).await?;
         let mut external_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {
-            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
+            let blocks = integration_tests::blocks::canonical_history(&peer.client()).await?;
             let matches = blocks
                 .iter()
                 .filter(|block| {
@@ -365,19 +356,27 @@ pub(super) async fn run() -> Result<()> {
             )
             .expect("one-shot PreCommit trigger is a valid action"),
         );
-        let registration_transaction ={
-    let account = client.account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-            [InstructionBox::from(Register::trigger(trigger))],
-            iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            Metadata::default(),
-        ))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
+        let registration_transaction = {
+            let account = client.account_client();
+            let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                [InstructionBox::from(Register::trigger(trigger))],
+                iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                Metadata::default(),
+            ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent),
+                "proposal-work fee quote changed payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
         let registration_entrypoint = registration_transaction.hash_as_entrypoint();
-        client
-            .submit_transaction(&registration_transaction)
+        let submitter = client.clone();
+        integration_tests::sync::spawn_blocking(move || submitter.submit_transaction(&registration_transaction))
+            .await?
             .wrap_err("register one-shot proposal-work PreCommit trigger")?;
         let registration_height = external_height.saturating_add(1);
         let internal_height = registration_height.saturating_add(1);
@@ -385,7 +384,7 @@ pub(super) async fn run() -> Result<()> {
         let mut registration_block_hash = None;
         let mut internal_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {
-            let blocks = peer.client().client().query(FindBlocks).execute_all()?;
+            let blocks = integration_tests::blocks::canonical_history(&peer.client()).await?;
             let registration_matches = blocks
                 .iter()
                 .filter(|block| {
@@ -440,7 +439,10 @@ pub(super) async fn run() -> Result<()> {
                 internal_block_hash = Some(trigger_block.hash());
             }
         }
-        let alice = client.client().query_single(FindAccountById::new(ALICE_ID.clone()))?;
+        let reader = client.clone();
+        let alice = integration_tests::sync::spawn_blocking(move || {
+            reader.client().query_single(FindAccountById::new(ALICE_ID.clone()))
+        }).await??;
         ensure!(
             alice.metadata().get(&marker_key) == Some(&marker_value),
             "one-shot PreCommit carrier did not apply its queryable state effect"
@@ -455,7 +457,7 @@ pub(super) async fn run() -> Result<()> {
             }),
             "external, registration, and internal-only carriers did not converge exactly: {post_work_statuses:?}"
         );
-        let post_work_tips = query_tips()?;
+        let post_work_tips = query_tips(&network).await?;
         let expected_internal_hash = internal_block_hash
             .ok_or_else(|| eyre!("four-peer gate observed no internal carrier hash"))?;
         ensure!(
@@ -476,7 +478,7 @@ pub(super) async fn run() -> Result<()> {
                 }),
                 "one-shot internal work did not return to a clean idle height: expected={post_work_statuses:?}, observed={statuses:?}"
             );
-            let tips = query_tips()?;
+            let tips = query_tips(&network).await?;
             ensure!(
                 tips == post_work_tips,
                 "canonical tip advanced again after one-shot internal work: expected={post_work_tips:?}, observed={tips:?}"
@@ -493,4 +495,18 @@ pub(super) async fn run() -> Result<()> {
         return Ok(());
     }
     Ok(())
+}
+
+async fn query_tips(network: &Network) -> Result<Vec<(u64, HashOf<Header>)>> {
+    let mut tips = Vec::with_capacity(network.peers().len());
+    for peer in network.peers() {
+        let blocks = integration_tests::blocks::canonical_history(&peer.client())
+            .await
+            .wrap_err_with(|| format!("query blocks from {}", peer.mnemonic()))?;
+        let latest = blocks
+            .first()
+            .ok_or_else(|| eyre!("peer {} returned an empty chain", peer.mnemonic()))?;
+        tips.push((latest.header().height().get(), latest.hash()));
+    }
+    Ok(tips)
 }

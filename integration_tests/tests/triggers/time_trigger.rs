@@ -517,13 +517,14 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                 let client = test_client.clone();
                 move || {
                     client
-                        .client()
-                        .query(FindNfts::new())
-                        .execute_all()
-                        .map(|nfts| {
-                            nfts.into_iter()
-                                .filter(|nft| nft.owned_by() == &account_id_clone)
-                                .count()
+                        .list(
+                            iroha::collections::Collection::Nfts,
+                            iroha::collections::ListQuery::new().select(["owned_by"]),
+                        )
+                        .try_fold(0_usize, |count, row| -> Result<usize> {
+                            let owner: AccountId =
+                                integration_tests::collections::field(&row?, "owned_by")?;
+                            Ok(count + usize::from(owner == account_id_clone))
                         })
                 }
             })
@@ -583,13 +584,14 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
                         let client = test_client.clone();
                         move || {
                             client
-                                .client()
-                                .query(FindNfts::new())
-                                .execute_all()
-                                .map(|nfts| {
-                                    nfts.into_iter()
-                                        .filter(|nft| nft.owned_by() == &account_id_clone)
-                                        .count()
+                                .list(
+                                    iroha::collections::Collection::Nfts,
+                                    iroha::collections::ListQuery::new().select(["owned_by"]),
+                                )
+                                .try_fold(0_usize, |count, row| -> Result<usize> {
+                                    let owner: AccountId =
+                                        integration_tests::collections::field(&row?, "owned_by")?;
+                                    Ok(count + usize::from(owner == account_id_clone))
                                 })
                         }
                     })
