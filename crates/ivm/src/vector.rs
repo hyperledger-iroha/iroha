@@ -1463,7 +1463,7 @@ fn metal_vadd64(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
         })?
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
 fn metal_vadd64(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
     None
 }
@@ -1495,7 +1495,7 @@ fn metal_vadd32(a: [u32; 4], b: [u32; 4]) -> Option<[u32; 4]> {
         })?
     })
 }
-#[cfg(not(all(target_os = "macos", feature = "metal")))]
+#[cfg(all(target_os = "macos", not(feature = "metal")))]
 fn metal_vadd32(_a: [u32; 4], _b: [u32; 4]) -> Option<[u32; 4]> {
     None
 }
