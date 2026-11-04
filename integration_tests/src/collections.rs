@@ -137,37 +137,31 @@ impl DomainRow {
 #[test]
 fn account_row_decodes_metadata_and_rejects_missing_identity() {
     let id = iroha_test_samples::ALICE_ID.clone();
-    let row =
-        norito::json::json!({"id": id, "metadata": {"key": "value"}, "label": null, "uaid": null});
+    let row = norito::json!({"id": id, "metadata": {"key": "value"}, "label": null, "uaid": null});
     let decoded: AccountRow = norito::json::from_value(row).unwrap();
     assert_eq!(decoded.id(), &id);
-    assert_eq!(
-        decoded.metadata().get(&"key".parse().unwrap()),
-        Some(&Json::from("value"))
-    );
-    assert!(norito::json::from_value::<AccountRow>(norito::json::json!({"metadata": {}})).is_err());
+    assert_eq!(decoded.metadata().get("key"), Some(&Json::from("value")));
+    assert!(norito::json::from_value::<AccountRow>(norito::json!({"metadata": {}})).is_err());
 }
 
 #[test]
 fn required_collection_field_preserves_type_and_refuses_missing_or_wrong_type() {
-    let row = norito::json::json!({"quantity": "13"});
+    let row = norito::json!({"quantity": "13"});
     assert_eq!(
         field::<Quantity>(&row, "quantity").unwrap(),
         Quantity::from(13_u32)
     );
     assert!(field::<Quantity>(&row, "absent").is_err());
-    assert!(field::<Quantity>(&norito::json::json!({"quantity": []}), "quantity").is_err());
+    assert!(field::<Quantity>(&norito::json!({"quantity": []}), "quantity").is_err());
 }
 
 #[test]
 fn domain_row_preserves_metadata_and_requires_identity() {
     let id = DomainId::try_new("wonderland", "universal").unwrap();
-    let row = norito::json::json!({"id": id, "metadata": {"rank": 3}, "owned_by": iroha_test_samples::ALICE_ID.clone(), "logo": null});
+    let owner = iroha_test_samples::ALICE_ID.clone();
+    let row = norito::json!({"id": id, "metadata": {"rank": 3}, "owned_by": owner, "logo": null});
     let decoded: DomainRow = norito::json::from_value(row).unwrap();
     assert_eq!(decoded.id(), &id);
-    assert_eq!(
-        decoded.metadata().get(&"rank".parse().unwrap()),
-        Some(&Json::from(3_u32))
-    );
-    assert!(norito::json::from_value::<DomainRow>(norito::json::json!({"metadata": {}})).is_err());
+    assert_eq!(decoded.metadata().get("rank"), Some(&Json::from(3_u32)));
+    assert!(norito::json::from_value::<DomainRow>(norito::json!({"metadata": {}})).is_err());
 }

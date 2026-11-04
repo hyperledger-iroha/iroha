@@ -60,6 +60,9 @@ windows-sys = { version = "0.61.2", features = [
 ] }
 
 [dev-dependencies]
+# Rust unit-test executables run without Node's exported N-API symbols. Resolve
+# those symbols dynamically in test builds, while retaining real Node bindings.
+napi = { version = "3.5.1", default-features = false, features = ["dyn-symbols"] }
 iroha_allocation = { workspace = true }
 iroha_sumeragi = { workspace = true }
 iroha_data_model = { workspace = true, default-features = false, features = ["test-fixtures", "transparent_api"] }
