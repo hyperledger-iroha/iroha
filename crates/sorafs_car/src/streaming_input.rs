@@ -339,6 +339,45 @@ mod tests {
     use crate::{CarStreamingWriter, CarWriter};
 
     #[test]
+    fn streaming_scan_rejects_entry_overflow_before_retaining_payload() {
+        let directory = tempfile::tempdir().unwrap();
+        fs::write(directory.path().join("payload"), b"not retained").unwrap();
+        for initial_entries in [CAR_DIRECTORY_MAX_ENTRIES, usize::MAX] {
+            let mut entries = initial_entries;
+            let mut files = Vec::new();
+            let mut recorded = Vec::new();
+            let mut directories = Vec::new();
+            let mut length = 0;
+            let error = scan(
+                ReaderDirectory::open(directory.path()).unwrap(),
+                &[],
+                &mut files,
+                &mut recorded,
+                &mut directories,
+                &mut entries,
+                &mut length,
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+            let expected = if initial_entries == usize::MAX {
+                "directory entry overflow"
+            } else {
+                "too many directory entries"
+            };
+            assert_eq!(error.to_string(), expected);
+            // A propagated inventory error must retain its classification and
+            // diagnostic when an outer input-acquisition boundary wraps it.
+            let propagated = invalid(error);
+            assert_eq!(propagated.kind(), io::ErrorKind::InvalidData);
+            assert_eq!(propagated.to_string(), expected);
+            assert!(files.is_empty());
+            assert!(recorded.is_empty());
+            assert!(directories.is_empty());
+            assert_eq!(length, 0);
+        }
+    }
+
+    #[test]
     fn streaming_plan_and_car_match_eager_directory() {
         let dir = tempfile::tempdir().unwrap();
         fs::create_dir(dir.path().join("nested")).unwrap();

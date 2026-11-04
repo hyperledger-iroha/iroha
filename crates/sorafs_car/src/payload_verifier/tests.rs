@@ -67,6 +67,10 @@ fn logarithmic_por_frontier_matches_complete_trees_and_canonical_car() {
         let mut store = crate::ChunkStore::with_profile(plan.chunk_profile);
         store.ingest_plan(&payload, &plan).unwrap();
         assert_eq!(verification.por_leaf_count, store.por_leaf_count());
+        let (streamed_root, streamed_leaves) =
+            por_commitment(&plan, &mut Cursor::new(&payload)).unwrap();
+        assert_eq!(streamed_root, manifest.por_root, "chunk count {count}");
+        assert_eq!(streamed_leaves, store.por_leaf_count());
     }
 }
 
@@ -93,6 +97,7 @@ fn streamed_verification_rejects_every_altered_commitment_and_inexact_eof() {
     );
     let mut extra = payload.clone();
     extra.push(0);
+    assert!(por_commitment(&plan, &mut Cursor::new(&extra)).is_err());
     assert!(verify_payload_reader(&manifest, &plan, &mut Cursor::new(extra)).is_err());
     let mut corrupted = payload;
     corrupted[0] ^= 1;

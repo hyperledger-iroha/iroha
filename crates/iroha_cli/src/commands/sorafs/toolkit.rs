@@ -1079,6 +1079,34 @@ mod tests {
             "local pack prints the exact report without a client context"
         );
         let report: Value = norito::json::from_slice(&report_bytes).expect("decode report");
+        let mut prepared = sorafs_car::streaming_input::PreparedCarInput::open(
+            &temp.path().join("payload.bin"),
+            ChunkProfile::DEFAULT,
+        )
+        .expect("retained source");
+        let dry_run_stats = write_pack_car(None, &prepared.plan, &mut prepared.payload)
+            .expect("metadata-only CAR pass");
+        prepared.payload.rewind().expect("rewind retained input");
+        let direct_path = temp.path().join("direct.car");
+        let direct_stats =
+            write_pack_car(Some(&direct_path), &prepared.plan, &mut prepared.payload)
+                .expect("direct CAR pass");
+        assert_eq!(direct_stats, dry_run_stats);
+        assert_eq!(fs::read(direct_path).expect("direct archive"), car_bytes);
+        let manifest_digest = manifest.digest().expect("manifest digest");
+        let direct_report = build_pack_report(&PackReportContext {
+            profile: &manifest.chunking,
+            plan: &prepared.plan,
+            car_stats: &direct_stats,
+            root_cid: &manifest.root_cid,
+            manifest: &manifest,
+            manifest_bytes: &manifest_bytes,
+            manifest_digest: &manifest_digest,
+            por_root: manifest.por_root,
+            por_chunk_count: prepared.plan.chunks.len(),
+        })
+        .expect("report from verified artifacts");
+        assert_eq!(direct_report, report);
         assert_eq!(
             report.get("car_archive_digest_hex").and_then(Value::as_str),
             Some(archive_digest_hex.as_str())

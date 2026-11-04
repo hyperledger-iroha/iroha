@@ -207,6 +207,175 @@ fn site_fixture(root: &Path) -> (PathBuf, CarBuildPlan, Vec<u8>, ManifestV1) {
     (site, plan, payload, manifest)
 }
 
+#[test]
+fn car_pack_native_entry_points_match_canonical_archives() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, plan, payload, _) = site_fixture(&root);
+    let descriptor = manifest_chunker_registry::lookup_by_handle(DEFAULT_CHUNKER_HANDLE).unwrap();
+    let mut expected_directory = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut expected_directory)
+        .unwrap();
+    let directory_car = root.join("directory.car");
+    build_from_directory(
+        &site,
+        descriptor,
+        &directory_car,
+        None,
+        None,
+        DEFAULT_CHUNKER_HANDLE,
+    )
+    .unwrap();
+    assert_eq!(fs::read(directory_car).unwrap(), expected_directory);
+    let emitted_car = root.join("emitted.car");
+    emit_car_and_artifacts(
+        &site,
+        descriptor,
+        DEFAULT_CHUNKER_HANDLE,
+        &emitted_car,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(fs::read(emitted_car).unwrap(), expected_directory);
+
+    let file = root.join("payload.bin");
+    fs::write(&file, &payload).unwrap();
+    let file_car = root.join("file.car");
+    let summary_path = root.join("file-summary.json");
+    build_from_file(
+        &file,
+        descriptor,
+        &file_car,
+        None,
+        Some(&summary_path),
+        DEFAULT_CHUNKER_HANDLE,
+    )
+    .unwrap();
+    let file_plan = CarBuildPlan::single_file(&payload).unwrap();
+    let mut expected_file = Vec::new();
+    sorafs_car::CarWriter::new(&file_plan, &payload)
+        .unwrap()
+        .write_to(&mut expected_file)
+        .unwrap();
+    assert_eq!(fs::read(file_car).unwrap(), expected_file);
+    let summary: Value = norito::json::from_slice(&fs::read(summary_path).unwrap()).unwrap();
+    assert_eq!(
+        summary.get("input_kind").and_then(Value::as_str),
+        Some("file")
+    );
+    assert_eq!(
+        summary.get("payload_bytes").and_then(Value::as_u64),
+        Some(payload.len() as u64)
+    );
+}
+
+#[test]
+fn proof_verify_streamed_source_binds_car_before_writing_summary() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, plan, payload, manifest) = site_fixture(&root);
+    let manifest_path = root.join("manifest.to");
+    fs::write(&manifest_path, manifest.encode().unwrap()).unwrap();
+    let car_path = root.join("site.car");
+    let mut car = Vec::new();
+    sorafs_car::CarWriter::new(&plan, &payload)
+        .unwrap()
+        .write_to(&mut car)
+        .unwrap();
+    fs::write(&car_path, &car).unwrap();
+    let summary_path = root.join("verified.json");
+    let arguments = |summary: &Path| {
+        vec![
+            format!("--manifest={}", manifest_path.display()),
+            format!("--car={}", car_path.display()),
+            format!("--payload={}", site.display()),
+            format!("--summary-out={}", summary.display()),
+        ]
+    };
+    proof_verify(arguments(&summary_path)).unwrap();
+    let summary: Value = norito::json::from_slice(&fs::read(summary_path).unwrap()).unwrap();
+    assert_eq!(
+        summary.get("payload_bytes").and_then(Value::as_u64),
+        Some(payload.len() as u64)
+    );
+    assert_eq!(
+        summary.get("car_size").and_then(Value::as_u64),
+        Some(car.len() as u64)
+    );
+    car.push(0);
+    fs::write(&car_path, car).unwrap();
+    let rejected_summary = root.join("rejected.json");
+    assert!(proof_verify(arguments(&rejected_summary)).is_err());
+    assert!(!rejected_summary.exists());
+}
+
+#[test]
+fn publication_qualify_rejects_provider_bounds_before_network_or_proof_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path().canonicalize().unwrap();
+    let (site, _, _, _) = site_fixture(&root);
+    let mut artifacts = build_deploy_artifacts(
+        &site,
+        &root.join("site.car"),
+        &root.join("plan.json"),
+        &root.join("pack.json"),
+        &root.join("manifest.to"),
+        &root.join("manifest.json"),
+        PinPolicy {
+            min_replicas: 3,
+            storage_class: StorageClass::Hot,
+            retention_epoch: 4_000_000_000,
+        },
+        None,
+    )
+    .unwrap();
+    let checkpoint =
+        iroha_data_model::sumeragi_finality::SumeragiFinalityCheckpoint::decode_canonical(
+            include_bytes!(
+                "../../../../../fixtures/sumeragi/native-finality/genesis-checkpoint.nrt"
+            ),
+        )
+        .unwrap();
+    let key = KeyPair::try_from_seed(vec![4; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+    let config = DeployClientConfig {
+        torii_url: None,
+        public_key: key.public_key().clone(),
+        private_key: key.private_key().clone(),
+        network_id: checkpoint.network_id(),
+        chain_id: checkpoint.chain_id().parse().unwrap(),
+        chain_discriminant: 777,
+    };
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+    let client = HttpClient::new();
+    for providers in [Vec::new(), vec![base.to_string(); 65]] {
+        let error = deploy_publication::qualify(
+            &client,
+            &base,
+            &config,
+            &mut artifacts,
+            checkpoint.clone(),
+            &providers,
+            &root,
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("1..=64 provider source endpoints"),
+            "{error}"
+        );
+        assert_eq!(
+            listener.accept().unwrap_err().kind(),
+            io::ErrorKind::WouldBlock
+        );
+        assert!(!root.join("publication.assigned.proof.to").exists());
+        assert!(!root.join("publication.completed.proof.to").exists());
+    }
+}
+
 /// Build a canonical manifest for exactly the supplied test plan and payload.
 pub(super) fn manifest(plan: &CarBuildPlan, payload: &[u8]) -> ManifestV1 {
     let mut reader = payload;
