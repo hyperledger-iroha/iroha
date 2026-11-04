@@ -21,6 +21,34 @@ use std::{
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+
+// Allow the consent commits, initiation and existing 30-second observation polls
+// to finish before the negative settlement check. The real roundtrips still wait
+// for this bounded two-minute term and settle against the on-ledger maturity.
+const ROUNDTRIP_TERM_MS: u64 = 120_000;
+
+fn roundtrip_maturity_ms(elapsed_since_epoch: Duration) -> Result<u64> {
+    u64::try_from(elapsed_since_epoch.as_millis())?
+        .checked_add(ROUNDTRIP_TERM_MS)
+        .ok_or_else(|| eyre!("repo fixture maturity timestamp overflow"))
+}
+
+#[test]
+fn roundtrip_maturity_is_bounded_and_rejects_timestamp_overflow() {
+    assert_eq!(
+        roundtrip_maturity_ms(Duration::from_secs(42)).unwrap(),
+        162_000
+    );
+    assert_eq!(
+        roundtrip_maturity_ms(Duration::from_millis(u64::MAX - ROUNDTRIP_TERM_MS)).unwrap(),
+        u64::MAX
+    );
+    assert!(
+        roundtrip_maturity_ms(Duration::from_millis(u64::MAX - ROUNDTRIP_TERM_MS + 1)).is_err()
+    );
+    assert!(roundtrip_maturity_ms(Duration::from_secs(u64::MAX)).is_err());
+}
+
 fn install_quiet_tracing() {
     static QUIET_TRACE: OnceLock<()> = OnceLock::new();
     QUIET_TRACE.get_or_init(|| {});
@@ -322,14 +350,7 @@ fn repo_roundtrip_transfers_balances_and_seals_agreement() -> Result<()> {
     // Initiate the repo: Alice borrows cash, pledging collateral.
     let agreement_id: RepoAgreementId = "daily_repo".parse()?;
     let repo_instruction_template = || -> Result<RepoIsi> {
-        let maturity_ms = u64::try_from(
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)?
-                .checked_add(Duration::from_secs(3))
-                .ok_or_else(|| eyre!("maturity timestamp overflow"))?
-                .as_millis(),
-        )
-        .expect("repo maturity timestamp fits in u64");
+        let maturity_ms = roundtrip_maturity_ms(SystemTime::now().duration_since(UNIX_EPOCH)?)?;
         Ok(RepoIsi::new(
             agreement_id.clone(),
             ALICE_ID.clone(),
@@ -747,14 +768,8 @@ fn repo_roundtrip_with_custodian_routes_collateral() -> Result<()> {
     )?;
     client.submit_transaction_and_wait(&setup_tx)?;
     let agreement_id: RepoAgreementId = "tri_party_repo".parse()?;
-    let maturity_timestamp_ms = u64::try_from(
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .checked_add(Duration::from_secs(3))
-            .ok_or_else(|| eyre!("maturity timestamp overflow"))?
-            .as_millis(),
-    )
-    .expect("repo maturity timestamp fits in u64");
+    let maturity_timestamp_ms =
+        roundtrip_maturity_ms(SystemTime::now().duration_since(UNIX_EPOCH)?)?;
     let repo_instruction = RepoIsi::new(
         agreement_id.clone(),
         ALICE_ID.clone(),

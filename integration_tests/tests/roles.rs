@@ -6,7 +6,9 @@ use iroha::{
     blocking::Client,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
 };
-use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
+use iroha_executor_data_model::permission::{
+    account::CanModifyAccountMetadata, role::CanManageRoles,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
@@ -34,6 +36,111 @@ fn funded_role_authority_client(
     )?;
     Ok(network.peers()[0].client_for(account, key.private_key().clone()))
 }
+
+#[test]
+fn metadata_role_authority_requires_explicit_role_management() -> Result<()> {
+    use iroha_core::{
+        executor::Executor,
+        state::World,
+        sumeragi::test_chain::{CertifiedTestChain, TestChainConfig},
+    };
+
+    let mouse = AccountId::new(
+        iroha::crypto::KeyPair::try_from_seed(vec![81; 32], iroha::crypto::Algorithm::Ed25519)?
+            .public_key()
+            .clone(),
+    );
+    for granted in [false, true] {
+        let world = World::with(
+            [],
+            [
+                Account::new(ALICE_ID.clone()).build(&ALICE_ID),
+                Account::new(mouse.clone()).build(&ALICE_ID),
+            ],
+            [],
+        );
+        let mut config = TestChainConfig::new(world, 0);
+        config
+            .genesis_instructions
+            .push(Grant::account_permission(CanManageRoles, ALICE_ID.clone()).into());
+        if granted {
+            config
+                .genesis_instructions
+                .push(Grant::account_permission(CanManageRoles, mouse.clone()).into());
+        }
+        let chain =
+            CertifiedTestChain::start(config).expect("apply the genuine signed fixture genesis");
+        let state = chain.state();
+        let mut block = state.block(BlockHeader::new(
+            2_u64.try_into()?,
+            Some(
+                state
+                    .view()
+                    .latest_block_hash()
+                    .expect("signed genesis parent"),
+            ),
+            None,
+            1_000,
+            0,
+        ));
+        let mut transaction = block.transaction();
+        let register: InstructionBox = Register::role(
+            Role::new("METADATA_ROLE_CONTROL".parse()?, mouse.clone()).add_permission(
+                CanModifyAccountMetadata {
+                    account: mouse.clone(),
+                },
+            ),
+        )
+        .into();
+        let registration =
+            Executor::Initial.execute_instruction(&mut transaction, &mouse, &register);
+        if granted {
+            registration?;
+        } else {
+            assert_eq!(
+                registration.expect_err("metadata authority alone cannot register a role"),
+                ValidationFail::NotPermitted("Can't register role".to_owned()),
+            );
+        }
+        assert_eq!(
+            Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    &Grant::account_permission(CanManageRoles, mouse.clone()).into(),
+                )
+                .expect_err("role management is an explicitly genesis-only capability"),
+            ValidationFail::NotPermitted(
+                "authority cannot grant or revoke permission `CanManageRoles`".to_owned()
+            ),
+        );
+        assert_eq!(
+            Executor::Initial
+                .execute_instruction(
+                    &mut transaction,
+                    &ALICE_ID,
+                    &SetKeyValue::account(mouse.clone(), "key".parse()?, Json::from("value"))
+                        .into(),
+                )
+                .expect_err("role management must not give Alice Mouse's metadata permission"),
+            ValidationFail::NotPermitted("authority cannot modify this metadata".to_owned()),
+        );
+        if granted {
+            Executor::Initial.execute_instruction(
+                &mut transaction,
+                &mouse,
+                &Grant::account_role("METADATA_ROLE_CONTROL".parse()?, ALICE_ID.clone()).into(),
+            )?;
+            Executor::Initial.execute_instruction(
+                &mut transaction,
+                &ALICE_ID,
+                &SetKeyValue::account(mouse.clone(), "key".parse()?, Json::from("value")).into(),
+            )?;
+        }
+    }
+    Ok(())
+}
+
 fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
 }
@@ -83,20 +190,21 @@ fn register_empty_role() -> Result<()> {
 /// @s8sato added: This test represents #2081 case.
 #[test]
 fn register_and_grant_role_for_metadata_access() -> Result<()> {
-    let Some((network, _rt)) =
-        start_network(stringify!(register_and_grant_role_for_metadata_access))
+    let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
+    // Role management is genesis-only. Seed the canonical account and its exact
+    // capability before Mouse creates a role containing its own metadata permission.
+    let builder = NetworkBuilder::new()
+        .with_genesis_instruction(Register::account(Account::new(mouse_id.clone())))
+        .with_genesis_instruction(Grant::account_permission(CanManageRoles, mouse_id.clone()));
+    let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
+        builder,
+        stringify!(register_and_grant_role_for_metadata_access),
+    )?
     else {
         return Ok(());
     };
     let test_client = network.client();
     let alice_id = ALICE_ID.clone();
-    let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    // Registering Mouse
-    let register_mouse = Register::account(Account::new(mouse_id.clone()));
-    test_client.submit(
-        register_mouse,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
     let mouse_client = funded_role_authority_client(&network, &mouse_id, &mouse_keypair)?;
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
