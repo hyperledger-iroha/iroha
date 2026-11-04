@@ -12,7 +12,7 @@ use iroha::{
     },
 };
 use iroha_crypto::Hash;
-use iroha_executor_data_model::permission::asset::CanTransferAsset;
+use iroha_executor_data_model::permission::asset::CanTransferAssetWithDefinition;
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
@@ -131,9 +131,18 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
             "aitai_xor_native".parse()?,
         );
         let seller_asset_id = AssetId::of(asset_definition_id.clone(), seller.clone());
+        let fee_asset_definition: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
         client.submit_all(
             [
                 InstructionBox::from(Register::account(Account::new(buyer.clone()))),
+                // Independently signed escrow actions pay ordinary transaction fees.
+                Transfer::asset_quantity(
+                    AssetId::of(fee_asset_definition, seller.clone()),
+                    100_000_u32,
+                    buyer.clone(),
+                )
+                .into(),
                 Register::asset_definition(AssetDefinition::numeric(
                     asset_definition_id.clone(),
                     "aitai_xor_native".to_owned(),
@@ -160,21 +169,23 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         let custody_asset_id = AssetId::of(asset_definition_id.clone(), opened.custody.clone());
         client.submit(
             Grant::account_permission(
-                Permission::from(CanTransferAsset {
-                    asset: custody_asset_id.clone(),
+                Permission::from(CanTransferAssetWithDefinition {
+                    asset_definition: asset_definition_id.clone(),
                 }),
                 seller.clone(),
             ),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
+        let direct_debit_error = client
+            .submit(
+                Transfer::asset_quantity(custody_asset_id, 1_u64, seller.clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .expect_err("active native escrow custody must reject generic transfer");
         assert!(
-            client
-                .submit(
-                    Transfer::asset_quantity(custody_asset_id, 1_u64, seller.clone(),),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
-                )
-                .is_err(),
-            "active native escrow custody must not be drainable through generic transfer"
+            format!("{direct_debit_error:#}")
+                .contains("direct debit from native escrow custody account is not allowed"),
+            "definition-scoped transfer permission must still reach the native custody guard: {direct_debit_error:#}"
         );
         buyer_client.submit(
             AcceptAssetEscrow::new(escrow_id),
@@ -251,10 +262,25 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
             "aitai_xor_lock_native".parse()?,
         );
         let source_asset_id = AssetId::of(asset_definition_id.clone(), source.clone());
+        let fee_asset_definition: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
         client.submit_all(
             [
                 InstructionBox::from(Register::account(Account::new(destination.clone()))),
+                // Independently signed escrow actions pay ordinary transaction fees.
+                Transfer::asset_quantity(
+                    AssetId::of(fee_asset_definition.clone(), source.clone()),
+                    100_000_u32,
+                    destination.clone(),
+                )
+                .into(),
                 InstructionBox::from(Register::account(Account::new(release_authority.clone()))),
+                Transfer::asset_quantity(
+                    AssetId::of(fee_asset_definition, source.clone()),
+                    100_000_u32,
+                    release_authority.clone(),
+                )
+                .into(),
                 Register::asset_definition(AssetDefinition::numeric(
                     asset_definition_id.clone(),
                     "aitai_xor_lock_native".to_owned(),
@@ -303,21 +329,23 @@ fn native_asset_lock_flow_on_multi_peer_network() -> Result<()> {
         )?;
         client.submit(
             Grant::account_permission(
-                Permission::from(CanTransferAsset {
-                    asset: custody_asset_id.clone(),
+                Permission::from(CanTransferAssetWithDefinition {
+                    asset_definition: asset_definition_id.clone(),
                 }),
                 source.clone(),
             ),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
+        let direct_debit_error = client
+            .submit(
+                Transfer::asset_quantity(custody_asset_id.clone(), 1_u64, source.clone()),
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
+            .expect_err("active native lock custody must reject generic transfer");
         assert!(
-            client
-                .submit(
-                    Transfer::asset_quantity(custody_asset_id.clone(), 1_u64, source.clone(),),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None)
-                )
-                .is_err(),
-            "active native lock custody must not be drainable through generic transfer"
+            format!("{direct_debit_error:#}")
+                .contains("direct debit from native escrow custody account is not allowed"),
+            "definition-scoped transfer permission must still reach the native custody guard: {direct_debit_error:#}"
         );
         assert!(
             destination_client

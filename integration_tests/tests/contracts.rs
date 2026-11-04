@@ -604,17 +604,20 @@ fn contract_probe_genesis_registration(
     ])
 }
 
-fn contract_probe_alias_management_permission() -> CanManageAccountAlias {
+fn contract_alias_management_permission(alias: &str) -> CanManageAccountAlias {
     CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Alias(
             iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                "contract_state_probe@universal"
+                alias
                     .parse()
-                    .expect("canonical contract probe alias permission"),
-                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    .expect("canonical contract fixture alias permission"),
+                DataSpaceId::UNIVERSAL,
             ),
         ),
     }
+}
+fn contract_probe_alias_management_permission() -> CanManageAccountAlias {
+    contract_alias_management_permission("contract_state_probe@universal")
 }
 
 fn contract_deployment_instructions(
@@ -730,15 +733,22 @@ fn contract_v1_deployment_grants_only_the_exact_hajimari_invocation() {
 
 #[test]
 fn contract_v1_alias_permission_is_exact() {
-    let permission = contract_probe_alias_management_permission();
-    let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
-        panic!("contract probe must not receive a domain- or dataspace-wide alias grant");
-    };
-    assert_eq!(alias.canonical_text(), "contract_state_probe@universal");
-    assert_eq!(
-        alias.dataspace_id,
-        iroha_model_base::topology::DataSpaceId::UNIVERSAL
-    );
+    for literal in [
+        "contract_state_probe@universal",
+        "owner_lifecycle_four_peer@universal",
+        "deploy_test@universal",
+        "dynamic_access_counter@universal",
+    ] {
+        let permission = contract_alias_management_permission(literal);
+        let AccountAliasPermissionScope::Alias(alias) = permission.scope else {
+            panic!("contract probe must not receive a domain- or dataspace-wide alias grant");
+        };
+        assert_eq!(alias.canonical_text(), literal);
+        assert_eq!(
+            alias.dataspace_id,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL
+        );
+    }
 }
 
 #[test]
@@ -1880,6 +1890,10 @@ async fn contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers() -> R
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            contract_alias_management_permission("owner_lifecycle_four_peer@universal"),
+            iroha_test_samples::ALICE_ID.clone(),
         ));
     let context = stringify!(contract_owner_lifecycle_cas_and_transfer_converge_on_four_peers);
     let network = sandbox::start_network_async_or_skip(builder, context).await?;
@@ -2219,6 +2233,10 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         .with_genesis_instruction(Grant::account_permission(
             permission,
             iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            contract_alias_management_permission("deploy_test@universal"),
+            iroha_test_samples::ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2362,6 +2380,10 @@ async fn dynamic_and_helper_hidden_contract_writes_serialize_on_four_peers() -> 
         })
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
+            iroha_test_samples::ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            contract_alias_management_permission("dynamic_access_counter@universal"),
             iroha_test_samples::ALICE_ID.clone(),
         ))
         .with_genesis_instruction(Grant::account_permission(
@@ -2735,6 +2757,7 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
                 "description",
                 "owned_by",
                 "total_quantity",
+                "numeric_scale",
                 "metadata",
             ],
         ),
