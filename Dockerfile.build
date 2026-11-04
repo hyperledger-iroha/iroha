@@ -33,6 +33,7 @@ RUN case "$(uname -m)" in \
       --output /tmp/grcov.tar.bz2 && \
     printf '%s  /tmp/grcov.tar.bz2\n' "$grcov_sha" | sha256sum --check --strict && \
     mkdir /tmp/grcov && tar --extract --bzip2 --no-same-owner --file /tmp/grcov.tar.bz2 --directory /tmp/grcov && \
+    install -d /usr/local/cargo/bin && \
     install -m 0755 /tmp/grcov/grcov /usr/local/cargo/bin/grcov && \
     grcov --version && rm -rf /tmp/grcov /tmp/grcov.tar.bz2
 
