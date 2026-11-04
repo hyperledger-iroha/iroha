@@ -5,11 +5,15 @@ use integration_tests::sandbox::{
 };
 use integration_tests::sync::spawn_blocking;
 use iroha::data_model::{
-    isi::{SetKeyValue, repo::RepoIsi},
+    isi::{
+        SetKeyValue,
+        kaigi::{CreateKaigi, RegisterKaigiRelay, ReportKaigiRelayHealth},
+        repo::RepoIsi,
+    },
     kaigi::{
-        KaigiId, KaigiRelayFeedback, KaigiRelayHealthStatus, KaigiRelayHpkeSuiteV1,
-        KaigiRelayRegistration, encode_kaigi_relay_hpke_key_v1, kaigi_relay_feedback_key,
-        kaigi_relay_metadata_key,
+        KaigiId, KaigiRecord, KaigiRelayHealthStatus, KaigiRelayHop, KaigiRelayHpkeSuiteV1,
+        KaigiRelayManifest, KaigiRelayRegistration, NewKaigi, encode_kaigi_relay_hpke_key_v1,
+        kaigi_metadata_key,
     },
     prelude::*,
     repo::{RepoAgreementId, RepoCashLeg, RepoCollateralLeg, RepoGovernance},
@@ -24,12 +28,15 @@ use iroha_executor_data_model::permission::settlement::CanExecuteSettlement;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_model_base::topology::DataSpaceId;
-use iroha_primitives::json::Json;
 use iroha_test_network::{
     NetworkBuilder, account_alias_setup_instruction_in_dataspace,
     domain_setup_instruction_in_dataspace, init_instruction_registry,
 };
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
+    SAMPLE_GENESIS_ACCOUNT_ID,
+};
+use iroha_torii::filter::{FilterExpr, ListQuery};
 use reqwest::Client;
 use std::{
     env,
@@ -82,6 +89,39 @@ fn http_client() -> Client {
         .connect_timeout(Duration::from_secs(5))
         .build()
         .expect("http client should build")
+}
+fn collection_equality_url(
+    mut url: reqwest::Url,
+    field: &str,
+    literal: &str,
+    limit: u32,
+) -> Result<reqwest::Url> {
+    let query = ListQuery::new()
+        .filter(FilterExpr::Eq(field.into(), literal.into()))
+        .limit(limit);
+    url.query_pairs_mut().extend_pairs(query.to_query_pairs()?);
+    Ok(url)
+}
+#[test]
+fn collection_equality_urls_use_the_current_get_filter_language() -> Result<()> {
+    for field in ["id", "authority"] {
+        for literal in [i105_alice_literal(), dotted_i105_alice_literal()] {
+            let url = collection_equality_url(
+                "http://127.0.0.1:8080/v1/accounts".parse()?,
+                field,
+                &literal,
+                8,
+            )?;
+            let parsed = ListQuery::from_query_pairs(url.query_pairs())?;
+            assert_eq!(
+                parsed,
+                ListQuery::new()
+                    .filter(FilterExpr::Eq(field.into(), literal.into()))
+                    .limit(8),
+            );
+        }
+    }
+    Ok(())
 }
 fn kaigi_operator_http_client() -> Client {
     Client::builder()
@@ -526,19 +566,14 @@ async fn accounts_listing_filter_rejects_dotted_i105_literals() -> Result<()> {
         .expect_err("dotted I105 literal must fail strict parsing")
         .code_str()
         .to_string();
-    let filter = format!(r#"{{"op":"eq","args":["id","{literal}"]}}"#);
     let http = http_client();
-    let mut url = network
+    let url = network
         .client()
         .client()
         .endpoint()
         .join("/v1/accounts")
         .expect("join accounts url");
-    {
-        let mut pairs = url.query_pairs_mut();
-        pairs.append_pair("filter", &filter);
-        pairs.append_pair("limit", "8");
-    }
+    let url = collection_equality_url(url, "id", &literal, 8)?;
     let resp = http
         .get(url)
         .header("Accept", "application/json")
@@ -1139,15 +1174,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         .endpoint()
         .join("/v1/explorer/transactions")
         .expect("join explorer transactions url");
-    let default_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let default_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(default_url)
         .header("Accept", "application/json")
@@ -1170,15 +1197,7 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
             .all(|literal| literal == &account_literal),
         "explorer transactions should default to I105 literals; got {authorities:?}"
     );
-    let i105_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let i105_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(i105_url)
         .header("Accept", "application/json")
@@ -1200,15 +1219,8 @@ async fn explorer_transactions_emit_i105_literals() -> Result<()> {
         "explorer transactions should honour canonical I105; got {authorities:?}"
     );
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
-    let dotted_i105_filter_url = {
-        let mut url = base;
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &dotted_i105_filter);
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let dotted_i105_filter_url =
+        collection_equality_url(base, "authority", &dotted_i105_filter, 8)?;
     let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
         .expect_err("dotted I105 authority filter must fail strict parsing")
         .code_str()
@@ -1253,15 +1265,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         .endpoint()
         .join("/v1/explorer/instructions")
         .expect("join explorer instructions url");
-    let default_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let default_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(default_url)
         .header("Accept", "application/json")
@@ -1284,15 +1288,7 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
             .all(|literal| literal == &account_literal),
         "explorer instructions should default to I105 literals; got {authorities:?}"
     );
-    let i105_url = {
-        let mut url = base.clone();
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &account_literal);
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let i105_url = collection_equality_url(base.clone(), "authority", &account_literal, 8)?;
     let resp = http
         .get(i105_url)
         .header("Accept", "application/json")
@@ -1314,15 +1310,8 @@ async fn explorer_instructions_emit_i105_literals() -> Result<()> {
         "explorer instructions should honour canonical I105; got {authorities:?}"
     );
     let dotted_i105_filter = dotted_i105_literal(&i105_literal);
-    let dotted_i105_filter_url = {
-        let mut url = base;
-        {
-            let mut qp = url.query_pairs_mut();
-            qp.append_pair("authority", &dotted_i105_filter);
-            qp.append_pair("limit", "8");
-        }
-        url
-    };
+    let dotted_i105_filter_url =
+        collection_equality_url(base, "authority", &dotted_i105_filter, 8)?;
     let dotted_i105_reason = AccountId::parse_encoded(&dotted_i105_filter)
         .expect_err("dotted I105 authority filter must fail strict parsing")
         .code_str()
@@ -1546,6 +1535,12 @@ async fn accounts_query_requires_canonical_ids_after_alias_resolution() -> Resul
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_genesis_instruction(Register::account(Account::new(account_id.clone())))
+        .with_genesis_instruction(Register::domain(Domain::new(domain_id.clone())))
+        .with_genesis_instruction(Transfer::domain(
+            SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+            domain_id.clone(),
+            ALICE_ID.clone(),
+        ))
         .with_genesis_instruction(Grant::account_permission(
             Permission::from(CanManageAccountAlias {
                 scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
@@ -1841,8 +1836,36 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     let query_url = base.join("/v1/repo/agreements/query")?;
     let query_body =
         format!(r#"{{"filter":{{"op":"eq","args":["id","{agreement_literal}"]}},"limit":4}}"#);
+    let unsigned = http
+        .post(query_url.clone())
+        .header("Content-Type", "application/json")
+        .body(query_body.clone())
+        .send()
+        .await?;
+    assert_eq!(unsigned.status(), reqwest::StatusCode::UNAUTHORIZED);
+    let timestamp_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let nonce = "address-canonicalisation-repo-query";
+    let message = iroha_torii::canonical_network_request_signature_message(
+        client.client().network_id(),
+        &iroha_torii::Method::POST,
+        &query_url.path().parse()?,
+        query_body.as_bytes(),
+        timestamp_ms,
+        nonce,
+    )?;
+    let signature = Signature::try_new(client.client().key_pair().private_key(), &message)?;
     let resp = http
         .post(query_url)
+        .header(
+            iroha_torii::HEADER_ACCOUNT,
+            client.client().account().to_canonical_hex()?,
+        )
+        .header(
+            iroha_torii::HEADER_SIGNATURE,
+            iroha_torii::signature_header_value(&signature)?,
+        )
+        .header(iroha_torii::HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+        .header(iroha_torii::HEADER_NONCE, nonce)
         .header("Content-Type", "application/json")
         .header("Accept", "application/json")
         .body(query_body)
@@ -1880,39 +1903,8 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
-    let registration = KaigiRelayRegistration {
-        relay_id: relay_id.clone(),
-        hpke_public_key: encode_kaigi_relay_hpke_key_v1(
-            KaigiRelayHpkeSuiteV1::MlKem768AuthPsk,
-            &[0xAA; 1_184],
-        )
-        .wrap_err("frame the relay HPKE key")?,
-        bandwidth_class: 5,
-    };
-    let registration_key =
-        kaigi_relay_metadata_key(&relay_id).wrap_err("kaigi relay metadata key")?;
-    let registration_value = Json::try_new(registration)
-        .map_err(|err| eyre!("serialize Kaigi relay registration: {err}"))?;
-    let set_registration =
-        SetKeyValue::domain(domain_id.clone(), registration_key, registration_value);
-    let call_name: Name = "integration-demo".parse()?;
-    let feedback = KaigiRelayFeedback {
-        relay_id: relay_id.clone(),
-        call: KaigiId::new(domain_id.clone(), call_name),
-        reported_by: reporter_id.clone(),
-        status: KaigiRelayHealthStatus::Healthy,
-        reported_at_ms: 1_735_000,
-        notes: Some("integration test coverage".to_owned()),
-    };
-    let feedback_key = kaigi_relay_feedback_key(&relay_id).wrap_err("kaigi relay feedback key")?;
-    let feedback_value =
-        Json::try_new(feedback).map_err(|err| eyre!("serialize Kaigi relay feedback: {err}"))?;
-    let set_feedback = SetKeyValue::domain(domain_id, feedback_key, feedback_value);
-    let mut builder = NetworkBuilder::new();
-    builder = builder.with_genesis_instruction(set_registration);
-    builder = builder.with_genesis_instruction(set_feedback);
     let Some(network) = Box::pin(start_network_async_or_skip(
-        builder,
+        NetworkBuilder::new(),
         stringify!(kaigi_endpoints_emit_i105_literals),
     ))
     .await?
@@ -1920,6 +1912,104 @@ async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
         return Ok(());
     };
     network.ensure_blocks(1).await?;
+    // Native Kaigi metadata is written only by its signed instructions. A real
+    // active manifest requires three distinct registered relays with primary aliases.
+    spawn_blocking({
+        let client = network.client();
+        let domain_id = domain_id.clone();
+        let relay_id = relay_id.clone();
+        move || -> Result<()> {
+            let mut hops = Vec::new();
+            for (index, (account, key_pair)) in [
+                (ALICE_ID.clone(), ALICE_KEYPAIR.clone()),
+                (BOB_ID.clone(), BOB_KEYPAIR.clone()),
+                (CARPENTER_ID.clone(), CARPENTER_KEYPAIR.clone()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                let relay_client =
+                    integration_tests::sync::rebind_blocking_client(&client, |config| {
+                        config.account = account.clone();
+                        config.key_pair = key_pair;
+                    });
+                let hpke_public_key = encode_kaigi_relay_hpke_key_v1(
+                    KaigiRelayHpkeSuiteV1::MlKem768AuthPsk,
+                    &[0xAA; 1_184],
+                )?;
+                let alias = format!("addrrelay{index}@{domain_id}");
+                let setup = account_alias_setup_instruction_in_dataspace(
+                    &alias,
+                    DataSpaceId::UNIVERSAL,
+                    &account,
+                    AccountProvisionV1::Existing,
+                    AccountAliasRoleV1::Primary,
+                )?;
+                relay_client.submit_all(
+                    [
+                        setup,
+                        RegisterKaigiRelay {
+                            relay: KaigiRelayRegistration {
+                                relay_id: account.clone(),
+                                hpke_public_key: hpke_public_key.clone(),
+                                bandwidth_class: 5,
+                            },
+                        }
+                        .into(),
+                    ],
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )?;
+                hops.push(KaigiRelayHop {
+                    relay_id: account,
+                    hpke_public_key,
+                    weight: 1,
+                });
+            }
+            let call_id = KaigiId::new(domain_id.clone(), "integration-demo".parse()?);
+            let mut call = NewKaigi::with_defaults(call_id.clone(), ALICE_ID.clone());
+            call.relay_manifest = Some(KaigiRelayManifest {
+                hops,
+                expiry_ms: u64::try_from(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)?
+                        .checked_add(Duration::from_hours(12))
+                        .ok_or_else(|| eyre!("Kaigi manifest expiry overflow"))?
+                        .as_millis(),
+                )?,
+            });
+            client.submit(
+                CreateKaigi {
+                    call,
+                    commitment: None,
+                    nullifier: None,
+                    roster_root: None,
+                    proof: None,
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            let domain = client
+                .client()
+                .query_single(FindDomainById::new(domain_id))?;
+            let record: KaigiRecord = domain
+                .metadata()
+                .get(&kaigi_metadata_key(&call_id.call_name)?)
+                .ok_or_else(|| eyre!("applied Kaigi creation omitted its record"))?
+                .clone()
+                .try_into_any_norito()?;
+            client.submit(
+                ReportKaigiRelayHealth {
+                    call_id,
+                    relay_id,
+                    status: KaigiRelayHealthStatus::Healthy,
+                    reported_at_ms: record.created_at_ms,
+                    notes: Some("integration test coverage".to_owned()),
+                },
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )?;
+            Ok(())
+        }
+    })
+    .await??;
     let seed = KaigiRelaySeed {
         relay_i105: relay_id.to_string(),
         reporter_i105: reporter_id.to_string(),
