@@ -64,6 +64,10 @@ fn collection_target_for_read(
     use routing::collection_sources::CollectionTarget as T;
     let first = || path_args.first().cloned().unwrap_or_default();
     Some(match endpoint {
+        ToriiReadEndpointV1::RolesList | ToriiReadEndpointV1::RolesQuery => T::Roles,
+        ToriiReadEndpointV1::AccountRolesGet | ToriiReadEndpointV1::AccountRolesQuery => {
+            T::AccountRoles(first())
+        }
         ToriiReadEndpointV1::DomainsList | ToriiReadEndpointV1::DomainsQuery => T::Domains,
         ToriiReadEndpointV1::AccountsList | ToriiReadEndpointV1::AccountsQuery => T::Accounts,
         ToriiReadEndpointV1::AssetDefinitionsList | ToriiReadEndpointV1::AssetDefinitionsQuery => {
@@ -328,6 +332,8 @@ fn decode_routed_collection_query(
             | ToriiReadEndpointV1::AssetHoldersGet
             | ToriiReadEndpointV1::AccountTransactionsGet
             | ToriiReadEndpointV1::AccountHistoryGet
+            | ToriiReadEndpointV1::RolesList
+            | ToriiReadEndpointV1::AccountRolesGet
             | ToriiReadEndpointV1::AccountPermissionsGet
             | ToriiReadEndpointV1::SpaceDirectoryManifestsGet
     );

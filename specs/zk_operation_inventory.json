@@ -455,35 +455,33 @@
   },
   {
    "id": "race.race_v1",
-   "family": "native STARK (privacy execution fork)",
+   "family": "native STARK (iroha_execution_stark)",
    "status": "implemented",
    "guarantee": "Exact RaceV1 replay and outcome for the committed game statement. The profile is compiled and marked unqualified.",
    "verifier": {"path": "crates/iroha_core_privacy/src/execution_proofs/registry.rs", "symbol": "pub fn verify_execution_proof_v1("},
    "tests": [
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-     "test": "late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected",
-     "ignored": true
+     "test": "late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected"
     },
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
      "test": "real_native_proof_roundtrip_and_statement_adversaries",
-     "ignored": true,
      "covers": "Proves and verifies with `verify_race_proof_v1`, the adapter-level verifier, not through the registry entry."
     },
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-     "test": "recomputed_successor_witness_cannot_forge_carry_transitions_or_padding",
-     "covers": "The relation's transition constraints on a recomputed witness; no proof is produced or verified."
+     "test": "checkpoint_state_is_a_proved_boundary",
+     "covers": "Proves a checkpointed race and rejects forged checkpoint and hidden-removal statements with `verify_race_proof_v1`."
     },
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-     "test": "execution_queries_match_full_native_race_fixed_lde",
-     "covers": "Query geometry against the full low-degree extension; no proof is produced or verified."
+     "test": "forged_node_states_cannot_be_proved",
+     "covers": "The circuit's transition identities on the node's own simulated states; forged states cannot be proved."
     }
    ],
-   "test_evidence": "not_default",
-   "test_note": "The only tests that prove and verify a RaceV1 proof are #[ignore]d. The default run covers the relation's constraints and query geometry, not a complete proof.",
+   "test_evidence": "default",
+   "test_note": "Default tests prove RaceV1 races with the bounded-integer execution STARK and verify them with `verify_race_proof_v1`; the late-finisher test also rejects a wrong profile through the registry entry.",
    "references": [
     {"inventory": "fastpq", "key": "consumers/race-v1"}
    ],
@@ -1097,8 +1095,7 @@
    "tests": [
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-     "test": "late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected",
-     "ignored": true
+     "test": "late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected"
     },
     {
      "path": "crates/iroha_core/src/smartcontracts/isi/game.rs",
@@ -1107,18 +1104,18 @@
     },
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-     "test": "recomputed_successor_witness_cannot_forge_carry_transitions_or_padding",
-     "covers": "The relation's transition constraints; no proof is verified."
+     "test": "forged_node_states_cannot_be_proved",
+     "covers": "The relation's transition identities; no proof is verified."
     }
    ],
-   "test_evidence": "not_default",
-   "test_note": "No default test executes the handler or calls `verify_execution_proof_v1`. The #[ignore]d test proves a race and verifies it through the registry entry the handler calls.",
+   "test_evidence": "default",
+   "test_note": "The default late-finisher test proves a race, verifies it with the adapter and rejects a wrong profile through `verify_execution_proof_v1`, the registry entry the handler calls. No default test executes the handler itself.",
    "status": {
     "presence": "registered",
     "verification": "implemented",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "FASTPQ adapter replacing the fork (B.3); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Decision whether B.3 consolidates the iroha_execution_stark adapter onto the shared FASTPQ backend; one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["B.3"],
    "native_bridges": [
@@ -4674,7 +4671,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -4709,7 +4706,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -4744,7 +4741,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -4779,7 +4776,7 @@
     "verification": "not_applicable",
     "state_effects": "implemented",
     "delivery": "not_delivered",
-    "missing": "Shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
+    "missing": "Initial-executor admission (refused after genesis and in genesis; an installed executor must admit it); shield, transfer and unshield instructions (P.9); one-call and prepared SDK operation in the six SDK families, Kotodama binding, canonical fixtures, four-validator flow, cold restart and current-genesis replay"
    },
    "owner_tasks": ["P.9"],
    "native_bridges": []
@@ -11300,7 +11297,7 @@
    {
     "product": "race",
     "owner_paths": ["crates/iroha_core_privacy/src/execution_proofs"],
-    "census": {"iroha_hash": 2, "poseidon": 28, "sha2_256": 9, "sha2_384": 1},
+    "census": {"iroha_hash": 2, "poseidon": 21, "sha2_256": 9, "sha2_384": 1},
     "native": [
      {
       "role": "profile identity",
@@ -11317,7 +11314,13 @@
     ],
     "in_circuit": [
      {
-      "role": "Merkle commitments and Fiat-Shamir frames",
+      "role": "RaceV1 Merkle commitments and Fiat-Shamir transcript",
+      "algorithm": "BLAKE2b-384 (RFC 7693, native 48-byte digest, 512-bit chaining state) with length-framed items for Merkle leaves and nodes and the transcript (iroha_execution_stark)",
+      "path": "crates/iroha_execution_stark/src/hash.rs",
+      "symbol": "pub struct FramedHash"
+     },
+     {
+      "role": "ClassedRaceV1 and IVM step chip Merkle commitments and Fiat-Shamir frames",
       "algorithm": "six-lane Goldilocks Poseidon digest",
       "path": "crates/iroha_core_privacy/src/execution_proofs/COMMITMENT_HASH.md",
       "symbol": "fastpq_isi::hash_bytes_384_v1"
@@ -11327,7 +11330,7 @@
      {"inventory": "primitive", "key": "digest_roles/execution.catalog-identity-sha384"},
      {"inventory": "primitive", "key": "digest_roles/fastpq.digest384"}
     ],
-    "note": "RaceV1 runs on the shared proof-managed-note STARK engine with the Poseidon digest context of its own module (COMMITMENT_HASH.md); the SHA3-384 outer hash of the privacy protocols is not its commitment hash. The SHA-384 occurrence is the execution catalog identity, which is metadata."
+    "note": "RaceV1 proves on iroha_execution_stark (specs/execution_stark_v1.md), whose BLAKE2b-384 commitments lie outside this census's owner path. The unregistered ClassedRaceV1 relation and the IVM step chips still run on the proof-managed-note STARK engine with the Poseidon digest context of this module (COMMITMENT_HASH.md); the SHA3-384 outer hash of the privacy protocols is not their commitment hash. The SHA-384 occurrence is the execution catalog identity, which is metadata."
    },
    {
     "product": "exact12_admission",
@@ -12160,14 +12163,13 @@
      },
      {
       "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-      "test": "late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected",
-      "ignored": true
+      "test": "late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected"
      }
     ],
     "test_evidence": "default",
     "open_defect": {
      "owner_task": "B.3",
-     "what": "A committed State key and an envelope field are a hash of source files (REQ-011, REQ-061). B.3 replaces the adapter; the identity must become the relation's semantic parameters."
+     "what": "A committed State key and an envelope field are a hash of source files (REQ-011, REQ-061). The 2026-11-03 move to iroha_execution_stark kept this source-hash identity, now over the engine sources as well; it must become the relation's semantic parameters."
     },
     "runtime_validity_note": "The runtime-validity census (F.4) has no entry for this identity: its digest-identity detector reads identifier names, and a profile id hashed from `include_bytes!` sources has none. The source-inclusion census of this inventory is the record."
    },
@@ -12513,7 +12515,7 @@
    "pattern": "include_(?:bytes|str)!\\(\\s*\"[^\"]*\\.rs\"\\s*\\)",
    "scope": "Test modules and test-gated items are not counted.",
    "files": [
-    {"path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs", "count": 20, "use": "identity", "site": "race.source_hash_profile"},
+    {"path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs", "count": 22, "use": "identity", "site": "race.source_hash_profile"},
     {
      "path": "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs",
      "count": 25,

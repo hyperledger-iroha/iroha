@@ -6746,10 +6746,15 @@ admission includes its refund scope in the same atomic concrete demand.
 Standalone callers have no native retry job and retire their one-shot decode.
 Settlement release input construction admits the complete bounded account/key,
 charge-ledger and quantity demand atomically before materializing any prefix.
-These owners cover specific retry stages. Schedule capture, later World maps,
-scoped settlement preflight prefixes and other execution allocations can still retire
-before their original refusal reaches the scheduler. Complete scheduler
-no-self-wake qualification remains open with that execution-owner boundary. Shared decoded policies, UID rosters/maps, policy
+These owners cover specific retry stages. Every native attempt also runs in one
+block-start credit scope of the State pool: the worker thread's refunds, World
+rollback included, stay with the attempt and pay for its later reservations, and a
+refusal that waits on that pool keeps them with the job for its next attempt.
+Schedule capture, later World maps, scoped settlement preflight prefixes and other
+worker-thread execution allocations therefore cannot wake their own refusal
+([Sumeragi](sumeragi.md) mutation HC983). Refunds an attempt makes on other threads, such as deferred reclamation,
+still return to the pool; complete scheduler no-self-wake qualification remains
+open with that boundary. Shared decoded policies, UID rosters/maps, policy
 encoding and remaining retail scratch still require original-pool custody and
 complete physical-refusal handling; the complete settlement boundary remains open. This work is distinct from the
 generic S8/H3 State custody owned by the Sumeragi workstream.

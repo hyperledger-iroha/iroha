@@ -1,10 +1,12 @@
 //! Torii iterable queries smoke test: ensure genesis assets are discoverable
-//! and batching works end-to-end via the HTTP `/query` path.
+//! and batching works end-to-end via native HTTP collection queries.
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::{
+    collections::{Collection, ListQuery},
+    data_model::prelude::*,
+};
 use iroha_model_base::domain::DomainId;
-// use iroha_data_model::query::builder::QueryBuilderExt as _; // not used in this smoke test
 use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::ALICE_ID;
 use reqwest::Client as HttpClient;
@@ -19,8 +21,13 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    // Execute a simple iterable query; default fetch size is fine for smoke test.
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
+    // One-row pages exercise the signed native account-assets continuation path.
+    let assets = client
+        .list(
+            Collection::AccountAssets(ALICE_ID.clone()),
+            ListQuery::new().limit(1),
+        )
+        .collect::<iroha::Result<Vec<_>>>()?;
     assert!(
         !assets.is_empty(),
         "expected at least one asset from genesis"
@@ -35,9 +42,21 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     );
     let rose = assets
         .into_iter()
-        .find(|a| a.id() == &asset_id)
+        .find(|row| {
+            row.get("asset").and_then(norito::json::Value::as_str)
+                == Some(asset_id.definition().to_string().as_str())
+        })
         .expect("genesis rose asset not found");
-    assert_eq!(*rose.value(), Quantity::from(13_u32));
+    let owner: AccountId =
+        norito::json::from_value(rose.get("account_id").expect("asset row account").clone())?;
+    assert_eq!(&owner, asset_id.account());
+    assert_eq!(
+        rose.get("scope").and_then(norito::json::Value::as_str),
+        Some("global")
+    );
+    let quantity: Quantity =
+        norito::json::from_value(rose.get("quantity").expect("asset row quantity").clone())?;
+    assert_eq!(quantity, Quantity::from(13_u32));
     let http = HttpClient::new();
     let peer = match network.peers().first() {
         Some(p) => p,

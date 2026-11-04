@@ -62,6 +62,9 @@ BINARY_ARTIFACTS = {
     "iroha": BinaryArtifact("iroha_cli", "iroha"),
     "kagami": BinaryArtifact("iroha_kagami", "kagami"),
     "koto": BinaryArtifact("kotodama_toolchain", "koto"),
+    "sorafs_cli": BinaryArtifact(
+        "sorafs_orchestrator", "sorafs_cli", ("cli-orchestrator", "moderation-grpc")
+    ),
     "iroha3d_private_settlement_routes": BinaryArtifact(
         "irohad", "iroha3d", ("test-network-private-settlement-route-control",), "private-settlement-route-control"
     ),
@@ -905,6 +908,14 @@ def _supported_feature_args(
     return ["--features", ",".join(features)] if features else []
 
 
+# Per-package features that complete `cargo test` coverage of the package's own targets.
+TEST_FEATURES = (
+    ("iroha_torii", "iroha_torii/test-fixtures"),
+    ("iroha_release_bundle", "iroha_release_bundle/dev-tools"),
+    ("iroha_native_source_delivery", "iroha_native_source_delivery/dev-tools"),
+)
+
+
 def commands_for_checks(
     packages: Sequence[str], checks: Sequence[str],
     *, features_by_package: Mapping[str, Sequence[str]] | None = None,
@@ -947,10 +958,15 @@ def commands_for_checks(
         elif check == "build":
             commands.append(["cargo", "build", "--locked", *package_args])
         elif check == "test":
-            # Torii integration targets explicitly opt into fixture entry points. A self
+            # Test routes opt into the features their own targets need: Torii integration
+            # targets use fixture entry points, and the release publisher and Python
+            # delivery helper keep their unit tests in `dev-tools` executables. A self
             # dev-dependency would also compile its owning mutation feature as a library.
-            test_features = (["--features", "iroha_torii/test-fixtures"]
-                             if "iroha_torii" in packages else [])
+            selected_test_features = [
+                feature for package, feature in TEST_FEATURES if package in packages
+            ]
+            test_features = (["--features", ",".join(selected_test_features)]
+                             if selected_test_features else [])
             commands.append(
                 ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
             )

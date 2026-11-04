@@ -1,7 +1,7 @@
 //! Integration tests for ZK proof events over the Torii event stream.
 use eyre::{Result, eyre};
 use futures_util::StreamExt;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::blocking::Client;
 use iroha::data_model::prelude::*;
 #[path = "../proof_fixtures.rs"]
@@ -12,7 +12,7 @@ use iroha_test_network::*;
 use iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_ID;
 use proof_fixtures::{confidential_attachment, rejected_confidential_attachment};
 use std::time::Duration;
-use tokio::{task::spawn_blocking, time::timeout};
+use tokio::time::timeout;
 const CLIENT_STATUS_TIMEOUT: Duration = Duration::from_secs(600);
 const PROOF_EVENT_TIMEOUT: Duration = Duration::from_secs(600);
 fn halo2_attachment_and_registration(
@@ -73,7 +73,7 @@ async fn verify_proof_emits_event(
     let verify: InstructionBox = iroha::data_model::isi::zk::VerifyProof::new(attachment).into();
     {
         let submit_client = client.clone();
-        let submit_result = spawn_blocking(move || {
+        let submit_result = run_on_dedicated_thread(move || {
             submit_client.submit_all(
                 [verify],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

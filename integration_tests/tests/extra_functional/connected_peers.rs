@@ -1,7 +1,7 @@
 //! Connected peers count and reconfiguration under register/unregister.
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, Unregister, register::RegisterPeerWithPop},
@@ -12,10 +12,7 @@ use iroha_test_network::*;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use std::{fmt::Write as _, time::Duration};
-use tokio::{
-    task::spawn_blocking,
-    time::{Instant, sleep, timeout},
-};
+use tokio::time::{Instant, sleep, timeout};
 fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a NetworkPeer {
     peers
         .into_iter()
@@ -52,6 +49,7 @@ async fn register_new_peer() -> Result<()> {
         return Ok(());
     };
     let peer = NetworkPeerBuilder::new().build(network.env());
+    network.attach_peer_client_context(&peer)?;
     let submit_timeout = network
         .sync_timeout()
         .saturating_add(network.da_commit_quorum_timeout());
@@ -464,7 +462,7 @@ async fn submit_instruction_or_warn(
 ) -> Result<()> {
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client
             .submit(
                 instruction,
@@ -560,7 +558,7 @@ async fn wait_for_peer_roster(
     let mut last_count = None;
     loop {
         let client = client.clone();
-        let result = spawn_blocking(move || {
+        let result = run_on_dedicated_thread(move || {
             client
                 .client()
                 .query(FindPeers)
@@ -593,7 +591,7 @@ async fn sample_peer_rosters(peers: &[&NetworkPeer], expected: usize) -> (bool, 
         .map(|peer| async {
             let peer_id = peer.id().to_string();
             let client = peer.client();
-            let result = spawn_blocking(move || {
+            let result = run_on_dedicated_thread(move || {
                 client
                     .client()
                     .query(FindPeers)

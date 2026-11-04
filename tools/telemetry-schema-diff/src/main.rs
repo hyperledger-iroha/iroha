@@ -885,26 +885,36 @@ fn append_metric(
     if labels.is_empty() {
         writeln!(buf, "{metric} {value}").map_err(|err| anyhow!(err))?;
     } else {
-        let mut label_parts = Vec::with_capacity(labels.len());
-        for (key, value) in labels {
-            label_parts.push(format!(r#"{}="{}""#, key, escape_label_value(value)));
+        buf.push_str(metric);
+        buf.push('{');
+        for (index, (key, label)) in labels.iter().enumerate() {
+            if index != 0 {
+                buf.push(',');
+            }
+            buf.push_str(key);
+            buf.push_str("=\"");
+            append_escaped_label_value(buf, label);
+            buf.push('"');
         }
-        writeln!(buf, "{metric}{{{}}} {value}", label_parts.join(","))
-            .map_err(|err| anyhow!(err))?;
+        writeln!(buf, "}} {value}").map_err(|err| anyhow!(err))?;
     }
     Ok(())
 }
-fn escape_label_value(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for ch in value.chars() {
-        match ch {
-            '\\' => escaped.push_str("\\\\"),
-            '\n' => escaped.push_str("\\n"),
-            '"' => escaped.push_str("\\\""),
-            _ => escaped.push(ch),
-        }
+fn append_escaped_label_value(buf: &mut String, value: &str) {
+    let mut start = 0;
+    for (index, byte) in value.bytes().enumerate() {
+        let escaped = match byte {
+            b'\\' => "\\\\",
+            b'\n' => "\\n",
+            b'"' => "\\\"",
+            _ => continue,
+        };
+        // Escapes are ASCII, so each copied run starts and ends on a UTF-8 boundary.
+        buf.push_str(&value[start..index]);
+        buf.push_str(escaped);
+        start = index + 1;
     }
-    escaped
+    buf.push_str(&value[start..]);
 }
 fn origin_label(commit: Option<&String>, config: Option<&String>) -> String {
     commit
@@ -1960,6 +1970,53 @@ mod tests {
     fn markdown_cell_escapes_pipes_and_newlines() {
         let escaped = escape_markdown_cell("a|b\nc\rd");
         assert_eq!(escaped, r"a\|b<br>c<br>d");
+    }
+    #[test]
+    fn metric_without_labels_appends_exact_text() {
+        let mut buf = String::from("previous metric\n");
+        append_metric(&mut buf, "sample_total", "Sample total.", &[], 12.5)
+            .expect("metric renders");
+        assert_eq!(
+            buf,
+            "previous metric\n# HELP sample_total Sample total.\n# TYPE sample_total gauge\nsample_total 12.5\n"
+        );
+    }
+    #[test]
+    fn metric_labels_preserve_order_empty_values_and_exact_escaping() {
+        let mut buf = String::new();
+        append_metric(
+            &mut buf,
+            "sample_total",
+            "Sample total.",
+            &[
+                ("second", ""),
+                ("first", "quote\"\\\n\r\t雪🦀"),
+                ("second", "tail"),
+            ],
+            -2.5,
+        )
+        .expect("metric renders");
+        assert_eq!(
+            buf,
+            concat!(
+                "# HELP sample_total Sample total.\n# TYPE sample_total gauge\n",
+                "sample_total{second=\"\",first=\"quote\\\"\\\\\\n\r\t雪🦀\",second=\"tail\"} -2.5\n"
+            )
+        );
+    }
+    #[test]
+    fn metric_label_escaping_appends_utf8_and_preserves_other_control_characters() {
+        for (value, expected) in [
+            ("", ""),
+            ("plain\r\t\0雪🦀\u{2028}", "plain\r\t\0雪🦀\u{2028}"),
+            ("\\\n\"", r#"\\\n\""#),
+            ("雪\"🦀\\次\n", "雪\\\"🦀\\\\次\\n"),
+        ] {
+            let mut buf = String::from("prefix[");
+            append_escaped_label_value(&mut buf, value);
+            buf.push(']');
+            assert_eq!(buf, format!("prefix[{expected}]"));
+        }
     }
     #[test]
     fn metrics_file_contains_counts() {

@@ -1,0 +1,62 @@
+{
+  "schema": "parliament-resource-accounting-current-review-v1",
+  "scope": "Source-reviewed standalone symbolic requested-Layout/logical-work diagnostic with current compile-only AES provider layouts. No full production certificate.",
+  "repository_commit": "c63d346bc8ee1313bf39b8ad672aaf95cda10d8a",
+  "working_lock_sha256": "eee6edbd0c0c7ee334e617cbf3e4e6d20d0ba3d552a508495ef2fec9675b8384",
+  "source_review_sha256": "98fe0075f855b3754448d392fcbc8a77c1a1ebf32f18c27c2ef717f803c85a9d",
+  "alloc_review_sha256": "a0fd45eec628fa164a0cc63e58a86fd9e56cdcc52701a97bc309824acf54b4aa",
+  "provider_receipt_sha256": "3483a68bc29109f62a05dd266d10db36e026f63c258bb02ebfca72b55d4ec42c",
+  "commands": [
+    {
+      "command": [
+        "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/venv/bin/python",
+        "/Users/takemiyamakoto/dev/iroha/scripts/check_parliament_ballot_resource_accounting.py"
+      ],
+      "exit_code": 0,
+      "stdout_sha256": "87fe5e904f63b742a739112b66e9f8508468b8a1a6c7e2487adb045946a44c0e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "command": [
+        "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/venv/bin/python",
+        "/Users/takemiyamakoto/dev/iroha/scripts/check_parliament_ballot_resource_accounting.py",
+        "--require-complete"
+      ],
+      "exit_code": 1,
+      "stdout_sha256": "87fe5e904f63b742a739112b66e9f8508468b8a1a6c7e2487adb045946a44c0e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "tests_passed": 21,
+  "tests_log_sha256": "38561723e4f6fa42d6d902f1b8630dd63b9f72941b0293e09090ddd8efd84698",
+  "numeric_historical_cases_identical": true,
+  "formula_functions_ast_identical": [
+    "allocation_schedule",
+    "backend_schedule",
+    "encoding_inventory",
+    "frame_allocation",
+    "frame_size",
+    "growing_vec_bound",
+    "main",
+    "matrix_weight",
+    "parse_rust_array",
+    "proof_layout",
+    "relation_operations",
+    "report",
+    "reviewed_source_inventory",
+    "sponge_permutations",
+    "standalone_case",
+    "statement_schedule",
+    "table_inventory",
+    "vec_append_schedule",
+    "work_components"
+  ],
+  "changed_functions": [
+    "provider_layout_inventory",
+    "standalone_inventory"
+  ],
+  "completeness_request_refuses": true,
+  "complete_certificate": false,
+  "profile_qualified": false,
+  "physical_cost_calibrated": false
+}

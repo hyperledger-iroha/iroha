@@ -62,14 +62,13 @@ fn transactions_should_be_applied() -> Result<()> {
             })?;
         target_height += 1;
         wait_for_height(target_height, "after set_parameter")?;
-        let domain_id = DomainId::try_new("and", "universal")?;
+        // The default genesis already owns `and` and its MAY definition.
+        let domain_id = DomainId::try_new("normalblocks", "universal")?;
         let account_pk: PublicKey =
             "ed01201F803CB23B1AAFB958368DF2F67CB78A2D1DFB47FFFC3133718F165F54DFF677".parse()?;
         let account_id = AccountId::new(account_pk);
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("and", "universal")?,
-            "MAY".parse()?,
-        );
+        let asset_definition_id =
+            AssetDefinitionId::derive_from_components(domain_id.clone(), "MAY".parse()?);
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let create_domain = domain_setup_instruction(&domain_id, iroha.client().account())?;
         iroha
@@ -91,7 +90,7 @@ fn transactions_should_be_applied() -> Result<()> {
                 __asset_definition_id.clone(),
                 "MAY".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain_id.clone()),
             )
         });
         iroha
@@ -152,13 +151,10 @@ fn transactions_should_be_applied() -> Result<()> {
             })?;
         target_height += 1;
         wait_for_height(target_height, "after second mint")?;
-        iroha
+        let asset = iroha
             .client()
-            .query(FindAssets::new())
-            .execute_all()?
-            .into_iter()
-            .find(|asset| asset.id() == &asset_id)
-            .expect("asset not found");
+            .query_single(FindAssetById::new(asset_id.clone()))?;
+        assert_eq!(asset.id(), &asset_id);
         Ok(())
     };
     if sandbox::handle_result(result(), stringify!(transactions_should_be_applied))?.is_none() {

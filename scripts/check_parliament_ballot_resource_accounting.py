@@ -26,18 +26,24 @@ OPEN_TERMS = (
     "Complete allocation lifetimes, provider scratch, stack and allocator overhead",
 )
 
-RUST_REVISION = "01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf"
+RUST_REVISION = "58cf8f9c35b355199727627d07ae34a4e2846d67"
 # Updating this pin requires reviewing the symbolic schedules against the new
 # implementation, not merely accepting changed hashes.
-REVIEWED_RUST_SOURCE_SHA256 = "85637106cc477d878f5935f559db568dd7450fac3f8edcc3dde04d44b9f30741"
-# Reviewed Rust 1.93.1 alloc sources; requested Layout sizes, not malloc sizes.
+REVIEWED_RUST_SOURCE_SHA256 = "b3756c955e8592372fa2d1ec8871fc5066f2a5411400ee8a5e0a924446e146ba"
+PROVIDER_LAYOUT_RECEIPT = Path(
+    "docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout.json"
+)
+REVIEWED_PROVIDER_LAYOUT_SHA256 = "3483a68bc29109f62a05dd266d10db36e026f63c258bb02ebfca72b55d4ec42c"
+# Rust 1.99.1 runtime allocation review and fresh eight-target/mode provider
+# probes are retained beside PROVIDER_LAYOUT_RECEIPT. Formulas are unchanged.
+# Requested Layout sizes do not include malloc rounding or internal storage.
 ALLOC_SOURCE_SHA256 = {
-    "raw_vec/mod.rs": "7f94665b803a970d83f99d3a451a92af6b210baaa8c9685b1f50d265c836f38b",
-    "vec/mod.rs": "98ed44ed3e17e41c6048b2057cdf44443ddb5f7462fbf9c48e7e62fc7ace286e",
-    "vec/spec_extend.rs": "5673f04327502716ba5774e2067f9c1a179290e0cde92fe72ddfc5475ab34396",
-    "vec/spec_from_iter.rs": "584c9018149f930b5cd56ca3ba7a7d70f48583b2dfc32b243926a6ae4cb10566",
+    "raw_vec/mod.rs": "cda0e96514e65a55b8ed559b02b7bc5f2dcb7854695a501ac0b03b0eeab0361c",
+    "vec/mod.rs": "e0c798ff16cf1770ef3266d28440d93dd65402b3afe1df4e184f15af17fb1e3e",
+    "vec/spec_extend.rs": "a0816ad0f39b947889771bf06930bf8e0c4ce794846d83863349697ec7c415ec",
+    "vec/spec_from_iter.rs": "393d1f28cfc8d28d80e142cef6b612aae9b484160969cfa0c9f97bb894534807",
     "vec/spec_from_iter_nested.rs": "f3c1a06f43734a65e102b6a107e2fd5adadd7d94d9a226d6ffe1610d1e7e1466",
-    "alloc.rs": "cd8a5946b4c44338c451d1bb4c47e3109ea08ae7e3c58397e0879e4fe099572b",
+    "alloc.rs": "3949baaebc3310d1a88a097d3b31b02445bfcad74b196ea4f6ea776de368ab97",
 }
 
 
@@ -369,8 +375,11 @@ def allocation_schedule(row: str, role: str, seats: int, tables: dict) -> dict:
 
 def provider_layout_inventory(repo: Path) -> dict:
     """Check the separate compile-only provider-size receipt and retained IR."""
-    path = Path("docs/validation/parliament_ballot_b6/provider-layout.json")
-    data = json.loads((repo / path).read_text())
+    path = PROVIDER_LAYOUT_RECEIPT
+    encoded = (repo / path).read_bytes()
+    if hashlib.sha256(encoded).hexdigest() != REVIEWED_PROVIDER_LAYOUT_SHA256:
+        raise ValueError("provider layout receipt changed; review fresh compiler evidence")
+    data = json.loads(encoded)
     for name, digest in data["source_sha256"].items():
         if hashlib.sha256((repo / name).read_bytes()).hexdigest() != digest:
             raise ValueError(f"provider layout source changed: {name}")
@@ -383,9 +392,11 @@ def provider_layout_inventory(repo: Path) -> dict:
         ir = (repo / path.parent / target["llvm_ir_file"]).read_bytes()
         if hashlib.sha256(ir).hexdigest() != target["llvm_ir_sha256"]:
             raise ValueError("provider IR changed")
-        for name in ("SOFT_SIZE", "AUTO_SIZE"):
-            match = re.search(rf"@B6_{name} = [^\n]*constant \[(\d+) x i8\]", ir.decode())
-            if match is None or int(match[1]) != target["bytes"][name] or int(match[1]) != 960:
+        expected = {"SOFT_SIZE": 960, "AUTO_SIZE": 960, "SOFT_ALIGN": 8,
+                    "AUTO_ALIGN": 8 if target["mode"] == "portable" else 16}
+        for name, size in expected.items():
+            matches = re.findall(rf"@B6_{name} = [^\n]*constant \[(\d+) x i8\]", ir.decode())
+            if len(matches) != 1 or int(matches[0]) != target["bytes"].get(name) or int(matches[0]) != size:
                 raise ValueError("provider size does not match reviewed layout")
     expected = {(target, mode) for target in ("aarch64-apple-darwin", "aarch64-apple-ios", "aarch64-linux-android", "x86_64-unknown-linux-musl") for mode in ("portable", "accel")}
     if seen != expected or data["maximum_simultaneous_verifier_provider_boxes"] != 1:
@@ -441,9 +452,9 @@ def standalone_inventory(repo: Path) -> dict:
         "complete_production_certificate": False,
         "instruction_cycle_or_deadline_bound": False,
         "assumptions": [
-            "Frozen reviewed Rust sources and Rust 1.93.1 Global/Vec allocation policy",
+            "Frozen reviewed Rust sources and Rust 1.99.1 Global/Vec allocation policy",
             "Source/manifests/lock pin identifies the reviewed checkout, not a compiled binary; dependency source integrity follows Cargo package checksums",
-            "Both fixed extended rows, registration fields at caps, vote S in 3..=1000",
+            "Both fixed extended rows in test/diagnostics builds; production exposes only the candidate. Registration fields at caps, vote S in 3..=1000",
             "64-bit usize; Key<Gf256> size 40 and Tree size at most 24 are explicit layout assumptions",
             "Input slices already exist; arbitrary caller spare capacity is excluded",
             "Optional owned record total assumes an allocation with exactly the canonical record length",

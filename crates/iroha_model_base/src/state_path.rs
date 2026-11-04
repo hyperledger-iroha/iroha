@@ -13,17 +13,21 @@ pub const MAX_STATE_PATH_BYTES: usize = 16 * 1024;
 #[model]
 mod model {
     use super::*;
-    use derive_more::{Debug, Display};
     use iroha_schema::IntoSchema;
     /// Canonical logical path for durable smart-contract and native ledger state.
     ///
     /// Unlike [`Name`], this nominal type is sized for composite state paths and
     /// must not be used as an ordinary business identifier.
-    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::state_path::model::StatePath")]
     pub struct StatePath(pub(super) ConstString);
+}
+impl core::fmt::Display for StatePath {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
+    }
 }
 impl StatePath {
     fn validate_str(candidate: &str) -> Result<(), ParseError> {

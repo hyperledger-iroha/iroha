@@ -14,6 +14,8 @@ use std::{io, net::AddrParseError};
 use thiserror::Error;
 mod dial_policy;
 #[cfg(test)]
+mod error_tests;
+#[cfg(test)]
 mod frame_identity_tests;
 pub mod network;
 mod p2p_mutation_guard;
@@ -286,11 +288,15 @@ pub mod boilerplate {
     impl<T> Enc for T where T: Aead + AeadInOut + KeyInit + Clone + Send + Sync + 'static {}
 }
 /// Errors used in [`crate`].
-#[derive(Debug, Error, displaydoc::Display)]
+#[derive(Debug, Error)]
 pub enum Error {
     /// Failed IO operation
+    #[error("Failed IO operation")]
     Io(#[source] std::sync::Arc<io::Error>),
     /// Failed to bind TCP listener for configured addresses `{listen_addr}` / `{public_address}`: {error}
+    #[error(
+        "Failed to bind TCP listener for configured addresses `{listen_addr}` / `{public_address}`: {error}"
+    )]
     BindListener {
         /// Listen address (with origin) that failed to bind.
         listen_addr: String,
@@ -301,22 +307,33 @@ pub enum Error {
         error: std::sync::Arc<io::Error>,
     },
     /// Message improperly formatted
+    #[error("Message improperly formatted")]
     Format,
     /// Field is not defined for a peer at this stage
+    #[error("Field is not defined for a peer at this stage")]
     Field,
     /// Norito codec error
+    #[error("Norito codec error")]
     NoritoCodec(#[from] norito::codec::Error),
     /// Failed to create keys
+    #[error("Failed to create keys")]
     Keys(#[from] iroha_crypto::error::Error),
     /// Symmetric encryption has failed
+    #[error("Symmetric encryption has failed")]
     SymmetricEncryption(#[from] iroha_crypto::encryption::Error),
     /// Failed to parse socket address
+    #[error("Failed to parse socket address")]
     Addr(#[from] AddrParseError),
     /// Connection reset by peer in the middle of message transfer
+    #[error("Connection reset by peer in the middle of message transfer")]
     ConnectionResetByPeer,
     /// Encrypted P2P frame exceeds the runtime cap or stream `u32` wire-body limit
+    #[error("Encrypted P2P frame exceeds the runtime cap or stream `u32` wire-body limit")]
     FrameTooLarge,
     /// Outbound {priority} frame queue full ({queued_frames}/{max_frames} frames, {queued_bytes}/{max_bytes} bytes)
+    #[error(
+        "Outbound {priority} frame queue full ({queued_frames}/{max_frames} frames, {queued_bytes}/{max_bytes} bytes)"
+    )]
     #[allow(clippy::doc_markdown)]
     OutboundFrameQueueFull {
         /// Queue priority label.
@@ -331,12 +348,18 @@ pub enum Error {
         max_frames: usize,
     },
     /// Authenticated decrypted frame carried a malformed inner payload; the peer must disconnect
+    #[error(
+        "Authenticated decrypted frame carried a malformed inner payload; the peer must disconnect"
+    )]
     MalformedPayloadFrame,
     /// Decrypted frame exceeded the cap selected from its raw inbound topic
+    #[error("Decrypted frame exceeded the cap selected from its raw inbound topic")]
     InboundTopicCapExceeded,
     /// Handshake preface header invalid
+    #[error("Handshake preface header invalid")]
     HandshakeBadPreface,
     /// Peer handshake belongs to another exact network (expected {expected}, found {found})
+    #[error("Peer handshake belongs to another exact network (expected {expected}, found {found})")]
     HandshakeNetworkMismatch {
         /// Locally configured exact genesis-derived network identity.
         expected: iroha_data_model::NetworkId,
@@ -344,15 +367,19 @@ pub enum Error {
         found: iroha_data_model::NetworkId,
     },
     /// Peer consensus handshake mismatch ({reason})
+    #[error("Peer consensus handshake mismatch ({reason})")]
     HandshakeConsensusMismatch {
         /// Human-readable mismatch reason (mode/proto/fingerprint/config)
         reason: String,
     },
     /// Peer confidential handshake mismatch (`enabled/assume_valid/backend`)
+    #[error("Peer confidential handshake mismatch (`enabled/assume_valid/backend`)")]
     HandshakeConfidentialMismatch,
     /// Peer crypto handshake mismatch (`sm_enabled/sm_openssl_preview`)
+    #[error("Peer crypto handshake mismatch (`sm_enabled/sm_openssl_preview`)")]
     HandshakeCryptoMismatch,
     /// Unexpected peer identity during handshake (expected {expected}, found {found})
+    #[error("Unexpected peer identity during handshake (expected {expected}, found {found})")]
     HandshakePeerMismatch {
         /// Peer identifier the outbound dial expected to authenticate.
         expected: iroha_model_base::peer::PeerId,
@@ -360,17 +387,22 @@ pub enum Error {
         found: iroha_model_base::peer::PeerId,
     },
     /// Node identity handshakes require BLS-normal, but `{found:?}` was supplied locally
+    #[error("Node identity handshakes require BLS-normal, but `{found:?}` was supplied locally")]
     HandshakeNodeAlgorithmMismatch {
         /// Algorithm supplied for the node identity role.
         found: Algorithm,
     },
     /// Handshake metadata exceeds the maximum supported length (`u16::MAX` bytes)
+    #[error("Handshake metadata exceeds the maximum supported length (`u16::MAX` bytes)")]
     HandshakeMessageTooLarge,
     /// Local peer public key is malformed during handshake
+    #[error("Local peer public key is malformed during handshake")]
     HandshakePublicKeyMalformed(#[source] iroha_crypto::error::ParseError),
     /// `SoraNet` handshake negotiation failed.
+    #[error("`SoraNet` handshake negotiation failed.")]
     HandshakeSoranet(String),
     /// `SoraNet` transport identity delegation failed: {0}
+    #[error("`SoraNet` transport identity delegation failed: {0}")]
     HandshakeSoranetDelegation(#[from] SoranetTransportDelegationError),
 }
 impl From<io::Error> for Error {

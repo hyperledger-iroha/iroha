@@ -18,5 +18,4 @@ iroha_data_model = { workspace = true, default-features = false, features = ["ap
 iroha_schema.workspace = true
 iroha_crypto = { workspace = true, default-features = false, features = ["consensus"] }
 
-derive_more = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }

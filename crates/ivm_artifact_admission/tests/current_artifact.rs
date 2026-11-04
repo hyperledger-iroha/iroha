@@ -238,14 +238,8 @@ fn exact_current_compiler_artifact_is_admitted() {
         verified.contract_interface.entrypoints.len(),
         fixture.entrypoint_count
     );
-    assert_eq!(
-        hex::encode(verified.code_hash.as_ref()),
-        fixture.code_hash_hex
-    );
-    assert_eq!(
-        hex::encode(verified.abi_hash.as_ref()),
-        fixture.abi_hash_hex
-    );
+    assert_eq!(verified.code_hash.to_string(), fixture.code_hash_hex);
+    assert_eq!(verified.abi_hash.to_string(), fixture.abi_hash_hex);
 }
 #[test]
 fn foreign_vm_modules_cannot_enter_native_ivm_admission() {

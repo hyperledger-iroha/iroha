@@ -72,6 +72,7 @@ fn custom_npos_genesis_builder(include_private_input: bool) -> NetworkBuilder {
                 post_topology,
                 topology,
                 topology_entries,
+                config::default_test_network_staking_policy(),
             )
         })
         .with_genesis_instruction(InstructionBox::from(SetParameter::new(Parameter::Custom(

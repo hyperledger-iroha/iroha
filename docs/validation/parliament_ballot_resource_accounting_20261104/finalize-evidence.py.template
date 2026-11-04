@@ -1,0 +1,43 @@
+from pathlib import Path
+import json,hashlib,subprocess,shutil,ast
+root=Path('/Users/takemiyamakoto/dev/iroha');out=root/'docs/validation/parliament_ballot_resource_accounting_20261104';py='/Users/takemiyamakoto/Library/Caches/iroha-script-tests/venv/bin/python';script=root/'scripts/check_parliament_ballot_resource_accounting.py'
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+rows=[]
+for name,extra,expected in [('report.json',[],0),('complete-refusal.json',['--require-complete'],1)]:
+ command=[py,str(script)]+extra;p=subprocess.run(command,cwd=root,capture_output=True);(out/name).write_bytes(p.stdout);(out/(name+'.stderr')).write_bytes(p.stderr);assert p.returncode==expected,(p.returncode,p.stderr);rows.append({'command':command,'exit_code':p.returncode,'stdout_sha256':sha(out/name),'stderr_sha256':sha(out/(name+'.stderr'))})
+assert (out/'report.json').read_bytes()==(out/'complete-refusal.json').read_bytes()
+old=json.loads((root/'docs/validation/parliament_ballot_b6/resource_accounting.json').read_text());new=json.loads((out/'report.json').read_text());assert old['cases']==new['cases'];assert old['standalone_symbolic_bounds']['cases']==new['standalone_symbolic_bounds']['cases']
+oldcode=subprocess.check_output(['git','show','HEAD:scripts/check_parliament_ballot_resource_accounting.py'],cwd=root,text=True);newcode=script.read_text();oldfunc={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(oldcode).body if isinstance(n,ast.FunctionDef)};newfunc={n.name:ast.dump(n,include_attributes=False) for n in ast.parse(newcode).body if isinstance(n,ast.FunctionDef)};changed=[n for n in oldfunc if oldfunc[n]!=newfunc[n]];assert set(changed)=={'provider_layout_inventory','standalone_inventory'},changed
+shutil.copy2(script,out/(script.name+'.template'));test=root/'scripts/tests/check_parliament_ballot_resource_accounting_test.py';shutil.copy2(test,out/(test.name+'.template'));shutil.copy2('/tmp/iroha-resource-accounting-current-tests.log',out/'tests.txt');shutil.copy2('/tmp/archive-parliament-resource-current.py',out/'archive-evidence.py.template');shutil.copy2(__file__,out/'finalize-evidence.py.template')
+receipt={'schema':'parliament-resource-accounting-current-review-v1','scope':'Source-reviewed standalone symbolic requested-Layout/logical-work diagnostic with current compile-only AES provider layouts. No full production certificate.','repository_commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),'working_lock_sha256':sha(root/'Cargo.lock'),'source_review_sha256':sha(out/'source-review.json'),'alloc_review_sha256':sha(out/'rust-alloc-review.json'),'provider_receipt_sha256':sha(out/'provider-layout.json'),'commands':rows,'tests_passed':21,'tests_log_sha256':sha(out/'tests.txt'),'numeric_historical_cases_identical':True,'formula_functions_ast_identical':sorted(set(oldfunc)-set(changed)),'changed_functions':changed,'completeness_request_refuses':True,'complete_certificate':False,'profile_qualified':False,'physical_cost_calibrated':False}
+(out/'receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');(out/'pending-bindings.json').unlink()
+(out/'README.md').write_text('''# Current standalone Parliament resource accounting
+
+The current Rust 1.99.1/AES 0.9.3 source candidate is bound to the unchanged
+standalone logical-work and requested-allocation formulas. The source review
+maps 39 unchanged protocol Rust files and 17 reviewed differences to the prior
+request-accounting review. Comparator cases require test/diagnostics builds.
+
+Eight fresh compile-only probes cover portable and accelerated AES on ARM64
+macOS, iOS and Android, plus x86-64 Linux musl. Each provider requests 960 bytes;
+portable alignment is eight bytes and accelerated-wrapper alignment is 16.
+Exact LLVM outputs, commands, compiler/package/std-library input hashes and
+before/after source checks are retained. All 683 recorded inputs stayed stable.
+No target-device code was executed.
+
+An independent review of six Rust alloc source files preserves the existing
+Vec reserve/append/collect requested-Layout formulas and conservative old/new
+reallocation overlap. The exact current sources and historical diff are gzip
+compressed here. Allocator internals, rounding, stack and process memory remain
+excluded. AES/Keccak internal work is not priced by API-level block counts.
+
+The 21 focused tests pass, including nine provider-evidence mutation controls.
+Every historical numeric case is identical. The normal report exits zero;
+`--require-complete` emits the same report and exits one. All five open production
+terms remain, and `profile_qualified` and `complete_certificate` remain false.
+The source is a shared dirty checkout, not clean/index-equal release provenance.
+
+`receipt.json` records the source review and command results; `SHA256SUMS` binds
+all retained files. Historical B6 artifacts have not been rewritten.
+''')
+files=sorted(p for p in out.rglob('*') if p.is_file() and p.name!='SHA256SUMS');(out/'SHA256SUMS').write_text(''.join(sha(p)+'  '+str(p.relative_to(out))+'\n' for p in files));print('Retained',len(files),'files;21tests;all numeric cases unchanged;qualification false')

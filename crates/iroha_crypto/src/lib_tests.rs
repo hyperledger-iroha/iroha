@@ -101,6 +101,20 @@ mod tests {
     fn checked_seed_keypair(seed: &[u8], algorithm: Algorithm) -> KeyPair {
         KeyPair::try_from_seed(seed.to_vec(), algorithm).expect("generate checked seeded keypair")
     }
+    #[test]
+    fn key_pair_getters_borrow_original_key_storage() {
+        let private_key = PrivateKey::from_bytes(Algorithm::Ed25519, &[0x34; 32])
+            .expect("fixed Ed25519 private key");
+        let public_key = PublicKey::from_private_key(&private_key).expect("derive public key");
+        let pair = KeyPair {
+            public_key,
+            private_key,
+        };
+        let public: &PublicKey = pair.public_key();
+        let private: &PrivateKey = pair.private_key();
+        assert!(std::ptr::eq(public, &pair.public_key));
+        assert!(std::ptr::eq(private, &pair.private_key));
+    }
     #[cfg(feature = "rand")]
     fn checked_random_keypair(algorithm: Algorithm) -> KeyPair {
         KeyPair::try_random_with_algorithm(algorithm).expect("generate checked random keypair")

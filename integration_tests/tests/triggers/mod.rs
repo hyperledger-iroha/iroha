@@ -1,10 +1,10 @@
 //! Trigger lifecycle regression tests.
-use eyre::{Result, eyre};
+use eyre::Result;
 use iroha::{
     blocking::Client,
     data_model::{
         asset::AssetId,
-        prelude::{FindAssets, Identifiable, Quantity, QueryBuilderExt},
+        prelude::{FindAssetById, Identifiable, Quantity},
     },
 };
 mod by_call_trigger;
@@ -14,14 +14,9 @@ mod orphans;
 mod time_trigger;
 mod trigger_rollback;
 fn get_asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
-    let assets = client
+    let asset = client
         .client()
-        .query(FindAssets::new())
-        .execute_all()
-        .map_err(|err| eyre!(err))?;
-    let asset = assets
-        .into_iter()
-        .find(|asset| asset.id() == asset_id)
-        .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
+        .query_single(FindAssetById::new(asset_id.clone()))?;
+    assert_eq!(asset.id(), asset_id);
     Ok(asset.value().clone())
 }

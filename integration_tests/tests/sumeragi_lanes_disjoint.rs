@@ -107,6 +107,14 @@ fn disjoint_builder() -> Result<NetworkBuilder> {
                 vec![instructions],
                 global,
                 voters,
+                {
+                    let fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+                    iroha_genesis::default_staking_policy(
+                        fees.fee_asset_id,
+                        fees.fee_sink_account_id.clone(),
+                        fees.fee_sink_account_id,
+                    )
+                },
             )
         }))
 }

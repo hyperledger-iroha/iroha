@@ -164,7 +164,7 @@ _QUALIFIED_CLIENT_BRANCH = """
             ).map_err(|error| {
                 ToriiBuildError::invalid_runtime_dependency(
                     "sorafs.gateway.acme",
-                    format!("client failed exact startup qualification: {error:?}"),
+                    &(format!("client failed exact startup qualification: {error:?}")),
                 )
             })?,
         ))

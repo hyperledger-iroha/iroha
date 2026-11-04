@@ -64,6 +64,14 @@ RETIRED_BUILTINS = (
     "ZkVerifyUnshield",
 )
 
+# Fixed-signature builtins whose surface arm adds compile-time literal checks.
+# The arm must call the fixed analyzer first and return its call unchanged, so
+# the fixed table stays the only signature owner.
+POST_VALIDATED_FIXED_BUILTINS = (
+    "BuildSubmitBallotInline",
+    "RegisterTrigger",
+)
+
 
 class GuardError(AssertionError):
     """Raised when the protected source contract changes."""
@@ -119,6 +127,21 @@ def _test_records(source: str) -> list[tuple[tuple[str, ...], str]]:
 
 def _builtin_variants(source: str) -> list[str]:
     return sorted(set(re.findall(r"Builtin::([A-Za-z0-9_]+)", source)))
+
+
+def _post_validation_arm(custom_region: str, name: str) -> str:
+    start = (
+        f"        Builtin::{name} => {{\n"
+        "            let call = analyze_fixed_builtin_call(builtin, arg_typed)?;\n"
+    )
+    _require(
+        custom_region.count(start) == 1,
+        f"post-validated Builtin no longer delegates to the fixed analyzer: {name}",
+    )
+    begin = custom_region.index(start)
+    end = custom_region.find("\n        }\n", begin)
+    _require(end >= 0, f"post-validated Builtin arm is unterminated: {name}")
+    return custom_region[begin : end + len("\n        }")]
 
 
 
@@ -184,8 +207,17 @@ def validate_source(source: str, owners: dict[Path, str] | None = None) -> None:
     custom_builtins = _builtin_variants(custom_region)
     _require(bool(fixed_builtins), "fixed Builtin partition is empty")
     _require(bool(custom_builtins), "custom Builtin partition is empty")
+    for name in POST_VALIDATED_FIXED_BUILTINS:
+        _require(name in fixed_builtins, f"post-validated Builtin has no fixed signature: {name}")
+        arm = _post_validation_arm(custom_region, name)
+        _require(
+            arm.count("Ok(") == 1 and arm.endswith("\n            Ok(call)\n        }"),
+            f"post-validated Builtin must return the fixed analyzer call: {name}",
+        )
     _require(
-        not set(fixed_builtins).intersection(custom_builtins),
+        not set(fixed_builtins)
+        .intersection(custom_builtins)
+        .difference(POST_VALIDATED_FIXED_BUILTINS),
         "fixed and custom Builtin partitions overlap",
     )
     for retired in RETIRED_BUILTINS:
@@ -328,6 +360,41 @@ class KotodamaSemanticHelpersSourceTest(unittest.TestCase):
                 with self.assertRaises(GuardError):
                     validate_source(mutated, owners)
 
+    def test_partition_overlap_requires_reviewed_delegation(self) -> None:
+        source = _read_source()
+        owners = _read_owners()
+        validate_source(source, owners)
+        fallback = "        _ => analyze_fixed_builtin_call(builtin, arg_typed),\n"
+        mutations = (
+            (
+                "no delegation",
+                "let call = analyze_fixed_builtin_call(builtin, arg_typed)?;\n"
+                "            if !context.test_builtins_enabled",
+                "let call = typed_builtin_call(builtin, arg_typed, Type::Unit);\n"
+                "            if !context.test_builtins_enabled",
+                "no longer delegates to the fixed analyzer: RegisterTrigger",
+            ),
+            (
+                "replaced result",
+                "validate_registration_literal(&args[0])?;\n            }\n            Ok(call)",
+                "validate_registration_literal(&args[0])?;\n            }\n"
+                "            Ok(typed_builtin_call(builtin, Vec::new(), Type::Unit))",
+                "must return the fixed analyzer call: RegisterTrigger",
+            ),
+            (
+                "unreviewed overlap",
+                fallback,
+                "        Builtin::RegisterPeer => analyze_fixed_builtin_call(builtin, arg_typed),\n"
+                + fallback,
+                "fixed and custom Builtin partitions overlap",
+            ),
+        )
+        for label, old, new, message in mutations:
+            with self.subTest(label=label):
+                mutated = _replace_once(source, old, new)
+                self.assertNotEqual(mutated, source)
+                with self.assertRaisesRegex(GuardError, message):
+                    validate_source(mutated, owners)
 
     def test_owner_mutations_fail_closed(self) -> None:
         source = _read_source()

@@ -10,16 +10,20 @@ pub type Path = [Name];
 #[model]
 mod model {
     use super::*;
-    use derive_more::Display;
     use iroha_schema::IntoSchema;
     /// Collection of parameters by their names with checked insertion.
-    #[derive(Debug, Display, Clone, Default, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+    #[derive(Debug, Clone, Default, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
     #[repr(transparent)]
-    #[display("Metadata")]
     #[allow(clippy::multiple_inherent_impl)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::metadata::model::Metadata")]
     pub struct Metadata(pub(super) BTreeMap<Name, Json>);
+}
+
+impl core::fmt::Display for Metadata {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("Metadata")
+    }
 }
 
 impl ncore::SerializePayload for Metadata {

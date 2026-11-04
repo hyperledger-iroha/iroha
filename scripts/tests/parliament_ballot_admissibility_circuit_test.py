@@ -356,6 +356,8 @@ class AdmissibilityTest(unittest.TestCase):
         self.assertEqual(result["max_auxiliary_trials"], 2**20)
         self.assertEqual(result["max_predicate_calls_per_request"], 2**21)
         self.assertEqual(set(result["rows"]), {"candidate", "comparator"})
+        self.assertEqual(result["rows"]["candidate"]["build_scope"], "production and diagnostic builds")
+        self.assertEqual(result["rows"]["comparator"]["build_scope"], "tests and diagnostic builds only")
         for name, row in result["rows"].items():
             per_trial = M.counts(M.row(name))
             self.assertEqual(row["per_trial"], per_trial)

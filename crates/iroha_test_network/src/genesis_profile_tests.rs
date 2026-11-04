@@ -333,6 +333,7 @@ fn permissioned_and_custom_npos_genesis_sign_their_voter_roster() {
                     Vec::new(),
                     topology,
                     topology_entries,
+                    config::default_test_network_staking_policy(),
                 )
             }),
     );

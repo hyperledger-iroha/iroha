@@ -1,0 +1,44 @@
+{
+  "reviewer": "handoff_inventory independent review",
+  "scope": "Conditional source-level requested-allocation grammar; no compiler/binary/provider-internal allocation or native-memory/stack qualification",
+  "current_run_inputs_rechecked": 93,
+  "backend_sources": 85,
+  "frontend_sources": 11,
+  "archived_rust_source_hashes_verified": 12,
+  "source_and_provider_review_hashes_verified": true,
+  "trace_and_event_function_asts_unchanged": true,
+  "metadata_only_function_changes": {
+    "parliament_ballot_arena_backend.py": [
+      "main",
+      "trace_assumptions"
+    ],
+    "parliament_ballot_arena_frontend.py": [
+      "trace_assumptions"
+    ],
+    "check_parliament_ballot_arena_sufficiency.py": []
+  },
+  "prior_source_model_numeric_and_domain_equality": {
+    "classes_checked": true,
+    "domain": true,
+    "frontend_spatial_proof": true,
+    "groups": true,
+    "registration_class_argument": true,
+    "rejection_argument": true
+  },
+  "classes_checked": 135064,
+  "qualification_false_flags_verified": true,
+  "exit_code": 2,
+  "findings": [],
+  "notes": [
+    "Inspected default GlobalAlloc::realloc typed Alignment change: alloc new, copy min(old,new), dealloc old remains. Routed directly implements GlobalAlloc and has no realloc override, so new GlobalAllocator blanket impl does not apply.",
+    "Inspected TrivialClone to_vec zero-length branch, map/flatten constructor and UncheckedIterator removals, and slice iterator changes; modeled exact-count/TrustedLen allocation schedules unchanged.",
+    "Provider receipt is a declared premise bound by SHA and focused regression, not an automatically verified runtime geometry or compiled-allocation correspondence claim.",
+    "Historical source-model numeric groups, all 135064 classes, spatial proof and rejection/domain arguments equal exactly; source metadata changes remain explicit."
+  ],
+  "reviewed_artifact_sha256": {
+    "source-review.json": "bbf62a14d3b1382b616ae84d8651a38860024fd7c2c82540e7b7d98a32840cb7",
+    "run-receipt.json": "927903a7437c7df46f89808fd761ab06609c534d094d2ccb24eda315b3b39c03",
+    "source-model.json": "274d1738cb70b86d2a1a3d0b7728afc096d5856a405def4d7e53fec0125fda21",
+    "additional-rust-source-review.diff": "0a299f04af1a8b1ac9eb01f8e3175d3adeb76210dd34dff17c4d91a4e9cc257e"
+  }
+}

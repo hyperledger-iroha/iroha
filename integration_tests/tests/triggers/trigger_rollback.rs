@@ -1,12 +1,11 @@
 //! Tests that state changes made by failing triggers are reverted.
 use eyre::Result;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError, trigger::TriggerId};
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use tokio::task::spawn_blocking;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_trigger_revert() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -31,7 +30,7 @@ async fn failed_trigger_revert() -> Result<()> {
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         )
     });
     let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
@@ -48,7 +47,7 @@ async fn failed_trigger_revert() -> Result<()> {
         )
         .expect("trigger action fixture satisfies validation invariants"),
     ));
-    let _ = spawn_blocking({
+    run_on_dedicated_thread({
         let client = client.clone();
         move || {
             client.submit(
@@ -57,9 +56,9 @@ async fn failed_trigger_revert() -> Result<()> {
             )
         }
     })
-    .await?;
+    .await??;
     let call_trigger = ExecuteTrigger::new(trigger_id);
-    let err = spawn_blocking({
+    let err = run_on_dedicated_thread({
         let client = client.clone();
         move || {
             client.submit(
@@ -103,28 +102,28 @@ async fn failed_trigger_revert() -> Result<()> {
     } else {
         panic!("unexpected error: {err:?}");
     }
-    //Then
-    let query_result = match sandbox::handle_result(
-        spawn_blocking({
-            let client = client.clone();
-            move || {
-                client
-                    .client()
-                    .query(FindAssetDefinitions::new())
-                    .execute_all()
-            }
-        })
-        .await?
-        .map_err(Into::into),
-        stringify!(failed_trigger_revert),
-    )? {
-        Some(query_result) => query_result,
-        None => return Ok(()),
-    };
+    // The valid first instruction must be rolled back after the missing-domain failure.
+    let page = client
+        .account_client()
+        .list_page(
+            &iroha::collections::Collection::AssetDefinitions,
+            &iroha::collections::ListQuery::new()
+                .filter(iroha::collections::field("id").eq(asset_definition_id.to_string()))
+                .limit(1),
+        )
+        .await?;
     assert!(
-        query_result
-            .iter()
-            .all(|asset_definition| asset_definition.id() != &asset_definition_id)
+        page.next_cursor.is_none(),
+        "exact definition absence must be complete"
+    );
+    assert!(
+        page.total.is_none(),
+        "native collections do not advertise totals"
+    );
+    assert!(
+        page.items.is_empty(),
+        "failed trigger retained its asset definition: {:?}",
+        page.items
     );
     Ok(())
 }

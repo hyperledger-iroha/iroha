@@ -11,6 +11,9 @@ import re
 
 
 STRICT_CUSTODY_OWNERS = frozenset({
+    # The Python native SDK gate strictly resolves its freshly built delivery helper
+    # and the source root that receives the retained native backup.
+    "ci/check_sorafs_python_native_sdk.sh",
     "scripts/build_sorafs_java_consumer_artifact.py",
     "scripts/build_sorafs_python_consumer_artifact.py",
     "scripts/check_sorafs_production_promotion_bundle.py",

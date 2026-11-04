@@ -189,11 +189,14 @@ pub use crate::config::genesis as genesis_factory;
 /// normalizes and pre-executes the block under that fully merged configuration
 /// before publishing identical prepared bytes to every peer. The returned block
 /// is not prepared genesis on its own.
+/// `staking_policy` is the caller's complete original monetary policy; validator
+/// registration plans must use its asset and custody accounts.
 pub fn unexecuted_genesis_factory_with_post_topology(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
+    staking_policy: PublicLaneStakingPolicy,
 ) -> GenesisBlock {
     crate::config::genesis_unexecuted_with_keypair_and_post_topology(
         extra_transactions,
@@ -201,7 +204,7 @@ pub fn unexecuted_genesis_factory_with_post_topology(
         topology,
         topology_entries,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
-        config::default_test_network_staking_policy(),
+        staking_policy,
     )
 }
 
@@ -2862,6 +2865,29 @@ impl Network {
     pub fn env_dir(&self) -> &Path {
         &self.env.dir
     }
+    /// Bind a late peer's clients to this network's immutable genesis identity.
+    ///
+    /// The peer must have been built in this network's environment and must not
+    /// already be attached. This copies the original client deadline policy;
+    /// each peer retains its own endpoint and operator key. It does not register,
+    /// start, or add the peer to any validator roster.
+    ///
+    /// # Errors
+    /// Returns an error for a foreign environment or an already attached peer.
+    pub fn attach_peer_client_context(&self, peer: &NetworkPeer) -> Result<()> {
+        color_eyre::eyre::ensure!(
+            peer.dir.parent() == Some(self.env.dir.as_path()),
+            "late peer must belong to this network's environment"
+        );
+        let identity = self.peers[0]
+            .client_config
+            .get()
+            .expect("built network must have its signed genesis client identity")
+            .clone();
+        peer.client_config
+            .set(identity)
+            .map_err(|_| eyre!("late peer client context is already attached"))
+    }
     #[cfg(test)]
     fn consensus_bootstrap_profile(&self) -> ConsensusBootstrapProfile {
         self.consensus_profile.clone()
@@ -4419,7 +4445,8 @@ async fn drain_log_lines<R, F>(
         error!(?err, log = label, "flushing log file failed");
     }
     if let Some(notify) = ready_notify {
-        notify.notify_waiters();
+        // The sole exit monitor can start waiting after EOF; retain its completion permit.
+        notify.notify_one();
     }
 }
 /// Bounded recipe for adding signed, non-voting P2P observers to a test network.
@@ -8409,7 +8436,7 @@ impl NetworkPeer {
                     Ok(file) => file,
                     Err(err) => {
                         error!(?err, ?log_path, "failed to create stderr log file");
-                        stderr_log_ready.notify_waiters();
+                        stderr_log_ready.notify_one();
                         return;
                     }
                 };
@@ -10381,6 +10408,36 @@ mod tests {
             eprintln!("skipping {test_name}: environment denies binding TCP sockets on 127.0.0.1");
             true
         }
+    }
+    #[tokio::test]
+    async fn stderr_completion_survives_exit_monitor_starting_after_eof() {
+        use futures::FutureExt as _;
+
+        let directory = tempdir().expect("temporary stderr directory");
+        let path = directory.path().join("stderr.log");
+        let file = File::create(&path).await.expect("stderr file");
+        let (mut writer, reader) = tokio::io::duplex(64);
+        writer
+            .write_all(b"startup rejected\n")
+            .await
+            .expect("stderr line");
+        drop(writer);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let ready = Arc::new(Notify::new());
+        drain_log_lines(
+            reader,
+            file,
+            fatal_rx,
+            Arc::new(AtomicBool::new(true)),
+            |_| {},
+            Some(Arc::clone(&ready)),
+            "stderr",
+        )
+        .await;
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"startup rejected\n");
+        // Child exit may be observed after EOF: completion must already be ready
+        // when the sole exit monitor first polls, without waiting for its deadline.
+        assert!(ready.notified().now_or_never().is_some());
     }
     fn set_env_var<K, V>(key: K, value: V)
     where
@@ -16250,6 +16307,7 @@ mod tests {
                         Vec::new(),
                         topology,
                         pops,
+                        config::default_test_network_staking_policy(),
                     )
                 },
             ));
@@ -16273,6 +16331,7 @@ mod tests {
             Vec::new(),
             recorded,
             recorded_pops,
+            config::default_test_network_staking_policy(),
         );
         assert!(
             !expected.0.has_results(),
@@ -16314,6 +16373,7 @@ mod tests {
                     Vec::new(),
                     topology,
                     pops,
+                    config::default_test_network_staking_policy(),
                 )
             });
         let network = build_with_isolated_permit(builder);
@@ -16406,6 +16466,7 @@ mod tests {
                         vec![registrations],
                         topology,
                         pops,
+                        config::default_test_network_staking_policy(),
                     )
                 },
             );

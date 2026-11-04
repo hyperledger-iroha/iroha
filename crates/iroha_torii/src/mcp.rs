@@ -3341,6 +3341,13 @@ fn custom_advertised_pattern_matches(pattern: &str, value: &str) -> Option<bool>
             && value.bytes().any(|byte| byte != b'0')
     };
     match pattern {
+        "^[!-~]+$" => Some(!value.is_empty() && value.bytes().all(|byte| byte.is_ascii_graphic())),
+        "^(0|[1-9][0-9]*)$" => Some(
+            value == "0"
+                || value.as_bytes().split_first().is_some_and(|(first, rest)| {
+                    matches!(first, b'1'..=b'9') && rest.iter().all(u8::is_ascii_digit)
+                }),
+        ),
         NONZERO_UPPER_HEX_PATTERN => Some(
             value.len() >= 2
                 && value.len().is_multiple_of(2)

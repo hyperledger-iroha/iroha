@@ -1593,7 +1593,14 @@ fn run() -> ReportResult<std::process::ExitCode, MainError> {
     let language = detect_language(args.language.as_deref());
     let i18n = Localizer::new(Bundle::Cli, language);
     if let Command::Tools(tools::Command::MarkdownHelp(_md)) = &args.command {
-        clap_markdown::print_help_markdown::<Args>();
+        let mut writer = io::BufWriter::new(io::stdout().lock());
+        iroha_cli_docs::write_markdown(Args::command(), &mut writer)
+            .and_then(|()| writer.flush())
+            .map_err(|error| {
+                Report::new(MainError::Command(format!(
+                    "Failed to write Markdown help: {error}"
+                )))
+            })?;
         return Ok(std::process::ExitCode::SUCCESS);
     }
     error_stack::Report::set_color_mode(color_mode());

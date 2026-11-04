@@ -12,6 +12,8 @@ instructions/targets, indirect calls, native stubs, traps, and positive-weight
 recursive components prevent a complete bound. A resolved-region result stops
 descending at opaque function/edge boundaries; it does not bound their targets.
 After opaque calls it may resume the caller using ABI preservation of SP/FP.
+A freshly derived, image-bound straight-line terminal-callee fact may omit only
+that call's ordinary continuation; its call edge and resource obligations remain.
 Apple's 128-byte red zone is conservatively added at every local leaf maximum,
 not at each call edge. Unwind/exception edges are not ordinary instruction edges.
 """
@@ -30,14 +32,14 @@ RED_ZONE_BYTES = 128
 # do not redirect control. SP destinations and SP writebacks are checked below
 # even for this allowlist. Unknown opcodes fail closed; this is not an ISA decoder.
 STRAIGHT = set("""
-add addp adds addv adr adrp aese aesimc aesmc and ands asr bfi bfxil bic bics bif
+add addp adds addv adr adrp aese aesimc aesmc and ands asr bcax bfi bfxil bic bics bif bit
 bsl cas casa casab casal casalb casb casl ccmn ccmp cinc clz cmeq cmgt cmhi cmn
 cmp cneg cnt csel cset csetm csinc csinv dmb dup eon eor eor3 ext extr fmov isb ld1
 ld1r ld2 ld4 ldadd ldaddab ldaddal ldaddl ldapr ldaprb ldapur ldapurb ldp ldr
-ldrb ldrh ldrsb ldrsh ldrsw ldur ldurb ldurh lsl lsr madd mov movi movk msub
-mul mvn neg nop orr rbit rev ror sbc sbcs sbfx shl shrn smaddl st1 stlr stlrb
+ldrb ldrh ldrsb ldrsh ldrsw ldur ldurb ldurh ldursb lsl lsr madd mov movi movk msub
+mul mvn mvni neg nop orn orr rax1 rbit rev ror sbc sbcs sbfx shl shrn smaddl st1 stlr stlrb
 stlur stlurb stp str strb strh stur sturb sturh sub subs swpab swpal swpb swplb sxtb
-sxtw tst ubfiz ubfx udiv umaddl umaxp uminv umulh umull uqsub ushl ushll ushll2
+sxtw tst ubfiz ubfx udiv umaddl umaxp umaxv uminv umov umulh umull uqsub ushl ushll ushll2
 ushr uzp1 xar xtn zip1
 """.split())
 CONDITIONAL = {"cbz", "cbnz", "tbz", "tbnz"} | {
@@ -118,22 +120,69 @@ def stack_effect(op, operands, sp, fp):
     An arbitrary restored FP is unknown; it matters only if later assigned to SP.
     """
     old_sp, old_fp = sp, fp
-    if op.split(".", 1)[0] in {"stlur", "eon"} and "." in op:
+    family = op.split(".", 1)[0]
+    if family in {"stlur", "ldursb", "eon", "orn"} and "." in op:
         raise ValueError("unsupported scalar instruction suffix")
     # STLUR (FEAT_LRCPC2) stores a W/X register at base + signed imm9;
     # unlike indexed STR, it has no base writeback or register destination.
     # Arm DDI 0602, STLUR (unscaled): accept only its ordinary LLVM spelling.
-    if op == "stlur":
+    # LDURSB has the same unscaled signed-imm9 address form, without base
+    # writeback. Its W/X destination is handled by the FP-clobber logic below.
+    if op in {"stlur", "ldursb"}:
         match = re.fullmatch(r"(?:[wx](?:[12]?\d|30)|[wx]zr), \[(?:x(?:[12]?\d|30)|sp)(?:, (#-?(?:0x[0-9a-f]+|\d+)))?\]", operands)
         if match is None or not -256 <= immediate(match[1] or "#0") <= 255:
-            raise ValueError("unsupported STLUR operands")
+            raise ValueError(f"unsupported {op.upper()} operands")
     # EON (shifted register) writes only its W/X destination, never SP.
     # All three registers have the same width; optional shifts are width-bounded.
     # The ordinary first-destination logic below invalidates an overwritten FP.
-    if op == "eon":
+    # ORN has the same scalar register/shift forms as EON; neither accepts SP.
+    if op in {"eon", "orn"}:
         match = re.fullmatch(r"([wx])(?:[12]?\d|30|zr), \1(?:[12]?\d|30|zr), \1(?:[12]?\d|30|zr)(?:, (lsl|lsr|asr|ror) (#(?:0x[0-9a-f]+|\d+)))?", operands)
         if match is None or not 0 <= immediate(match[3] or "#0") < (64 if match[1] == "x" else 32):
-            raise ValueError("unsupported EON operands")
+            raise ValueError(f"unsupported {op.upper()} operands")
+    # Arm DDI 0602 (2025-03), UMAXV/MVNI/RAX1: these reviewed Advanced SIMD
+    # forms write only SIMD&FP registers, never the integer FP or SP. Accept
+    # Apple's LLVM arrangement suffix spelling only, not arbitrary suffixes.
+    # Feature/exception behavior is outside the ordinary ABI graph, as for
+    # the other SIMD instructions; decoding supplies no latency/cost bound.
+    vector = r"v(?:[12]?\d|3[01])"
+    if family == "umaxv":
+        widths = {"umaxv.8b": "b", "umaxv.16b": "b", "umaxv.4h": "h",
+                  "umaxv.8h": "h", "umaxv.4s": "s"}
+        if op not in widths or re.fullmatch(widths[op] + r"(?:[12]?\d|3[01]), " + vector, operands) is None:
+            raise ValueError("unsupported UMAXV operands or arrangement")
+    if family == "mvni":
+        match = re.fullmatch(vector + r", (#(?:0x[0-9a-f]+|\d+))(?:, (lsl|msl) (#(?:0x[0-9a-f]+|\d+)))?", operands)
+        halfword = op in {"mvni.4h", "mvni.8h"}
+        if op not in {"mvni.4h", "mvni.8h", "mvni.2s", "mvni.4s"} or match is None:
+            raise ValueError("unsupported MVNI operands or arrangement")
+        shift, amount = match[2] or "lsl", immediate(match[3] or "#0")
+        allowed = ({0, 8} if halfword else {0, 8, 16, 24}) if shift == "lsl" else (set() if halfword else {8, 16})
+        if not 0 <= immediate(match[1]) <= 255 or amount not in allowed:
+            raise ValueError("unsupported MVNI immediate or shift")
+    if family == "rax1":
+        if op != "rax1.2d" or re.fullmatch(vector + ", " + vector + ", " + vector, operands) is None:
+            raise ValueError("unsupported RAX1 operands or arrangement")
+    # Arm DDI 0602 (2025-03), BCAX/BIT: only SIMD registers are read/written.
+    # BCAX has four 16B operands; BIT has three operands of 8B or 16B each.
+    if family == "bcax":
+        if op != "bcax.16b" or re.fullmatch(", ".join([vector] * 4), operands) is None:
+            raise ValueError("unsupported BCAX operands or arrangement")
+    if family == "bit":
+        if op not in {"bit.8b", "bit.16b"} or re.fullmatch(", ".join([vector] * 3), operands) is None:
+            raise ValueError("unsupported BIT operands or arrangement")
+    # UMOV zero-extends one vector element into Wd (B/H/S) or Xd (D).
+    # Integer FP destinations must still be invalidated below. LLVM places
+    # the element size on the opcode and prints a decimal vector lane index.
+    if family == "umov":
+        forms = {"umov.b": ("w", 16), "umov.h": ("w", 8),
+                 "umov.s": ("w", 4), "umov.d": ("x", 2)}
+        if op not in forms:
+            raise ValueError("unsupported UMOV element size")
+        width, lanes = forms[op]
+        match = re.fullmatch(width + r"(?:[12]?\d|30|zr), " + vector + r"\[(\d+)\]", operands)
+        if match is None or not 0 <= int(match[1]) < lanes:
+            raise ValueError("unsupported UMOV operands or lane index")
     fields = operands.split(", ")
     first = fields[0] if fields else ""
     # AArch64 post/pre-indexed base writes happen independently of destination.
@@ -188,11 +237,75 @@ def stack_effect(op, operands, sp, fp):
     return sp, fp
 
 
-def analyze_function(start, end, instructions, starts, stubs, name):
+def terminal_callee_fact(start, end, instructions, starts, stubs, image_binding_sha256):
+    """Prove only a linear ordinary CFG ending in UDF/BRK, never a cost bound.
+
+    Scan the entire exact function interval, including terminal padding. Direct
+    calls may return under the existing ordinary ABI assumption; no transitive
+    returnability fact is consulted. Dotted opcodes are deliberately excluded
+    from this initial narrow rule even where the general analyzer supports them.
+    """
+    if re.fullmatch(r"[0-9a-f]{64}", image_binding_sha256 or "") is None:
+        return None
+    addresses = sorted(starts)
+    if start not in starts or start % 4 or end % 4 or end <= start:
+        return None
+    index = addresses.index(start)
+    # LC_FUNCTION_STARTS gives no final function end. The last decoded word
+    # cannot prove that no trailing bytes were elided, so exclude that interval.
+    if index + 1 == len(addresses):
+        return None
+    expected_end = addresses[index + 1]
+    if end != expected_end:
+        return None
+    sp, fp, terminal, calls, interval = 0, None, None, [], []
+    for address in range(start, end, 4):
+        if address not in instructions or any(address + offset in instructions for offset in (1, 2, 3)):
+            return None
+        op, operands = instructions[address]
+        interval.append([hex(address), op, operands])
+        if op in {"udf", "brk"}:
+            match = re.fullmatch(r"#(0x[0-9a-f]+|\d+)", operands)
+            if match is None or not 0 <= int(match[1], 16 if match[1].startswith("0x") else 10) <= 65535:
+                return None
+            if terminal is None:
+                terminal = {"address": hex(address), "opcode": op, "operands": operands}
+            continue
+        if terminal is not None:
+            return None  # After the first trap, accept only decoded trap padding.
+        if op == "bl":
+            match = re.fullmatch(r"(0x[0-9a-f]+)(?:\s+<.*>)?", operands)
+            if match is None or int(match[1], 16) not in starts.keys() | stubs.keys():
+                return None
+            calls.append({"address": hex(address), "target": match[1], "caller_depth_bytes": -sp})
+        elif op in STRAIGHT:  # Exact mnemonic, not a family/suffix allowance.
+            try:
+                sp, fp = stack_effect(op, operands, sp, fp)
+            except ValueError:
+                return None
+        else:
+            return None  # RET, all branches/indirect calls, HLT and unknowns.
+        if sp > 0 or sp % 16:
+            return None
+    if terminal is None:
+        return None
+    fact = {
+        "address": hex(start), "end": hex(end), "instruction_count": len(interval),
+        "interval_sha256": hashlib.sha256(json.dumps(interval, separators=(",", ":")).encode()).hexdigest(),
+        "image_binding_sha256": image_binding_sha256,
+        "terminal": terminal, "direct_calls": calls,
+        "scope": "no ordinary return only; callee/native/trap/recursive and hidden unwind obligations remain",
+    }
+    fact["fact_sha256"] = hashlib.sha256(json.dumps(fact, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    return fact
+
+
+def analyze_function(start, end, instructions, starts, stubs, name,
+                     no_return_callees=None, image_binding_sha256=None):
     """Explore ordinary CFG paths and direct-call depths for one function."""
     result = {"address": hex(start), "name": name, "end": hex(end), "maximum_sp_decrement_bytes": 0,
               "local_frame_plus_red_zone_bytes": RED_ZONE_BYTES, "visited_instructions": 0,
-              "calls": [], "gaps": [], "frame_errors": []}
+              "calls": [], "gaps": [], "frame_errors": [], "ordinary_continuations_omitted": []}
     states, queue, seen_calls, seen_gaps = {}, deque([(start, 0, None)]), set(), set()
 
     def gap(address, kind, detail, depth=0, frame=False):
@@ -275,6 +388,23 @@ def analyze_function(start, end, instructions, starts, stubs, name):
                     if key not in seen_calls:
                         seen_calls.add(key)
                         result["calls"].append({"address": hex(address), "target": hex(target), "kind": "call", "caller_depth_bytes": depth})
+                    if no_return_callees and target in no_return_callees:
+                        fact = no_return_callees[target]
+                        # audit() derives facts afresh from this image. Recheck
+                        # the exact interval before use; there is no receipt-import
+                        # or name-based returnability path.
+                        if (image_binding_sha256 is None
+                                or fact["image_binding_sha256"] != image_binding_sha256
+                                or fact != terminal_callee_fact(target, int(fact["end"], 16),
+                                                               instructions, starts, stubs, image_binding_sha256)):
+                            gap(address, "invalid_terminal_callee_fact", hex(target), depth, True)
+                            continue
+                        result["ordinary_continuations_omitted"].append({
+                            "address": hex(address), "target": hex(target),
+                            "caller_depth_bytes": depth, "ordinary_successor": hex(address + 4),
+                            "fact_sha256": fact["fact_sha256"],
+                        })
+                        continue
                 elif target in stubs:
                     gap(address, "native_edge", stubs[target], depth)
                 else:
@@ -329,12 +459,17 @@ def call_region(functions, root):
     collapsed because they do not accumulate stack. Positive SCCs are opaque
     at function entry, rather than assigning a guessed recursion depth.
     """
-    graph = {key: [int(call["target"], 16) for call in value["calls"]] for key, value in functions.items()}
+    # Ordinary continuation refinement is not a discharge of native, unwind,
+    # trap or recursive resource obligations. Retained continuation calls stay
+    # in this conservative resource graph even when ordinary reachability ends.
+    calls = {key: value["calls"] + value.get("deferred_continuation_calls", [])
+             for key, value in functions.items()}
+    graph = {key: [int(call["target"], 16) for call in rows] for key, rows in calls.items()}
     groups = components(graph)
     owner = {node: i for i, group in enumerate(groups) for node in group}
     recursive = {i for i, group in enumerate(groups) if any(
         owner[int(call["target"], 16)] == i and call["caller_depth_bytes"] > 0
-        for node in group for call in functions[node]["calls"])}
+        for node in group for call in calls[node])}
     reachable, pending = set(), [root]
     while pending:
         node = pending.pop()
@@ -343,7 +478,8 @@ def call_region(functions, root):
             pending.extend(graph[node])
     frontier = []
     for node in sorted(reachable):
-        for item in functions[node]["gaps"] + functions[node]["frame_errors"]:
+        for item in (functions[node]["gaps"] + functions[node]["frame_errors"]
+                     + functions[node].get("deferred_continuation_frontiers", [])):
             frontier.append({"function": functions[node]["name"], **item})
     recursive_groups = [[{"address": hex(n), "name": functions[n]["name"]} for n in groups[i]]
                         for i in sorted(recursive) if any(n in reachable for n in groups[i])]
@@ -357,7 +493,7 @@ def call_region(functions, root):
             return 0, ["opaque function/component entry"]
         best = max((functions[n]["local_frame_plus_red_zone_bytes"], [functions[n]["name"]]) for n in group)
         for node in group:
-            for call in functions[node]["calls"]:
+            for call in calls[node]:
                 target = int(call["target"], 16)
                 if owner[target] != group_id:
                     child_bound, child_path = bound(owner[target])
@@ -378,7 +514,7 @@ def call_region(functions, root):
                                 "no hidden exception/signal/unwind edge", "compiler memory accesses obey the ABI stack frame/red zone"]}
 
 
-def audit(disassembly, starts_text, stubs_text, root_patterns=None):
+def audit(disassembly, starts_text, stubs_text, root_patterns=None, *, image_identity=None):
     """Analyze one retained image, never silently discarding incomplete roots."""
     if not re.search(r"file format mach-o arm64\s*$", disassembly, re.MULTILINE):
         raise ValueError("expected a Mach-O ARM64 image")
@@ -388,10 +524,69 @@ def audit(disassembly, starts_text, stubs_text, root_patterns=None):
     if min(instructions) != addresses[0]:
         raise ValueError("function starts do not cover text prefix")
     end = max(instructions) + 4
+    binding = {
+        "disassembly_sha256": hashlib.sha256(disassembly.encode()).hexdigest(),
+        "function_starts_sha256": hashlib.sha256(starts_text.encode()).hexdigest(),
+        "native_stubs_sha256": hashlib.sha256(stubs_text.encode()).hexdigest(),
+        "analyzer_sha256": digest(__file__),
+        "scope": "complete retained disassembly and function/native metadata",
+    }
+    if image_identity is not None:
+        for field in ("binary_sha256", "objdump_sha256", "script_sha256"):
+            if re.fullmatch(r"[0-9a-f]{64}", image_identity.get(field, "")) is None:
+                raise ValueError("invalid captured image identity")
+        if (image_identity["script_sha256"] != binding["analyzer_sha256"]
+                or image_identity.get("binary_tool_and_analyzer_unchanged_during_capture") is not True
+                or [row["sha256"] for row in image_identity["commands"][:3]] != [
+                    binding["disassembly_sha256"], binding["function_starts_sha256"], binding["native_stubs_sha256"]]):
+            raise ValueError("captured image identity does not bind these analysis inputs")
+        binding.update({field: image_identity[field] for field in ("binary_sha256", "objdump_sha256")})
+    binding_sha256 = hashlib.sha256(json.dumps(binding, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    ranges = {address: addresses[i + 1] if i + 1 < len(addresses) else end
+              for i, address in enumerate(addresses)}
+    facts = {address: fact for address, stop in ranges.items()
+             if (fact := terminal_callee_fact(address, stop, instructions, starts, stubs, binding_sha256)) is not None}
     functions = {}
-    for i, address in enumerate(addresses):
-        stop = addresses[i + 1] if i + 1 < len(addresses) else end
-        functions[address] = analyze_function(address, stop, instructions, starts, stubs, names.get(address, starts[address]))
+    for address, stop in ranges.items():
+        # A proved terminal callee keeps its full conservative analysis. In
+        # particular a recursive BL must not erase the callee's own trap or
+        # later native obligations merely because its ordinary return is absent.
+        functions[address] = analyze_function(address, stop, instructions, starts, stubs,
+                                             names.get(address, starts[address]),
+                                             None if address in facts else facts, binding_sha256)
+        refined = functions[address]
+        if refined["ordinary_continuations_omitted"]:
+            baseline = analyze_function(address, stop, instructions, starts, stubs, refined["name"])
+            # Preserve the exact pre-refinement analysis and all resource
+            # frontiers/call edges it exposed. Some are landing-pad instructions:
+            # ending ordinary reachability says nothing about hidden unwinding.
+            refined["conservative_analysis_before_refinement"] = baseline
+            refinement = {
+                "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+                "refinement_fact_sha256s": sorted({row["fact_sha256"] for row in refined["ordinary_continuations_omitted"]}),
+                "omitted_call_addresses": sorted({row["address"] for row in refined["ordinary_continuations_omitted"]}),
+            }
+            key = lambda row: tuple((field, row[field]) for field in sorted(row))
+            current_frontiers = {key(row) for row in refined["gaps"] + refined["frame_errors"]}
+            removed_frontiers = [row for row in baseline["gaps"] + baseline["frame_errors"]
+                                 if key(row) not in current_frontiers]
+            refined["deferred_continuation_frontiers"] = [
+                {**row, **refinement} for row in removed_frontiers
+            ]
+            refined["deferred_continuation_frame_errors"] = [
+                {**row, **refinement} for row in baseline["frame_errors"] if key(row) not in current_frontiers
+            ]
+            refined["ordinary_sp_merge_explanations"] = [
+                {**row, **refinement, "status": "retained as an active deferred obligation"}
+                for row in removed_frontiers if row["kind"] == "inconsistent_sp_merge"
+            ]
+            current_calls = {key(row) for row in refined["calls"]}
+            refined["deferred_continuation_calls"] = [
+                {**row, **refinement} for row in baseline["calls"] if key(row) not in current_calls
+            ]
+            refined["ordinary_maximum_sp_decrement_bytes"] = refined["maximum_sp_decrement_bytes"]
+            refined["maximum_sp_decrement_bytes"] = max(refined["maximum_sp_decrement_bytes"], baseline["maximum_sp_decrement_bytes"])
+            refined["local_frame_plus_red_zone_bytes"] = refined["maximum_sp_decrement_bytes"] + RED_ZONE_BYTES
     patterns = root_patterns or DEFAULT_ROOTS
     selected = {pattern: [a for a, fn in functions.items() if pattern in fn["name"]] for pattern in patterns}
     missing = [pattern for pattern, matches in selected.items() if not matches]
@@ -401,8 +596,12 @@ def audit(disassembly, starts_text, stubs_text, root_patterns=None):
     return {"format": "parliament-arm64-stack-audit-v1", "profile_qualified": False,
             "complete_workspace_certificate": False, "scope": "ABI-conditional compiled direct CFG regions; no native/runtime/indirect continuation bound",
             "red_zone_bytes": RED_ZONE_BYTES, "text_instructions": len(instructions), "function_count": len(functions),
+            "image_binding": binding, "image_binding_sha256": binding_sha256,
+            "terminal_callee_facts": list(facts.values()),
             "function_entry_cfg_instructions_visited": sum(fn["visited_instructions"] for fn in functions.values()),
-            "whole_image_frame_error_count": sum(len(fn["frame_errors"]) for fn in functions.values()),
+            "whole_image_ordinary_frame_error_count": sum(len(fn["frame_errors"]) for fn in functions.values()),
+            "whole_image_frame_error_count": sum(len(fn["frame_errors"]) + len(fn.get("deferred_continuation_frame_errors", []))
+                                                  for fn in functions.values()),
             "roots": roots, "functions": list(functions.values())}
 
 
@@ -411,7 +610,9 @@ def capture(binary, raw_dir):
     raw_dir.mkdir(parents=True, exist_ok=True)
     tool = subprocess.check_output(["xcrun", "--find", "llvm-objdump"], text=True).strip()
     commands = {
-        "disassembly": [tool, "--disassemble", "--demangle", "--no-show-raw-insn", str(binary)],
+        # Omitted zero blocks are not proof of unreachable padding. Decode
+        # them so a possible continuation retains its actual trap/unknown edge.
+        "disassembly": [tool, "--disassemble", "--disassemble-zeroes", "--demangle", "--no-show-raw-insn", str(binary)],
         "starts": [tool, "--macho", "--function-starts=both", str(binary)],
         "stubs": [tool, "--macho", "--indirect-symbols", str(binary)],
         "unwind": [tool, "--macho", "--unwind-info", str(binary)],
@@ -441,7 +642,7 @@ def main():
     parser.add_argument("--root", action="append", help="demangled root-name substring; repeatable")
     args = parser.parse_args()
     outputs, identity = capture(args.binary.resolve(), args.raw_dir)
-    result = audit(outputs["disassembly"], outputs["starts"], outputs["stubs"], args.root)
+    result = audit(outputs["disassembly"], outputs["starts"], outputs["stubs"], args.root, image_identity=identity)
     result["identity"] = identity
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")

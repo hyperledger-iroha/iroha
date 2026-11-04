@@ -337,6 +337,7 @@ def _copy_current_js_inventory(tmp_path: Path) -> Path:
         "norito.js",
         "noritoNftMarketCodecs.js",
         "noritoGameRegistry.js",
+        "noritoValueCodecs.js",
     ):
         (target_dir / filename).write_bytes((source_dir / filename).read_bytes())
     return target_dir / "norito.js"
@@ -417,6 +418,58 @@ def test_current_js_binding_parser_rejects_changed_wire_identity(tmp_path: Path)
     assert changed != original
     js_source.write_text(changed, encoding="utf-8")
     with pytest.raises(ValueError, match="changes canonical outer/inner identity"):
+        MODULE._extract_js_instruction_type_map(js_source)  # type: ignore[attr-defined]
+
+
+@pytest.mark.parametrize(
+    ("filename", "old", "new", "error"),
+    [
+        (
+            "noritoValueCodecs.js",
+            'const TEXT_IROHA_DATA_MODEL = "iroha_data_model::";',
+            'const TEXT_IROHA_DATA_MODEL = "iroha_data_modl::";',
+            "has a noncanonical JS instruction binding",
+        ),
+        (
+            "noritoValueCodecs.js",
+            "  TEXT_IROHA_DATA_MODEL,\n",
+            "",
+            "must declare and export TEXT_IROHA_DATA_MODEL exactly once",
+        ),
+        (
+            "norito.js",
+            "  TEXT_IROHA_DATA_MODEL,\n",
+            "  TEXT_UNSUPPORTED as TEXT_IROHA_DATA_MODEL,\n",
+            "renames imported JS instruction constant TEXT_IROHA_DATA_MODEL",
+        ),
+        (
+            "norito.js",
+            "\nconst TEXT_IROHA_DATA_MODEL_ISI = ",
+            '\nconst TEXT_IROHA_DATA_MODEL = "iroha_data_model::";\nconst TEXT_IROHA_DATA_MODEL_ISI = ',
+            "missing or repeated JS instruction constant TEXT_IROHA_DATA_MODEL",
+        ),
+    ],
+)
+def test_current_js_binding_parser_follows_only_exported_sibling_constants(
+    tmp_path: Path, filename: str, old: str, new: str, error: str,
+) -> None:
+    js_source = _copy_current_js_inventory(tmp_path)
+    module = js_source.with_name(filename)
+    original = module.read_text(encoding="utf-8")
+    changed = original.replace(old, new, 1)
+    assert changed != original
+    module.write_text(changed, encoding="utf-8")
+    with pytest.raises(ValueError, match=error):
+        MODULE._extract_js_instruction_type_map(js_source)  # type: ignore[attr-defined]
+
+
+def test_current_js_binding_parser_rejects_missing_imported_module(tmp_path: Path) -> None:
+    js_source = _copy_current_js_inventory(tmp_path)
+    js_source.with_name("noritoValueCodecs.js").unlink()
+    with pytest.raises(
+        ValueError,
+        match="imports TEXT_IROHA_DATA_MODEL from missing module noritoValueCodecs.js",
+    ):
         MODULE._extract_js_instruction_type_map(js_source)  # type: ignore[attr-defined]
 
 

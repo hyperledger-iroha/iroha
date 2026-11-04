@@ -2,6 +2,10 @@
 
 import importlib.util
 import itertools
+import gzip
+import hashlib
+import html
+import json
 from pathlib import Path
 import re
 
@@ -189,7 +193,7 @@ def test_critical_order_and_drop_lifetimes_are_preserved():
 def test_source_pin_checks_current_reviewed_code_and_refuses_missing_scope(tmp_path):
     inventory = MODULE.source_inventory()
     assert inventory["aggregate_sha256"] == MODULE.REVIEWED_SOURCE_SHA256
-    assert len(inventory["files"]) == 75
+    assert len(inventory["files"]) == 85
     with pytest.raises(ValueError, match="source drift"):
         MODULE.source_inventory(tmp_path)
 
@@ -209,3 +213,29 @@ def test_metadata_does_not_promote_source_model_to_runtime_certificate():
     assert assumptions["layouts"]["Key_Gf256"] == [40, 8]
     assert assumptions["layouts"]["Tree"] == [24, 8]
     assert "not Rust ABI promises" in assumptions["layout_obligation"]
+
+
+def test_current_allocation_sources_and_provider_receipt_are_retained(tmp_path):
+    review_root = MODULE.ROOT / "docs/validation/parliament_ballot_arena_current_20261104"
+    review = json.loads((review_root / "source-review.json").read_text())
+    assert review["profile_qualified"] is False
+    assert len(review["rust_allocation_review"]) == 12
+    for row in review["rust_allocation_review"]:
+        source = gzip.decompress((review_root / "rust-sources" / (row["path"] + ".gz")).read_bytes())
+        assert hashlib.sha256(source).hexdigest() == MODULE.RUST_SOURCE_SHA256[row["path"]]
+        path = tmp_path / (row["path"] + ".html")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("<pre><code>" + html.escape(source.decode()) + "</code></pre>")
+    assert MODULE.rust_source_inventory(tmp_path)["revision"] == MODULE.RUST_REVISION
+    changed = tmp_path / "core/alloc/global.rs.html"
+    changed.write_text(changed.read_text().replace("self.alloc(new_layout)", "self.alloc(layout)"))
+    with pytest.raises(ValueError, match="allocation source changed"):
+        MODULE.rust_source_inventory(tmp_path)
+    assumptions = MODULE.trace_assumptions()
+    provider = MODULE.ROOT / assumptions["provider_receipt"]
+    assert hashlib.sha256(provider.read_bytes()).hexdigest() == assumptions["provider_receipt_sha256"]
+    targets = json.loads(provider.read_text())["targets"]
+    assert len(targets) == 8
+    for target in targets:
+        assert target["bytes"] == {"SOFT_SIZE": 960, "AUTO_SIZE": 960, "SOFT_ALIGN": 8,
+                                   "AUTO_ALIGN": 8 if target["mode"] == "portable" else 16}

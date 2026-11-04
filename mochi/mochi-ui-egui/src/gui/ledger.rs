@@ -493,7 +493,7 @@ impl Desktop {
                             {
                                 widgets::copy_to_clipboard(
                                     ui.ctx(),
-                                    &hex::encode(bytes),
+                                    norito_clipboard_hex(bytes),
                                     "Norito hex",
                                 );
                             }
@@ -520,9 +520,56 @@ impl Desktop {
     }
 }
 
+fn norito_clipboard_hex(bytes: &[u8]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let capacity = bytes
+        .len()
+        .checked_mul(2)
+        .expect("Norito hexadecimal text length must fit usize");
+    let mut text = String::with_capacity(capacity);
+    for &byte in bytes {
+        text.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        text.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn norito_clipboard_hex_is_lowercase_complete_and_unprefixed() {
+        assert_eq!(norito_clipboard_hex(&[]), "");
+        assert_eq!(
+            norito_clipboard_hex(&[0, 1, 15, 16, 127, 128, 254, 255]),
+            "00010f107f80feff"
+        );
+        let all_bytes: Vec<u8> = (0..=u8::MAX).collect();
+        let expected = concat!(
+            "000102030405060708090a0b0c0d0e0f",
+            "101112131415161718191a1b1c1d1e1f",
+            "202122232425262728292a2b2c2d2e2f",
+            "303132333435363738393a3b3c3d3e3f",
+            "404142434445464748494a4b4c4d4e4f",
+            "505152535455565758595a5b5c5d5e5f",
+            "606162636465666768696a6b6c6d6e6f",
+            "707172737475767778797a7b7c7d7e7f",
+            "808182838485868788898a8b8c8d8e8f",
+            "909192939495969798999a9b9c9d9e9f",
+            "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+            "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+            "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+            "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+            "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+            "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+        );
+        assert_eq!(norito_clipboard_hex(&all_bytes), expected);
+        assert_eq!(
+            norito_clipboard_hex(&all_bytes.repeat(256)),
+            expected.repeat(256)
+        );
+    }
 
     fn summary(height: u64, hash: &str) -> BlockSummary {
         BlockSummary {

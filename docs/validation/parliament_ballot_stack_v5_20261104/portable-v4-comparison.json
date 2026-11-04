@@ -1,0 +1,4071 @@
+{
+  "all_original_resource_obligations_preserved": true,
+  "analyzer_sha256": "63146df4723720655462fcf45ac935c493d161a265f9f0042b7e1260ad9ab31a",
+  "every_function_baseline_call_and_frontier_checked": 870,
+  "functions_with_ordinary_cfg_refinements": [
+    {
+      "address": "0x100000b30",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100000b3c",
+          "caller_depth_bytes": 16,
+          "detail": "0x100000b40",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100000b3c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "2946220500418759a0c9ae0148d7c6f1e101457f24a37a8161c7af8c020b67ab"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "parliament_memory_entry::main",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100000b3c",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "2946220500418759a0c9ae0148d7c6f1e101457f24a37a8161c7af8c020b67ab",
+          "ordinary_successor": "0x100000b40",
+          "target": "0x10003c804"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 4,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 4
+    },
+    {
+      "address": "0x100002980",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100002afc",
+          "caller_depth_bytes": 16,
+          "detail": "0x100002b00",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100002ad0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "__rustc::__rust_dealloc",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100002ad0",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9",
+          "ordinary_successor": "0x100002ad4",
+          "target": "0x10005a1f0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 96,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 85
+    },
+    {
+      "address": "0x100002b00",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100002d34",
+          "caller_depth_bytes": 80,
+          "detail": "0x100002d38",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100002d34"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "__rustc::__rust_realloc",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100002d34",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9",
+          "ordinary_successor": "0x100002d38",
+          "target": "0x10005a1f0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 142,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 142
+    },
+    {
+      "address": "0x10000fa04",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10000fc10",
+          "caller_depth_bytes": 160,
+          "detail": "0x10000fc14",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10000fc10"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::vec::Vec<u8> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<u8, core::iter::adapters::flatten::FlatMap<core::slice::iter::Iter<u64>, [u8; 8], iroha_parliament_ballot_proof::profile::crt_bytes::{closure#0}>>>::from_iter",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10000fc10",
+          "caller_depth_bytes": 160,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10000fc14",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 160,
+      "v4_visited_instructions": 132,
+      "v5_ordinary_maximum_sp_decrement_bytes": 160,
+      "v5_ordinary_visited_instructions": 132
+    },
+    {
+      "address": "0x10001440c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100014638",
+          "caller_depth_bytes": 96,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10001461c",
+            "0x100014634"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::vec::Vec<usize> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<usize, core::iter::adapters::map::Map<core::ops::range::RangeInclusive<usize>, iroha_zkp_vole::bavc::reconstruct_as::{closure#1}>>>::from_iter",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001461c",
+          "caller_depth_bytes": 96,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100014620",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100014634",
+          "caller_depth_bytes": 96,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100014638",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 96,
+      "v4_visited_instructions": 150,
+      "v5_ordinary_maximum_sp_decrement_bytes": 96,
+      "v5_ordinary_visited_instructions": 149
+    },
+    {
+      "address": "0x100015abc",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100015c14",
+          "caller_depth_bytes": 16,
+          "detail": "0 versus -16; loop/branch bound unproved",
+          "kind": "inconsistent_sp_merge",
+          "omitted_call_addresses": [
+            "0x100015c10"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::bavc::Shape>::new_as",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100015c10",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7",
+          "ordinary_successor": "0x100015c14",
+          "target": "0x10005a228"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [
+        {
+          "address": "0x100015c14",
+          "caller_depth_bytes": 16,
+          "detail": "0 versus -16; loop/branch bound unproved",
+          "kind": "inconsistent_sp_merge",
+          "omitted_call_addresses": [
+            "0x100015c10"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7"
+          ],
+          "status": "retained as an active deferred obligation"
+        }
+      ],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 93,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 93
+    },
+    {
+      "address": "0x100015c30",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100015fdc",
+          "caller_depth_bytes": 336,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100015fd8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::bavc::LeafCommitter>::commit",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100015fd8",
+          "caller_depth_bytes": 336,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100015fdc",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 336,
+      "v4_visited_instructions": 236,
+      "v5_ordinary_maximum_sp_decrement_bytes": 336,
+      "v5_ordinary_visited_instructions": 235
+    },
+    {
+      "address": "0x100016dd8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::bavc::expand_node",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100016f78",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100016f7c",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 208,
+      "v4_visited_instructions": 112,
+      "v5_ordinary_maximum_sp_decrement_bytes": 208,
+      "v5_ordinary_visited_instructions": 112
+    },
+    {
+      "address": "0x100016fd4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::bavc::hash_leaves",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001772c",
+          "caller_depth_bytes": 1200,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100017730",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1200,
+      "v4_visited_instructions": 477,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1200,
+      "v5_ordinary_visited_instructions": 476
+    },
+    {
+      "address": "0x100017da4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100017ef4",
+          "caller_depth_bytes": 144,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100017ef0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::bavc::opening_nodes",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100017ef0",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7",
+          "ordinary_successor": "0x100017ef4",
+          "target": "0x10005a228"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 144,
+      "v4_visited_instructions": 85,
+      "v5_ordinary_maximum_sp_decrement_bytes": 144,
+      "v5_ordinary_visited_instructions": 84
+    },
+    {
+      "address": "0x100017f00",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::bavc::reconstruct_as",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000185e0",
+          "caller_depth_bytes": 928,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000185e4",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100018650",
+          "caller_depth_bytes": 928,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100018654",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 928,
+      "v4_visited_instructions": 470,
+      "v5_ordinary_maximum_sp_decrement_bytes": 928,
+      "v5_ordinary_visited_instructions": 469
+    },
+    {
+      "address": "0x10001a324",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10001a398",
+          "caller_depth_bytes": 16,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10001a388",
+            "0x10001a394"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::iter::adapters::zip::Zip<core::slice::iter::ChunksExactMut<u64>, core::slice::iter::ChunksExact<u64>> as core::iter::adapters::zip::ZipImpl<core::slice::iter::ChunksExactMut<u64>, core::slice::iter::ChunksExact<u64>>>::new",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001a388",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9",
+          "ordinary_successor": "0x10001a38c",
+          "target": "0x10005a1f0"
+        },
+        {
+          "address": "0x10001a394",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "43754de5e58b90c5eda714cfa9d19a24e1639e09119211a2b4d38702ff7abbb9",
+          "ordinary_successor": "0x10001a398",
+          "target": "0x10005a1f0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 30,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 29
+    },
+    {
+      "address": "0x10001b6ec",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10001b984",
+          "caller_depth_bytes": 80,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10001b980"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::crt::matrix::BitMatrix>::apply_to_byte_columns",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001b980",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001b984",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 167,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 166
+    },
+    {
+      "address": "0x10001b9a4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10001bba0",
+          "caller_depth_bytes": 64,
+          "detail": "0x10001bba4",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10001bba0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::crt::matrix::BitMatrix>::mul_vec",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001bba0",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001bba4",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 128,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 128
+    },
+    {
+      "address": "0x10001e504",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::vole::Layout>::gate_labels",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001e778",
+          "caller_depth_bytes": 192,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001e77c",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 192,
+      "v4_visited_instructions": 168,
+      "v5_ordinary_maximum_sp_decrement_bytes": 192,
+      "v5_ordinary_visited_instructions": 168
+    },
+    {
+      "address": "0x10001e7d4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10001eccc",
+          "caller_depth_bytes": 112,
+          "detail": "0x10001ecd0",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10001ecb4",
+            "0x10001eccc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::vole::Layout>::fold_mask_rows",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001ecb4",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001ecb8",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x10001eccc",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001ecd0",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 112,
+      "v4_visited_instructions": 319,
+      "v5_ordinary_maximum_sp_decrement_bytes": 112,
+      "v5_ordinary_visited_instructions": 319
+    },
+    {
+      "address": "0x10001ecd0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::vole::Layout>::new",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001f22c",
+          "caller_depth_bytes": 304,
+          "fact_sha256": "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7",
+          "ordinary_successor": "0x10001f230",
+          "target": "0x10005a228"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 304,
+      "v4_visited_instructions": 357,
+      "v5_ordinary_maximum_sp_decrement_bytes": 304,
+      "v5_ordinary_visited_instructions": 357
+    },
+    {
+      "address": "0x10001f264",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::vole::Layout>::lift",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001f634",
+          "caller_depth_bytes": 160,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001f638",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 160,
+      "v4_visited_instructions": 246,
+      "v5_ordinary_maximum_sp_decrement_bytes": 160,
+      "v5_ordinary_visited_instructions": 246
+    },
+    {
+      "address": "0x10001f6a4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<iroha_zkp_vole::vole::Layout>::mask_tags",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10001fccc",
+          "caller_depth_bytes": 320,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10001fcd0",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 320,
+      "v4_visited_instructions": 400,
+      "v5_ordinary_maximum_sp_decrement_bytes": 320,
+      "v5_ordinary_visited_instructions": 399
+    },
+    {
+      "address": "0x10001fd48",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::vole::reconstruct_as",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002104c",
+          "caller_depth_bytes": 1424,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100021050",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x10002108c",
+          "caller_depth_bytes": 1424,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100021090",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100020c5c",
+          "caller_depth_bytes": 1424,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100020c60",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1424,
+      "v4_visited_instructions": 1244,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1424,
+      "v5_ordinary_visited_instructions": 1241
+    },
+    {
+      "address": "0x10002130c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000213a4",
+          "caller_depth_bytes": 16,
+          "detail": "0x1000213a8",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000213a4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::vole::spread",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000213a4",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000213a8",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 39,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 39
+    },
+    {
+      "address": "0x100022d54",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [
+        {
+          "address": "0x1000231f4",
+          "caller_depth_bytes": 320,
+          "kind": "call",
+          "omitted_call_addresses": [
+            "0x1000231dc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ],
+          "target": "0x100002980"
+        }
+      ],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000231fc",
+          "caller_depth_bytes": 320,
+          "detail": "__Unwind_Resume",
+          "kind": "native_edge",
+          "omitted_call_addresses": [
+            "0x1000231dc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        },
+        {
+          "address": "0x1000231fc",
+          "caller_depth_bytes": 320,
+          "detail": "0x100023200",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000231dc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "iroha_zkp_vole::codec::decode_as",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000231dc",
+          "caller_depth_bytes": 320,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000231e0",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 320,
+      "v4_visited_instructions": 299,
+      "v5_ordinary_maximum_sp_decrement_bytes": 320,
+      "v5_ordinary_visited_instructions": 291
+    },
+    {
+      "address": "0x1000237c4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000239cc",
+          "caller_depth_bytes": 112,
+          "detail": "0x1000239d0",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000239cc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "keccak::backends::aarch64_sha3::p1600_armv8_sha3",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000239cc",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000239d0",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 112,
+      "v4_visited_instructions": 131,
+      "v5_ordinary_maximum_sp_decrement_bytes": 112,
+      "v5_ordinary_visited_instructions": 131
+    },
+    {
+      "address": "0x100026480",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000264a4",
+          "caller_depth_bytes": 16,
+          "detail": "0x1000264a8",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000264a4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::ptr::drop_glue::<std::backtrace_rs::backtrace::libunwind::Bomb>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000264a4",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000264a8",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 10,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 10
+    },
+    {
+      "address": "0x10002675c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000267a0",
+          "caller_depth_bytes": 32,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002679c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "0fc3ceb25196aed313a14165d16fb9e3e96e6dac0e0686f11c682e263184f653"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::ptr::drop_glue::<std::sys::pal::unix::sync::mutex::AttrGuard>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002679c",
+          "caller_depth_bytes": 32,
+          "fact_sha256": "0fc3ceb25196aed313a14165d16fb9e3e96e6dac0e0686f11c682e263184f653",
+          "ordinary_successor": "0x1000267a0",
+          "target": "0x100058750"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 32,
+      "v4_visited_instructions": 18,
+      "v5_ordinary_maximum_sp_decrement_bytes": 32,
+      "v5_ordinary_visited_instructions": 17
+    },
+    {
+      "address": "0x1000270c8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100027384",
+          "caller_depth_bytes": 208,
+          "detail": "0x100027388",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100027384"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "gimli::read::line::parse_file_v5::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100027384",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100027388",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 208,
+      "v4_visited_instructions": 176,
+      "v5_ordinary_maximum_sp_decrement_bytes": 208,
+      "v5_ordinary_visited_instructions": 176
+    },
+    {
+      "address": "0x100027a4c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100027b3c",
+          "caller_depth_bytes": 160,
+          "detail": "0x100027b40",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100027b3c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "gimli::read::line::parse_directory_v5::<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100027b3c",
+          "caller_depth_bytes": 160,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100027b40",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 160,
+      "v4_visited_instructions": 61,
+      "v5_ordinary_maximum_sp_decrement_bytes": 160,
+      "v5_ordinary_visited_instructions": 61
+    },
+    {
+      "address": "0x100029008",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000292bc",
+          "caller_depth_bytes": 16,
+          "detail": "0x1000292c0",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000292bc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::sort8_stable::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000292bc",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x1000292c0",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 174,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 174
+    },
+    {
+      "address": "0x1000292c0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000296b8",
+          "caller_depth_bytes": 1584,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x1000296b4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::small_sort_general::<addr2line::line::LineSequence, <[addr2line::line::LineSequence]>::sort_unstable_by_key<u64, <addr2line::line::Lines>::parse<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#1}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000296b4",
+          "caller_depth_bytes": 1584,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x1000296b8",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1584,
+      "v4_visited_instructions": 255,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1584,
+      "v5_ordinary_visited_instructions": 254
+    },
+    {
+      "address": "0x1000296d8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100029bf8",
+          "caller_depth_bytes": 1584,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100029bf4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::small_sort_general::<addr2line::unit::UnitRange, <[addr2line::unit::UnitRange]>::sort_unstable_by_key<(u64, usize), <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#4}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100029bf4",
+          "caller_depth_bytes": 1584,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x100029bf8",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1584,
+      "v4_visited_instructions": 329,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1584,
+      "v5_ordinary_visited_instructions": 328
+    },
+    {
+      "address": "0x100029c18",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002a0dc",
+          "caller_depth_bytes": 1216,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002a0d8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::small_sort_general::<addr2line::function::FunctionAddress, <[addr2line::function::FunctionAddress]>::sort_unstable_by_key<u64, <addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#1}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002a0d8",
+          "caller_depth_bytes": 1216,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x10002a0dc",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1216,
+      "v4_visited_instructions": 306,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1216,
+      "v5_ordinary_visited_instructions": 305
+    },
+    {
+      "address": "0x10002a100",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002a6c8",
+          "caller_depth_bytes": 1600,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002a6c4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::small_sort_general::<addr2line::function::InlinedFunctionAddress, <[addr2line::function::InlinedFunctionAddress]>::sort_unstable_by<<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002a6c4",
+          "caller_depth_bytes": 1600,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x10002a6c8",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1600,
+      "v4_visited_instructions": 371,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1600,
+      "v5_ordinary_visited_instructions": 370
+    },
+    {
+      "address": "0x10002a6e8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002ab14",
+          "caller_depth_bytes": 1328,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002ab10"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::small_sort_general::<(&[u8], u64), <[(&[u8], u64)]>::sort_unstable_by_key<&[u8], <std::backtrace_rs::symbolize::gimli::macho::Object>::parse::{closure#1}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002ab10",
+          "caller_depth_bytes": 1328,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x10002ab14",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1328,
+      "v4_visited_instructions": 268,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1328,
+      "v5_ordinary_visited_instructions": 267
+    },
+    {
+      "address": "0x10002ab38",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002afdc",
+          "caller_depth_bytes": 1200,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002afd8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::shared::smallsort::small_sort_general::<(&[u8], u64), <[(&[u8], u64)]>::sort_unstable_by_key<u64, <std::backtrace_rs::symbolize::gimli::macho::Object>::parse::{closure#2}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002afd8",
+          "caller_depth_bytes": 1200,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x10002afdc",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 1200,
+      "v4_visited_instructions": 298,
+      "v5_ordinary_maximum_sp_decrement_bytes": 1200,
+      "v5_ordinary_visited_instructions": 297
+    },
+    {
+      "address": "0x10002c840",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::unstable::quicksort::quicksort::<(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset), <[(gimli::common::DebugInfoOffset, gimli::common::DebugArangesOffset)]>::sort_unstable_by_key<gimli::common::DebugInfoOffset, <addr2line::unit::ResUnits<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::parse::{closure#0}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002cf78",
+          "caller_depth_bytes": 864,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x10002cf7c",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 864,
+      "v4_visited_instructions": 464,
+      "v5_ordinary_maximum_sp_decrement_bytes": 864,
+      "v5_ordinary_visited_instructions": 464
+    },
+    {
+      "address": "0x10002d8e8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002d948",
+          "caller_depth_bytes": 32,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10002d94c",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 32,
+      "v4_visited_instructions": 28,
+      "v5_ordinary_maximum_sp_decrement_bytes": 32,
+      "v5_ordinary_visited_instructions": 28
+    },
+    {
+      "address": "0x10002d958",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002d9b8",
+          "caller_depth_bytes": 64,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002d9b4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sync::once::Once>::call_once_force::<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::cleanup::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0}",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002d9b4",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10002d9b8",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 25,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 24
+    },
+    {
+      "address": "0x10002d9e8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002db7c",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002db58",
+            "0x10002db78"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371",
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sync::once::Once>::call_once::<std::rt::cleanup::{closure#0}>::{closure#0}",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002db58",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10002db5c",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x10002db78",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371",
+          "ordinary_successor": "0x10002db7c",
+          "target": "0x100059dd8"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 108,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 107
+    },
+    {
+      "address": "0x10002e9b8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::stdout::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002ea18",
+          "caller_depth_bytes": 32,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10002ea1c",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 32,
+      "v4_visited_instructions": 28,
+      "v5_ordinary_maximum_sp_decrement_bytes": 32,
+      "v5_ordinary_visited_instructions": 28
+    },
+    {
+      "address": "0x10002ea28",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10002ea88",
+          "caller_depth_bytes": 64,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10002ea84"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<<std::sync::once::Once>::call_once_force<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::initialize<<std::sync::once_lock::OnceLock<std::sync::reentrant_lock::ReentrantLock<core::cell::RefCell<alloc::io::buffered::linewriter::LineWriter<std::io::stdio::StdoutRaw>>>>>::get_or_init<std::io::stdio::cleanup::{closure#0}>::{closure#0}, !>::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&std::sync::once::OnceState,)>>::call_once::{shim:vtable#0}",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002ea84",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10002ea88",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 25,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 24
+    },
+    {
+      "address": "0x10002eb94",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "__rustc::__rust_drop_panic",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002ebc8",
+          "caller_depth_bytes": 32,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x10002ebcc",
+          "target": "0x1000597a0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 32,
+      "v4_visited_instructions": 22,
+      "v5_ordinary_maximum_sp_decrement_bytes": 32,
+      "v5_ordinary_visited_instructions": 22
+    },
+    {
+      "address": "0x10002ec1c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "__rustc::__rust_foreign_exception",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002ec50",
+          "caller_depth_bytes": 32,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x10002ec54",
+          "target": "0x1000597a0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 32,
+      "v4_visited_instructions": 22,
+      "v5_ordinary_maximum_sp_decrement_bytes": 32,
+      "v5_ordinary_visited_instructions": 22
+    },
+    {
+      "address": "0x10002f480",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::pal::unix::sync::mutex::Mutex>::init",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10002f4fc",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "0fc3ceb25196aed313a14165d16fb9e3e96e6dac0e0686f11c682e263184f653",
+          "ordinary_successor": "0x10002f500",
+          "target": "0x100058750"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 107,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 107
+    },
+    {
+      "address": "0x100030c2c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::sync::rwlock::queue::RwLock>::unlock_queue",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100030ddc",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100030de0",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 110,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 110
+    },
+    {
+      "address": "0x1000346e8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::thread::thread::Thread>::new",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000347fc",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100034800",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 75,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 74
+    },
+    {
+      "address": "0x10003b690",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10003b888",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003b874",
+            "0x10003b884"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        },
+        {
+          "address": "0x10003b878",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003b874",
+            "0x10003b884"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::collections::btree::map::IntoIter<u64, core::result::Result<alloc::sync::Arc<gimli::read::abbrev::Abbreviations>, gimli::read::Error>>>::dying_next",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003b884",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10003b888",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x10003b874",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10003b878",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 127,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 125
+    },
+    {
+      "address": "0x10003b88c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10003ba84",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003ba70",
+            "0x10003ba80"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        },
+        {
+          "address": "0x10003ba74",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003ba70",
+            "0x10003ba80"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::collections::btree::map::IntoIter<u64, gimli::read::abbrev::Abbreviation>>::dying_next",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003ba80",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10003ba84",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x10003ba70",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10003ba74",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 127,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 125
+    },
+    {
+      "address": "0x10003bafc",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "std::rt::lang_start_internal",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003bfa4",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x10003bfa8",
+          "target": "0x1000597a0"
+        },
+        {
+          "address": "0x10003bf88",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10003bf8c",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x10003bfcc",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "7847adaefa2c5eb09b90d64dfe5983c04383279e01e4153d7327cc7ba16c5ff7",
+          "ordinary_successor": "0x10003bfd0",
+          "target": "0x10005a228"
+        },
+        {
+          "address": "0x10003bf2c",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10003bf30",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 144,
+      "v4_visited_instructions": 336,
+      "v5_ordinary_maximum_sp_decrement_bytes": 144,
+      "v5_ordinary_visited_instructions": 333
+    },
+    {
+      "address": "0x10003ca3c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10003cda4",
+          "caller_depth_bytes": 208,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003cc0c",
+            "0x10003ccc0",
+            "0x10003cd48"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+            "d575ccf62fb86b8a775a4e40bd5d701ca4326e3ec405fb185456ee08406b4946",
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::panicking::panic_with_hook",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003cd48",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x10003cd4c",
+          "target": "0x1000597a0"
+        },
+        {
+          "address": "0x10003ccc0",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "d575ccf62fb86b8a775a4e40bd5d701ca4326e3ec405fb185456ee08406b4946",
+          "ordinary_successor": "0x10003ccc4",
+          "target": "0x100058c70"
+        },
+        {
+          "address": "0x10003cc0c",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10003cc10",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 208,
+      "v4_visited_instructions": 202,
+      "v5_ordinary_maximum_sp_decrement_bytes": 208,
+      "v5_ordinary_visited_instructions": 200
+    },
+    {
+      "address": "0x10003d0d8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10003d194",
+          "caller_depth_bytes": 96,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003d190"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::io::stdio::_print",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003d190",
+          "caller_depth_bytes": 96,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10003d194",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 96,
+      "v4_visited_instructions": 48,
+      "v5_ordinary_maximum_sp_decrement_bytes": 96,
+      "v5_ordinary_visited_instructions": 47
+    },
+    {
+      "address": "0x10003d1e8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10003d28c",
+          "caller_depth_bytes": 96,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003d288"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::io::stdio::_eprint",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003d288",
+          "caller_depth_bytes": 96,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10003d28c",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 96,
+      "v4_visited_instructions": 42,
+      "v5_ordinary_maximum_sp_decrement_bytes": 96,
+      "v5_ordinary_visited_instructions": 41
+    },
+    {
+      "address": "0x10003fdf8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100040020",
+          "caller_depth_bytes": 128,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10003ffe0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::env::unix::env_read_lock",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10003ffe0",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10003ffe4",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 128,
+      "v4_visited_instructions": 125,
+      "v5_ordinary_maximum_sp_decrement_bytes": 128,
+      "v5_ordinary_visited_instructions": 123
+    },
+    {
+      "address": "0x10004036c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100040478",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100040470",
+            "0x100040474"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+            "64aaa26ace19e656bd2de72e9b093538bcea8961d68a5b18d6549e524bed3718"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::thread_local::destructors::list::register",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100040470",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x100040474",
+          "target": "0x1000597a0"
+        },
+        {
+          "address": "0x100040474",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "64aaa26ace19e656bd2de72e9b093538bcea8961d68a5b18d6549e524bed3718",
+          "ordinary_successor": "0x100040478",
+          "target": "0x100058c28"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 68,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 67
+    },
+    {
+      "address": "0x1000404c8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100040548",
+          "caller_depth_bytes": 192,
+          "detail": "0x10004054c",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100040548"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::io::error::unix::error_string",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100040548",
+          "caller_depth_bytes": 192,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10004054c",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 192,
+      "v4_visited_instructions": 33,
+      "v5_ordinary_maximum_sp_decrement_bytes": 192,
+      "v5_ordinary_visited_instructions": 33
+    },
+    {
+      "address": "0x100040700",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::pal::unix::stack_overflow::thread_info::set_current_info",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100040b48",
+          "caller_depth_bytes": 304,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100040b4c",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100041210",
+          "caller_depth_bytes": 304,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100041214",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x100041230",
+          "caller_depth_bytes": 304,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100041234",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 304,
+      "v4_visited_instructions": 775,
+      "v5_ordinary_maximum_sp_decrement_bytes": 304,
+      "v5_ordinary_visited_instructions": 772
+    },
+    {
+      "address": "0x1000413f4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100041594",
+          "caller_depth_bytes": 96,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100041534",
+            "0x100041590"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::pal::unix::stack_overflow::imp::make_handler",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100041534",
+          "caller_depth_bytes": 96,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100041538",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100041590",
+          "caller_depth_bytes": 96,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100041594",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 96,
+      "v4_visited_instructions": 113,
+      "v5_ordinary_maximum_sp_decrement_bytes": 96,
+      "v5_ordinary_visited_instructions": 111
+    },
+    {
+      "address": "0x1000415e0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [
+        {
+          "address": "0x1000417cc",
+          "caller_depth_bytes": 128,
+          "kind": "call",
+          "omitted_call_addresses": [
+            "0x1000417c8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd"
+          ],
+          "target": "0x10005a05c"
+        },
+        {
+          "address": "0x1000417d4",
+          "caller_depth_bytes": 128,
+          "kind": "call",
+          "omitted_call_addresses": [
+            "0x1000417c8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd"
+          ],
+          "target": "0x10005a05c"
+        }
+      ],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000417d8",
+          "caller_depth_bytes": 128,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x1000417c8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::pal::unix::stack_overflow::imp::signal_handler",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000417c8",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x1000417cc",
+          "target": "0x1000597a0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 128,
+      "v4_visited_instructions": 127,
+      "v5_ordinary_maximum_sp_decrement_bytes": 128,
+      "v5_ordinary_visited_instructions": 123
+    },
+    {
+      "address": "0x100041878",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000418e4",
+          "caller_depth_bytes": 48,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x1000418e0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::sys::thread_local::guard::apple::enable::run_dtors",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000418e0",
+          "caller_depth_bytes": 48,
+          "fact_sha256": "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371",
+          "ordinary_successor": "0x1000418e4",
+          "target": "0x100059dd8"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 48,
+      "v4_visited_instructions": 59,
+      "v5_ordinary_maximum_sp_decrement_bytes": 48,
+      "v5_ordinary_visited_instructions": 58
+    },
+    {
+      "address": "0x100041e00",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100041ed8",
+          "caller_depth_bytes": 48,
+          "detail": "__Unwind_Resume",
+          "kind": "native_edge",
+          "omitted_call_addresses": [
+            "0x100041ed0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371"
+          ]
+        },
+        {
+          "address": "0x100041ee8",
+          "caller_depth_bytes": 48,
+          "detail": "__Unwind_Resume",
+          "kind": "native_edge",
+          "omitted_call_addresses": [
+            "0x100041ed0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371"
+          ]
+        },
+        {
+          "address": "0x100041ee8",
+          "caller_depth_bytes": 48,
+          "detail": "0x100041eec",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100041ed0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::io::write::default_write_fmt::Adapter<std::io::stdio::StderrLock> as core::fmt::Write>::write_str",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100041ed0",
+          "caller_depth_bytes": 48,
+          "fact_sha256": "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371",
+          "ordinary_successor": "0x100041ed4",
+          "target": "0x100059dd8"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 48,
+      "v4_visited_instructions": 59,
+      "v5_ordinary_maximum_sp_decrement_bytes": 48,
+      "v5_ordinary_visited_instructions": 53
+    },
+    {
+      "address": "0x100043190",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100043274",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100043270"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::fs::unix::DirStream as core::ops::drop::Drop>::drop",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100043270",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100043274",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 62,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 61
+    },
+    {
+      "address": "0x1000432b4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100043320",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10004331c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<&std::io::stdio::Stdout as core::io::write::Write>::write_fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004331c",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100043320",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 57,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 56
+    },
+    {
+      "address": "0x100043410",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::io::stdio::StdoutLock as core::io::write::Write>::write_all",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100043578",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "d1d080e120cf85e309544fe1e789ba8e8056796c90c8cbce4811a3b2e8d11371",
+          "ordinary_successor": "0x10004357c",
+          "target": "0x100059dd8"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 97,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 97
+    },
+    {
+      "address": "0x100043cf4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100043d60",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100043d5c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<&std::io::stdio::Stderr as core::io::write::Write>::write_fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100043d5c",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100043d60",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 57,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 56
+    },
+    {
+      "address": "0x100043e6c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<&str as core::str::pattern::Pattern>::is_contained_in",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000445b8",
+          "caller_depth_bytes": 368,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x1000445bc",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 368,
+      "v4_visited_instructions": 479,
+      "v5_ordinary_maximum_sp_decrement_bytes": 368,
+      "v5_ordinary_visited_instructions": 479
+    },
+    {
+      "address": "0x1000445f4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100044648",
+          "caller_depth_bytes": 64,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100044644"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::vec::Vec<u8> as core::io::write::Write>::write_fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100044644",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100044648",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 40,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 39
+    },
+    {
+      "address": "0x1000446ac",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100044700",
+          "caller_depth_bytes": 64,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x1000446fc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::io::cursor::Cursor<&mut [u8]> as core::io::write::Write>::write_fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000446fc",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100044700",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 40,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 39
+    },
+    {
+      "address": "0x100045344",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [
+        {
+          "address": "0x100045408",
+          "caller_depth_bytes": 224,
+          "kind": "call",
+          "omitted_call_addresses": [
+            "0x1000453f0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ],
+          "target": "0x100002980"
+        }
+      ],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100045410",
+          "caller_depth_bytes": 224,
+          "detail": "__Unwind_Resume",
+          "kind": "native_edge",
+          "omitted_call_addresses": [
+            "0x1000453f0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        },
+        {
+          "address": "0x100045410",
+          "caller_depth_bytes": 224,
+          "detail": "0x100045414",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000453f0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<<core::io::error::Error>::from_raw_os_error::FUNCTIONS::{closure#0} as core::ops::function::FnOnce<(i32, &mut core::fmt::Formatter)>>::call_once",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000453f0",
+          "caller_depth_bytes": 224,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000453f4",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 224,
+      "v4_visited_instructions": 52,
+      "v5_ordinary_maximum_sp_decrement_bytes": 224,
+      "v5_ordinary_visited_instructions": 44
+    },
+    {
+      "address": "0x100045458",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::stdio::unix::Stderr as core::io::write::Write>::write_all_vectored",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000455d8",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000455dc",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x10004562c",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100045630",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 112,
+      "v4_visited_instructions": 129,
+      "v5_ordinary_maximum_sp_decrement_bytes": 112,
+      "v5_ordinary_visited_instructions": 129
+    },
+    {
+      "address": "0x100045788",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000457dc",
+          "caller_depth_bytes": 64,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x1000457d8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::stdio::unix::Stderr as core::io::write::Write>::write_fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000457d8",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000457dc",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 40,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 39
+    },
+    {
+      "address": "0x1000469e0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::sort::stable::quicksort::quicksort::<object::read::symbol_map::ObjectMapEntry, <[object::read::symbol_map::ObjectMapEntry]>::sort_by_key<u64, <object::read::symbol_map::SymbolMap<object::read::symbol_map::ObjectMapEntry>>::new::{closure#0}>::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000471dc",
+          "caller_depth_bytes": 160,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000471e0",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x1000471e0",
+          "caller_depth_bytes": 160,
+          "fact_sha256": "852844e87cb20ab682b233bc2e86ed70ae8060257d6f2eef53b75260a07e69b4",
+          "ordinary_successor": "0x1000471e4",
+          "target": "0x10005a26c"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 160,
+      "v4_visited_instructions": 529,
+      "v5_ordinary_maximum_sp_decrement_bytes": 160,
+      "v5_ordinary_visited_instructions": 529
+    },
+    {
+      "address": "0x1000473b0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000474f8",
+          "caller_depth_bytes": 16,
+          "detail": "0x1000474fc",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000474f8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "object::read::archive::parse_u64_digits",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000474f8",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000474fc",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 83,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 83
+    },
+    {
+      "address": "0x100047dcc",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100047e28",
+          "caller_depth_bytes": 48,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100047e24"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Owned, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Internal>>::new_internal::<alloc::alloc::Global>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100047e24",
+          "caller_depth_bytes": 48,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100047e28",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 48,
+      "v4_visited_instructions": 24,
+      "v5_ordinary_maximum_sp_decrement_bytes": 48,
+      "v5_ordinary_visited_instructions": 23
+    },
+    {
+      "address": "0x100048170",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100048324",
+          "caller_depth_bytes": 432,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100048320"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<alloc::collections::btree::node::Handle<alloc::collections::btree::node::NodeRef<alloc::collections::btree::node::marker::Mut, u64, gimli::read::abbrev::Abbreviation, alloc::collections::btree::node::marker::Leaf>, alloc::collections::btree::node::marker::Edge>>::insert_recursing::<alloc::alloc::Global, <alloc::collections::btree::map::entry::VacantEntry<u64, gimli::read::abbrev::Abbreviation>>::insert_entry::{closure#0}>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100048320",
+          "caller_depth_bytes": 432,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100048324",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 432,
+      "v4_visited_instructions": 110,
+      "v5_ordinary_maximum_sp_decrement_bytes": 432,
+      "v5_ordinary_visited_instructions": 109
+    },
+    {
+      "address": "0x1000489b4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100048a24",
+          "caller_depth_bytes": 48,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100048a20"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "68e692a18de0a3cc86c5245afa341a4b45a7bc5e9f42d63c0106fb255dfa50e2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<gimli::read::abbrev::Abbreviation>::new",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100048a20",
+          "caller_depth_bytes": 48,
+          "fact_sha256": "68e692a18de0a3cc86c5245afa341a4b45a7bc5e9f42d63c0106fb255dfa50e2",
+          "ordinary_successor": "0x100048a24",
+          "target": "0x100059d50"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 48,
+      "v4_visited_instructions": 29,
+      "v5_ordinary_maximum_sp_decrement_bytes": 48,
+      "v5_ordinary_visited_instructions": 28
+    },
+    {
+      "address": "0x10004a694",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "rustc_demangle::demangle",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004b024",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004b028",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004afe4",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004afe8",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004adfc",
+          "caller_depth_bytes": 208,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004ae00",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 208,
+      "v4_visited_instructions": 622,
+      "v5_ordinary_maximum_sp_decrement_bytes": 208,
+      "v5_ordinary_visited_instructions": 622
+    },
+    {
+      "address": "0x10004b310",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10004b410",
+          "caller_depth_bytes": 16,
+          "detail": "0x10004b414",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10004b410"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<rustc_demangle::v0::HexNibbles>::try_parse_uint",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004b410",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10004b414",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 65,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 65
+    },
+    {
+      "address": "0x10004b4f0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10004b5ac",
+          "caller_depth_bytes": 16,
+          "detail": "0x10004b5b0",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10004b5ac"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<rustc_demangle::v0::Parser>::hex_nibbles",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004b5ac",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004b5b0",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 48,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 48
+    },
+    {
+      "address": "0x10004b648",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10004b8a0",
+          "caller_depth_bytes": 16,
+          "detail": "0x10004b8a4",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10004b85c",
+            "0x10004b88c",
+            "0x10004b8a0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<rustc_demangle::v0::Parser>::ident",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004b88c",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004b890",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004b8a0",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004b8a4",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004b85c",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004b860",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 151,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 151
+    },
+    {
+      "address": "0x10004cab0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10004cc0c",
+          "caller_depth_bytes": 80,
+          "detail": "0x10004cc10",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10004cc0c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<rustc_demangle::v0::Printer>::print_const_uint",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004cc0c",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10004cc10",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 88,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 88
+    },
+    {
+      "address": "0x10004d300",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<rustc_demangle::legacy::Demangle as core::fmt::Display>::fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004dd4c",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10004dd50",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x10004ddac",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004ddb0",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004dd64",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004dd68",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004dcec",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004dcf0",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004de40",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004de44",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004ddd4",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004ddd8",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10004dd88",
+          "caller_depth_bytes": 128,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004dd8c",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 128,
+      "v4_visited_instructions": 736,
+      "v5_ordinary_maximum_sp_decrement_bytes": 128,
+      "v5_ordinary_visited_instructions": 736
+    },
+    {
+      "address": "0x10004de94",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10004e134",
+          "caller_depth_bytes": 112,
+          "detail": "0x10004e138",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10004e0bc",
+            "0x10004e134"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+            "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::iter::sources::from_fn::FromFn<<rustc_demangle::v0::HexNibbles>::try_parse_str_chars::{closure#2}> as core::iter::traits::iterator::Iterator>::next",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004e0bc",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x10004e0c0",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x10004e134",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10004e138",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 112,
+      "v4_visited_instructions": 169,
+      "v5_ordinary_maximum_sp_decrement_bytes": 112,
+      "v5_ordinary_visited_instructions": 169
+    },
+    {
+      "address": "0x10004e848",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::str::pattern::StrSearcher as core::str::pattern::Searcher>::next",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004ea4c",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x10004ea50",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 199,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 199
+    },
+    {
+      "address": "0x10004f064",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10004f0c4",
+          "caller_depth_bytes": 16,
+          "detail": "0x10004f0c8",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10004f0c4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "alloc::sync::arcinner_layout_for_value_layout",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10004f0c4",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10004f0c8",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 25,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 25
+    },
+    {
+      "address": "0x100051738",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "core::str::slice_error_fail_rt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100051a88",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100051a8c",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x1000517b0",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000517b4",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100051ab4",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100051ab8",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x1000518a4",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x1000518a8",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x10005182c",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x100051830",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x100051960",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100051964",
+          "target": "0x100059e40"
+        },
+        {
+          "address": "0x100051a5c",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100051a60",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100051a10",
+          "caller_depth_bytes": 112,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100051a14",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 112,
+      "v4_visited_instructions": 233,
+      "v5_ordinary_maximum_sp_decrement_bytes": 112,
+      "v5_ordinary_visited_instructions": 233
+    },
+    {
+      "address": "0x1000549c4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100054d20",
+          "caller_depth_bytes": 144,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100054c90",
+            "0x100054d1c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<str as core::fmt::Debug>::fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100054c90",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x100054c94",
+          "target": "0x100059d90"
+        },
+        {
+          "address": "0x100054d1c",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "09c5dac40043e553f4cb4f6509119bc011a13c93c807d57057ec976cfbcf6f20",
+          "ordinary_successor": "0x100054d20",
+          "target": "0x100059d90"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 144,
+      "v4_visited_instructions": 216,
+      "v5_ordinary_maximum_sp_decrement_bytes": 144,
+      "v5_ordinary_visited_instructions": 215
+    },
+    {
+      "address": "0x100055980",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000559c4",
+          "caller_depth_bytes": 16,
+          "detail": "0x1000559c8",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000559c4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::get_or_init<<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::dwarf_and_unit::{closure#6}::{closure#0}>::{closure#0}, !>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000559c4",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000559c8",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 18,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 18
+    },
+    {
+      "address": "0x1000559c8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100055a2c",
+          "caller_depth_bytes": 16,
+          "detail": "0x100055a30",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100055a2c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<core::option::Option<alloc::boxed::Box<addr2line::unit::DwoUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>>, gimli::read::Error>>>::get_or_init<<addr2line::unit::ResUnit<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::dwarf_and_unit::{closure#4}>::{closure#0}, !>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100055a2c",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100055a30",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 26,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 26
+    },
+    {
+      "address": "0x100055a30",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::cell::once::OnceCell<core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<addr2line::function::Function<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::get_or_init<<addr2line::function::LazyFunction<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::borrow::{closure#0}>::{closure#0}, !>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100055f78",
+          "caller_depth_bytes": 368,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100055f7c",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x100055f84",
+          "caller_depth_bytes": 368,
+          "fact_sha256": "fc148e7112bd786d7c618f22ac643fc493f36818fe4ab072cf52dd365d06eac2",
+          "ordinary_successor": "0x100055f88",
+          "target": "0x100059e40"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 368,
+      "v4_visited_instructions": 345,
+      "v5_ordinary_maximum_sp_decrement_bytes": 368,
+      "v5_ordinary_visited_instructions": 345
+    },
+    {
+      "address": "0x10005600c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::cell::once::OnceCell<core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<addr2line::function::Functions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>, gimli::read::Error>>>::get_or_init<<addr2line::function::LazyFunctions<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>>::borrow::{closure#0}>::{closure#0}, !>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100056bf0",
+          "caller_depth_bytes": 576,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100056bf4",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 576,
+      "v4_visited_instructions": 829,
+      "v5_ordinary_maximum_sp_decrement_bytes": 576,
+      "v5_ordinary_visited_instructions": 829
+    },
+    {
+      "address": "0x100056d8c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::cell::once::OnceCell<core::result::Result<addr2line::line::Lines, gimli::read::Error>>>::try_init::<<core::cell::once::OnceCell<core::result::Result<addr2line::line::Lines, gimli::read::Error>>>::get_or_init<<addr2line::line::LazyLines>::borrow<gimli::read::endian_slice::EndianSlice<gimli::endianity::LittleEndian>>::{closure#0}>::{closure#0}, !>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100058254",
+          "caller_depth_bytes": 864,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100058258",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 864,
+      "v4_visited_instructions": 950,
+      "v5_ordinary_maximum_sp_decrement_bytes": 864,
+      "v5_ordinary_visited_instructions": 950
+    },
+    {
+      "address": "0x100058430",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10005852c",
+          "caller_depth_bytes": 64,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100058528"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<core::cell::once::OnceCell<std::thread::thread::Thread>>::try_init::<<core::cell::once::OnceCell<std::thread::thread::Thread>>::get_or_init<std::thread::current::current_or_unnamed>::{closure#0}, !>",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100058528",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10005852c",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 64,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 63
+    },
+    {
+      "address": "0x100058ab4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100058ae8",
+          "caller_depth_bytes": 16,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100058ae4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "std::alloc::rust_oom::{closure#0}",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100058ae4",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x100058ae8",
+          "target": "0x1000597a0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 14,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 13
+    },
+    {
+      "address": "0x100058ce4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [
+        {
+          "address": "0x100058ed4",
+          "caller_depth_bytes": 80,
+          "kind": "call",
+          "omitted_call_addresses": [
+            "0x100058ec8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ],
+          "target": "0x100041fe8"
+        },
+        {
+          "address": "0x100058ee0",
+          "caller_depth_bytes": 80,
+          "kind": "call",
+          "omitted_call_addresses": [
+            "0x100058ec8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ],
+          "target": "0x100059f20"
+        }
+      ],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100058edc",
+          "caller_depth_bytes": 80,
+          "detail": "__Unwind_Resume",
+          "kind": "native_edge",
+          "omitted_call_addresses": [
+            "0x100058ec8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        },
+        {
+          "address": "0x100058ee0",
+          "caller_depth_bytes": 80,
+          "detail": "0x100058ee4",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100058ec8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::sync::once::queue::Once>::call",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100058ec8",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100058ecc",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 128,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 122
+    },
+    {
+      "address": "0x1000597d4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "std::thread::current::init_current",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059900",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100059904",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x1000598e8",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x1000598ec",
+          "target": "0x1000597a0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 77,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 77
+    },
+    {
+      "address": "0x100059998",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x1000599b4",
+          "caller_depth_bytes": 16,
+          "detail": "0x1000599b8",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x1000599b4"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::thread::id::ThreadId>::new::exhausted",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x1000599b4",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x1000599b8",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 8,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 8
+    },
+    {
+      "address": "0x1000599b8",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059a18",
+          "caller_depth_bytes": 80,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100059a14"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::pal::unix::sync::mutex::Mutex>::lock::fail",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059a14",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100059a18",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 32,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 31
+    },
+    {
+      "address": "0x100059a84",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059aa8",
+          "caller_depth_bytes": 32,
+          "detail": "0x100059aac",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100059aa8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "<std::sys::sync::rwlock::queue::PanicGuard as core::ops::drop::Drop>::drop",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059aa8",
+          "caller_depth_bytes": 32,
+          "fact_sha256": "29a2cfca28a3f37c97919f8d15bc5054d1bfbe9ac37cc1a06ec05866a87644cd",
+          "ordinary_successor": "0x100059aac",
+          "target": "0x1000597a0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 32,
+      "v4_visited_instructions": 10,
+      "v5_ordinary_maximum_sp_decrement_bytes": 32,
+      "v5_ordinary_visited_instructions": 10
+    },
+    {
+      "address": "0x100059cc4",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059cd8",
+          "caller_depth_bytes": 16,
+          "detail": "0x100059cdc",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100059cd8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "4b1b62cab7b08d94a3b4e43ff4d30260026ad74a4fd26b73ae05e76d6e35bfb4"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "alloc::alloc::handle_alloc_error",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059cd8",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "4b1b62cab7b08d94a3b4e43ff4d30260026ad74a4fd26b73ae05e76d6e35bfb4",
+          "ordinary_successor": "0x100059cdc",
+          "target": "0x100058cb8"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 6,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 6
+    },
+    {
+      "address": "0x100059cdc",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [],
+      "exact_v4_baseline_retained": true,
+      "function": "alloc::raw_vec::handle_error",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059ce8",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "60a369e41426c1e40e5be4275bc74b1f3b78493a871e47e40076ad393f8f9142",
+          "ordinary_successor": "0x100059cec",
+          "target": "0x100059cf0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 5,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 5
+    },
+    {
+      "address": "0x100059e10",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059e3c",
+          "caller_depth_bytes": 48,
+          "detail": "0x100059e40",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100059e3c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::option::expect_failed",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059e3c",
+          "caller_depth_bytes": 48,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100059e40",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 48,
+      "v4_visited_instructions": 12,
+      "v5_ordinary_maximum_sp_decrement_bytes": 48,
+      "v5_ordinary_visited_instructions": 12
+    },
+    {
+      "address": "0x100059e7c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059ec0",
+          "caller_depth_bytes": 80,
+          "detail": "0x100059ec4",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100059ec0"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::result::unwrap_failed",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059ec0",
+          "caller_depth_bytes": 80,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100059ec4",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 80,
+      "v4_visited_instructions": 18,
+      "v5_ordinary_maximum_sp_decrement_bytes": 80,
+      "v5_ordinary_visited_instructions": 18
+    },
+    {
+      "address": "0x100059f20",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059f34",
+          "caller_depth_bytes": 16,
+          "detail": "0x100059f38",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100059f34"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "48f30c61c22be42eb8afaaef7071cc5a85cbf6489a8582696de4ac93b68c5939"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::panicking::panic_in_cleanup",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059f34",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "48f30c61c22be42eb8afaaef7071cc5a85cbf6489a8582696de4ac93b68c5939",
+          "ordinary_successor": "0x100059f38",
+          "target": "0x10005a074"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 6,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 6
+    },
+    {
+      "address": "0x100059f38",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059f6c",
+          "caller_depth_bytes": 64,
+          "detail": "0x100059f70",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x100059f6c"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::panicking::panic_bounds_check",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059f6c",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x100059f70",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 14,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 14
+    },
+    {
+      "address": "0x100059f70",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x100059f98",
+          "caller_depth_bytes": 64,
+          "detail": "brk #0x1",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x100059f94"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "3927879b779fb67de12ebbbdbe903124a094d2fa3d0bbbda18a67549b0507950"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::panicking::panic_nounwind_fmt",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x100059f94",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "3927879b779fb67de12ebbbdbe903124a094d2fa3d0bbbda18a67549b0507950",
+          "ordinary_successor": "0x100059f98",
+          "target": "0x10002ebf0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 11,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 10
+    },
+    {
+      "address": "0x100059fa0",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10005a058",
+          "caller_depth_bytes": 144,
+          "detail": "0x10005a05c",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10005a058"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::panicking::assert_failed_inner",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10005a058",
+          "caller_depth_bytes": 144,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10005a05c",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 144,
+      "v4_visited_instructions": 47,
+      "v5_ordinary_maximum_sp_decrement_bytes": 144,
+      "v5_ordinary_visited_instructions": 47
+    },
+    {
+      "address": "0x10005a05c",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10005a070",
+          "caller_depth_bytes": 16,
+          "detail": "0x10005a074",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10005a070"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "54b6a66f447e42a97e07ed5be8430763d8ec6dd17170735f6843aad4739ad04e"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::panicking::panic_cannot_unwind",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10005a070",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "54b6a66f447e42a97e07ed5be8430763d8ec6dd17170735f6843aad4739ad04e",
+          "ordinary_successor": "0x10005a074",
+          "target": "0x100059ec4"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 6,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 6
+    },
+    {
+      "address": "0x10005a0bc",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10005a0cc",
+          "caller_depth_bytes": 16,
+          "detail": "0x10005a0d0",
+          "kind": "function_fallthrough",
+          "omitted_call_addresses": [
+            "0x10005a0cc"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::panicking::panic",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10005a0cc",
+          "caller_depth_bytes": 16,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10005a0d0",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 16,
+      "v4_visited_instructions": 5,
+      "v5_ordinary_maximum_sp_decrement_bytes": 16,
+      "v5_ordinary_visited_instructions": 5
+    },
+    {
+      "address": "0x10005a138",
+      "all_original_calls_and_frontiers_preserved_with_exact_depths": true,
+      "deferred_continuation_calls": [],
+      "deferred_continuation_frontiers": [
+        {
+          "address": "0x10005a1ec",
+          "caller_depth_bytes": 64,
+          "detail": "udf #0x0",
+          "kind": "exceptional_terminal",
+          "omitted_call_addresses": [
+            "0x10005a178",
+            "0x10005a1b8",
+            "0x10005a1e8"
+          ],
+          "ordinary_reachability": "deferred after terminal-callee refinement; resource obligation retained",
+          "refinement_fact_sha256s": [
+            "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae"
+          ]
+        }
+      ],
+      "exact_v4_baseline_retained": true,
+      "function": "core::slice::index::slice_index_fail",
+      "ordinary_continuations_omitted": [
+        {
+          "address": "0x10005a178",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10005a17c",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x10005a1e8",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10005a1ec",
+          "target": "0x10005a0d0"
+        },
+        {
+          "address": "0x10005a1b8",
+          "caller_depth_bytes": 64,
+          "fact_sha256": "95a61d736aa0fbc6d026c9302c63fb28fa3070335156e0aff747e1ef37256fae",
+          "ordinary_successor": "0x10005a1bc",
+          "target": "0x10005a0d0"
+        }
+      ],
+      "ordinary_sp_merge_explanations": [],
+      "original_maximum_sp_decrement_bytes": 64,
+      "v4_visited_instructions": 46,
+      "v5_ordinary_maximum_sp_decrement_bytes": 64,
+      "v5_ordinary_visited_instructions": 45
+    }
+  ],
+  "image_binding_sha256": "0b04a285f1a3d9c0c09fda3eaa28426d3626170d74e45870a1ee12b7c40c5cd6",
+  "prior_capture_sha256": "4964faf01959f9f69bef55cf100f39fd2102a6ee1c4c008f6b36fddcfadc0dea",
+  "qualification_changed": false,
+  "root_comparisons": [
+    {
+      "address": "0x100000b40",
+      "all_frontiers_identical_with_original_addresses_and_depths": true,
+      "complete_stack_bound_bytes": null,
+      "direct_resource_reachability_identical": true,
+      "frontier_kind_counts": {
+        "exceptional_terminal": 64,
+        "function_fallthrough": 49,
+        "inconsistent_sp_merge": 1,
+        "indirect_branch": 5,
+        "indirect_call": 32,
+        "native_edge": 125
+      },
+      "ordinary_abi_conditional_resolved_region_bytes_unchanged": 15808,
+      "positive_weight_recursive_components": 1,
+      "positive_weight_recursive_components_identical": true,
+      "prior_capture": "stack-v4",
+      "root": "<parliament_memory_entry::budget::Reservation>::verify"
+    },
+    {
+      "address": "0x1000030ec",
+      "all_frontiers_identical_with_original_addresses_and_depths": true,
+      "complete_stack_bound_bytes": null,
+      "direct_resource_reachability_identical": true,
+      "frontier_kind_counts": {
+        "exceptional_terminal": 65,
+        "function_fallthrough": 49,
+        "inconsistent_sp_merge": 1,
+        "indirect_branch": 5,
+        "indirect_call": 32,
+        "native_edge": 132
+      },
+      "ordinary_abi_conditional_resolved_region_bytes_unchanged": 16000,
+      "positive_weight_recursive_components": 1,
+      "positive_weight_recursive_components_identical": true,
+      "prior_capture": "stack-v4",
+      "root": "parliament_memory_entry::workspace::worker"
+    },
+    {
+      "address": "0x1000050a0",
+      "all_frontiers_identical_with_original_addresses_and_depths": true,
+      "complete_stack_bound_bytes": null,
+      "direct_resource_reachability_identical": true,
+      "frontier_kind_counts": {
+        "exceptional_terminal": 1,
+        "native_edge": 1
+      },
+      "ordinary_abi_conditional_resolved_region_bytes_unchanged": 144,
+      "positive_weight_recursive_components": 0,
+      "positive_weight_recursive_components_identical": true,
+      "prior_capture": "stack-v4",
+      "root": "parliament_memory_entry::fatal::exhausted"
+    },
+    {
+      "address": "0x10000770c",
+      "all_frontiers_identical_with_original_addresses_and_depths": true,
+      "complete_stack_bound_bytes": null,
+      "direct_resource_reachability_identical": true,
+      "frontier_kind_counts": {
+        "exceptional_terminal": 62,
+        "function_fallthrough": 40,
+        "inconsistent_sp_merge": 1,
+        "indirect_branch": 5,
+        "indirect_call": 32,
+        "native_edge": 88
+      },
+      "ordinary_abi_conditional_resolved_region_bytes_unchanged": 9744,
+      "positive_weight_recursive_components": 1,
+      "positive_weight_recursive_components_identical": true,
+      "prior_capture": "stack-v4",
+      "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+    },
+    {
+      "address": "0x10000858c",
+      "all_frontiers_identical_with_original_addresses_and_depths": true,
+      "complete_stack_bound_bytes": null,
+      "direct_resource_reachability_identical": true,
+      "frontier_kind_counts": {
+        "exceptional_terminal": 62,
+        "function_fallthrough": 41,
+        "inconsistent_sp_merge": 1,
+        "indirect_branch": 5,
+        "indirect_call": 32,
+        "native_edge": 89
+      },
+      "ordinary_abi_conditional_resolved_region_bytes_unchanged": 9744,
+      "positive_weight_recursive_components": 1,
+      "positive_weight_recursive_components_identical": true,
+      "prior_capture": "stack-v4",
+      "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+    }
+  ],
+  "schema": "parliament-stack-v5-exact-obligation-comparison-v1",
+  "scope": "Only ordinary ABI control flow is refined; every original resource refusal remains machine-active."
+}

@@ -1,0 +1,19 @@
+{
+  "observed_utc": "2026-11-04T06:24:51.655704+00:00",
+  "reviewer": "root independent source and archive review",
+  "verified_archive_entries": 18,
+  "verified_lossless_original_pairs": 15,
+  "selected_complete_bounds_unknown": 10,
+  "source_review": "Reviewed exact scalar/vector operand forms, FP invalidation, SP/red-zone refusal behavior and zero-inclusive capture. Invalid unknown forms and opaque native/trap/indirect/merge/recursive obligations remain failures or explicit frontiers.",
+  "prior_capture_preserved": true,
+  "qualification": false,
+  "tests": "141 retained passing tests; no unnecessary repeat suite",
+  "scope": "Artifact-bound static diagnostic only; current shared candidate and physical stack qualification remain open.",
+  "input_sha256": {
+    "summary.json": "58672fcde9c0065c390d40668b6ba08578fc2b6f6e3ee9c94dac91a1fac2a28a",
+    "receipt.json": "2ee222df0fa4f5afe5062b0ebc379a6771266f0e10328b6cae3fb822e4b97cc2",
+    "analyzer": "d6952d3521cf628a2630a865308b196c2ba67c38a8922b3c786370cb6332dda4",
+    "tests": "9819f4f8f3079bef6234aad6078bd60839b74d761ff5eef085cb6ff73175099c"
+  },
+  "findings": []
+}

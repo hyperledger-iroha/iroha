@@ -55,6 +55,7 @@ packages = [
   "iroha_core_timed_ovn",
   "iroha_data_model",
   "iroha_data_model_derive",
+  "iroha_execution_stark",
   "iroha_executor_data_model",
   "iroha_executor_data_model_derive",
   "iroha_kagemusha_proof",
@@ -82,6 +83,7 @@ description = "Node, Torii, client, configuration, networking, and node test sup
 packages = [
   "iroha",
   "iroha_cli",
+  "iroha_cli_docs",
   "iroha_cli_lib",
   "iroha_config",
   "iroha_contract_deploy",
@@ -160,6 +162,7 @@ description = "Platform-specific acceleration and hardware discovery."
 packages = [
   "cust_raw",
   "find_cuda_helper",
+  "gpuzstd_codec",
   "gpuzstd_cuda",
   "gpuzstd_metal",
   "iroha_accel",
@@ -182,7 +185,7 @@ packages = ["integration_tests"]
 [package_binaries]
 iroha_test_network = ["iroha3d", "iroha", "iroha3d_private_settlement_routes"]
 izanami = ["iroha3d", "iroha"]
-integration_tests = ["iroha3d", "iroha", "iroha3d_private_settlement_routes"]
+integration_tests = ["iroha3d", "iroha", "iroha3d_private_settlement_routes", "kagami", "sorafs_cli"]
 
 # Non-Cargo consumers participate in the same artifact-union calculation.
 # Package triggers use the expanded reverse-dependency closure. Unknown/shared

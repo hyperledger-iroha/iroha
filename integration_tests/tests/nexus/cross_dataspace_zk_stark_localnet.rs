@@ -122,8 +122,12 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
 fn stake_asset_definition_id() -> AssetDefinitionId {
     nexus_fee_asset_definition_id()
 }
-fn stake_asset_id_literal() -> String {
-    stake_asset_definition_id().to_string()
+fn genesis_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    iroha_genesis::default_staking_policy(
+        stake_asset_definition_id(),
+        ALICE_ID.clone(),
+        ALICE_ID.clone(),
+    )
 }
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
@@ -235,7 +239,6 @@ fn require_test_network_feature(feature: &str, test_name: &str) -> Result<()> {
     Ok(())
 }
 fn localnet_builder() -> NetworkBuilder {
-    let gas_account_str = ALICE_ID.to_string();
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -249,6 +252,7 @@ fn localnet_builder() -> NetworkBuilder {
                 post_topology,
                 topology,
                 topology_entries,
+                genesis_staking_policy(),
             );
             genesis
                 .0
@@ -376,18 +380,6 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
-                )
-                .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id_literal(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str.clone(),
                 )
                 .write(
                     ["nexus", "staking", "max_validators"],
@@ -518,7 +510,40 @@ fn multilane_da_proof_policy_bundle() -> DaProofPolicyBundle {
 #[test]
 fn cross_dataspace_zk_stark_localnet_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
-    let _network = localnet_builder().build();
+    let network = localnet_builder().build();
+    let genesis = network.genesis();
+    let authority = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
+    iroha_core::block::check_genesis_block(&genesis.0, &authority)
+        .expect("configured STARK genesis authenticates after executing its staking plans");
+    let policies = genesis
+        .0
+        .external_transactions()
+        .filter_map(|tx| match tx.instructions() {
+            iroha_data_model::transaction::Executable::Instructions(instructions) => {
+                Some(instructions.iter())
+            }
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|instruction| {
+            let set = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()?;
+            let iroha_data_model::parameter::Parameter::Custom(custom) = set.inner() else {
+                return None;
+            };
+            use iroha_data_model::block::consensus::PublicLaneStakingPolicy;
+            (custom.id() == &PublicLaneStakingPolicy::parameter_id()).then(|| {
+                PublicLaneStakingPolicy::from_custom_parameter(custom)
+                    .expect("canonical original signed staking policy")
+            })
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        policies,
+        vec![genesis_staking_policy()],
+        "one signed staking policy preserves the fixture's XOR and ALICE custody"
+    );
 }
 fn expected_lane_validators(
     network: &sandbox::SerializedNetwork,

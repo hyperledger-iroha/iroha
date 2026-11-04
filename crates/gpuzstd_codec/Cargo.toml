@@ -1,0 +1,18 @@
+[package]
+name = "gpuzstd_codec"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Portable deterministic frame coding shared by native GPU Zstd helpers"
+
+[features]
+default = []
+# CPU references used by the backend hardware parity tests only.
+test-support = []
+
+[dev-dependencies]
+zstd = { workspace = true }
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "forbid"

@@ -9,15 +9,15 @@ enum PayloadKind {
 enum Pred {
     NameEq(String),
     CodeEq(u32),
-    NameMatches(regex::Regex),
+    NameMatches(fn(&str) -> bool),
     CodeIn(core::ops::RangeInclusive<u32>),
     CodesNonDecreasing(usize),
 }
 fn p_name(value: &str) -> Pred {
     Pred::NameEq(value.to_owned())
 }
-fn p_name_re(value: &str) -> Pred {
-    Pred::NameMatches(regex::Regex::new(value).unwrap())
+fn p_name_matches(predicate: fn(&str) -> bool) -> Pred {
+    Pred::NameMatches(predicate)
 }
 fn p_code(value: u32) -> Pred {
     Pred::CodeEq(value)
@@ -37,7 +37,7 @@ fn has_pattern_window_pred(seq: &[PayloadKind], pattern: &[Pred]) -> bool {
             let value = &seq[start + idx];
             let ok = match (value, pred) {
                 (PayloadKind::Name(actual), Pred::NameEq(expected)) => actual == expected,
-                (PayloadKind::Name(actual), Pred::NameMatches(regex)) => regex.is_match(actual),
+                (PayloadKind::Name(actual), Pred::NameMatches(predicate)) => predicate(actual),
                 (PayloadKind::Code(actual), Pred::CodeEq(expected)) => actual == expected,
                 (PayloadKind::Code(actual), Pred::CodeIn(range)) => range.contains(actual),
                 _ => false,
@@ -107,6 +107,43 @@ fn has_pattern_window_pred_adv(seq: &[PayloadKind], pattern: &[Pred]) -> bool {
         }
     }
     false
+}
+#[test]
+fn name_predicates_preserve_anchored_prefix_windows() {
+    let pattern = [
+        p_name_matches(|name| name.starts_with('a')),
+        p_code_in(53, 54),
+    ];
+    for (name, expected) in [
+        ("", false),
+        ("a", true),
+        ("alpha", true),
+        ("a\n", true),
+        ("a\r\nmore", true),
+        ("a\0é", true),
+        ("á", false),
+        ("éa", false),
+        ("\na", false),
+        ("\0a", false),
+        ("ba", false),
+    ] {
+        let seq = [PayloadKind::Name(name.to_owned()), PayloadKind::Code(53)];
+        assert_eq!(
+            has_pattern_window_pred(&seq, &pattern),
+            expected,
+            "{name:?}"
+        );
+        assert_eq!(
+            has_pattern_window_pred_adv(&seq, &pattern),
+            expected,
+            "{name:?}"
+        );
+        assert!(!has_pattern_window_pred(&seq[..1], &pattern));
+        assert!(!has_pattern_window_pred_adv(&seq[..1], &pattern));
+    }
+    let codes = [PayloadKind::Code(53), PayloadKind::Code(54)];
+    assert!(!has_pattern_window_pred(&codes, &pattern));
+    assert!(!has_pattern_window_pred_adv(&codes, &pattern));
 }
 fn collect_flag_true_payloads(view: &ncb::NcbU64EnumBoolView<'_>) -> Vec<PayloadKind> {
     let mut out = Vec::new();
@@ -231,9 +268,15 @@ fn assert_contains_multi_windows(dict: bool) {
         let seq = collect_flag_true_payloads(&view);
         let w1 = vec![p_name("aa"), p_code(50), p_code(50), p_name("bb")];
         assert!(has_pattern_window_pred(&seq, &w1));
-        let w2 = vec![p_name_re(r"^a.*"), p_code_in(53, 54)];
+        let w2 = vec![
+            p_name_matches(|name| name.starts_with('a')),
+            p_code_in(53, 54),
+        ];
         assert!(has_pattern_window_pred(&seq, &w2));
-        let w3 = vec![p_code_in(60, 61), p_name_re(r"^kot")];
+        let w3 = vec![
+            p_code_in(60, 61),
+            p_name_matches(|name| name.starts_with("kot")),
+        ];
         assert!(has_pattern_window_pred(&seq, &w3));
         let w4_deep = vec![
             p_name("aa"),

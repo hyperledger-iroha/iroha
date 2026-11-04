@@ -1,0 +1,49 @@
+import ast,difflib,gzip,hashlib,importlib.util,json,pathlib,shutil
+root=pathlib.Path('/Users/takemiyamakoto/dev/iroha');out=root/'docs/validation/parliament_ballot_arena_current_20261104';out.mkdir(exist_ok=True)
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def load(n):
+ s=importlib.util.spec_from_file_location(n,root/'scripts'/f'{n}.py');m=importlib.util.module_from_spec(s);s.loader.exec_module(m);return m
+b=load('parliament_ballot_arena_backend');f=load('parliament_ballot_arena_frontend')
+old=json.loads((root/'docs/validation/parliament_ballot_arena_sufficiency/source-model.json').read_text())['sources'];review=json.loads((root/'docs/validation/parliament_ballot_resource_accounting_20261104/source-review.json').read_text())
+paths=sorted(str(p.relative_to(root)) for d in b.SOURCE_DIRECTORIES for p in (root/d).rglob('*.rs'))
+backend={p:sha(root/p) for p in paths};front={p:sha(root/p) for p in f.FRONT_SOURCE_PATHS}
+for p,h in old['backend']['files'].items():assert review['historical'][p]==h
+for p,h in backend.items():assert review['current'][p]==h
+for p,h in front.items():
+ if p in review['current']:assert review['current'][p]==h and review['historical'][p]==old['frontend']['files'][p]
+ else:assert old['frontend']['files'][p]==h
+roots={v:pathlib.Path.home()/f'.rustup/toolchains/{v}-aarch64-apple-darwin/lib/rustlib/src/rust/library' for v in ['1.93.1','1.99.1']};pins={};rsrows=[]
+notes={
+'alloc/alloc.rs':'Prior independent resource-accounting review: Global requested layouts and grow semantics unchanged.',
+'alloc/raw_vec/mod.rs':'Prior independent review: max(2*capacity,required,MIN_NON_ZERO_CAP) unchanged, minimum8/4/1 unchanged.',
+'alloc/vec/mod.rs':'Prior independent review: Vec layout/reserve/extend/TrustedLen count and request sizes unchanged.',
+'alloc/vec/spec_extend.rs':'Prior independent review: slice/TrustedLen reserve exact full appended length once.',
+'alloc/vec/spec_from_iter.rs':'Prior independent review: initial generic lower-bound reserve and delegation unchanged for modeled iterators.',
+'alloc/vec/spec_from_iter_nested.rs':'Byte-identical source, TrustedLen exact capacity construction unchanged.',
+'alloc/slice.rs':'TrivialClone to_vec caches the same len and skips zero-length copy/set_len; Vec::with_capacity_in still exact len. into_vec only gains const qualifier. ASCII case conversions are outside modeled paths. Generic slice cloning and concat ownership unchanged.',
+'alloc/vec/spec_from_elem.rs':'Byte-identical source; vec![T;n] exact requested capacity/zero-fill specialization unchanged.',
+'core/alloc/global.rs':'Default GlobalAlloc::realloc replaces unchecked usize alignment constructor with typed Alignment equivalent; still allocates new Layout, copies min(old,new), then deallocates old on success. New blanket GlobalAllocator implementation is inapplicable to Routed, which directly implements GlobalAlloc and inherits its default realloc. Documentation clarifies optimizer freedom; source-to-compiled correspondence remains unproved.',
+'core/iter/adapters/flatten.rs':'Only const qualifiers for Flatten/FlattenCompat constructors changed; fixed-array FlatMap TrustedLen and size hints unchanged.',
+'core/iter/adapters/map.rs':'Constructor gains const, UncheckedIterator specialization removed; Iterator size_hint and TrustedLen forwarding unchanged, hence collect capacity unchanged for modeled slices/map chains.',
+'core/slice/iter.rs':'New ArrayWindows stable traits/count implementation and mutable chunk nth_back refactoring are outside modeled collection paths; slice Iter TrustedLen and exact count remain. Removed UncheckedIterator import does not change requested capacities.'}
+for p,h in b.RUST_SOURCE_SHA256.items():
+ crate,rel=p.split('/',1);before=roots['1.93.1']/crate/'src'/rel;after=roots['1.99.1']/crate/'src'/rel
+ assert sha(before)==h;pins[p]=sha(after);dest=out/'rust-sources'/p;dest.parent.mkdir(parents=True,exist_ok=True);dest.with_suffix(dest.suffix+'.gz').write_bytes(gzip.compress(after.read_bytes(),mtime=0));rsrows.append(dict(path=p,historical_sha256=h,current_sha256=pins[p],review=notes[p]))
+# Recheck current default allocator and all premises before changing source review pins.
+w=(root/f.FRONT_SOURCE_PATHS[1]).read_text();assert 'unsafe impl GlobalAlloc for Routed' in w and 'fn realloc' not in w and 'GlobalAllocator' not in w
+rev=roots['1.99.1']/'core/src/alloc/global.rs';s=rev.read_text();start=s.index('unsafe fn realloc(');body=s[start:s.index('\n    }',start)];assert body.index('self.alloc(new_layout)')<body.index('ptr::copy_nonoverlapping')<body.index('self.dealloc(ptr, layout)')
+artifact='docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout.json';provider_sha=sha(root/artifact);assert provider_sha=='3483a68bc29109f62a05dd266d10db36e026f63c258bb02ebfca72b55d4ec42c'
+source_review=dict(scope='Conditional requested-allocation grammar only; unchanged formulas, no compiled/native/stack/production certification',historical_sources=old,current_backend=backend,current_frontend=front,prior_exact_source_review={'path':'docs/validation/parliament_ballot_resource_accounting_20261104/source-review.json','sha256':sha(root/'docs/validation/parliament_ballot_resource_accounting_20261104/source-review.json')},rust_allocation_review=rsrows,provider={'path':artifact,'sha256':provider_sha,'geometry':'Eight compiled target/mode pairs;960 bytes,portable align8,accelerated align16;not hardware execution'},frontend_extra_review='Budget/workspace/framing/registration/test_codec/vote bytes match historical grammar exactly; four changed protocol files match prior source review exactly. rust-toolchain changes1.93.1→1.99.1; compiler/std reviewed separately.',conditional_model_only=True,profile_qualified=False)
+(out/'source-review.json').write_text(json.dumps(source_review,indent=2)+'\n');shutil.copy2('/tmp/iroha-rust-arena-additional-review.diff',out/'additional-rust-source-review.diff');shutil.copy2('/tmp/iroha-arena-before-current-tests.log',out/'tests-before.log')
+for name,m,new in [('parliament_ballot_arena_backend',b,backend),('parliament_ballot_arena_frontend',f,front)]:
+ p=root/'scripts'/f'{name}.py';text=p.read_text();(out/(p.name+'.before.template')).write_text(text);digest=hashlib.sha256(json.dumps(new,sort_keys=True,separators=(',',':')).encode()).hexdigest();text=text.replace(m.REVIEWED_SOURCE_SHA256,digest).replace('Rust 1.93.1','Rust 1.99.1').replace('Rust1.93.1','Rust1.99.1')
+ if name.endswith('backend'):
+  text=text.replace(b.RUST_REVISION,'58cf8f9c35b355199727627d07ae34a4e2846d67')
+  for key,value in pins.items():text=text.replace(b.RUST_SOURCE_SHA256[key],value)
+  text=text.replace('"provider_receipt": "docs/validation/parliament_ballot_b6/provider-layout.json",',f'"provider_receipt": "{artifact}",\n        "provider_receipt_sha256": "{provider_sha}",')
+  text=text.replace('"scope": "normal cold standalone verification, both fixed extended rows; allocation failure is a separate worker resource failure",','"scope": "normal cold standalone verification, candidate plus diagnostics-only comparator; allocation failure is a separate worker resource failure",')
+ p.write_text(text);print(name,len(new),digest)
+p=root/'scripts/check_parliament_ballot_arena_sufficiency.py';text=p.read_text();(out/(p.name+'.before.template')).write_text(text);p.write_text(text.replace('1.93.1 sources','1.99.1 sources'))
+# Only reviewed metadata return literals change; all trace-generating function/class ASTs must match.
+for name in ['parliament_ballot_arena_backend','parliament_ballot_arena_frontend','check_parliament_ballot_arena_sufficiency']:
+ p=root/'scripts'/f'{name}.py';a=ast.parse((out/(p.name+'.before.template')).read_text());z=ast.parse(p.read_text());olddefs={n.name:ast.dump(n,include_attributes=False) for n in a.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))};newdefs={n.name:ast.dump(n,include_attributes=False) for n in z.body if isinstance(n,(ast.FunctionDef,ast.ClassDef))};diff=[k for k in olddefs if olddefs[k]!=newdefs[k]];assert set(diff)<=({'trace_assumptions','main'} if name.endswith('backend') else {'trace_assumptions'}),diff;print('AST changed',name,diff)

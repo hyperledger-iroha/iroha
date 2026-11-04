@@ -1,24 +1,19 @@
-//! Pagination behaviour integration tests for query iterators.
-use eyre::Result;
+//! Pagination behaviour integration tests for bounded, authenticated collections.
+use eyre::{Result, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery},
     data_model::{asset::AssetDefinition, isi::InstructionBox, prelude::*},
 };
-use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use iroha_primitives::nonzero;
 use iroha_test_network::*;
+use std::collections::BTreeSet;
 #[test]
 fn pagination_behaves() -> Result<()> {
-    // Stored cursors are required to validate multi-batch pagination behavior.
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new()
-            .with_block_cadence(std::time::Duration::from_secs(2))
-            .with_config_layer(|layer| {
-                layer.write(["pipeline", "query_default_cursor_mode"], "stored");
-            }),
+        NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2)),
         stringify!(pagination_behaves),
     )?
     else {
@@ -26,55 +21,96 @@ fn pagination_behaves() -> Result<()> {
     };
     let client = network.client();
     register_assets(&client)?;
-    // limits_should_work
-    let vec = client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
-        .execute_all()?;
-    assert_eq!(vec.len(), 7);
-    // Stored bounded cursors intentionally omit exact remaining counts so the
-    // first response can stay cheap; the iterator reports the current batch as
-    // the lower bound and streams the rest through cursors.
-    let mut iter = client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
-        .with_fetch_size(FetchSize::new(Some(nonzero!(3_u64))))
-        .execute()?;
-    assert_eq!(iter.size_hint(), (3, None));
+    // Native limits bound each page. Compare the seven-row page with the same
+    // seven-row window streamed through three-row pages.
+    let collection = Collection::ExplorerAssetDefinitions;
+    let seven = client.list_page(&collection, &ListQuery::new().limit(7))?;
+    assert_eq!(seven.items.len(), 7);
+    assert_eq!(seven.total, None);
+    assert!(
+        seven.has_more(),
+        "ten registered fixtures require continuation"
+    );
+    let seven_ids = asset_definition_ids(&seven.items)?;
+    assert!(seven_ids.windows(2).all(|pair| pair[0] < pair[1]));
+
+    let query = ListQuery::new().limit(3);
+    let first = client.list_page(&collection, &query)?;
+    assert_eq!(first.items.len(), 3);
+    assert_eq!(first.total, None);
+    assert!(first.has_more());
+    assert_eq!(asset_definition_ids(&first.items)?, seven_ids[..3]);
+
+    // The SDK iterator fetches lazily; the page response above tests its first
+    // batch directly. After four rows, two rows of its second page stay buffered.
+    let mut iter = client.list(collection.clone(), query.clone());
+    let mut window = Vec::new();
     for _ in 0..4 {
-        iter.next().unwrap().unwrap();
+        window.push(iter.next().expect("row within seven-row window")?);
     }
     assert_eq!(iter.size_hint(), (2, None));
-    let remaining = iter.collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(iter.total(), None);
+    let remaining = iter.take(3).collect::<Result<Vec<_>, _>>()?;
     assert_eq!(remaining.len(), 3);
-    // fetch_size_should_work
-    {
-        use iroha::data_model::query::{
-            QueryBox, QueryOutputBatchBox, QueryWithFilter, QueryWithParams,
-            builder::QueryExecutor as _,
-            dsl::CompoundPredicate,
-            parameters::{FetchSize, QueryParams, Sorting},
+    window.extend(remaining);
+    assert_eq!(asset_definition_ids(&window)?, seven_ids);
+
+    // Walk the actual server continuations independently of the local window.
+    // A missing page, duplicate row, or repeated cursor must fail explicitly.
+    let mut page = first;
+    let mut query = query;
+    let mut all_ids = Vec::new();
+    let mut cursors = BTreeSet::new();
+    let mut completed = false;
+    for page_index in 0..64 {
+        assert!(page.items.len() <= 3);
+        if page_index < 2 {
+            assert_eq!(
+                page.items.len(),
+                3,
+                "the first two native pages must be full"
+            );
+            assert!(page.has_more());
+        }
+        assert_eq!(page.total, None);
+        for id in asset_definition_ids(&page.items)? {
+            assert!(all_ids.last().is_none_or(|previous| previous < &id));
+            all_ids.push(id);
+            assert!(
+                all_ids.len() <= 64,
+                "fixture exceeds bounded collection size"
+            );
+        }
+        let Some(next) = query.next_page(&page) else {
+            completed = true;
+            break;
         };
-        let with_filter: QueryWithFilter<AssetDefinition> =
-            QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
-        let qbox: QueryBox<QueryOutputBatchBox> = with_filter.into();
-        let query = QueryWithParams::new(
-            &qbox,
-            QueryParams::new(
-                Pagination::new(Some(nonzero!(7_u64)), 0),
-                Sorting::default(),
-                FetchSize::new(Some(nonzero!(3_u64))),
-            ),
-        )
-        .expect("asset-definition query type has a canonical mapping");
-        let (first_batch, remaining_items, _continue_cursor) =
-            client.client().start_query(query)?;
-        assert_eq!(first_batch.len(), 3);
-        assert_eq!(remaining_items, None);
+        assert!(cursors.insert(page.next_cursor.expect("continuation cursor")));
+        query = next;
+        page = client.list_page(&collection, &query)?;
+    }
+    assert!(
+        completed,
+        "collection did not finish within 64 bounded pages"
+    );
+    assert_eq!(&all_ids[..7], seven_ids.as_slice());
+    for (expected, _) in pagination_asset_definitions() {
+        assert!(
+            all_ids.binary_search(&expected).is_ok(),
+            "registered fixture missing"
+        );
     }
     Ok(())
+}
+fn asset_definition_ids(rows: &[norito::json::Value]) -> Result<Vec<AssetDefinitionId>> {
+    rows.iter()
+        .map(|row| {
+            let id = row
+                .get("id")
+                .ok_or_else(|| eyre!("asset-definition row omitted its ID"))?;
+            norito::json::from_value(id.clone()).map_err(Into::into)
+        })
+        .collect()
 }
 fn register_assets(client: &Client) -> Result<()> {
     const MAX_INSTRUCTIONS_PER_TX: usize = 5;
@@ -87,7 +123,10 @@ fn register_assets(client: &Client) -> Result<()> {
                     __asset_definition_id.clone(),
                     name,
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(
+                        DomainId::try_new("wonderland", "universal")
+                            .expect("fixture owning domain"),
+                    ),
                 )
             })
             .into()

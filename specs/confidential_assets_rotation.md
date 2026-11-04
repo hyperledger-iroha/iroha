@@ -32,7 +32,13 @@ so governance can schedule upgrades via
    is rejected. The executor rejects
    duplicate IDs, non-increasing versions, or bad status transitions per
    `crates/iroha_core/src/smartcontracts/isi/world.rs:2499`–`2635`, and the
-   registry tests cover the failure modes (`crates/iroha_core/tests/confidential_params_registry.rs:93`–`226`).
+   registry tests exercise those native handlers directly
+   (`crates/iroha_core/tests/confidential_params_registry.rs`). In the first
+   release the Initial executor admits none of the four parameter instructions,
+   after genesis or in it (`initial_executor_leaves_confidential_parameter_registry_unadmitted`
+   in `crates/iroha_core/src/executor_tests.rs`): confidential assets are not
+   delivered yet (P.9), so a network publishes parameter bundles only through an
+   installed executor that admits them.
 2. **Register/verifying-key updates.** `RegisterVerifyingKey` enforces backend,
    commitment, and circuit/version constraints before a key can enter the
    registry (`crates/iroha_core/src/smartcontracts/isi/world.rs:2067`–`2137`).

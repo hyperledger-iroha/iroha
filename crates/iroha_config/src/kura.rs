@@ -6,37 +6,38 @@ use norito::{
 };
 use std::str::FromStr;
 
-/// Kura initialization mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum InitMode {
-    /// Validate every canonical block body and parent link before startup completes.
-    #[default]
-    Strict,
-    /// Trust a signed current snapshot and the durable local marker/count/tip boundary.
-    ///
-    /// This emergency mode requires storage already initialized by Strict mode and an
-    /// already-current five-artifact snapshot generation. It authenticates a bounded manifest
-    /// containing the payload length, chain/network identity, terminal height/hash, and SCCP policy
-    /// hash, then checks the exact durable Kura boundary. The full snapshot payload and Merkle
-    /// sidecar are required and metadata-bound but are not read, hashed, or decoded. Fast constructs
-    /// only a minimal World/Nexus, maps the exact Kura hash prefix read-only, and leaves every
-    /// derived index and durable recovery journal unopened. Missing or malformed deferred merge
-    /// state and pending auxiliary recovery artifacts are ignored and left untouched for Strict.
-    /// Torii exposes only bounded operational probes and diagnostics. Local
-    /// transaction/lane/merge production stays quarantined;
-    /// canonical mutation, writer startup, sidecar queueing, repair, import, streaming
-    /// persistence, Torii proxy control, and consensus-topic subscription are rejected or
-    /// omitted. Optional durable application
-    /// services, background state workers, Sumeragi, and transaction gossip remain offline.
-    /// Operators should return to [`Self::Strict`] after service is restored so the complete chain,
-    /// payload, Merkle tree, indexes, and auxiliary histories are audited before production
-    /// resumes.
-    Fast,
+iroha_config_base::config_enum! {
+    /// Kura initialization mode.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum InitMode {
+        /// Validate every canonical block body and parent link before startup completes.
+        #[default]
+        Strict => "strict",
+        /// Trust a signed current snapshot and the durable local marker/count/tip boundary.
+        ///
+        /// This emergency mode requires storage already initialized by Strict mode and an
+        /// already-current five-artifact snapshot generation. It authenticates a bounded manifest
+        /// containing the payload length, chain/network identity, terminal height/hash, and SCCP policy
+        /// hash, then checks the exact durable Kura boundary. The full snapshot payload and Merkle
+        /// sidecar are required and metadata-bound but are not read, hashed, or decoded. Fast constructs
+        /// only a minimal World/Nexus, maps the exact Kura hash prefix read-only, and leaves every
+        /// derived index and durable recovery journal unopened. Missing or malformed deferred merge
+        /// state and pending auxiliary recovery artifacts are ignored and left untouched for Strict.
+        /// Torii exposes only bounded operational probes and diagnostics. Local
+        /// transaction/lane/merge production stays quarantined;
+        /// canonical mutation, writer startup, sidecar queueing, repair, import, streaming
+        /// persistence, Torii proxy control, and consensus-topic subscription are rejected or
+        /// omitted. Optional durable application
+        /// services, background state workers, Sumeragi, and transaction gossip remain offline.
+        /// Operators should return to [`Self::Strict`] after service is restored so the complete chain,
+        /// payload, Merkle tree, indexes, and auxiliary histories are audited before production
+        /// resumes.
+        Fast => "fast",
+    }
 }
 impl JsonSerialize for InitMode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl JsonDeserialize for InitMode {
@@ -50,11 +51,10 @@ impl JsonDeserialize for InitMode {
 }
 impl SerializePayload for InitMode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let text = self.to_string();
-        <String as SerializePayload>::serialize(&text, writer)
+        <&str as SerializePayload>::serialize(&self.as_str(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        Some(self.to_string().len())
+        Some(self.as_str().len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()
@@ -70,19 +70,20 @@ impl<'de> DeserializePayload<'de> for InitMode {
     }
 }
 
-/// Fsync policy for Kura block storage.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, strum::EnumString, strum::Display)]
-#[strum(serialize_all = "snake_case")]
-pub enum FsyncMode {
-    /// Synchronously fsync after each batch write.
-    Always,
-    /// Batch fsyncs using a time-based interval.
-    #[default]
-    Batched,
+iroha_config_base::config_enum! {
+    /// Fsync policy for Kura block storage.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub enum FsyncMode {
+        /// Synchronously fsync after each batch write.
+        Always => "always",
+        /// Batch fsyncs using a time-based interval.
+        #[default]
+        Batched => "batched",
+    }
 }
 impl JsonSerialize for FsyncMode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl JsonDeserialize for FsyncMode {
@@ -96,11 +97,10 @@ impl JsonDeserialize for FsyncMode {
 }
 impl SerializePayload for FsyncMode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let text = self.to_string();
-        <String as SerializePayload>::serialize(&text, writer)
+        <&str as SerializePayload>::serialize(&self.as_str(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        Some(self.to_string().len())
+        Some(self.as_str().len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()

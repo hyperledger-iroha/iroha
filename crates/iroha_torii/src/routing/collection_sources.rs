@@ -10,6 +10,7 @@ use super::*;
 mod account_history_multisig_tests;
 
 mod account_aliases;
+mod roles;
 #[cfg(test)]
 mod account_aliases_tests;
 use account_aliases::AccountAliasJoin;
@@ -48,6 +49,10 @@ pub enum CollectionTarget {
     ContractEvents,
     /// `/v1/repo/agreements`
     RepoAgreements,
+    /// `/v1/roles`
+    Roles,
+    /// `/v1/accounts/{account_id}/roles`
+    AccountRoles(String),
     /// `/v1/accounts/{account_id}/permissions`
     AccountPermissions(String),
     /// `/v1/subscriptions/plans`
@@ -80,6 +85,8 @@ impl CollectionTarget {
             Self::ContractActivity => &specs::CONTRACT_ACTIVITY,
             Self::ContractEvents => &specs::CONTRACT_EVENTS,
             Self::RepoAgreements => &specs::REPO_AGREEMENTS,
+            Self::Roles => &specs::ROLES,
+            Self::AccountRoles(_) => &specs::ACCOUNT_ROLES,
             Self::AccountPermissions(_) => &specs::ACCOUNT_PERMISSIONS,
             Self::SubscriptionPlans => &specs::SUBSCRIPTION_PLANS,
             Self::Subscriptions => &specs::SUBSCRIPTIONS,
@@ -98,10 +105,12 @@ impl CollectionTarget {
             | Self::AssetMovements(literal)
             | Self::AccountTransactions(literal)
             | Self::AccountHistory(literal)
+            | Self::AccountRoles(literal)
             | Self::AccountPermissions(literal)
             | Self::UaidManifests(literal)
             | Self::BondEntitlements(literal) => literal,
             Self::Domains
+            | Self::Roles
             | Self::Accounts
             | Self::AssetDefinitions
             | Self::Nfts
@@ -133,6 +142,8 @@ impl CollectionTarget {
             Self::ContractActivity => ENDPOINT_CONTRACTS_ACTIVITY,
             Self::ContractEvents => ENDPOINT_CONTRACTS_EVENTS,
             Self::RepoAgreements => ENDPOINT_REPO_AGREEMENTS_QUERY,
+            Self::Roles => "/v1/roles",
+            Self::AccountRoles(_) => "/v1/accounts/{account_id}/roles",
             Self::AccountPermissions(_) => ENDPOINT_ACCOUNTS_PERMISSIONS,
             Self::SubscriptionPlans => ENDPOINT_SUBSCRIPTION_PLANS_LIST,
             Self::Subscriptions => ENDPOINT_SUBSCRIPTIONS_LIST,
@@ -863,6 +874,9 @@ fn execute_prepared_collection_local(
                 visibility,
                 |transaction, position| Some(transaction_row(transaction, position)),
             );
+        }
+        CollectionTarget::Roles | CollectionTarget::AccountRoles(_) => {
+            return roles::execute(state, target, query, telemetry, visibility, prepared, limits);
         }
         CollectionTarget::AccountPermissions(account_literal) => {
             let (account, _) = parse_account_path_segment_with_state(

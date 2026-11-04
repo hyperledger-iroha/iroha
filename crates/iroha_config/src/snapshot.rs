@@ -5,21 +5,22 @@ use norito::{
     json::{self, JsonDeserialize, JsonSerialize},
 };
 use std::str::FromStr;
-/// Functioning mode of the Snapshot Iroha module
-#[derive(Copy, Clone, Debug, Default, strum::Display, strum::EnumString)]
-#[strum(serialize_all = "snake_case")]
-pub enum Mode {
-    /// Read the snapshot on startup, update periodically
-    #[default]
-    ReadWrite,
-    /// Read the snapshot on startup, do not update
-    Readonly,
-    /// Do not read or write the snapshot
-    Disabled,
+iroha_config_base::config_enum! {
+    /// Functioning mode of the Snapshot Iroha module
+    #[derive(Copy, Clone, Debug, Default)]
+    pub enum Mode {
+        /// Read the snapshot on startup, update periodically
+        #[default]
+        ReadWrite => "read_write",
+        /// Read the snapshot on startup, do not update
+        Readonly => "readonly",
+        /// Do not read or write the snapshot
+        Disabled => "disabled",
+    }
 }
 impl JsonSerialize for Mode {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl JsonDeserialize for Mode {
@@ -33,11 +34,10 @@ impl JsonDeserialize for Mode {
 }
 impl SerializePayload for Mode {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let text = self.to_string();
-        <String as SerializePayload>::serialize(&text, writer)
+        <&str as SerializePayload>::serialize(&self.as_str(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        Some(self.to_string().len())
+        Some(self.as_str().len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()

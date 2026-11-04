@@ -47,7 +47,6 @@ pub use bounded_manifest::{
     validate_genesis_manifest_json,
 };
 use core::num::NonZeroU64;
-use derive_more::Constructor;
 use eyre::{Result, WrapErr, eyre};
 use iroha_config::parameters::defaults::confidential::RULES_VERSION;
 #[cfg(test)]
@@ -2859,7 +2858,7 @@ impl norito::json::JsonDeserialize for IvmPath {
 }
 /// Human-readable alternative to [`Trigger`] whose action executes IVM
 /// bytecode instead of a native instruction sequence.
-#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode, Constructor)]
+#[derive(Debug, Clone, JsonSerialize, JsonDeserialize, IntoSchema, Encode, Decode)]
 #[norito(decode_from_slice)]
 pub struct GenesisIvmTrigger {
     /// Unique trigger identifier.
@@ -2906,6 +2905,12 @@ impl GenesisIvmAction {
     }
 }
 impl GenesisIvmTrigger {
+    /// Construct a genesis IVM trigger from its identifier and action.
+    #[inline]
+    pub const fn new(id: TriggerId, action: GenesisIvmAction) -> Self {
+        Self { id, action }
+    }
+
     fn try_into_with_ivm_bytecode_budget(self, total: &mut usize) -> Result<Trigger> {
         Ok(Trigger::new(
             self.id,

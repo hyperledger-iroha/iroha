@@ -651,8 +651,32 @@ pub static ASSET_MOVEMENTS: CollectionSpec = CollectionSpec {
     ordered: false,
 };
 
+/// `/v1/roles`: exact stored permissions, restricted to whole-ledger readers.
+pub static ROLES: CollectionSpec = CollectionSpec {
+    id: "roles",
+    tag: 21,
+    fields: &[text("id"), json("permissions")],
+    metadata: false,
+    default_sort: &[("id", Order::Asc)],
+    identity: &["id"],
+    positioned: 0,
+    ordered: true,
+};
+
+/// `/v1/accounts/{account_id}/roles`: exact role assignments for one account.
+pub static ACCOUNT_ROLES: CollectionSpec = CollectionSpec {
+    id: "account_roles",
+    tag: 22,
+    fields: &[text("id")],
+    metadata: false,
+    default_sort: &[("id", Order::Asc)],
+    identity: &["id"],
+    positioned: 0,
+    ordered: true,
+};
+
 /// Every collection, in cursor-tag order.
-pub const ALL: [&CollectionSpec; 20] = [
+pub const ALL: [&CollectionSpec; 22] = [
     &DOMAINS,
     &ACCOUNTS,
     &ASSET_DEFINITIONS,
@@ -673,6 +697,8 @@ pub const ALL: [&CollectionSpec; 20] = [
     &BONDS,
     &BOND_ENTITLEMENTS,
     &ASSET_MOVEMENTS,
+    &ROLES,
+    &ACCOUNT_ROLES,
 ];
 
 #[cfg(test)]

@@ -17,13 +17,15 @@ CHECKSUM = b'{"component_control":"opaque original manifest; not native qualific
 # Reviewed census of the captured candidate, shared by every SoraFS JavaScript
 # test so that adding or removing an SDK module changes it in one place.
 # The reviewed expansion adds 28 source modules and iso_bridge_context.mjs;
-# seven dependency fixtures contribute 14 members plus one hidden lock.
-SOURCE_FILES = 263
-PROJECTED_MEMBERS = 260
-PROJECTED_DIST_MEMBERS = 221
-INSTALLED_MEMBERS = 275
+# seven dependency fixtures contribute 14 members plus one hidden lock. The
+# private-settlement/privacy-X509 exports add five modules and two typings, and
+# Petal and query helpers add four more modules.
+SOURCE_FILES = 272
+PROJECTED_MEMBERS = 269
+PROJECTED_DIST_MEMBERS = 228
+INSTALLED_MEMBERS = 284
 REQUIRED_OUTPUTS = (
-    "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
+    "address.js", "atomicPrivateSettlement.js", "privateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "native.js", "nativeArtifactHash.js", "numericV1.js",
     "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js", "sorafsOrderbookSubmission.d.ts",
     "smartContractDeploymentSubmit.js", "sumeragiTyped.js", "tairaTestnetProfile.js",

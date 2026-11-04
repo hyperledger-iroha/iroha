@@ -17,7 +17,7 @@ pub mod transparency;
 use crate::{
     bundle::ProofBundleV1,
     config::{DotTlsConfig, ResolverConfig},
-    events::EventEmitter,
+    events::{EventEmitter, ResolverEvent},
     limits::{
         MAX_STATE_BUNDLES, MAX_STATE_RAD_ENTRIES, MAX_STATE_RETAINED_BYTES, MAX_TLS_CERT_BYTES,
         MAX_TLS_KEY_BYTES, read_bounded_file, read_bounded_private_file, replace_retained_bytes,
@@ -69,7 +69,6 @@ use tokio::{
     time::{Instant, MissedTickBehavior, interval_at, timeout},
 };
 use tokio_rustls::TlsAcceptor;
-use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{error, info, warn};
 const DNS_CONTENT_TYPE: &str = "application/dns-message";
 const MAX_DNS_MESSAGE_BYTES_V1: usize = u16::MAX as usize;
@@ -955,30 +954,37 @@ async fn resolve_bytes(state: &SharedState, request: &dns::DnsMessage) -> Option
 async fn sse_handler(
     AxumState(emitter): AxumState<EventEmitter>,
 ) -> Sse<impl futures::Stream<Item = Result<SseEvent, Infallible>>> {
-    let stream = BroadcastStream::new(emitter.subscribe()).filter_map(|event| async move {
-        match event {
-            Ok(payload) => match json::to_value(&payload).and_then(|value| json::to_string(&value))
-            {
-                Ok(data) => Some(Ok(SseEvent::default().data(data))),
-                Err(error) => {
-                    warn!(?error, "failed to serialise SSE payload");
-                    None
-                }
-            },
-            Err(BroadcastStreamRecvError::Lagged(count)) => {
-                warn!(
-                    lagged = count,
-                    "SSE consumer lagged; dropping {count} events"
-                );
-                None
-            }
-        }
-    });
-    Sse::new(stream).keep_alive(
+    Sse::new(sse_events(emitter.subscribe())).keep_alive(
         KeepAlive::new()
             .interval(Duration::from_secs(15))
             .text("keepalive"),
     )
+}
+fn sse_events(
+    receiver: tokio::sync::broadcast::Receiver<ResolverEvent>,
+) -> impl futures::Stream<Item = Result<SseEvent, Infallible>> {
+    futures::stream::unfold(receiver, |mut receiver| async move {
+        loop {
+            match receiver.recv().await {
+                Ok(payload) => {
+                    match json::to_value(&payload).and_then(|value| json::to_string(&value)) {
+                        Ok(data) => {
+                            return Some((Ok(SseEvent::default().data(data)), receiver));
+                        }
+                        Err(error) => warn!(?error, "failed to serialise SSE payload"),
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(count)) => {
+                    warn!(
+                        lagged = count,
+                        "SSE consumer lagged; dropping {count} events"
+                    );
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => return None,
+            }
+        }
+    })
+    .fuse()
 }
 fn load_tls_configs(config: &DotTlsConfig) -> Result<ResolverTls> {
     let certs = load_certs(&config.cert_path)?;
@@ -1023,6 +1029,8 @@ fn escape_label_value(value: &str) -> String {
     }
     escaped
 }
+#[cfg(test)]
+mod sse_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

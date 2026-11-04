@@ -20,13 +20,14 @@ HELPER_START = "#[derive(Clone, Copy)]\nenum McpAliasDispatchArguments"
 HELPER_END = "fn enable_writer_mcp"
 HELPER_HASH = "c14965735716c50fb3937a9719291ca1248432c70afdf246f84483349cf852ce"
 
-# file, name, expectation, request id, tool name, argument row, assertion messages
+# file, name, expectation, request id (exact Rust literal), tool name, argument row,
+# assertion messages
 CASES = (
     (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_accounts_get_accepts_canonical_path",
         "error",
-        1051,
+        "1051",
         "iroha.accounts.get",
         "InvalidAccountId",
         "invalid account id should be marked as MCP tool error for account detail alias",
@@ -36,7 +37,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_accounts_qr_accepts_canonical_path",
         "error",
-        1052,
+        "1052",
         "iroha.accounts.qr",
         "InvalidAccountId",
         "invalid account id should be marked as MCP tool error for account QR alias",
@@ -46,7 +47,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_transaction_status_accepts_canonical_query_hash",
         "schema_error",
-        1061,
+        "1061",
         "iroha.transactions.status",
         "InvalidStatusHash",
         "invalid query hash must fail advertised-schema validation",
@@ -55,7 +56,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_transactions_get_accepts_canonical_path",
         "error",
-        10612,
+        "10612",
         "iroha.transactions.get",
         "InvalidPathHash",
         "invalid hash should be marked as MCP tool error for transaction detail alias",
@@ -65,7 +66,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_assets_get_accepts_canonical_path",
         "error",
-        106152,
+        "106_152",
         "iroha.assets.get",
         "InvalidAssetId",
         "invalid asset id should be marked as MCP tool error for asset detail alias",
@@ -75,7 +76,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_nfts_get_accepts_canonical_path",
         "error",
-        106154,
+        "106_154",
         "iroha.nfts.get",
         "InvalidNftId",
         "invalid nft id should be marked as MCP tool error for nft detail alias",
@@ -85,7 +86,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_canonical_path",
         "error",
-        106158,
+        "106_158",
         "iroha.rwas.get",
         "InvalidRwaId",
         "invalid rwa id should be marked as MCP tool error for rwa detail alias",
@@ -95,7 +96,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_domains_get_accepts_canonical_path",
         "error",
-        1062221,
+        "1_062_221",
         "iroha.domains.get",
         "InvalidDomainId",
         "invalid domain id should be marked as MCP tool error for domain detail alias",
@@ -105,7 +106,7 @@ CASES = (
         "extended",
         "mcp_jsonrpc_tools_call_agent_alias_subscriptions_get_accepts_canonical_path",
         "error",
-        1062233,
+        "1_062_233",
         "iroha.subscriptions.get",
         "InvalidSubscriptionId",
         "invalid subscription id should be marked as MCP tool error for subscription detail alias",
@@ -115,7 +116,7 @@ CASES = (
         "extended",
         "mcp_jsonrpc_tools_call_agent_alias_subscription_usage_accepts_canonical_path",
         "schema_error",
-        10622344,
+        "10_622_344",
         "iroha.subscriptions.usage",
         "InvalidSubscriptionId",
         "invalid canonical subscription path must fail advertised-schema validation",
@@ -124,7 +125,7 @@ CASES = (
         "extended",
         "mcp_jsonrpc_tools_call_agent_alias_asset_definitions_get_accepts_canonical_path",
         "error",
-        1062241,
+        "1_062_241",
         "iroha.assets.definitions.get",
         "InvalidDefinitionId",
         "invalid definition id should be marked as MCP tool error for definition detail alias",
@@ -134,7 +135,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_transactions_list_accepts_flat_query_fields",
         "success",
-        10611,
+        "10611",
         "iroha.transactions.list",
         "LimitTwo",
         "transactions list alias with flat query fields should dispatch successfully",
@@ -143,7 +144,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_instructions_list_accepts_flat_query_fields",
         "success",
-        10613,
+        "10613",
         "iroha.instructions.list",
         "LimitTwo",
         "instructions list alias with flat query fields should dispatch successfully",
@@ -152,7 +153,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_assets_list_accepts_flat_query_fields",
         "success",
-        106151,
+        "106_151",
         "iroha.assets.list",
         "LimitOne",
         "assets list alias with flat query fields should dispatch successfully",
@@ -161,7 +162,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_nfts_list_accepts_flat_query_fields",
         "success",
-        106153,
+        "106_153",
         "iroha.nfts.list",
         "LimitOne",
         "nfts list alias with flat query fields should dispatch successfully",
@@ -170,7 +171,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_nfts_query_accepts_flat_envelope_fields",
         "success",
-        106155,
+        "106_155",
         "iroha.nfts.query",
         "LimitTwo",
         "nfts query alias with flat envelope fields should dispatch successfully",
@@ -179,7 +180,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_rwas_list_accepts_flat_query_fields",
         "success",
-        106157,
+        "106_157",
         "iroha.rwas.list",
         "LimitOne",
         "rwas list alias with flat query fields should dispatch successfully",
@@ -188,7 +189,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_rwas_query_accepts_flat_envelope_fields",
         "success",
-        106159,
+        "106_159",
         "iroha.rwas.query",
         "LimitTwo",
         "rwas query alias with flat envelope fields should dispatch successfully",
@@ -197,7 +198,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_blocks_list_accepts_flat_query_fields",
         "success",
-        10616,
+        "10616",
         "iroha.blocks.list",
         "LimitTwo",
         "blocks list alias with flat query fields should dispatch successfully",
@@ -206,7 +207,7 @@ CASES = (
         "main",
         "mcp_jsonrpc_tools_call_agent_alias_domains_query_accepts_flat_envelope_fields",
         "success",
-        106223,
+        "106_223",
         "iroha.domains.query",
         "LimitTwo",
         "domains query alias with flat envelope fields should dispatch successfully",
@@ -413,8 +414,8 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
             validate_source(mutated, self.extended)
 
     def test_request_id_mutation_is_rejected(self) -> None:
-        old = '1062233,\n        "iroha.subscriptions.get"'
-        mutated = _replace_once(self.extended, old, old.replace("1062233", "1062234"))
+        old = '1_062_233,\n        "iroha.subscriptions.get"'
+        mutated = _replace_once(self.extended, old, old.replace("1_062_233", "1_062_234"))
         with self.assertRaises(GuardError):
             validate_source(self.main, mutated)
 
@@ -426,7 +427,7 @@ class McpAliasDispatchCaseMatrixSourceTests(unittest.TestCase):
 
     def test_argument_row_mutation_is_rejected(self) -> None:
         name = "mcp_jsonrpc_tools_call_agent_alias_rwas_get_accepts_canonical_path"
-        old = f"async fn {name} => error(\n        106158,\n        \"iroha.rwas.get\",\n        InvalidRwaId"
+        old = f"async fn {name} => error(\n        106_158,\n        \"iroha.rwas.get\",\n        InvalidRwaId"
         mutated = _replace_once(self.main, old, old.replace("InvalidRwaId", "InvalidNftId"))
         with self.assertRaises(GuardError):
             validate_source(mutated, self.extended)

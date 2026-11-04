@@ -2,7 +2,7 @@
 use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use futures_util::StreamExt as _;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::{
     crypto::KeyPair,
     data_model::{
@@ -28,10 +28,7 @@ use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
-use tokio::{
-    task::spawn_blocking,
-    time::{Duration, Instant, sleep, timeout},
-};
+use tokio::time::{Duration, Instant, sleep, timeout};
 const TRIGGER_NAME: &str = "mint_rose";
 fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
     let mut metadata = Metadata::default();
@@ -74,7 +71,7 @@ async fn submit_instruction_and_wait(
     });
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client
             .submit(
                 instruction,
@@ -100,7 +97,7 @@ async fn wait_for_asset_value(
                 "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
             ));
         }
-        match spawn_blocking({
+        match run_on_dedicated_thread({
             let client = client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -134,7 +131,7 @@ async fn wait_for_trigger(
                 "timed out waiting for trigger {trigger_id} after {context}; last_observed={last_observed}"
             ));
         }
-        match spawn_blocking({
+        match run_on_dedicated_thread({
             let client = client.clone();
             let trigger_id = trigger_id.clone();
             move || -> Result<Option<Trigger>> {
@@ -249,7 +246,7 @@ async fn call_execute_trigger() -> Result<()> {
         );
         let account_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_definition_id, account_id);
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -274,7 +271,7 @@ async fn call_execute_trigger() -> Result<()> {
             stringify!(call_execute_trigger),
         )
         .await?;
-        let new_value = spawn_blocking({
+        let new_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -405,13 +402,13 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                 stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
             )
             .await?;
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
             })
             .await??;
-            let err = spawn_blocking({
+            let err = run_on_dedicated_thread({
                 let client =
                     integration_tests::sync::rebind_blocking_client(&test_client, |client| {
                         client.transaction_status_timeout = network
@@ -473,7 +470,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                     .and_then(|payload| account.sign_transaction(payload))
             }
             .expect("build integration-test transaction");
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = test_client.clone();
                 move || client.submit_transaction(&log_tx)
             })
@@ -481,7 +478,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             network
                 .ensure_blocks_with(|height| height.non_empty >= target_non_empty)
                 .await?;
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -538,7 +535,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             )
             .await?;
             // Saving current asset value
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -555,7 +552,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             )
             .await?;
             // Executing trigger second time
-            let error = spawn_blocking({
+            let error = run_on_dedicated_thread({
                 let client = test_client.clone();
                 move || {
                     client.submit(
@@ -582,7 +579,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
                 "Unexpected error received: {error:?}",
             );
             // Checking results
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -660,7 +657,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             )
             .await?;
             // Saving current asset value
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -685,7 +682,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             )
             .await?;
             // Checking results
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -752,25 +749,37 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 stringify!(only_account_with_permission_can_register_trigger),
             )
             .await?;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = test_client.clone();
                 let rabbit_account_id = rabbit_account_id.clone();
                 move || -> Result<()> {
-                    client
+                    let account = client
                         .client()
-                        .query(FindAccounts::new())
-                        .execute_all()
-                        .expect("Account not found")
-                        .into_iter()
-                        .find(|account| account.id() == &rabbit_account_id)
+                        .query_single(FindAccountById::new(rabbit_account_id.clone()))
                         .expect("Account not found");
+                    assert_eq!(account.id(), &rabbit_account_id);
                     Ok(())
                 }
             })
             .await??;
             println!("Rabbit is found.");
+            // Fund the registered signer so the following rejection exercises
+            // trigger authority rather than transaction fee admission.
+            let fee_definition: AssetDefinitionId =
+                iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Transfer::asset_quantity(
+                    AssetId::new(fee_definition, ALICE_ID.clone()),
+                    100u32,
+                    rabbit_account_id.clone(),
+                ),
+                stringify!(only_account_with_permission_can_register_trigger),
+            )
+            .await?;
             // Trying register the trigger without permissions
-            let err = spawn_blocking({
+            let err = run_on_dedicated_thread({
                 let client = rabbit_client.clone();
                 let trigger = trigger.clone();
                 move || {
@@ -862,7 +871,7 @@ async fn unregister_trigger() -> Result<()> {
         // Finding trigger
         let deadline = Instant::now() + Duration::from_secs(20);
         let found_trigger = loop {
-            let found_trigger = spawn_blocking({
+            let found_trigger = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let trigger_id = trigger_id.clone();
                 move || {
@@ -909,7 +918,7 @@ async fn unregister_trigger() -> Result<()> {
         // Checking result
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            let still_present = spawn_blocking({
+            let still_present = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let trigger_id = trigger_id.clone();
                 move || {
@@ -969,7 +978,7 @@ async fn trigger_in_genesis() -> Result<()> {
             "rose".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id, account_id);
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -992,7 +1001,7 @@ async fn trigger_in_genesis() -> Result<()> {
         )
         .await?;
         // Checking result
-        let new_value = spawn_blocking({
+        let new_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -1068,7 +1077,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             )
             .await?;
             // Saving current asset value
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -1078,7 +1087,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             let execute_trigger_unregister = ExecuteTrigger::new(trigger_id_unregister);
             let execute_trigger_should_be_unregistered =
                 ExecuteTrigger::new(trigger_id_to_be_unregistered.clone());
-            let err = spawn_blocking({
+            let err = run_on_dedicated_thread({
                 let client = test_client.clone();
                 move || {
                     client.submit_all(
@@ -1117,7 +1126,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             }
             // Checking results
             // First trigger should cancel second one, so value should stay the same
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -1226,7 +1235,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
         .await?;
         timeout(network.sync_timeout(), async {
             loop {
-                let still_active = spawn_blocking({
+                let still_active = run_on_dedicated_thread({
                     let client = test_client.clone();
                     let trigger_id = trigger_id.clone();
                     move || -> Result<bool> {
@@ -1273,7 +1282,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
         )
         .await
         .wrap_err("timed out opening pipeline event stream")??;
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             let transaction = transaction.clone();
             move || client.submit_transaction(&transaction)
@@ -1370,7 +1379,7 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
                 stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
             )
             .await?;
-            let got_second_trigger = spawn_blocking({
+            let got_second_trigger = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let second_trigger_id = second_trigger_id.clone();
                 move || {
@@ -1422,7 +1431,7 @@ async fn call_execute_trigger_with_args() -> Result<()> {
         );
         let account_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)

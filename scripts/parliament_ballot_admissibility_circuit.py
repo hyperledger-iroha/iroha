@@ -14,11 +14,14 @@ import json
 from pathlib import Path
 
 MAX_TRIALS = 1 << 20
+# Reviewed current correspondence: BAVC changes only its test SHAKE oracle;
+# profile.rs restricts the comparator to tests/diagnostics without changing row
+# geometry. The source diffs are retained in the 2026-11-04 zero-challenge review.
 PINS = {
-    "crates/iroha_zkp_vole/src/bavc.rs": "481b4c7027b46520e848a67d94a6dc7cdda312838e1769a93b9079260b8d4269",
+    "crates/iroha_zkp_vole/src/bavc.rs": "b6cae7b82973325d3342434201188192896ad5686029f005bedbf06fc4e0f0fd",
     "crates/iroha_zkp_vole/src/params.rs": "41d18d1bf137496db8bd858bc291e48684c11122c03834828d54d3b6ae8cabba",
     "crates/iroha_zkp_vole/src/variant.rs": "50d8c414309f5ccc315181abefbdabe79ed092f0644dc72e04596c93c58059b9",
-    "crates/iroha_parliament_ballot_proof/src/profile.rs": "9cc79a448f4199b748923b8b3e6a552fb9f0aa7980a1cb6d1d89746e8b79323d",
+    "crates/iroha_parliament_ballot_proof/src/profile.rs": "1e1d5e5b40208c06934199b79a2b1b0551c362bab864f0d17ea0c4f9ab385678",
     "specs/parliament_ballot_b6_ideal_public_sampler.md": "eeea377a3686fcd31c1c77b8ea576d6f72895789389ed4c2d99d9107a5f0ab74",
 }
 
@@ -236,6 +239,8 @@ def report(root: Path, requests: int) -> dict:
         per_trial = counts(g)
         rows[name] = dict(tau=g.tau, depths=list(g.depths), grinding_bits=g.grinding_bits,
                           leaves=g.leaves, opening_limit=g.opening_limit,
+                          build_scope="production and diagnostic builds" if name == "candidate"
+                                      else "tests and diagnostic builds only",
                           per_trial=per_trial,
                           per_request_gate_upper_bound=2 * MAX_TRIALS * per_trial["elementary_gates"],
                           lifetime_gate_upper_bound=requests * 2 * MAX_TRIALS * per_trial["elementary_gates"])

@@ -216,7 +216,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                              'canonical_output_contract_has_one_details_owner_and_header_without_result_root',
                                              'openapi_authorities_have_only_resolvable_component_refs',
                                              'package_openapi_authority_is_canonical_norito_json',
-                                             'privacy_proposed_lifecycle_schema_matches_explicit_governance_payload',
+                                             'privacy_protocol_policy_schema_matches_native_limits_and_future_updates',
                                              'standalone_ballot_drafts_publish_one_exact_success_and_standard_bad_request',
                                              'account_onboarding_current_state_openapi_is_one_closed_v1_observation',
                                              'connect_status_openapi_separates_session_and_operator_aggregate',
@@ -235,8 +235,13 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                              'compiled_private_cache_contract_follows_the_route_catalog',
                                              'operator_credential_management_contract_is_closed_and_two_factor',
                                              'musubi_provider_bundle_attestation_and_exact_release_contract_is_static',
-                                             'openapi_uint64_bounds_keep_exact_integer_tokens_recursively'),
- 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': ('static_authority_is_the_complete_catalog_projection_with_exact_effects',
+                                             'openapi_uint64_bounds_keep_exact_integer_tokens_recursively',
+                                             'asset_movement_feed_documents_rows_kinds_and_freshness',
+                                             'multisig_proposal_reads_return_approval_times_only_when_asked',
+                                             'multisig_occurrence_contract_separates_identity_from_content'),
+ 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': ('account_inspection_contract_is_public_bounded_and_syntax_only',
+                                                                   'explorer_transaction_proof_contract_is_selective_and_dataspace_visible',
+                                                                   'static_authority_is_the_complete_catalog_projection_with_exact_effects',
                                                                    'sccp_schema_serialization_excludes_secret_fields',
                                                                    'sccp_governance_openapi_tracks_the_v1_parliament_proposal',
                                                                    'production_constants_embedded_in_openapi_remain_frozen',
@@ -255,7 +260,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                    'ledger_executed_block_wire_cached_loading_is_safe_from_256_kib_callers',
                                                                    'account_capabilities_document_exact_public_bootstrap_policy',
                                                                    'generated_spec_includes_documented_paths',
-                                                                   'openapi_authorities_retire_kagemusha_transport_and_proposal_inputs',
+                                                                   'openapi_authorities_preserve_native_enrollment_and_retire_wallet_transport_inputs',
                                                                    'musubi_v1_openapi_matches_the_complete_catalog_and_declares_models',
                                                                    'musubi_instruction_previews_discriminate_equal_payload_shapes_by_wire_id',
                                                                    'musubi_crypto_text_schemas_do_not_impose_single_key_size_limits',
@@ -273,7 +278,9 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                    'transaction_submission_503s_document_exact_outcome_unknown_identity',
                                                                    'signed_transaction_reject_code_inventory_matches_runtime_metadata',
                                                                    'openapi_schemas_include_system_keys',
-                                                                   'scoped_native_original_reads_match_canonical_media_and_resource_bounds'),
+                                                                   'scoped_native_original_reads_match_canonical_media_and_resource_bounds',
+                                                                   'sccp_forgery_openapi_hex_fields_match_model_json',
+                                                                   'sumeragi_evidence_model_hex_fields_match_json_codec'),
  'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': ('pipeline_status_openapi_exposes_only_the_exact_first_release_scope',
                                                                  'npos_schema_excludes_retired_process_local_and_vrf_surfaces',
                                                                  'status_openapi_uses_only_exact_scalar_probe_paths',
@@ -286,6 +293,7 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                     'native_finality_schema_matches_executed_norito_json_and_rejects_retired_fields',
                                                                     'ledger_state_endpoints_expose_one_closed_authenticated_native_schema',
                                                                     'bridge_finality_operations_describe_current_durable_evidence',
+                                                                    'finality_interval_openapi_binds_full_proofs_positive_selectors_and_native_count_limit',
                                                                     'signed_status_documents_actual_driver_fields',
                                                                     'current_finality_schemas_match_portable_wire_bounds',
                                                                     'generated_spec_documents_read_only_nexus_lifecycle_status',
@@ -299,7 +307,9 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
  'crates/iroha_torii/src/openapi/tests/retail_fee_contract.rs': ('retail_validation_fee_api_contract_has_calendar_rates_and_authenticated_reads',),
  'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': ('iso20022_operations_require_fresh_operator_signatures',
                                                            'iso20022_openapi_documents_party_scope_durable_admission_and_signed_xml',
-                                                           'iso20022_v2_status_and_audit_responses_are_exact_and_bounded'),
+                                                           'iso20022_v2_status_and_audit_responses_are_exact_and_bounded',
+                                                           'iso_return_report_schema_is_closed_and_separate_from_native_execution',
+                                                           'iso_native_payment_schema_preserves_distinct_carrier_and_business_evidence'),
  'crates/iroha_torii/src/openapi/tests/json_value_contract.rs': ('json_value_openapi_schema_is_the_canonical_arbitrary_json_union',
                                                                  'recovered_torii_component_schemas_match_their_wire_fields'),
  'crates/iroha_torii/src/openapi/tests/prepared_account_contracts.rs': ('prepared_account_transaction_schemas_are_closed_and_exactly_typed',
@@ -307,14 +317,16 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
  'crates/iroha_torii/src/openapi/tests/privacy_release_qualification.rs': ('privacy_release_qualification_records_match_native_json_fields',
                                                                            'privacy_release_qualification_enums_match_native_json_tags',
                                                                            'privacy_release_qualification_inventory_counts_match_native_contract',
-                                                                           'privacy_release_qualification_is_required_and_explicitly_nullable',
+                                                                           'privacy_runtime_manifest_binds_network_without_documentary_qualification',
                                                                            'privacy_release_qualification_keeps_java_source_kotlin_as_one_of_ten_consumers'),
- 'crates/iroha_torii/src/openapi/tests/private_settlement_contract.rs': ('private_settlement_openapi_covers_the_exact_catalog_family',
+ 'crates/iroha_torii/src/openapi/tests/private_settlement_contract.rs': ('private_settlement_policy_extension_keeps_original_privacy_and_context_shapes',
+                                                                         'private_settlement_openapi_covers_the_exact_catalog_family',
                                                                          'private_settlement_operations_are_typed_authenticated_and_redacted',
                                                                          'private_settlement_top_level_v1_dtos_are_strict',
                                                                          'private_settlement_tagged_v1_dtos_have_exact_closed_variants'),
  'crates/iroha_torii/src/openapi/tests/public_contract_call.rs': ('public_contract_call_schema_matches_exact_current_admission',),
- 'crates/iroha_torii/src/openapi/tests/query_asset_absence_contract.rs': ('query_asset_absence_openapi_requires_the_exact_selector',),
+ 'crates/iroha_torii/src/openapi/tests/query_asset_absence_contract.rs': ('query_asset_absence_openapi_requires_the_exact_selector',
+                                                                          'query_settlement_receipt_absence_openapi_requires_the_exact_selector'),
  'crates/iroha_torii/src/openapi/tests/sns_contract.rs': ('sns_name_absence_openapi_is_typed_and_selector_bound',
                                                           'alias_errors_openapi_match_native_reports_and_bound_absence'),
  'crates/iroha_torii/src/openapi/tests/soracloud_lease_contracts.rs': ('soracloud_control_plane_openapi_exposes_authoritative_lease_accounting',
@@ -387,19 +399,19 @@ TEST_INVENTORY = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs'
                                                                                 'secret_byte_cleanup_accounting_is_isolated_between_threads')}
 ATTRIBUTE_SIGNATURE = {'crates/iroha_data_model/src/soracloud/tests/proof_schemas.rs': 'd8bb84caecce3d9dc46322b7fba4c6510a53df96d4ad7ca6f45df4d8d218c471',
  'crates/iroha_torii/src/openapi.rs': 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
- 'crates/iroha_torii/src/openapi/tests.rs': '37fa848056b9bdbd777d56e3d5521dc6f12897b872edaef8e9c55ce5c7af59ec',
- 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': '5697e2c51dc67776ae41acebdc89b2e3c17f16ebdd50cbcf41ada5316a6aca29',
+ 'crates/iroha_torii/src/openapi/tests.rs': 'a7b299709fb33ed006446d857c8c3e56cdc9ff3da6d03ae76121c5837c95cb7a',
+ 'crates/iroha_torii/src/openapi/tests/catalog_and_contracts.rs': '98c8445254320f7954d258bdab2766e3f81c794704f439dda4c5e939ca541bd6',
  'crates/iroha_torii/src/openapi/tests/diagnostics_schemas.rs': 'e9c818b7a47d03eeafa5846b96838acaca60a99594e6b125d8bc564f7d1e5d1a',
  'crates/iroha_torii/src/openapi/tests/fee_quote_contract.rs': '32dc22a816d915f8cc2dd33fc257a38306ba0061f330594d4287a45ddc604ad6',
- 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': '97200fdde850193b136a2de805d6d585b16bb64a3ba5e30abfcdec6b631d0590',
+ 'crates/iroha_torii/src/openapi/tests/finality_app_contracts.rs': '92d56a6312f30ce710648afe1cb947e25626feaf320fa5b068539a1940d11368',
  'crates/iroha_torii/src/openapi/tests/retail_fee_contract.rs': '1b46a214f2d8db475f194c3652c131f3dfee789f919c7d905e84400400d7c275',
- 'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': 'b1b49d0c5d309eb98a9db7bcba90c415ad86ed10d41fb55fd9216bbf7fb2cd12',
+ 'crates/iroha_torii/src/openapi/tests/iso20022_auth.rs': '6cb0922cb8d7ec307a5dbca431c133a38690c4a99ce02388610f1d8ccab78139',
  'crates/iroha_torii/src/openapi/tests/json_value_contract.rs': 'a0721c177ae54f8127c3f74c46c2435970238f7e49c3d1fc1d0149dfea3280e7',
  'crates/iroha_torii/src/openapi/tests/prepared_account_contracts.rs': 'c67c92d10270de49b0a2c592728382b8c8e6f4a717803e74ac4e57f501bb8152',
- 'crates/iroha_torii/src/openapi/tests/privacy_release_qualification.rs': 'c70ff1c24aa1be36619c595433648aeb1ecf5dabab055c17b8e2142c4a07b5ac',
- 'crates/iroha_torii/src/openapi/tests/private_settlement_contract.rs': 'da767015a4c6a6722af8a9060d9efb1f9a2ab1198c97eb187f74ecf14c718ad4',
+ 'crates/iroha_torii/src/openapi/tests/privacy_release_qualification.rs': '77479f265d9bddb601c69fac3e651defdc8a021950a1014535cb2f437810270f',
+ 'crates/iroha_torii/src/openapi/tests/private_settlement_contract.rs': '5b1b473926976ca1625585dab4b84943e3e2f153b3680d1327eb5588a5f3a9a1',
  'crates/iroha_torii/src/openapi/tests/public_contract_call.rs': 'ff2e4ff211194e5f3688e2500aabe394515c8c9a8398862ad4bb98cab509edb6',
- 'crates/iroha_torii/src/openapi/tests/query_asset_absence_contract.rs': '6c4b10417f73afe762037ed2bd96476225a438bd5a14df295a1d1bb9c82afa28',
+ 'crates/iroha_torii/src/openapi/tests/query_asset_absence_contract.rs': 'f49520a3355a8706cb501adf38b87d4071d86d9307a18cbe9d9efe0e3527a827',
  'crates/iroha_torii/src/openapi/tests/sns_contract.rs': 'fd7e2d02d8e03ceaa5f0d2a8ca6776d64ff29a12e581525ac8a5e11e890fbd28',
  'crates/iroha_torii/src/openapi/tests/soracloud_lease_contracts.rs': '4083f46e0a01b55d52174ecdceac2c36c6ef24237d351743a763f0f48ede7729',
  'crates/iroha_torii/src/openapi/tests/sorafs_contracts.rs': '6a667bd8626703dbac8667fa77570df05768ba722251c68db4614eb63e9c3423',
@@ -739,6 +751,7 @@ class LargeStaticContractAssetTests(unittest.TestCase):
             "multisig_account_id": "canonical-account-id",
             "signer_account_id": "canonical-signer-id",
             "fee_payment": {"payer": "authority", "value": {"charge_limits": [], "gas_limit": 1000}},
+            "proposal_nonce": "41" * 32,
             "instructions": ["AQ=="],
         }
         self.assertTrue(validator.is_valid(request))
@@ -767,6 +780,12 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         self.assertFalse(validator.is_valid(request | {"multisig_account_id": None}))
         missing_id = dict(request); del missing_id["multisig_account_id"]
         self.assertFalse(validator.is_valid(missing_id))
+        # Each proposal occurrence needs a caller-retained nonzero nonce.
+        missing_nonce = dict(request); del missing_nonce["proposal_nonce"]
+        self.assertFalse(validator.is_valid(missing_nonce))
+        for value in (None, "00" * 32, "AB" * 32, "41" * 31):
+            with self.subTest(proposal_nonce=value):
+                self.assertFalse(validator.is_valid(request | {"proposal_nonce": value}))
 
     def test_retail_fee_schema_authority_mutations_are_rejected(self) -> None:
         document = json.loads((ROOT / OPENAPI_AUTHORITIES[0]).read_bytes())
@@ -813,6 +832,13 @@ class LargeStaticContractAssetTests(unittest.TestCase):
                 self.assertIn("#[norito(flatten)]", body)
                 self.assertNotIn("contract_address", body)
                 Draft202012Validator.check_schema(schema)
+        # Approval and cancellation name one occurrence and its content commitment
+        # (specs/multisig_proposal_occurrences.md).
+        references = {
+            "handle_post_multisig_approve": "(&proposal_id, &instructions_hash)?",
+            "handle_post_multisig_cancel": "(&target_proposal_id, &target_instructions_hash)?",
+            "handle_post_contract_call_multisig_approve": "(&proposal_id, &instructions_hash)?",
+        }
         for handler in (
             "handle_post_multisig_propose", "handle_post_multisig_approve", "handle_post_multisig_cancel",
             "handle_post_contract_call_multisig_propose", "handle_post_contract_call_multisig_approve",
@@ -820,7 +846,16 @@ class LargeStaticContractAssetTests(unittest.TestCase):
             body = source.split("pub async fn " + handler + "(", 1)[1].split("pub async fn ", 1)[0]
             with self.subTest(handler=handler):
                 self.assertIn("reject_unverified_multisig_alias_selector(&selector)?", body)
-        self.assertIn("exactly one of proposal_id or instructions_hash must be set", source)
+                if handler in references:
+                    self.assertIn("resolve_multisig_proposal_reference" + references[handler], body)
+        self.assertIn(
+            "fn resolve_multisig_proposal_reference(\n    proposal_id: &str,\n    instructions_hash: &str,\n)",
+            source,
+        )
+        self.assertIn("target content differs from reviewed instructions_hash", source)
+        # The retired hash-only selector stays absent.
+        self.assertNotIn("fn resolve_multisig_proposal_hash(", source)
+        self.assertNotIn("exactly one of proposal_id or instructions_hash must be set", source)
         self.assertIn("exact_target.contract_alias != contract_alias", source)
         self.assertIn("exact_target.contract_entrypoint != entrypoint", source)
         self.assertIn("exact_target.payload != payload", source)
@@ -837,15 +872,23 @@ class LargeStaticContractAssetTests(unittest.TestCase):
         for name, _ in MULTISIG_MUTATION_DTOS:
             validator = Draft202012Validator({"$ref": "#/components/schemas/" + name, "components": document["components"]})
             request = copy.deepcopy(base)
-            selector = name in ("MultisigApproveRequest", "MultisigCancelRequest", "MultisigContractCallApproveRequest")
+            # Proposals and cancellation wrappers create an occurrence from a nonce.
+            # Approvals and cancellation targets name the occurrence and its content.
+            nonce = name in ("MultisigProposeRequest", "MultisigCancelRequest", "MultisigContractCallProposeRequest")
+            reference = {
+                "MultisigApproveRequest": ("proposal_id", "instructions_hash"),
+                "MultisigCancelRequest": ("target_proposal_id", "target_instructions_hash"),
+                "MultisigContractCallApproveRequest": ("proposal_id", "instructions_hash"),
+            }.get(name, ())
             contract_call = name.startswith("MultisigContractCall")
             optional = ["multisig_account_alias", "public_key_hex", "signature_b64", "creation_time_ms"]
             if name == "MultisigProposeRequest":
                 request["instructions"] = ["AQ=="]
                 optional += ["memo", "validation_fee_assessment"]
-            if selector:
-                request["proposal_id"] = "ab" * 32
-                optional += ["instructions_hash"]
+            if nonce:
+                request["proposal_nonce"] = "41" * 32
+            if reference:
+                request.update({reference[0]: "ab" * 32, reference[1]: "cd" * 32})
             if contract_call:
                 request.update(contract_alias="router::universal", entrypoint="ping", payload={"amount": 1})
             with self.subTest(schema=name):
@@ -866,16 +909,21 @@ class LargeStaticContractAssetTests(unittest.TestCase):
                 self.assertFalse(validator.is_valid(missing))
                 alias_only = dict(missing); alias_only["multisig_account_alias"] = "treasury@universal"
                 self.assertFalse(validator.is_valid(alias_only))
-                if selector:
-                    by_hash = dict(request); del by_hash["proposal_id"]; by_hash["instructions_hash"] = "cd" * 32
-                    self.assertTrue(validator.is_valid(by_hash))
-                    self.assertTrue(validator.is_valid(by_hash | {"proposal_id": None}))
-                    self.assertFalse(validator.is_valid(request | {"instructions_hash": request["proposal_id"]}))
-                    self.assertFalse(validator.is_valid(request | {"instructions_hash": "cd" * 32}))
-                    for value in (None, "", "AB" * 32, " " + "ab" * 32, "ab" * 31):
-                        self.assertFalse(validator.is_valid(request | {"proposal_id": value}), value)
-                    absent = dict(request); del absent["proposal_id"]
+                if nonce:
+                    absent = dict(request); del absent["proposal_nonce"]
                     self.assertFalse(validator.is_valid(absent))
+                    for value in (None, "", "00" * 32, "AB" * 32, "41" * 31):
+                        self.assertFalse(validator.is_valid(request | {"proposal_nonce": value}), value)
+                # Both halves are required: no hash-only or id-only selector.
+                for field in reference:
+                    absent = dict(request); del absent[field]
+                    self.assertFalse(validator.is_valid(absent), field)
+                    for value in (None, "", "AB" * 32, " " + "ab" * 32, "ab" * 31):
+                        self.assertFalse(validator.is_valid(request | {field: value}), (field, value))
+                if name == "MultisigCancelRequest":
+                    # Cancel proposes a wrapper; it has no direct occurrence selector.
+                    for field in ("proposal_id", "instructions_hash"):
+                        self.assertFalse(validator.is_valid(request | {field: "ab" * 32}), field)
                 if contract_call:
                     for field in ("contract_alias", "entrypoint", "payload"):
                         missing = dict(request); del missing[field]

@@ -1,4 +1,3 @@
-use derive_more::Display;
 use std::{format, string::String, vec::Vec};
 /// Variable length unsigned int. [ref](https://github.com/multiformats/unsigned-varint)
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -7,9 +6,14 @@ pub struct VarUint {
     payload: Vec<u8>,
 }
 /// Error which occurs when converting to/from `VarUint`
-#[derive(Debug, Clone, Display)]
+#[derive(Debug, Clone)]
 pub struct ConvertError {
     reason: String,
+}
+impl core::fmt::Display for ConvertError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.reason, f)
+    }
 }
 impl ConvertError {
     const fn new(reason: String) -> Self {
@@ -132,6 +136,31 @@ impl VarUint {
 mod tests {
     use super::*;
     use std::vec;
+
+    #[test]
+    fn convert_error_display_preserves_string_flags_and_writer_failure() {
+        use std::{error::Error as _, fmt::Write as _};
+
+        struct FailingWriter;
+        impl std::fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+
+        for reason in ["", "invalid varuint", "μ🔥\nquote\"\\"] {
+            let error = ConvertError::new(reason.into());
+            assert_eq!(format!("{error}"), reason);
+            assert_eq!(format!("{error:>32.3}"), format!("{reason:>32.3}"));
+            assert_eq!(format!("{error:🦀^32.3}"), format!("{reason:🦀^32.3}"));
+            assert_eq!(format!("{error:+#032.3}"), format!("{reason:+#032.3}"));
+            assert!(error.source().is_none());
+            if !reason.is_empty() {
+                assert_eq!(write!(FailingWriter, "{error}"), Err(std::fmt::Error));
+            }
+        }
+    }
+
     #[test]
     fn test_basic_into() {
         let n = 0x4000_u64;

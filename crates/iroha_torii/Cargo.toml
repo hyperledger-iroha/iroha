@@ -147,7 +147,6 @@ url = { workspace = true }
 prometheus = { workspace = true, optional = true }
 
 thiserror = { workspace = true }
-displaydoc = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
 axum = { workspace = true, features = ["ws", "query", "json", "tokio", "http1", "macros", "matched-path", "original-uri"] }
 tower-http = { version = "0.7.1", features = ["cors", "trace", "timeout"] }
@@ -186,7 +185,10 @@ parking_lot = { workspace = true }
 flate2 = "1.1.5"
 zstd = { workspace = true }
 futures-util = "0.3.31"
-jsonwebtoken = { version = "11.1.0", default-features = false, features = ["use_pem", "aws_lc_rs"] }
+# Push tokens use the existing TLS cryptographic backend directly. The private
+# module owns only provider-specific JWT framing and key-format admission.
+aws-lc-rs = { version = "1.18.2", default-features = false, features = ["alloc", "non-fips"] }
+rustls-pki-types = { version = "1.15.1", features = ["std"] }
 
 [target.'cfg(unix)'.dependencies]
 rustix = { version = "1.1.4", features = ["fs", "process"] }
@@ -201,7 +203,6 @@ crossbeam-epoch = "0.9.20"
 tracing-subscriber = { workspace = true, features = ["fmt", "json"] }
 iroha_p2p = { workspace = true, features = ["test-fixtures"] }
 fastpq_prover = { workspace = true }
-humantime = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 iroha_service_model = { workspace = true }
 criterion = { workspace = true }

@@ -21,6 +21,8 @@ mod fraud_monitoring;
 mod genesis_json;
 #[path = "iroha_cli.rs"]
 mod iroha_cli;
+#[path = "iroha_cli_storage.rs"]
+mod iroha_cli_storage;
 #[path = "misc.rs"]
 mod misc;
 #[path = "multisig.rs"]
@@ -68,7 +70,6 @@ mod sorafs_orderbook_ledger;
 #[cfg(unix)]
 #[path = "sorafs_publication.rs"]
 mod sorafs_publication;
-#[cfg(unix)]
 #[path = "sorafs_publication_authority.rs"]
 mod sorafs_publication_authority;
 #[cfg(unix)]
@@ -77,7 +78,6 @@ mod sorafs_publication_compliance;
 #[cfg(unix)]
 #[path = "sorafs_publication_config.rs"]
 mod sorafs_publication_config;
-#[cfg(unix)]
 #[path = "sorafs_publication_http.rs"]
 mod sorafs_publication_http;
 #[path = "sorafs_repair_ledger.rs"]

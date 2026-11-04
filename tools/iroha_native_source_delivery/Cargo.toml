@@ -1,5 +1,6 @@
 [package]
 name = "iroha_native_source_delivery"
+autobins = false
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -10,6 +11,16 @@ publish = false
 
 [lints]
 workspace = true
+
+[features]
+# The internal delivery executable is an explicit release/CI tool, never a default
+# workspace binary (scripts/check_workspace_target_inventory.py).
+dev-tools = []
+
+[[bin]]
+name = "iroha_native_source_delivery"
+path = "src/main.rs"
+required-features = ["dev-tools"]
 
 [dependencies]
 iroha_fs.workspace = true

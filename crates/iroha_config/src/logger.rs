@@ -10,23 +10,24 @@ use std::{
     str::FromStr,
 };
 use tracing_subscriber::filter::Directive;
-/// Reflects formatters in [`mod@tracing_subscriber::fmt::format`]
-#[derive(Debug, Copy, Clone, Eq, PartialEq, strum::Display, strum::EnumString, Default)]
-#[strum(serialize_all = "snake_case")]
-pub enum Format {
-    /// See [`tracing_subscriber::fmt::format::Full`]
-    #[default]
-    Full,
-    /// See [`tracing_subscriber::fmt::format::Compact`]
-    Compact,
-    /// See [`tracing_subscriber::fmt::format::Pretty`]
-    Pretty,
-    /// See [`tracing_subscriber::fmt::format::Json`]
-    Json,
+iroha_config_base::config_enum! {
+    /// Reflects formatters in [`mod@tracing_subscriber::fmt::format`]
+    #[derive(Debug, Copy, Clone, Eq, PartialEq, Default)]
+    pub enum Format {
+        /// See [`tracing_subscriber::fmt::format::Full`]
+        #[default]
+        Full => "full",
+        /// See [`tracing_subscriber::fmt::format::Compact`]
+        Compact => "compact",
+        /// See [`tracing_subscriber::fmt::format::Pretty`]
+        Pretty => "pretty",
+        /// See [`tracing_subscriber::fmt::format::Json`]
+        Json => "json",
+    }
 }
 impl JsonSerialize for Format {
     fn json_serialize(&self, out: &mut String) {
-        json::write_json_string(&self.to_string(), out);
+        json::write_json_string(self.as_str(), out);
     }
 }
 impl JsonDeserialize for Format {
@@ -40,11 +41,10 @@ impl JsonDeserialize for Format {
 }
 impl SerializePayload for Format {
     fn serialize(&self, writer: &mut norito::core::Encoder<'_>) -> Result<(), ncore::Error> {
-        let text = self.to_string();
-        <String as SerializePayload>::serialize(&text, writer)
+        <&str as SerializePayload>::serialize(&self.as_str(), writer)
     }
     fn encoded_len_hint(&self) -> Option<usize> {
-        Some(self.to_string().len())
+        Some(self.as_str().len())
     }
     fn encoded_len_exact(&self) -> Option<usize> {
         self.encoded_len_hint()

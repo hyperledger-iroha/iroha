@@ -1195,9 +1195,9 @@ mod frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             super::ProposeRuntimeUpgradeProposal,
         >("iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal");
-        crate::frame_owner_identity_tests::assert_bidirectional::<
-            super::ProposeEndorsedRuntimeUpgradeProposal,
-        >("iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal");
+        // The endorsed proposal was added after the original identity cutover.
+        // Its current complete frames are pinned by manual_frame_identity::runtime_upgrade;
+        // it has no pre-cutover observation to assert here.
         crate::frame_owner_identity_tests::assert_bidirectional::<super::ProposeSccpRouteGovernance>(
             "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
         );

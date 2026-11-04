@@ -265,12 +265,20 @@ trait ComposeImageFields {
     fn into_fields(self) -> norito::json::Map;
 }
 /// Schema serialization error.
-#[derive(displaydoc::Display, Debug)]
+#[derive(Debug)]
 pub enum Error {
     /// Could not write the banner: {0}
     BannerWrite(std::io::Error),
     /// Could not serialize the schema: {0}
     Yaml(norito::yaml::Error),
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BannerWrite(error) => write!(formatter, "Could not write the banner: {error}"),
+            Self::Yaml(error) => write!(formatter, "Could not serialize the schema: {error}"),
+        }
+    }
 }
 impl std::error::Error for Error {}
 /// Image identifier.

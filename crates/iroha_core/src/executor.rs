@@ -21,7 +21,6 @@ use core::{
     convert::TryFrom,
     ops::{Deref, DerefMut},
 };
-use derive_more::Debug;
 use iroha_config::parameters::actual::{ConfidentialGas, Pipeline};
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus::RootFeePolicy;
@@ -267,7 +266,7 @@ const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// host-side limit at that deterministic region size prevents a guest-controlled length prefix from
 /// requesting an unbounded host allocation, while retaining the entire addressable result envelope.
 const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum NativeQueryAccess {
     /// Control-plane or public-definition data available to any registered account.
     Registered,
@@ -286,6 +285,65 @@ enum NativeQueryAccess {
     AssetFiOwner(AssetDefinitionId, AccountId),
     /// Ledger-wide state requiring the genesis-issued read root.
     AllLedger,
+}
+impl core::fmt::Debug for NativeQueryAccess {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Pretty tuple fields retain their own default flags; compact output forwards outer flags.
+        let pretty = formatter.alternate();
+        match self {
+            Self::Registered => formatter.write_str("Registered"),
+            Self::Account(account) => {
+                let mut tuple = formatter.debug_tuple("Account");
+                if pretty {
+                    tuple.field(&format_args!("{account:#?}"));
+                } else {
+                    tuple.field(account);
+                }
+                tuple.finish()
+            }
+            Self::EnrollmentAccount(account) => {
+                let mut tuple = formatter.debug_tuple("EnrollmentAccount");
+                if pretty {
+                    tuple.field(&format_args!("{account:#?}"));
+                } else {
+                    tuple.field(account);
+                }
+                tuple.finish()
+            }
+            Self::AssetUidOwner(asset) => {
+                let mut tuple = formatter.debug_tuple("AssetUidOwner");
+                if pretty {
+                    tuple.field(&format_args!("{asset:#?}"));
+                } else {
+                    tuple.field(asset);
+                }
+                tuple.finish()
+            }
+            Self::AssetEscrowOwner(asset, incarnation) => {
+                let mut tuple = formatter.debug_tuple("AssetEscrowOwner");
+                if pretty {
+                    tuple
+                        .field(&format_args!("{asset:#?}"))
+                        .field(&format_args!("{incarnation:#?}"));
+                } else {
+                    tuple.field(asset).field(incarnation);
+                }
+                tuple.finish()
+            }
+            Self::AssetFiOwner(asset, account) => {
+                let mut tuple = formatter.debug_tuple("AssetFiOwner");
+                if pretty {
+                    tuple
+                        .field(&format_args!("{asset:#?}"))
+                        .field(&format_args!("{account:#?}"));
+                } else {
+                    tuple.field(asset).field(account);
+                }
+                tuple.finish()
+            }
+            Self::AllLedger => formatter.write_str("AllLedger"),
+        }
+    }
 }
 fn decode_native_iterable_payload_exact<Q>(payload: &[u8]) -> Option<Q>
 where
@@ -1458,7 +1516,7 @@ pub(crate) fn execute_instruction_detached(
 ///
 /// Executing is done in order to verify dependent instructions in transaction.
 /// Can be upgraded with [`Upgrade`](iroha_data_model::isi::Upgrade) instruction.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub enum Executor {
     /// Initial executor with minimal built-in permission checks for critical instructions.
     #[default]
@@ -1466,8 +1524,25 @@ pub enum Executor {
     /// User-provided executor with arbitrary logic.
     UserProvided(LoadedExecutor),
 }
+impl core::fmt::Debug for Executor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let pretty = formatter.alternate();
+        match self {
+            Self::Initial => formatter.write_str("Initial"),
+            Self::UserProvided(executor) => {
+                let mut tuple = formatter.debug_tuple("UserProvided");
+                if pretty {
+                    tuple.field(&format_args!("{executor:#?}"));
+                } else {
+                    tuple.field(executor);
+                }
+                tuple.finish()
+            }
+        }
+    }
+}
 /// Migration outcome at the State-owning instruction boundary.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ExecutorMigrationError {
     /// A completed migration error retains its original VM fields.
     #[error("executor migration rejected: {0}")]
@@ -1480,6 +1555,24 @@ pub enum ExecutorMigrationError {
     /// become a completed rejection; the outer State terminal must export the original once.
     #[error("local executor migration did not complete; original refusal retained in State")]
     LocalRefusalRetained,
+}
+impl core::fmt::Debug for ExecutorMigrationError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let pretty = formatter.alternate();
+        match self {
+            Self::Rejected(error) => {
+                let mut tuple = formatter.debug_tuple("Rejected");
+                if pretty {
+                    tuple.field(&format_args!("{error:#?}"));
+                } else {
+                    tuple.field(error);
+                }
+                tuple.finish()
+            }
+            Self::LiveCustody => formatter.write_str("LiveCustody"),
+            Self::LocalRefusalRetained => formatter.write_str("LocalRefusalRetained"),
+        }
+    }
 }
 
 /// Execution profile applied when running native ISIs.
@@ -2156,7 +2249,7 @@ fn parse_account_id_literal(
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
 }
 /// Deterministic reason a Nexus fee quote or admission check failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum NexusFeeAdmissionError {
     /// The selected fee payer cannot satisfy deterministic admission.
     Rejected {
@@ -2167,6 +2260,27 @@ pub enum NexusFeeAdmissionError {
     },
     /// Node or persisted fee configuration is invalid.
     ConfigInvalid(String),
+}
+impl core::fmt::Debug for NexusFeeAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let pretty = formatter.alternate();
+        match self {
+            Self::Rejected { code, reason } => formatter
+                .debug_struct("Rejected")
+                .field("code", code)
+                .field("reason", reason)
+                .finish(),
+            Self::ConfigInvalid(reason) => {
+                let mut tuple = formatter.debug_tuple("ConfigInvalid");
+                if pretty {
+                    tuple.field(&format_args!("{reason:#?}"));
+                } else {
+                    tuple.field(reason);
+                }
+                tuple.finish()
+            }
+        }
+    }
 }
 impl core::fmt::Display for NexusFeeAdmissionError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -10112,6 +10226,10 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
 mod runtime_memory_tests;
 
 #[cfg(test)]
+#[path = "executor_formatting_tests.rs"]
+mod formatting_tests;
+
+#[cfg(test)]
 #[path = "executor_public_pin_admission_tests.rs"]
 mod public_pin_admission_tests;
 
@@ -10133,8 +10251,7 @@ fn executor_test_budget() -> iroha_allocation::AllocationBudget {
 }
 
 /// [`Executor`] with cached [`IVM`] for execution.
-#[derive(Debug, Clone)]
-#[debug("LoadedExecutor {{ runtime: <IVM> }}")]
+#[derive(Clone)]
 pub struct LoadedExecutor {
     runtime_pool: Arc<Mutex<ExecutorRuntimePool>>,
     pool_memory: Arc<ivm::cache_memory::MemoryReservation>,
@@ -10142,6 +10259,11 @@ pub struct LoadedExecutor {
     /// Sharing immutable bytecode makes executor clones cheap.
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
     raw_executor: ivm::cache_memory::SharedValue<data_model_executor::Executor>,
+}
+impl core::fmt::Debug for LoadedExecutor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("LoadedExecutor { runtime: <IVM> }")
+    }
 }
 // Stack sizing and the governed heap ceiling define distinct VM memory
 // authorities. Keep a small bounded LRU so adversarial governance/gas

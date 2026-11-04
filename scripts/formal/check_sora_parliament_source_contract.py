@@ -766,7 +766,7 @@ def require_retired_parliament_broker_exposure() -> None:
         attributes=('#[expect(clippy::needless_pass_by_value, reason = '
                     '"each blocking session owns its shared permits and ordered transcript")]',),
     )
-    if rust_token_digest(server) != "34291b440f43b692acfcc036937ecf3f961c85770985a4ce1b287d286b1fa9ba":
+    if rust_token_digest(server) != "d91bcb67f122835c5dc1663f766ea85736def8071b2cedecd64b4fcf61868d41":
         raise RuntimeError(f"{transport_path}: live broker request/discriminator binding changed")
     # Retain the shared live broker's original pre-dispatch requalification.
     dispatch = unconditional_rust_item(sources[dispatch_path], "fn dispatch_server_operation_with_session(", dispatch_path)
@@ -795,8 +795,13 @@ def require_public_finding_endorsement_order(types: str) -> None:
 
 
 def require_sortition_registration_guards(world: str) -> None:
-    """Follow both registration transitions into their shared admission helper."""
+    """Follow both registration transitions into their shared admission helper.
+
+    Comments and literals are masked first, so a commented or quoted copy of the
+    shared admission call cannot stand in for a disconnected live call.
+    """
     path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
+    world = mask_rust(world)
     for start, end, snapshot, candidates in (
         (
             "gov::ParliamentLifecycleTransitionV1::RegisterInitialSortition => {",
@@ -815,9 +820,9 @@ def require_sortition_registration_guards(world: str) -> None:
         require_all(path, branch, (snapshot,))
         admission = re.compile(
             r"no_result_kind\s*=\s*apply_parliament_sortition_request_batch_v1\s*\(\s*"
-            r"&mut\s+attempt\s*,\s*payload\s*,\s*"
+            r"&mut\s+attempt\s*,\s*payload\s*,\s*&\s*\(\s*"
             + re.escape(candidates)
-            + r"\s*,\s*state_transaction\s*,?\s*\)\s*\?"
+            + r"\s*\)\s*,\s*state_transaction\s*,?\s*\)\s*\?"
         )
         if admission.search(branch) is None:
             raise RuntimeError(
@@ -971,6 +976,9 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
     constructor_owner = "pub(crate) fn try_new_with_randomness_redraws_before_attempt("
     constructor = body(reducer, constructor_owner, path)
     require_ordered_once(path, constructor_owner, constructor, (
+        # Both frozen inputs are `u64`: the destructuring order alone gives them meaning.
+        "policy_version:u64,(sortition_pulse_delay_blocks,sortition_pulse_epoch_length_blocks):"
+        "(u64,u64),effect_preimage_hash:[u8;32],",
         "if" + schedule_floor.format(""),
         "policy_version,sortition_pulse_delay_blocks,sortition_pulse_epoch_length_blocks,"
         "effect_preimage_hash,",
@@ -978,7 +986,7 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
     simple = body(reducer, "pub fn try_new(", path)
     require_ordered_once(path, "pub fn try_new(", simple, (
         "Self::try_new_with_randomness_redraws_before_attempt(attempt,0,policy_version,"
-        "sortition_pulse_delay_blocks,sortition_pulse_epoch_length_blocks,"
+        "(sortition_pulse_delay_blocks,sortition_pulse_epoch_length_blocks,),"
         "effect_preimage_hash,expected_head,required_bodies,)}",
     ))
     validate_owner = "pub fn validate(&self) -> Result<(), ParliamentReducerErrorV1> {"
@@ -1195,10 +1203,7 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
                     state.consume_sortition_pulse_batch(
                         id,
                         request_ids,
-                        session,
-                        pulse_height,
-                        pulse_id,
-                        seed,
+                        (session, pulse_height, pulse_id, seed),
                         network_id,
                         governance,
                     )
@@ -1244,9 +1249,9 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<u64, Error> {
             let no_native_cadence = || {
-                Error::from(InstructionExecutionError::InvariantViolation(
+                InstructionExecutionError::InvariantViolation(
                     PARLIAMENT_SORTITION_REQUIRES_NPOS_CADENCE_V1.into(),
-                ))
+                )
             };
             let policy = match state_transaction.world.sumeragi_npos_parameters() {
                 Ok(policy) => policy,
@@ -1254,9 +1259,7 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
                     return Err(contract_attempt_instruction_error(
                         state_transaction,
                         error.map_rejection(|message| {
-                            Error::from(InstructionExecutionError::InvariantViolation(
-                                message.into(),
-                            ))
+                            InstructionExecutionError::InvariantViolation(message.into())
                         }),
                     ));
                 }
@@ -1294,8 +1297,8 @@ def require_sortition_slot_rule(reducer: str, planner: str, world: str) -> None:
         "crate::governance::parliament::ParliamentAttemptStateV1::"
         "try_new_with_randomness_redraws_before_attempt(self.canonical_attempt(risk_tier),"
         "randomness_redraws_before_attempt,PARLIAMENT_GOVERNANCE_POLICY_VERSION_V1,"
-        "state_transaction.gov.parliament_sortition_pulse_delay_blocks,"
-        "sortition_pulse_epoch_length_blocks,effect_preimage_hash,expected_head,required_bodies,)"
+        "(state_transaction.gov.parliament_sortition_pulse_delay_blocks,"
+        "sortition_pulse_epoch_length_blocks),effect_preimage_hash,expected_head,required_bodies,)"
         ".map_err(parliament_reducer_error)?;",
         ".put_governance_proposal(proposal_id,retried_proposal)",
         ".put_parliament_attempt(attempt)",
@@ -1520,6 +1523,8 @@ def require_block_start_construction(state: str) -> None:
         reason = "the acquired block owns the supplied header independently of its caller")]'''
     replacement_lint = '''#[expect(clippy::large_types_passed_by_value,
         reason = "the replacement block owns the supplied header independently of its caller")]'''
+    fields_lint = '''#[expect(clippy::struct_excessive_bools,
+        reason = "Independent block journals retain their own completion and refusal observations")]'''
     # Pin the defining module routes as actual top-level declarations. An intact
     # path spelling below cfg(any()), a macro or another module is not a route.
     for location, declaration, attributes in (
@@ -1539,11 +1544,11 @@ def require_block_start_construction(state: str) -> None:
     # its invocation binds exactly the original four State Cell sources.
     owners = (
         (path, "pub(super) fn construct_acquired_block<'state, R>(", "impl State", (lint,),
-         "original writers and armed continuation", "b598f2643ff1f30ea3e3656e6f15857285acb579c4a3ad9bb45f0e55524d5940"),
+         "original writers and armed continuation", "a7aa2bb68560fab218287ddcec60beb1a4d48e042daddc1a8cfd8f7c712af3db"),
         (path, "fn finish_state_block_construction<R>(", None, ("#[inline(never)]",),
          "bounded borrowed finish", "aa4f6e7dd39969dd98751ac40f7f1b87bd4664a960a937cd8ccadc99487831b1"),
         (acquisition_path, "macro_rules! runtime_cells", None, (),
-         "original acquisition field and release inventory", "9cb2d3ab7b464383a53bd8cef93cb1a9a955a4c02fc4101bb5f6481b7126745c"),
+         "original acquisition field and release inventory", "5aa79ff60434f078f739dd2d6afec96b9dd2fafe7935a8e0f685e46085965ca2"),
         (acquisition_path, "runtime_cells! {", None, (),
          "original four Cell sources", "f9ba176bbbc91b965a3d867296e37fcc62c3ccf5479e507fe5b20919b565821d"),
         (acquisition_path, "pub(in crate::state) struct AcquiredRuntimeBlock<'state>", None, (),
@@ -1557,11 +1562,11 @@ def require_block_start_construction(state: str) -> None:
         (hydration_path, "impl<'state> DaRewindReleases<'state>", None, (gate,),
          "conditional original rewind sources", "2154aecc0c638b4f0fdf7d8ae636cd20746dd373a1360d6b30355df3dd683ac1"),
         (hydration_path, "pub(super) fn rewind_da_indexes_to_height_with_releases(", "impl State", (gate,),
-         "borrowed original rewind kernel", "4da09f62d000c110745209e8993f4c3fa669d8c5bf640fe7eec2a8aceaf9b3a8"),
+         "borrowed original rewind kernel", "39db8f45edd603db73f72e9aba6ff2958f1c3b9497415cf71106afaaad11560a"),
         (state_path, "pub struct StateBlock<'state>", None, (),
          "original armed State owner", "7e13644044a601096aaeb2925833a17155627e291f47483344d61dd793e0397b"),
-        (state_path, "pub struct StateBlockFields<'state>", None, (),
-         "original armed State owner fields and paired cfg", "38f3579738e338befdf0c76b96f0818b50ea4af8d923e1117125764057a55e9e"),
+        (state_path, "pub struct StateBlockFields<'state>", None, (fields_lint,),
+         "original armed State owner fields and paired cfg", "decd4eea8a43b5d0ffbcc519362f3b1e3a0f666199943f3add88b969cf9da76c"),
         (state_path, "fn from_fields(", "impl<'state> StateBlock<'state>", (),
          "original armed State owner", "a946ab2482fdd67135614e20b672dba30bfd09176105b2d94838ba89ef09eac9"),
         (state_path, "impl mv::BlockRetirement for StateBlock<'_>", None, (),
@@ -1584,11 +1589,11 @@ def require_block_start_construction(state: str) -> None:
     # This still trusts the surrounding Rust crate/dependency resolver/compiler;
     # it is not a complete semantic proof of arbitrary Rust programs.
     for location, expected in (
-        (path, "694dd24b7abcd0d7d55406b5ad8d007bf57b3c0c8524db70d7fbf88118023235"),
-        (runtime_path, "a2686034fb1ab48518d0c9f2f01d88230ba5a5ca297639cde2046f34a7554994"),
-        (policy_path, "13607ca92e0c04219d4af4c7e38db727da756ae15fc221ecffda3b53ee2e596c"),
-        (acquisition_path, "876c3b13faf12679ac157b5dd030780f30dbdfd74686fb0ef7874d279ede035a"),
-        (hydration_path, "da39434761a9214486ebf0d5b65e697e763bf247358d784a9eeeafac55c06755"),
+        (path, "b96dc3daef08021418073b97d9ccb02c101f4883252943a39e08d227caad7204"),
+        (runtime_path, "afeeb9a9d958e10c45088a3147aee39db626a697fe134d629c24f887b54c759b"),
+        (policy_path, "e6211c96f91d57002f2175d6aa057cb3059877e116d7b7437480a2547d1d2e3f"),
+        (acquisition_path, "6a64d3d0231415fc30520a2a1d4466964e5ffd0f7470aff7f375fabc1649223c"),
+        (hydration_path, "d2259450d7526a8b5ba4c5ed04ce1a9816ded6e814190c95e7012800377c4615"),
     ):
         if rust_token_digest(sources[location]) != expected:
             raise RuntimeError(f"{location}: start construction changed its defining module tokens")
@@ -1616,7 +1621,7 @@ def torii_without_reviewed_lint_attributes(source: str) -> str:
             raise RuntimeError(f"{path}: Torii exposure has an unclosed inner attribute")
         spans.append((match.start(), end))
     attributes = " ".join(source[start:end] for start, end in spans)
-    if rust_token_digest(attributes) != "3cfefcb2f50982444ad977cb430d5d8e2497115d1d78d23cffd8e47ed54e83d8":
+    if rust_token_digest(attributes) != "ddf2d74124e2b0448b3c08b09a3c2df581bff953c013b5e1234e9dca3f822d69":
         raise RuntimeError(f"{path}: Torii exposure changed reviewed leading lint attributes")
     located = list(source)
     for start, end in spans:
@@ -1676,10 +1681,10 @@ def require_retired_parliament_release_exposure() -> None:
     if actual_paths != expected_paths:
         raise RuntimeError(f"{catalog_path}: current Parliament route path set changed")
     handler_pins = (
-        ("f3368e5759a111d1fc7345b59ec62dde64d061aa2452a8ab549923e950222bea", "d6ac2c27e2627068f946bd4993d78e41602b42547e540c13c6a2a8d151f0d950"),
-        ("ebab8d0b25d5b1e220eb54bfcc4bdf6e5a499bf1ae392025bf445c25adf81611", "3da534aa6aa16c64f0615f60df91b6276eca276febf904653e233eee45715797"),
+        ("f3368e5759a111d1fc7345b59ec62dde64d061aa2452a8ab549923e950222bea", "0ee16ebb7e543a5e0763d0db95f02deb69c2256446476ad882bd6d3b75b4d27d"),
+        ("ebab8d0b25d5b1e220eb54bfcc4bdf6e5a499bf1ae392025bf445c25adf81611", "3aa253c10544d5d3cafb896276ad9e9b045b583f44b6eff0c7464fe1cdc42eb6"),
         ("53304c10dfd3ac9fb3defe2b9a26cbfd64ad11b447c47eaa9aa5a280f144c594", "4cf9d6c3c2b0116783c9699dcad8aea8e607903576b02cd6b718a58c7b0182e9"),
-        ("27c316273576b5c4bcd15fa8c9b9c89cb06b81caa02080b01a9e4e39e497f0e7", "8ec3a6d6e2989ad06461ec32d000a5804981349078df5ffe93931e982419ede6"),
+        ("27c316273576b5c4bcd15fa8c9b9c89cb06b81caa02080b01a9e4e39e497f0e7", "39c01c9a6e45176df47b719159988730ce368e9f69cc3e0ac156a19658c9f172"),
     )
     for row, pins in zip(PARLIAMENT_PUBLIC_ROUTES, handler_pins):
         tag, name, method, suffix, operation = row
@@ -1718,7 +1723,7 @@ def require_retired_parliament_release_exposure() -> None:
     startup = rust_item(daemon, "async fn activate_with_runtime_deps(", daemon_path)
     builder = rust_item(startup, "let runtime_deps = (|| {", daemon_path)
     if (compact_rust(mask_rust(startup)).count("letruntime_deps=(||{") != 1
-            or rust_token_digest(builder) != "bf8d2d1be278b37cbad45a1dffe497b98fa7267b1b9e815190cbbf518b8ed284"
+            or rust_token_digest(builder) != "ec43f619d7824e83260de3ae98f365f2451a161f9cc4e550a9041357c7b690ec"
             or not compact_rust(mask_rust(startup[startup.index(builder) + len(builder):])).startswith(")();letqueue_backpressure=")):
         raise RuntimeError(f"{daemon_path}: current Torii dependency construction changed")
 
@@ -1830,7 +1835,7 @@ def require_block_start_phase_call_order(state: str) -> None:
     # closure, or early successful return around intact call text. Pin the whole
     # reviewed entry bodies with literal-preserving tokens; changes need review.
     if (rust_token_digest(wrapper_source) != "36d421b3f6c6311c4a41af89ad1982e9f9c9647fed5c27659b86b219487c8ca8"
-            or rust_token_digest(constructor) != "443683719d777fb1bdf8f7189d2a18b16660e918190c99bc98f984697151a065"):
+            or rust_token_digest(constructor) != "93b948646381f39a0b6268f6c3128284667988c880058f0da05c2a8b5e4fed00"):
         raise RuntimeError(f"{state_path}: start phases changed their reviewed complete entry bodies")
 
 
@@ -2095,8 +2100,8 @@ def require_kura_claim_cleanup(lease: str, raw: str, retained: str) -> None:
             Self { kura, lease: None, releases: KuraPublicationReleases::new(kura), }
         }
     """, "impl<'kura> KuraPublicationSlot<'kura>")
-    exact(lease, lease_path, "pub(crate) struct KuraPublicationReleases", """
-        pub(crate) struct KuraPublicationReleases {
+    exact(lease, lease_path, "pub struct KuraPublicationReleases", """
+        pub struct KuraPublicationReleases {
             source: super::KuraInstanceIdentity,
             fences: [iroha_allocation::release::DeferredReleaseBatch; 4],
             claims: super::lane_geometry::RawGeometryReleases,
@@ -2126,8 +2131,8 @@ def require_kura_claim_cleanup(lease: str, raw: str, retained: str) -> None:
             }
         }
     """)
-    exact(raw, raw_path, "pub(crate) struct RawGeometryReleases", """
-        pub(crate) struct RawGeometryReleases { head: Option<Arc<ClaimSignal>>, }
+    exact(raw, raw_path, "pub struct RawGeometryReleases", """
+        pub struct RawGeometryReleases { head: Option<Arc<ClaimSignal>>, }
     """)
     exact(raw, raw_path, "impl RawGeometryReleases", """
         impl RawGeometryReleases {
@@ -2614,8 +2619,19 @@ def require_parliament_commit_publication(state: str) -> None:
         "}=this.fields.as_mut().expect();",
         "letcurrent_generation=state_ref.state_view_generation();",
     ))
+    # This exact current lint attribute cannot disable the engine owner. Every
+    # other attribute remains visible to the scoped unconditional-owner locator.
+    engine_lint = """#[expect(
+    clippy::result_large_err,
+    reason = "Refusal returns the original retained owner without an additional fallible error allocation"
+)]
+impl<'state> StateBlock<'state> {
+"""
+    if publication.count(engine_lint) != 1:
+        raise RuntimeError(f"{path}: original publication changed its reviewed lint attributes")
     original_attempt = unconditional_rust_item(
-        publication, "fn attempt_original_publication(", path, "impl<'state> StateBlock<'state>",
+        publication.replace(engine_lint, "impl<'state> StateBlock<'state> {\n", 1),
+        "fn attempt_original_publication(", path, "impl<'state> StateBlock<'state>",
     )
     # A success marker has no other live mention: it is declared, constructed
     # false, bound once from the original owner, and read and granted only in
@@ -2750,7 +2766,7 @@ def require_parliament_commit_publication(state: str) -> None:
     # Bind the complete reviewed defining owner after the specific explanatory
     # checks. This covers substitutions, shadows and conditional bypasses while
     # retaining literals, typed refusals and the original frozen journal sources.
-    if rust_token_digest(original_attempt) != "cca5ce3f63b777f930d7c3253689c35982d8ec36a90e4afd8065512c2b873cf0":
+    if rust_token_digest(original_attempt) != "6b265ab147262bf0934caed34a96b85d442363fe99634a77d296feb43b3ce512":
         raise RuntimeError(f"{path}: original publication changed its complete live owner")
 
 
@@ -2802,7 +2818,7 @@ def require_validator_committee_boundary(committee: str) -> None:
 def require_beacon_finalization_roster(committee: str) -> None:
     """Finalization authenticates the original current and frozen target rosters."""
     committee_path = "crates/iroha_core/src/state/validator_committee.rs"
-    finalization = section(committee, "pub(crate) fn validate_beacon_finalization(",
+    finalization = section(committee, "pub fn validate_beacon_finalization(",
                            "impl StateBlock<'_> {", committee_path)
     require_all(committee_path, finalization, (
         "current_authority(state)?", "validate_against_generation(authority)",
@@ -2875,7 +2891,7 @@ def require_beacon_borrowed_witness(beacon: str, producer: str, control: str) ->
     premises. This source check does not establish byte, allocation or runtime
     equivalence and does not qualify production.
     """
-    for declaration in ("pub(crate) mod control;", "pub(crate) mod producer;"):
+    for declaration in ("pub mod control;", "pub mod producer;"):
         construction_rust_item(beacon, declaration, EPOCH_BEACON_PATH)
     construction_rust_item(producer, "use super::control;", BEACON_PRODUCER_PATH)
     build = construction_rust_item(
@@ -2909,9 +2925,9 @@ def require_beacon_borrowed_witness(beacon: str, producer: str, control: str) ->
             f"{BEACON_PRODUCER_PATH}: original prepared context and actual demanded shares "
             "must reach the borrowed witness encoder with error propagation"
         )
-    encode = construction_rust_item(control, "pub(crate) fn encode(", BEACON_CONTROL_PATH)
+    encode = construction_rust_item(control, "pub fn encode(", BEACON_CONTROL_PATH)
     expected_encode = """
-        pub(crate) fn encode(pulse: Option<&Pulse>) -> Result<ControlWitness, ControlCodecError> {
+        pub fn encode(pulse: Option<&Pulse>) -> Result<ControlWitness, ControlCodecError> {
             let mut witness = ControlWitness::empty();
             if let Some(pulse) = pulse {
                 norito::core::write_canonical_to_writer(pulse, &mut witness)?;
@@ -2924,7 +2940,7 @@ def require_beacon_borrowed_witness(beacon: str, producer: str, control: str) ->
             f"{BEACON_CONTROL_PATH}: borrowed original pulse must stream into its returned "
             "witness with codec error propagation"
         )
-    if rust_token_digest(control) != "477c9f6fe212385c3c7eb308d3ab42e711a86f138d866f37984ed68a07660e04":
+    if rust_token_digest(control) != "fc542c8e9acb60d3aa77f204887fbe6792ea217b187bd707a21735a5e14f8804":
         raise RuntimeError(f"{BEACON_CONTROL_PATH}: borrowed witness codec changed defining module tokens")
 
 
@@ -2965,9 +2981,9 @@ def require_parliament_beacon_requirement(beacon: str, producer: str, readiness:
         )
     # Demand is the NPoS pre-boundary height and nothing else. The Parliament index
     # is read only by the HC224 mutation hook, which no production build compiles.
-    requirement = compact_rust(rust_item(beacon, "pub(crate) fn required(", path))
+    requirement = compact_rust(rust_item(beacon, "pub fn required(", path))
     expected = compact_rust("""
-        pub(crate) fn required(
+        pub fn required(
             scope: SumeragiRootScope,
             world: &impl WorldReadOnly,
             current: &ValidatorEpochContextV1,
@@ -3026,7 +3042,7 @@ def require_parliament_beacon_requirement(beacon: str, producer: str, readiness:
     # Follower admission: a demanded pulse is obligatory, an unrequested one is
     # refused, and a supplied pulse passes the committed slot history and the
     # height roster before its threshold proof is verified.
-    admission = compact_rust(rust_item(beacon, "pub(crate) fn capture(", path))
+    admission = compact_rust(rust_item(beacon, "pub fn capture(", path))
     admission_order = (
         "current.validate()?;",
         compact_rust("""
@@ -3275,14 +3291,15 @@ def require_parliament_beacon_requirement(beacon: str, producer: str, readiness:
     # attestation flag or project the signing refusal into a successful output.
     drive = compact_rust(rust_item(producer, "    pub(crate) fn drive(", producer_path))
     signing = compact_rust("""
-        if active.own.is_none() {
-            if let (Some(index), Some(signer)) = (active.local, self.signer.as_ref()) {
-                signer
-                    .attest_partial_signing_capability(active.aggregator.session(), index)
-                    .map_err(|_| NativeBeaconError::LocalSigning)?;
-                let partial = signer
-                    .sign_partial(active.aggregator.session(), active.aggregator.payload())
-                    .map_err(|_| NativeBeaconError::LocalSigning)?;
+        if active.own.is_none()
+            && let (Some(index), Some(signer)) = (active.local, self.signer.as_ref())
+        {
+            signer
+                .attest_partial_signing_capability(active.aggregator.session(), index)
+                .map_err(|_| NativeBeaconError::LocalSigning)?;
+            let partial = signer
+                .sign_partial(active.aggregator.session(), active.aggregator.payload())
+                .map_err(|_| NativeBeaconError::LocalSigning)?;
     """)
     if drive.count(signing) != 1:
         raise RuntimeError(
@@ -3728,8 +3745,9 @@ def require_native_beacon_pulse_application(
     execution_order = (
         "Self::validate_sumeragi_consensus_effects(block)?;",
         ".block_with_recorded_pristine_carrier_stage(",
-        ".request_sumeragi_schedule(genesis_height,block,profile.sumeragi_pulse(),"
-        "profile.sumeragi_pulse_context(),).map_err(BlockValidationError::from)?;",
+        ".request_sumeragi_schedule_with_preparation(crate::sumeragi::startup::GENESIS_HEIGHT,"
+        "block,profile.sumeragi_pulse(),profile.sumeragi_pulse_context(),successor_context,)"
+        ".map_err(BlockValidationError::from)?;",
     )
     positions = [execution.find(token) for token in execution_order]
     if (any(execution.count(token) != 1 for token in execution_order)
@@ -3758,11 +3776,14 @@ def require_native_beacon_pulse_application(
 
     schedule_path = SCHEDULE_EXECUTION_PATH
     request = compact_rust(rust_item(
-        schedule, "    pub(crate) fn request_sumeragi_schedule(", schedule_path
+        schedule, "    pub(crate) fn request_sumeragi_schedule_with_preparation(", schedule_path
     ))
+    # A retained native successor preparation rechecks the same successor-context
+    # kernel; a standalone request authenticates directly. Neither may skip it.
     require_all(schedule_path, request, (
         "source.header()!=self._curr_block",
-        "authenticate_successor_context(self,&self._curr_block,expected)?;",
+        "ifletSome(original)=successor{original.recheck(self,&self._curr_block,expected)?;}"
+        "else{authenticate_successor_context(self,&self._curr_block,expected)?;}",
     ))
     capture = (
         "epoch_beacon::capture(root_scope,&self.world,self.block_hashes(),{epoch},height,"
@@ -3856,7 +3877,7 @@ def require_beacon_parliament_pulse_fixtures(
         producer_tests, BEACON_PRODUCER_TESTS_PATH, r"mod\s+execution_tests\s*;",
         '#[path="execution_tests.rs"]',
     )
-    rust_item(fixtures, "pub(crate) fn pending_batched_sortition_attempt(", tests_path)
+    rust_item(fixtures, "pub fn pending_batched_sortition_attempt(", tests_path)
 
     # Canonical admission maintains the one governance-local slot index. A pulse wait
     # has no expiry, never conflicts with a finalized pulse, and only consuming the
@@ -4307,32 +4328,73 @@ def require_signed_deferred_authority_and_native_fees(
     def item(source: str, declaration: str, path: str) -> str:
         return re.sub(r"\s+", "", mask_rust(rust_item(source, declaration, path)))
 
+    def function_item(source: str, declaration: str, path: str) -> str:
+        """Like `item`, for a function whose parameters may destructure a struct.
+
+        `declaration` ends with the parameter list's opening parenthesis. The body
+        opens at the first brace after the balanced parameter list, so a braced
+        parameter pattern cannot end the located item early.
+        """
+        masked = mask_rust(source)
+        starts = [match.start() for match in re.finditer(re.escape(declaration), masked)]
+        if len(starts) != 1 or not declaration.endswith("("):
+            raise RuntimeError(
+                f"{path}: expected one live declaration {declaration!r}, found {len(starts)}"
+            )
+        depth, index = 1, starts[0] + len(declaration)
+        while depth and index < len(masked):
+            depth += (masked[index] == "(") - (masked[index] == ")")
+            index += 1
+        opening = masked.find("{", index)
+        if depth or opening < 0:
+            raise RuntimeError(f"{path}: unclosed item {declaration!r}")
+        for end in range(opening, len(masked)):
+            depth += (masked[end] == "{") - (masked[end] == "}")
+            if depth == 0:
+                return re.sub(r"\s+", "", masked[starts[0]:end + 1])
+        raise RuntimeError(f"{path}: unclosed item {declaration!r}")
+
     def require(path: str, source: str, bindings: tuple[str, ...]) -> None:
         require_all(path, source, tuple(re.sub(r"\s+", "", x) for x in bindings))
 
     core_code = mask_rust(core)
+    # Every Core module declaration carries one test-only lint level, which
+    # cannot gate compilation. The complete attribute run must be exactly that
+    # attribute: any cfg, cfg_attr, path or other attribute refuses.
+    module_attributes = ("#[cfg_attr(test,deny(clippy::large_stack_arrays))]",)
     for module in ("deferred_authority", "retail_fee", "validation_fee", "tx"):
         declarations = list(re.finditer(
             rf"(?m)^pub(?:\(crate\))? mod {module};$", core_code
         ))
-        if len(declarations) != 1 or core_code[:declarations[0].start()].rstrip().endswith("]"):
+        if (len(declarations) != 1 or live_item_attributes(
+                core_code, declarations[0].group(0), core_path) != module_attributes):
             raise RuntimeError(f"{core_path}: native fee owner {module!r} must be unconditional")
 
-    deferred = item(fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(", fee_path)
+    # Owned groups delegate their whole body to the borrowed-view owner, which
+    # checks every instruction of every group before any policy lookup.
+    owned_groups = item(fee, "pub(crate) fn enforce_opaque_deferred_instruction_groups(", fee_path)
+    if owned_groups[owned_groups.index("{"):] != re.sub(r"\s+", "", """{
+            enforce_opaque_deferred_instruction_views(
+                groups.iter().flat_map(|(authority, instructions)| {
+                    instructions.iter().map(move |instruction| (authority, instruction))
+                }),
+                groups.len(),
+                &ordered.iter().map(|(authority, instruction)| (authority, instruction)),
+                stx,
+                origin,
+            )
+        }"""):
+        raise RuntimeError(f"{fee_path}: opaque deferred groups must delegate to their borrowed owner")
+    deferred = item(fee, "pub(crate) fn enforce_opaque_deferred_instruction_views<'a>(", fee_path)
     require(fee_path, deferred, (
-        "{crate::deferred_authority::reject_opaque_deferred_authority(groups, stx)"
-        ".map_err(|error| transaction_attempt_rejection(stx, error))?;"
+        "{crate::deferred_authority::reject_opaque_instruction_authority("
+        "groups.clone().map(|(_, instruction)| instruction), stx,)"
+        ".map_err(|error| {transaction_attempt_rejection(stx,"
+        "error.map_rejection(TransactionRejectionReason::Validation),)})?;"
         "let registry = validated_policy_registry(stx)",
         "active_policy_from_validated_registry(registry.as_ref(), stx)",
     ))
-    authoritative = item(authority, "pub(crate) fn reject_opaque_deferred_authority(", authority_path)
-    require(authority_path, authoritative, (
-        "Result<(), Attempt<TransactionRejectionReason>>",
-        "reject_opaque_instruction_authority(instruction_groups.values()"
-        ".flat_map(|instructions| instructions.iter()),state_transaction,)",
-        ".map_err(|error| error.map_rejection(TransactionRejectionReason::Validation))",
-    ))
-    shared_authority = item(authority, "pub(crate) fn reject_opaque_instruction_authority<'a>(", authority_path)
+    shared_authority = item(authority, "pub fn reject_opaque_instruction_authority<'a>(", authority_path)
     require(authority_path, shared_authority, (
         "Result<(), Attempt<ValidationFail>>",
         "reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve|",
@@ -4348,7 +4410,7 @@ def require_signed_deferred_authority_and_native_fees(
     classifier = item(authority, "fn monetary_staking_wire_id(", authority_path)
     require(authority_path, classifier, (
         "instruction.as_any().downcast_ref::<$ty>().is_some()",
-        "return iroha_data_model::isi::instruction_wire_id(instruction);",
+        "return iroha_data_model::isi::wire_id_of::<$ty>();",
         "classify!(RegisterPublicLaneCandidate, RegisterPublicLaneValidator,"
         "BondPublicLaneStake, FinalizePublicLaneUnbond, SlashPublicLaneValidator,"
         "ClaimPublicLaneRewards,);",
@@ -4424,7 +4486,10 @@ def require_signed_deferred_authority_and_native_fees(
     deferred_admit = item(retail, "pub(crate) fn admit_deferred(", retail_path)
     require(retail_path, deferred_admit, (
         "decode_assessment_marker(log)",
-        "if reviewed.replace(assessment).is_some() {return Err(rejection(",
+        "if let Some(log) = instruction.as_any().downcast_ref::<Log>()"
+        "&& let Some(assessment) = decode_assessment_marker(log)"
+        ".map_err(|error| transaction_marker_error(stx, error))?"
+        "&& reviewed.replace(assessment).is_some() {return Err(rejection(",
         "bind_assessment(stx, assessment)?;",
         "stx.world.retail_fee_assessment_marker_pending = true;",
     ))
@@ -4484,7 +4549,7 @@ def require_signed_deferred_authority_and_native_fees(
         raise RuntimeError(f"{retail_path}: native fee must revalidate before debiting")
 
     transfer = rust_item(asset, "impl PreparedNumericTransferPlan {", asset_path)
-    prepare = item(transfer, "fn prepare(", asset_path)
+    prepare = function_item(transfer, "fn prepare(", asset_path)
     require(asset_path, prepare, (
         "retail_payment: matches!(source_policy, NumericAssetTransferSourcePolicy::User"
         " | NumericAssetTransferSourcePolicy::PrivacyPoolDeposit(_))",
@@ -4504,10 +4569,22 @@ def require_signed_deferred_authority_and_native_fees(
         "ExecutionAttemptError::Deferred(reason)",
         "state_transaction.defer_execution(reason)",
     ))
-    execute = item(transaction, "pub(crate) fn execute_accepted_transaction_in_overlay(", tx_path)
+    # The accepted entrypoint hands its external signed input to the one signed
+    # execution owner on the same overlay and never finishes a fee itself.
+    accepted = item(transaction, "pub(crate) fn execute_accepted_transaction_in_overlay(", tx_path)
+    require(tx_path, accepted, (
+        "let signed = match tx.entrypoint() {",
+        "TransactionEntrypoint::External(signed) => signed,",
+    ))
+    delegation = re.sub(r"\s+", "", "Self::execute_signed_transaction_in_overlay(signed,"
+                        "state_transaction, ivm_cache, routing_decision, policy_route, genesis,)}")
+    if (not accepted.endswith(delegation) or accepted.count("execute_signed_transaction_in_overlay(") != 1
+            or "crate::retail_fee::finalize(" in accepted):
+        raise RuntimeError(f"{tx_path}: native fee must finish once in the original transaction overlay")
+    execute = item(transaction, "fn execute_signed_transaction_in_overlay(", tx_path)
     sequence = (
         "Self::validate_stateful_admission(",
-        "Self::validate_transaction_with_runtime_executor(signed.clone(), state_transaction, ivm_cache,)?;",
+        "Self::validate_transaction_with_runtime_executor(signed, state_transaction, ivm_cache)?;",
         "state_transaction.execute_data_triggers_dfs(&authority)",
         "crate::retail_fee::finalize(state_transaction)?;",
         "state_transaction.world.tx_sequences.insert(authority.clone(), seq);",
@@ -4995,7 +5072,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     admission = mask_rust(original_admission)
     signature = """fn prepare_checked_for_enqueue<C: QueueAdmissionStateAccess>(
         &self, checked: CheckedTransaction<'static>, routing_plan: RoutingPlan,
-        state_access: &mut C,
+        state_access: &mut C, retired: &mut QueuePrivacyRetirements,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<PreparedQueueAdmission, Failure>"""
     if compact_rust(strip_rust_comments(original_admission[:original_admission.index("{")])) != compact_rust(signature):
@@ -5046,7 +5123,7 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "7b34fd1fc961c54f9b406a79822c4759f2fa4ebaac1712e29ce8cb5f4e40bb08":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "1d1a06e6d648e7a616754be6ab73be7c32ce02c0cd84ce15fa4d6ba83c7194a4":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):
@@ -5073,7 +5150,7 @@ def require_parliament_attempt_read_bound(source: str) -> None:
     ))
     # Presence alone would accept a dead bounded call or a shadowed payload.
     # Keep the entire reviewed handler, including its return and qualifiers.
-    if rust_token_digest(item) != "3da534aa6aa16c64f0615f60df91b6276eca276febf904653e233eee45715797":
+    if rust_token_digest(item) != "3aa253c10544d5d3cafb896276ad9e9b045b583f44b6eff0c7464fe1cdc42eb6":
         raise RuntimeError(f"{path}: attempt-read changed its complete bounded response owner")
 
 
@@ -7193,7 +7270,7 @@ def main() -> int:
     )
     casting_snapshot = section(
         casting,
-        "pub(crate) fn derive_parliament_timed_ovn_casting_snapshot_v1(",
+        "pub fn derive_parliament_timed_ovn_casting_snapshot_v1(",
         "fn compact_binding_from_world_v1(",
         casting_path,
     )

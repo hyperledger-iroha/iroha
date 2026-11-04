@@ -50,6 +50,34 @@ fn control_authentication_rejects_short_and_different_tokens() {
 }
 
 #[test]
+fn token_encoding_preserves_leading_zeroes_and_byte_order() {
+    assert_eq!(encode_token(&[0; 32]), "0".repeat(64));
+    assert_eq!(encode_token(&[255; 32]), "f".repeat(64));
+    let bytes = std::array::from_fn(|index| u8::try_from(index).unwrap());
+    assert_eq!(
+        encode_token(&bytes),
+        "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+    );
+}
+
+#[test]
+fn token_encoding_matches_standard_hex_for_every_byte_at_every_position() {
+    use std::fmt::Write as _;
+
+    for position in 0..32 {
+        for byte in u8::MIN..=u8::MAX {
+            let mut bytes = [0xa5; 32];
+            bytes[position] = byte;
+            let mut expected = String::new();
+            for value in bytes {
+                write!(&mut expected, "{value:02x}").unwrap();
+            }
+            assert_eq!(encode_token(&bytes), expected);
+        }
+    }
+}
+
+#[test]
 fn session_tokens_are_fresh_exact_lowercase_hexadecimal() {
     let token = random_token();
     assert_eq!(token.len(), 64);

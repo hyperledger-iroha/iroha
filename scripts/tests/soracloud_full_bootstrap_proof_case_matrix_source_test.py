@@ -16,17 +16,17 @@ REGIONS = {
     "verifier_record": (
         '#[derive(Clone, Copy)]\nenum FullBootstrapVerifierRecordMetadataTamper',
         '#[cfg(feature = "zk-stark")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_empty_input_slots',
-        "e6561ab6eedd4281ead704f6895e6e467b324fd4a0abc9bc02354a9e1c25f63a",
+        "814036fd2742bd5ca2df13c93f09006813ddf5469fa612f05e6876cf079ae284",
     ),
     "release_verifier": (
         '#[cfg(feature = "zk-stark")]\n#[derive(Clone, Copy)]\nenum FullBootstrapReleaseVerifierCase',
         '#[cfg(feature = "zk-stark")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_release_prover_rejects_role_spliced_artifacts',
-        "c85150accfdc635efc52d572f5a1ce5f80983c038d54dd9ad5528fd98ea5e449",
+        "1d162fb76912c7dff146fdb0e2756ea6c74dfe8f29e3685df7380f015d471f08",
     ),
     "guarded_verifier": (
         '#[cfg(all(feature = "zk-stark", feature = "zk-preverify"))]\n#[derive(Clone, Copy)]\nenum FullBootstrapGuardedVerifierCase',
         '#[cfg(feature = "zk-preverify")]\n#[test]\nfn soracloud_fhe_full_bootstrap_execution_guarded_verifier_rejects_invalid_native_air',
-        "58c09a27c28904d140cbcdc9fe77e8650511ff81073ffc5cb2e5945272dc62ed",
+        "1752e82a5cb96dd4ccd3b1b4b18ed6a69994bacb5c56b7904e046f2be4162ec7",
     ),
     "proof_quota": (
         '#[cfg(feature = "zk-stark")]\nfn enable_full_bootstrap_proof_quotas<P>(',
@@ -146,11 +146,11 @@ REQUIRED_TOKENS = {
         ".saturating_add(1)",
         "record.commitment = [0xA8; Hash::LENGTH]",
         "drifted_key.bytes.push(0xA9)",
-        'assert_invariant_contains(err, "verifying key not found")',
-        'assert_invariant_contains(err, "verifying key is not active")',
-        "assert_invalid_parameter_contains(err, expected_error)",
-        'assert_invalid_parameter_contains(err, "native AIR envelope")',
-        'assert_invalid_parameter_contains(err, "requires the zk-stark feature")',
+        'assert_invariant_contains(&(err), "verifying key not found")',
+        'assert_invariant_contains(&(err), "verifying key is not active")',
+        "assert_invalid_parameter_contains(&(err), expected_error)",
+        'assert_invalid_parameter_contains(&(err), "native AIR envelope")',
+        'assert_invalid_parameter_contains(&(err), "requires the zk-stark feature")',
     ),
     "release_verifier": (
         "sample_full_bootstrap_execution_binding_air_proofs_for_claims",
@@ -170,7 +170,7 @@ REQUIRED_TOKENS = {
         '"composition value does not match governed AIR evaluation"',
         "FHE_FULL_BOOTSTRAP_GENERIC_BINDING_AIR_REJECTED",
         ".expect_err(failure_context)",
-        "assert_invalid_parameter_contains(err, expected_error)",
+        "assert_invalid_parameter_contains(&(err), expected_error)",
     ),
     "guarded_verifier": (
         "stx.apply()",
@@ -189,7 +189,7 @@ REQUIRED_TOKENS = {
         '"guarded verifier must reject release-native opening commitment drift"',
         '"guarded verifier must reject full-bootstrap execution generic AIR drift"',
         ".expect_err(failure_context)",
-        "assert_invalid_parameter_contains(err, expected_error)",
+        "assert_invalid_parameter_contains(&(err), expected_error)",
     ),
     "proof_quota": (
         "impl IntoIterator<Item = P>",
@@ -381,12 +381,12 @@ class SoracloudFullBootstrapProofCaseMatrixSourceTests(unittest.TestCase):
         self.assert_rejected(_replace_once(self.source, old, "native_stark_test_digest(0xD1)"))
 
     def test_error_category_mutation_is_rejected(self) -> None:
-        old = "assert_invalid_parameter_contains(err, expected_error)"
+        old = "assert_invalid_parameter_contains(&(err), expected_error)"
         mutated = _replace_in_region(
             self.source,
             "release_verifier",
             old,
-            "assert_invariant_contains(err, expected_error)",
+            "assert_invariant_contains(&(err), expected_error)",
         )
         self.assert_rejected(mutated)
 

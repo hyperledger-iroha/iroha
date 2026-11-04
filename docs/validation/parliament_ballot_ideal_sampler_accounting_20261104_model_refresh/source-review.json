@@ -1,0 +1,68 @@
+{
+  "model_review": {
+    "old_model_sha256": "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1",
+    "new_model_sha256": "e1b30a670c12b265170200b0fedefffcf9fbf9f0c4eb6fc171667f8c5e8c3033",
+    "unchanged_function_asts": [
+      "sponge_permutations",
+      "growing_vec_bound",
+      "vec_append_schedule",
+      "frame_allocation",
+      "parse_rust_array",
+      "matrix_weight",
+      "table_inventory",
+      "relation_operations",
+      "backend_schedule",
+      "statement_schedule",
+      "allocation_schedule",
+      "standalone_case",
+      "reviewed_source_inventory",
+      "frame_size",
+      "proof_layout",
+      "encoding_inventory",
+      "work_components",
+      "report",
+      "main"
+    ],
+    "changed_function_asts": [
+      "provider_layout_inventory",
+      "standalone_inventory"
+    ],
+    "semantic_review": "The only function-body changes are a stricter exact provider-layout receipt/LLVM size+alignment guard and standalone-inventory assumption wording. All imported logical count/formula function ASTs remain identical. Reviewed Rust revision/alloc source pins and provider receipt constants affect standalone physical/requested-Layout diagnostics, not the logical call-count functions imported by request and ideal sampler. This refresh does not import the provider or allocator qualification scope.",
+    "resource_review_receipt": "docs/validation/parliament_ballot_resource_accounting_20261104/receipt.json",
+    "resource_review_receipt_sha256": "d835eff8807c1392233fb005cd3437f739c1ba59db460ca6224da0788711d717",
+    "profile_qualified": false,
+    "consumer_source_review": [
+      {
+        "consumer": "check_parliament_ballot_request_accounting.py",
+        "source_count": 87,
+        "only_changed_source": {
+          "scripts/check_parliament_ballot_resource_accounting.py": {
+            "before": "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1",
+            "after": "e1b30a670c12b265170200b0fedefffcf9fbf9f0c4eb6fc171667f8c5e8c3033"
+          }
+        },
+        "updated_inventory_sha256": "d3906c1b7255bb20415ffcbda9ee5ecb8edf590532ec98dacd6b696f6742ddac"
+      },
+      {
+        "consumer": "parliament_ballot_ideal_sampler_accounting.py",
+        "source_count": 61,
+        "only_changed_source": {
+          "scripts/check_parliament_ballot_resource_accounting.py": {
+            "before": "18a6fdd3f808f1b73d3e2e6c9903a0a069f1866c0af04783eb03b0c21e7841f1",
+            "after": "e1b30a670c12b265170200b0fedefffcf9fbf9f0c4eb6fc171667f8c5e8c3033"
+          }
+        },
+        "updated_inventory_sha256": "165bc9065313e3841258f35b7111c3c32cadf8dc50779aeaf8b069b93bd4f50f"
+      }
+    ]
+  },
+  "prior_artifact": "docs/validation/parliament_ballot_ideal_sampler_accounting_20261104",
+  "prior_receipt_sha256": "50641eae929efa015fd6b9bfde48e2e08cfef9c6c9073aa94fe9a496d052f52a",
+  "consumer_function_and_class_asts_unchanged": true,
+  "numeric_fields_exactly_unchanged": [
+    "cases",
+    "all_opening_lifetime_envelope"
+  ],
+  "only_pinned_source_or_receipt_constants_updated": true,
+  "profile_qualified": false
+}

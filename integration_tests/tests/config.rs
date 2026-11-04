@@ -65,9 +65,9 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         assert_pow(config, (6, 900, 120, 240, 8192, 1, 1));
     }
 
-    // One validator receives a different local configuration on restart. Its
-    // peers retain their own settings while the same four-validator committee
-    // continues to exchange and apply blocks.
+    // Read back an alternative local policy before restoring handshake
+    // compatibility. Difficulty and Argon2 parameters must match peer tickets;
+    // changing them on only one validator intentionally disconnects that peer.
     let restarted_peer = &network.peers()[0];
     let mut layers: Vec<_> = network.config_layers_for_peer(restarted_peer).collect();
     layers.push(Cow::Owned(toml::toml! {
@@ -106,26 +106,63 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         "local proof-of-work policy must preserve the handshake identity and negotiated suite",
     );
 
+    let assert_other_peers_unchanged = || -> Result<()> {
+        for (index, operator) in operators.iter().enumerate().skip(1) {
+            let config = operator.configuration().get()?;
+            assert_shared_settings(&config);
+            assert_eq!(config.logger.level, baseline[index].logger.level);
+            assert_eq!(config.logger.filter, baseline[index].logger.filter);
+            assert_pow(&config, (6, 900, 120, 240, 8192, 1, 1));
+            assert_eq!(
+                handshake_identity(&config.network.soranet_handshake),
+                handshake_identity(&baseline[index].network.soranet_handshake),
+            );
+        }
+        Ok(())
+    };
+    assert_other_peers_unchanged()?;
+    let restarted = operators[0].configuration().get()?;
+    assert_pow(&restarted, (7, 720, 180, 360, 12288, 3, 3));
+    assert_eq!(restarted.logger.level, Level::DEBUG);
+
+    // Keep the distinct logger and admission windows. Both peers' freshly
+    // minted ticket lifetimes fit the other side's min-TTL/max-skew window,
+    // while restoring the exact work parameters permits mutual verification.
+    layers.push(Cow::Owned(toml::toml! {
+        [network.soranet_handshake.pow]
+        difficulty = 6
+        [network.soranet_handshake.pow.puzzle]
+        memory_kib = 8192
+        time_cost = 1
+        lanes = 1
+    }));
+    runtime.block_on(async {
+        restarted_peer.shutdown().await;
+        tokio::time::timeout(
+            network.peer_startup_timeout(),
+            restarted_peer.start_checked(layers.iter(), None),
+        )
+        .await
+        .wrap_err("handshake-compatible validator restart exceeded its startup deadline")??;
+        Ok::<_, eyre::Report>(())
+    })?;
+
     let height = network.peers()[1].client().status().get()?.blocks;
     network.peers()[1].client().submit(
         iroha_data_model::isi::Log::new(Level::INFO, "node-local configuration isolation".into()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     runtime.block_on(network.ensure_blocks(height + 1))?;
-    for (index, operator) in operators.iter().enumerate().skip(1) {
-        let config = operator.configuration().get()?;
-        assert_shared_settings(&config);
-        assert_eq!(config.logger.level, baseline[index].logger.level);
-        assert_eq!(config.logger.filter, baseline[index].logger.filter);
-        assert_pow(&config, (6, 900, 120, 240, 8192, 1, 1));
-        assert_eq!(
-            handshake_identity(&config.network.soranet_handshake),
-            handshake_identity(&baseline[index].network.soranet_handshake),
-        );
-    }
+    assert_other_peers_unchanged()?;
     let restarted = operators[0].configuration().get()?;
-    assert_pow(&restarted, (7, 720, 180, 360, 12288, 3, 3));
+    assert_shared_settings(&restarted);
+    assert_pow(&restarted, (6, 720, 180, 360, 8192, 1, 1));
     assert_eq!(restarted.logger.level, Level::DEBUG);
+    assert_eq!(restarted.logger.filter.as_deref(), Some("iroha_p2p=trace"));
+    assert_eq!(
+        handshake_identity(&restarted.network.soranet_handshake),
+        handshake_identity(&baseline[0].network.soranet_handshake),
+    );
     runtime.block_on(network.shutdown());
     Ok(())
 }

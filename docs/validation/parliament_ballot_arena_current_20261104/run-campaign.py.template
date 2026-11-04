@@ -1,0 +1,9 @@
+from pathlib import Path
+import hashlib,json,subprocess,time
+root=Path('/Users/takemiyamakoto/dev/iroha');out=root/'docs/validation/parliament_ballot_arena_current_20261104';python='/Users/takemiyamakoto/Library/Caches/iroha-script-tests/venv/bin/python'
+def sha(p):return hashlib.sha256(p.read_bytes()).hexdigest()
+def inputs():
+ review=json.loads((out/'source-review.json').read_text());paths=set(review['current_backend'])|set(review['current_frontend'])|{'scripts/parliament_ballot_arena_model.py','scripts/parliament_ballot_arena_backend.py','scripts/parliament_ballot_arena_frontend.py','scripts/check_parliament_ballot_arena_sufficiency.py','crates/iroha_parliament_ballot_proof/examples/resource_contract/arena.rs'};return {p:sha(root/p) for p in sorted(paths)}
+cmd=[python,'scripts/check_parliament_ballot_arena_sufficiency.py','--rustdoc-root','/Users/takemiyamakoto/.rustup/toolchains/1.99.1-aarch64-apple-darwin/share/doc/rust/html/src','--output',str(out/'source-model.json'),'--require-qualified'];receipt={'command':cmd,'before':inputs(),'profile_qualified':False};(out/'run-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');start=time.monotonic()
+with (out/'source-model.log').open('w') as log:r=subprocess.run(cmd,cwd=root,stdout=log,stderr=subprocess.STDOUT)
+receipt.update(exit_code=r.returncode,elapsed_seconds=time.monotonic()-start,after=inputs());receipt['inputs_stable']=receipt['before']==receipt['after'];receipt['report_sha256']=sha(out/'source-model.json');(out/'run-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n');print(json.dumps({k:v for k,v in receipt.items() if k not in ['before','after','command']}),flush=True)

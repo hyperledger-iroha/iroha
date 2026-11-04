@@ -3923,6 +3923,73 @@ fn initial_executor_classifies_verifying_key_bootstrap_as_genesis_only() {
     }
 }
 #[test]
+fn initial_executor_leaves_confidential_parameter_registry_unadmitted() {
+    use iroha_data_model::{
+        confidential::{ConfidentialParamsId, ConfidentialStatus, PedersenParams, PoseidonParams},
+        isi::confidential::{
+            PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
+            SetPoseidonParamsLifecycle,
+        },
+    };
+    // These baseline definitions keep their native handlers, but confidential assets are not
+    // delivered in the first release (P.9): an installed executor must admit them.
+    let params_id = ConfidentialParamsId::new(1);
+    let instructions: [InstructionBox; 4] = [
+        PublishPedersenParams {
+            params: PedersenParams {
+                params_id,
+                generators_hash: [0x11; 32],
+                constants_hash: [0x22; 32],
+                metadata_uri_cid: None,
+                params_cid: None,
+                activation_height: Some(10),
+                withdraw_height: None,
+                status: ConfidentialStatus::Active,
+            },
+        }
+        .into(),
+        PublishPoseidonParams {
+            params: PoseidonParams {
+                params_id,
+                round_constants_hash: [0x33; 32],
+                mds_matrix_hash: [0x44; 32],
+                metadata_uri_cid: None,
+                params_cid: None,
+                activation_height: Some(10),
+                withdraw_height: None,
+                status: ConfidentialStatus::Active,
+            },
+        }
+        .into(),
+        SetPedersenParamsLifecycle {
+            params_id,
+            status: ConfidentialStatus::Withdrawn,
+            activation_height: None,
+            withdraw_height: Some(20),
+        }
+        .into(),
+        SetPoseidonParamsLifecycle {
+            params_id,
+            status: ConfidentialStatus::Withdrawn,
+            activation_height: None,
+            withdraw_height: Some(20),
+        }
+        .into(),
+    ];
+    for instruction in &instructions {
+        assert!(
+            !initial_native_instruction_is_explicitly_admitted(instruction),
+            "{} must stay closed on the post-genesis Initial surface",
+            instruction.id()
+        );
+        assert!(
+            !initial_genesis_instruction_is_explicitly_admitted(instruction),
+            "{} must stay closed on the genesis bootstrap surface",
+            instruction.id()
+        );
+    }
+}
+#[test]
 fn initial_executor_routes_native_privacy_corridor_to_core() {
     use crate::privacy_profiles::compiled_privacy_profile_v1;
     use iroha_data_model::{

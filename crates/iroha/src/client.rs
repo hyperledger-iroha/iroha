@@ -114,7 +114,6 @@ use crate::{
 };
 use base64::Engine as _;
 use bytes::Bytes;
-use derive_more::Display;
 use eyre::{Result, WrapErr, eyre};
 #[cfg(test)]
 use futures_util::{Stream, StreamExt};
@@ -9110,6 +9109,55 @@ mod evidence_http_tests {
         assert_eq!(accept_headers[0].1, expected);
     }
     #[test]
+    fn client_display_preserves_identity_endpoint_flags_and_header_privacy() {
+        use std::fmt::Write as _;
+
+        let mut builder =
+            client_with_base_url("https://example.com:1443/torii/".parse().expect("endpoint"))
+                .to_builder();
+        builder.headers.insert(
+            "authorization".into(),
+            "Bearer display-header-secret-fixture".into(),
+        );
+        let client = builder.build().expect("valid client configuration");
+        // Only the public identity and validated endpoint are printable; neither
+        // the signing key nor authentication headers are included.
+        let expected = format!(
+            "{}@https://example.com:1443/torii/",
+            client.key_pair.public_key()
+        );
+        assert_eq!(format!("{client}"), expected);
+        assert_eq!(format!("{client:>256.3}"), expected);
+        assert_eq!(format!("{client:🦀^256.3}"), expected);
+        assert_eq!(format!("{client:+#0256.3}"), expected);
+
+        struct FailingWriter;
+        impl fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> fmt::Result {
+                Err(fmt::Error)
+            }
+        }
+        assert_eq!(write!(FailingWriter, "{client}"), Err(fmt::Error));
+    }
+
+    #[test]
+    fn client_display_endpoint_cannot_contain_url_credentials_query_or_fragment() {
+        // Display retains the endpoint path. The public constructor rejects URL
+        // credential fields, queries, and fragments before a Client can exist.
+        let client = client_with_base_url(base_url());
+        for endpoint in [
+            "https://display-user:display-password@example.com/torii/",
+            "https://display-user@example.com/torii/",
+            "https://example.com/torii/?token=display-query",
+            "https://example.com/torii/#display-fragment",
+        ] {
+            let mut builder = client.to_builder();
+            builder.torii_url = endpoint.parse().expect("URL fixture");
+            assert!(builder.build().is_err());
+        }
+    }
+
+    #[test]
     fn client_debug_redacts_runtime_headers_and_torii_url_secrets() {
         let mut client = client_with_base_url(base_url()).to_builder();
         client.torii_url = Url::parse(
@@ -14241,8 +14289,7 @@ pub(crate) fn test_network_id() -> NetworkId {
 ///     client.torii_url = endpoint;
 /// }
 /// ```
-#[derive(Clone, Display)]
-#[display("{}@{torii_url}", key_pair.public_key())]
+#[derive(Clone)]
 pub struct Client {
     /// Human-readable business chain label used by APIs that explicitly carry a [`ChainId`].
     pub(crate) chain: ChainId,
@@ -14657,6 +14704,16 @@ impl OperatorClient {
     #[must_use]
     pub fn endpoint(&self) -> &Url {
         &self.context.torii_url
+    }
+}
+impl fmt::Display for Client {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}@{}",
+            self.key_pair.public_key(),
+            self.torii_url
+        )
     }
 }
 impl fmt::Debug for Client {
@@ -22908,11 +22965,64 @@ mod tx_confirmation_stream_tests {
         },
     };
     use eyre::eyre;
-    use futures_util::stream;
+    use futures_util::{StreamExt as _, stream};
     use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
     use std::{future, time::Duration};
     use tokio::sync::{mpsc, oneshot};
-    use tokio_stream::wrappers::UnboundedReceiverStream;
+    // Test events retain Tokio's own receive, wakeup and close behavior without another adapter.
+    fn receiver_stream<T>(
+        mut receiver: mpsc::UnboundedReceiver<T>,
+    ) -> impl futures_util::Stream<Item = T> + Unpin {
+        stream::poll_fn(move |context| receiver.poll_recv(context))
+    }
+
+    #[test]
+    fn receiver_stream_wakes_and_drains_buffered_events_before_close() {
+        use std::{
+            sync::{
+                Arc,
+                atomic::{AtomicUsize, Ordering},
+            },
+            task::{Context, Poll, Wake, Waker},
+        };
+
+        struct WakeCount(AtomicUsize);
+        impl Wake for WakeCount {
+            fn wake(self: Arc<Self>) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let wake_count = Arc::new(WakeCount(AtomicUsize::new(0)));
+        let waker = Waker::from(Arc::clone(&wake_count));
+        let mut context = Context::from_waker(&waker);
+        let (sender, receiver) = mpsc::unbounded_channel();
+        let mut events = receiver_stream(receiver);
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Pending);
+        sender.send(1).unwrap();
+        sender.send(2).unwrap();
+        assert!(wake_count.0.load(Ordering::Relaxed) > 0);
+        drop(sender);
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Ready(Some(1)));
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Ready(Some(2)));
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Ready(None));
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Ready(None));
+
+        let (sender, receiver) = mpsc::unbounded_channel::<u8>();
+        let mut events = receiver_stream(receiver);
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Pending);
+        let wakes_before_close = wake_count.0.load(Ordering::Relaxed);
+        drop(sender);
+        assert!(wake_count.0.load(Ordering::Relaxed) > wakes_before_close);
+        assert_eq!(events.poll_next_unpin(&mut context), Poll::Ready(None));
+    }
+
+    #[test]
+    fn dropping_receiver_stream_closes_the_channel() {
+        let (sender, receiver) = mpsc::unbounded_channel::<u8>();
+        drop(receiver_stream(receiver));
+        assert!(sender.send(1).is_err());
+    }
     fn block_event(height: std::num::NonZeroU64, status: BlockStatus) -> EventBox {
         EventBox::Pipeline(PipelineEventBox::Block(BlockEvent {
             header: BlockHeader {
@@ -23077,7 +23187,7 @@ mod tx_confirmation_stream_tests {
             HashOf::from_untyped_unchecked(Hash::prehashed([7_u8; Hash::LENGTH]));
         let queued_event = transaction_event(hash, None, TransactionStatus::Queued);
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
-        let mut events = UnboundedReceiverStream::new(rx);
+        let mut events = receiver_stream(rx);
         tokio::spawn(async move {
             let _ = tx.send(Ok(queued_event.clone()));
             tokio::time::sleep(Duration::from_millis(5)).await;
@@ -23156,7 +23266,7 @@ mod tx_confirmation_stream_tests {
         let committed_event = block_event(height, BlockStatus::Committed);
         let applied_event = block_event(height, BlockStatus::Applied);
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
-        let mut events = UnboundedReceiverStream::new(rx);
+        let mut events = receiver_stream(rx);
         let status_is_applied = Arc::new(AtomicBool::new(false));
         let status_is_applied_in_task = Arc::clone(&status_is_applied);
         let mut handle = tokio::spawn(async move {
@@ -23229,7 +23339,7 @@ mod tx_confirmation_stream_tests {
         let height = std::num::NonZeroU64::new(12).expect("nonzero height");
         let block_event = block_event(height, BlockStatus::Applied);
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
-        let mut events = UnboundedReceiverStream::new(rx);
+        let mut events = receiver_stream(rx);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(5)).await;
             let _ = tx.send(Ok(block_event));
@@ -23264,7 +23374,7 @@ mod tx_confirmation_stream_tests {
             "rejected".to_string(),
         ));
         let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
-        let mut events = UnboundedReceiverStream::new(rx);
+        let mut events = receiver_stream(rx);
         tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(5)).await;
             let _ = tx.send(Ok(block_event));
@@ -23398,7 +23508,7 @@ mod tx_confirmation_stream_tests {
                 TransactionStatus::Rejected(Box::new(rejection)),
             )))
             .expect("queue peer-local rejection before submission result");
-        let mut events = UnboundedReceiverStream::new(event_receiver);
+        let mut events = receiver_stream(event_receiver);
         let (submit_result_sender, submit_result_receiver) = oneshot::channel();
         let status_checks = Arc::new(AtomicUsize::new(0));
         let producer = {

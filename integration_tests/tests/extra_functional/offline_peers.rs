@@ -1,6 +1,9 @@
 //! Startup and operation with subsets of peers offline.
-use eyre::{OptionExt, Result, eyre};
-use integration_tests::sandbox;
+use eyre::{Result, eyre};
+use integration_tests::{
+    sandbox,
+    sync::{get_status_with_retry_async, run_on_dedicated_thread},
+};
 use iroha::{
     crypto::{Algorithm, KeyPair, bls_normal_pop_prove},
     data_model::{isi::register::RegisterPeerWithPop, prelude::*},
@@ -10,7 +13,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::{Duration, Instant};
-use tokio::{task::spawn_blocking, time::sleep};
+use tokio::time::sleep;
 #[tokio::test]
 async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
     // Given
@@ -28,9 +31,11 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         return Ok(());
     };
     let genesis = network.genesis();
-    for (i, peer) in network.peers().iter().take(2).enumerate() {
+    for peer in network.peers().iter().take(2) {
         if let Err(err) = peer
-            .start(network.config_layers(), (i == 0).then_some(&genesis))
+            // Every starting node needs the same locally authenticated genesis;
+            // the other two peers remain offline throughout this scenario.
+            .start(network.config_layers(), Some(&genesis))
             .await
         {
             if let Some(reason) = sandbox::sandbox_reason(&err) {
@@ -42,6 +47,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
             return Err(err);
         }
     }
+    let sync_started = Instant::now();
     if sandbox::handle_result(
         network.ensure_blocks(1).await.map(|_| ()),
         stringify!(genesis_block_is_committed_with_some_offline_peers),
@@ -57,16 +63,28 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         .find(|x| x.is_running())
         .expect("there are two running peers")
         .client();
-    spawn_blocking(move || -> Result<()> {
-        let assets = client.client().query(FindAssets::new()).execute_all()?;
-        let asset = assets
-            .iter()
-            .find(|asset| *asset.id().account() == alice_id && *asset.id().definition() == roses)
-            .ok_or_eyre("asset should be found")?;
-        assert_eq!(&alice_has_roses, asset.value());
-        Ok(())
-    })
-    .await??;
+    // The storage observation above can precede Torii startup. Require an
+    // authoritative applied-state response within the same sync budget before
+    // exercising the signed asset query.
+    let status = tokio::time::timeout(
+        network
+            .sync_timeout()
+            .saturating_sub(sync_started.elapsed()),
+        get_status_with_retry_async(&client),
+    )
+    .await
+    .map_err(|_| eyre!("genesis peer Torii readiness exceeded the sync budget"))??;
+    assert!(
+        status.blocks >= 1,
+        "genesis must be applied before the asset read"
+    );
+    let asset_id = AssetId::new(roses, alice_id);
+    let asset = client
+        .account_client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+        .await?;
+    assert_eq!(asset.id(), &asset_id);
+    assert_eq!(&alice_has_roses, asset.value());
     Ok(())
 }
 #[tokio::test]
@@ -97,7 +115,7 @@ async fn register_offline_peer() -> Result<()> {
     let register_peer = RegisterPeerWithPop::new(peer_id, pop);
     // Wait for some time to allow peers to connect
     let client = network.client();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client.submit(
             register_peer,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

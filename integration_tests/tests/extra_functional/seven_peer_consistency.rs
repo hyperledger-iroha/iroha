@@ -8,10 +8,10 @@ use iroha::{
         parameter::BlockParameter,
         prelude::*,
         query::{
-            account::prelude::FindAccounts,
+            account::prelude::FindAccountById,
             asset::prelude::FindAssetById,
-            asset::prelude::FindAssetDefinitions,
-            domain::prelude::FindDomains,
+            asset::prelude::FindAssetDefinitionById,
+            domain::prelude::FindDomainById,
             error::{FindError, QueryExecutionFail},
         },
     },
@@ -72,7 +72,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         )
     });
     let submitter_client = submitter.client();
@@ -268,16 +268,20 @@ fn wait_for_setup_state(
     let deadline = Instant::now() + timeout;
     let mut last_err = None;
     loop {
-        let domains = client.client().query(FindDomains).execute_all();
-        let accounts = client.client().query(FindAccounts).execute_all();
-        let asset_defs = client.client().query(FindAssetDefinitions).execute_all();
+        let domains = client
+            .client()
+            .query_single(FindDomainById::new(domain_id.clone()));
+        let accounts = client
+            .client()
+            .query_single(FindAccountById::new(account_id.clone()));
+        let asset_defs = client
+            .client()
+            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()));
         match (domains, accounts, asset_defs) {
             (Ok(domains), Ok(accounts), Ok(asset_defs)) => {
-                let domain_ok = domains.iter().any(|domain| domain.id() == domain_id);
-                let account_ok = accounts.iter().any(|account| account.id() == account_id);
-                let asset_ok = asset_defs
-                    .iter()
-                    .any(|asset_def| asset_def.id() == asset_definition_id);
+                let domain_ok = domains.id() == domain_id;
+                let account_ok = accounts.id() == account_id;
+                let asset_ok = asset_defs.id() == asset_definition_id;
                 if domain_ok && account_ok && asset_ok {
                     return Ok(());
                 }

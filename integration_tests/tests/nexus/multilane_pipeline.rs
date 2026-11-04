@@ -200,6 +200,7 @@ fn multilane_catalog_sets_up_storage_and_routing() -> Result<()> {
         configured_lane_catalog: lane_catalog.clone(),
         lane_config: lane_config.clone(),
         dataspace_catalog: dataspace_catalog.clone(),
+        configured_dataspace_catalog: dataspace_catalog.clone(),
         routing_policy: LaneRoutingPolicy::default(),
         ..Default::default()
     })?;

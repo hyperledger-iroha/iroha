@@ -1,6 +1,6 @@
 //! Peer unregister flows under churn.
 use eyre::{Report, Result, WrapErr, eyre};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::{
     blocking::Client,
     data_model::{isi::register::RegisterPeerWithPop, parameter::BlockParameter, prelude::*},
@@ -10,10 +10,7 @@ use iroha_primitives::nonzero;
 use iroha_test_network::{NetworkBuilder, NetworkPeer, domain_setup_instruction};
 use iroha_test_samples::gen_account_in;
 use std::time::{Duration, Instant};
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
@@ -47,6 +44,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     );
     // Register a new peer early to keep the pre-join block history short.
     let new_peer = NetworkPeer::builder().build(network.env());
+    network.attach_peer_client_context(&new_peer)?;
     let new_peer_id = new_peer.id();
     let new_peer_client = new_peer.client();
     let register_peer = RegisterPeerWithPop::new(
@@ -110,6 +108,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
             let client = client.clone();
             let account = account.clone();
             let asset_def = asset_def.clone();
+            let domain_id = domain_id.clone();
             let setup_domain = setup_domain.clone();
             move || {
                 client
@@ -123,7 +122,7 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
                                     __asset_definition_id.clone(),
                                     "xor".to_owned(),
                                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                                    None,
+                                    Some(domain_id),
                                 )
                             })
                             .into(),
@@ -262,14 +261,23 @@ async fn find_asset(
     account: &AccountId,
     asset_definition: &AssetDefinitionId,
 ) -> Result<Option<Quantity>> {
-    let account_id = account.clone();
-    let client = client.clone();
-    let asset = spawn_blocking(move || client.client().query(FindAssets::new()).execute_all())
-        .await??
-        .into_iter()
-        .filter(|asset| asset.id().account() == &account_id)
-        .find(|asset| asset.id().definition() == asset_definition);
-    Ok(asset.map(|asset| asset.value().clone()))
+    let id = AssetId::new(asset_definition.clone(), account.clone());
+    match client
+        .account_client()
+        .query_single(FindAssetById::new(id.clone()))
+        .await
+    {
+        Ok(asset) => {
+            assert_eq!(asset.id(), &id);
+            Ok(Some(asset.value().clone()))
+        }
+        Err(iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
+            iroha::data_model::query::error::QueryExecutionFail::Find(
+                iroha::data_model::query::error::FindError::Asset(missing),
+            ),
+        ))) if missing.as_ref() == &id => Ok(None),
+        Err(error) => Err(error.into()),
+    }
 }
 async fn wait_for_asset(
     client: &Client,
@@ -357,11 +365,11 @@ where
     T: Send + 'static,
     F: FnOnce() -> Result<T> + Send + 'static,
 {
-    let join = spawn_blocking(task);
+    let join = run_on_dedicated_thread(task);
     let result = timeout(timeout_duration, join)
         .await
         .map_err(|_| eyre!("{context} timed out"))?;
-    result.map_err(Report::new)?
+    result?
 }
 async fn wait_for_peer_count(
     client: &Client,
@@ -370,7 +378,7 @@ async fn wait_for_peer_count(
 ) -> Result<()> {
     let deadline = Instant::now() + timeout_duration;
     loop {
-        let count = spawn_blocking({
+        let count = run_on_dedicated_thread({
             let client = client.clone();
             move || {
                 client

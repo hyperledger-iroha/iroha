@@ -4,6 +4,9 @@
 //! finality, every peer exposes the same genesis-bound certified SCCP result, and even an
 //! authorized proposer cannot substitute a missing qualified Parliament ballot.
 
+mod anchor_prefix;
+mod anchor_prefix_tests;
+
 use std::{
     num::NonZeroU64,
     path::Path,
@@ -43,7 +46,7 @@ use iroha::{
     },
 };
 use iroha_executor_data_model::permission::sccp::CanProposeSccpRouteGovernance;
-use iroha_model_base::{metadata::Metadata, name::Name, topology::LaneId};
+use iroha_model_base::{metadata::Metadata, topology::LaneId};
 use iroha_sccp::{
     api::{SccpCertificateV1, SccpGenerationV1},
     v1::{
@@ -141,6 +144,16 @@ fn configured_builder(
                 1_073_741_824_i64,
             );
         })
+}
+
+/// Keep every prefetched ordinary metadata transaction in its own native block.
+fn anchor_builder(parameters: SccpParametersV1) -> NetworkBuilder {
+    configured_builder(parameters, Some(2), 10_000, Duration::from_millis(100))
+        .with_genesis_instruction(SetParameter::new(Parameter::Block(
+            iroha::data_model::parameter::BlockParameter::MaxTransactions(
+                NonZeroU64::new(1).unwrap(),
+            ),
+        )))
 }
 
 #[test]
@@ -557,7 +570,7 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
         }),
     )?;
     let (network, runtime) = sandbox::start_network_blocking_or_skip(
-        configured_builder(parameters, Some(2), 10_000, Duration::from_millis(100)),
+        anchor_builder(parameters),
         stringify!(
             four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_forgery
         ),
@@ -817,45 +830,44 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
         // neither empty blocks nor a source-state/clock shortcut is involved.
         let client = network.peers()[0].client();
         let anchor_started_ms = wall_time_ms()?;
-        let anchor_metadata: Name = "sccp_anchor_sequence".parse()?;
         let mut next_observation = Instant::now();
-        let mut anchor_height = successor_height;
-        let mut sequence = 0_u64;
-        let mut anchor_transactions = Vec::new();
-        while anchor_height < 4_097 {
-            sequence = sequence
-                .checked_add(1)
-                .ok_or_else(|| eyre!("anchor sequence overflow"))?;
-            let transaction = client.submit(
-                SetKeyValue::account(
-                    ALICE_ID.clone(),
-                    anchor_metadata.clone(),
-                    Json::new(sequence),
-                ),
-                FeePaymentIntent::authority(Vec::new(), None),
-            )?;
-            let height = client.client().get_sumeragi_status()?.committed_height;
-            ensure!(
-                height > anchor_height,
-                "ordinary signed metadata must advance the chain"
-            );
-            anchor_transactions.push(norito::json!({
-                "sequence": sequence, "transaction_hash": transaction, "observed_height": height,
-            }));
-            anchor_height = height;
-            if Instant::now() >= next_observation || height >= 4_097 {
-                runtime.block_on(network.ensure_blocks(height))?;
-                write_heartbeat_observation(
-                    &directory,
-                    &norito::json!({
-                        "stage": "sealing_anchor_chunk", "wall_ms": (wall_time_ms()?),
-                        "started_ms": anchor_started_ms, "height": height, "target_height": 4_097,
-                        "signed_metadata_transactions": sequence,
-                    }),
-                )?;
-                next_observation = Instant::now() + Duration::from_secs(30);
-            }
-        }
+        let receipts = anchor_prefix::drive(
+            &client,
+            successor_height,
+            4_097,
+            anchor_prefix::WINDOW,
+            |progress| {
+                if Instant::now() >= next_observation
+                    || (progress.height >= 4_097 && progress.pending == 0)
+                {
+                    runtime.block_on(network.ensure_blocks(progress.height))?;
+                    write_heartbeat_observation(
+                        &directory,
+                        &norito::json!({
+                            "stage": "sealing_anchor_chunk", "wall_ms": (wall_time_ms()?),
+                            "started_ms": anchor_started_ms, "height": (progress.height), "target_height": 4_097,
+                            "signed_metadata_transactions": (progress.submitted),
+                        }),
+                    )?;
+                    next_observation = Instant::now() + Duration::from_secs(30);
+                }
+                Ok(())
+            },
+        )?;
+        let anchor_height = receipts
+            .iter()
+            .map(|receipt| receipt.observed_height)
+            .max()
+            .unwrap_or(successor_height);
+        let anchor_transactions = receipts
+            .iter()
+            .map(|receipt| {
+                norito::json!({
+                    "sequence": (receipt.sequence), "transaction_hash": (receipt.transaction_hash),
+                    "observed_height": (receipt.observed_height),
+                })
+            })
+            .collect::<Vec<_>>();
         runtime.block_on(network.ensure_blocks(anchor_height))?;
         get_status_with_retry_at_least(&client, 4_097)?;
         let seal = client

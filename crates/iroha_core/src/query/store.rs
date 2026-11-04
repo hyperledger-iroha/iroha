@@ -965,6 +965,26 @@ impl LiveQueryStoreHandle {
     ) -> Result<OrdinaryQueryCursorBinding, QueryExecutionFail> {
         self.store.ordinary_cursor_binding(cursor, authority)
     }
+    /// Read the admitted execution geometry of an authenticated ordinary cursor.
+    ///
+    /// This copies only fixed-size limits after validating the opaque ID, authority,
+    /// exact position, completed Start archive and retained memory lease. No row,
+    /// archive decoding or map guard escapes this lookup. Callers must match the
+    /// returned limits against their current policy before reserving execution;
+    /// Core independently revalidates the complete binding during continuation.
+    ///
+    /// # Errors
+    /// Returns [`QueryExecutionFail::Expired`] for absent, foreign, stale, unbound
+    /// or unleased cursors, preserving the ordinary continuation error boundary.
+    pub fn ordinary_cursor_execution_limits(
+        &self,
+        cursor: &ForwardCursor,
+        authority: &AccountId,
+    ) -> Result<crate::smartcontracts::isi::query::OrdinaryQueryExecutionLimits, QueryExecutionFail>
+    {
+        self.ordinary_cursor_binding(cursor, authority)
+            .map(OrdinaryQueryCursorBinding::execution_limits)
+    }
     /// Remove query from the storage if there is any.
     pub fn drop_query(&self, query_id: &QueryId) {
         self.store.remove(query_id);
@@ -1119,6 +1139,11 @@ mod tests {
             Err(QueryExecutionFail::Expired),
             "unbound cursors must not expose retained charge"
         );
+        assert_eq!(
+            handle.ordinary_cursor_execution_limits(&cursor, &ALICE_ID),
+            Err(QueryExecutionFail::Expired),
+            "unbound cursors cannot select execution geometry",
+        );
         handle
             .bind_revalidation_request(&cursor, &ALICE_ID, vec![0xaa])
             .expect("bind archive");
@@ -1132,6 +1157,16 @@ mod tests {
             .ordinary_cursor_binding(&cursor, &ALICE_ID)
             .expect("owner policy binding");
         assert_eq!(binding.retained_bytes(), retained);
+        assert_eq!(
+            handle
+                .ordinary_cursor_execution_limits(&cursor, &ALICE_ID)
+                .unwrap(),
+            ordinary_test_limits(),
+        );
+        assert_eq!(
+            handle.ordinary_cursor_execution_limits(&cursor, &BOB_ID),
+            Err(QueryExecutionFail::Expired),
+        );
         assert_eq!(
             handle.ordinary_cursor_retained_bytes(&cursor, &BOB_ID),
             Err(QueryExecutionFail::Expired)
@@ -1151,6 +1186,10 @@ mod tests {
             handle.ordinary_cursor_binding(&stale, &ALICE_ID),
             Err(QueryExecutionFail::Expired)
         );
+        assert_eq!(
+            handle.ordinary_cursor_execution_limits(&stale, &ALICE_ID),
+            Err(QueryExecutionFail::Expired),
+        );
         let response_lease = admission
             .take_response_lease(false)
             .expect("response headroom");
@@ -1159,6 +1198,10 @@ mod tests {
             total.checked_sub(retained).expect("response remainder")
         );
         handle.drop_query(&cursor.query);
+        assert_eq!(
+            handle.ordinary_cursor_execution_limits(&cursor, &ALICE_ID),
+            Err(QueryExecutionFail::Expired),
+        );
         assert_eq!(released.load(Ordering::SeqCst), retained);
         drop(response_lease);
         assert_eq!(released.load(Ordering::SeqCst), total);

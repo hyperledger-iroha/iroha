@@ -244,6 +244,23 @@ fn trigger_fixture() -> super::GenesisIvmTrigger {
     super::GenesisIvmTrigger::new("bootstrap".parse().unwrap(), action_fixture())
 }
 
+#[test]
+fn trigger_constructor_preserves_fields_and_is_const_callable() {
+    const fn construct(
+        id: super::TriggerId,
+        action: super::GenesisIvmAction,
+    ) -> super::GenesisIvmTrigger {
+        super::GenesisIvmTrigger::new(id, action)
+    }
+
+    let id: super::TriggerId = "constructor-test".parse().unwrap();
+    let action = action_fixture();
+    let expected_action = action.encode();
+    let trigger = construct(id.clone(), action);
+    assert_eq!(trigger.id, id);
+    assert_eq!(trigger.action.encode(), expected_action);
+}
+
 fn record_prefix<T>(value: &T, flags: u8) -> T
 where
     T: SerializePayload + for<'de> norito::DeserializePayload<'de> + for<'de> DecodeFromSlice<'de>,

@@ -452,11 +452,15 @@ fn routed_read_source_status(endpoint: ToriiReadEndpointV1) -> RoutedReadSourceS
         | InternalAccountTransactionGet
         | AccountPermissionsQuery
         | UaidManifestsQuery
-        | AccountHistoryQuery => Residual,
+        | AccountHistoryQuery
+        | RolesList
+        | RolesQuery
+        | AccountRolesGet
+        | AccountRolesQuery => Residual,
     }
 }
 #[test]
-fn routed_read_source_inventory_classifies_all_49_endpoints() {
+fn routed_read_source_inventory_classifies_all_53_endpoints() {
     use ToriiReadEndpointV1::*;
     let endpoints = [
         AccountGet,
@@ -508,18 +512,22 @@ fn routed_read_source_inventory_classifies_all_49_endpoints() {
         AccountPermissionsQuery,
         UaidManifestsQuery,
         AccountHistoryQuery,
+        RolesList,
+        RolesQuery,
+        AccountRolesGet,
+        AccountRolesQuery,
     ];
     let proven = endpoints
         .iter()
         .copied()
         .filter(|endpoint| routed_read_source_status(*endpoint) == RoutedReadSourceStatus::Proven)
         .count();
-    assert_eq!(endpoints.len(), 49);
+    assert_eq!(endpoints.len(), 53);
     // These collection paths now execute through collection_sources, rather
     // than the older DTO helpers whose isolated parity tests appear above.
     // Source certification requires the actual canonical engine path.
     assert_eq!(proven, 15);
-    assert_eq!(endpoints.len() - proven, 34);
+    assert_eq!(endpoints.len() - proven, 38);
 }
 #[test]
 fn routed_read_blanket_rejection_is_absent_repo_wide() {

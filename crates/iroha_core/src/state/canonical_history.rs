@@ -234,6 +234,12 @@ impl<'a> CanonicalHistorySource<'a> {
         &self.budget
     }
 
+    /// Bind physical source allocations to an already admitted off-chain request.
+    pub(crate) fn with_frame_pool(mut self, budget: &AllocationBudget) -> Self {
+        self.budget = budget.clone();
+        self
+    }
+
     /// Bind an off-chain walk to the actual caller's original source backing.
     /// The caller keeps this same budget's synchronous codec scope installed.
     pub(crate) fn with_read_budget(mut self, budget: &CanonicalHistoryReadBudget) -> Self {
@@ -649,6 +655,68 @@ impl<'a> CanonicalHistorySource<'a> {
         start: WalkStart,
         first: NonZeroUsize,
         last: NonZeroUsize,
+        original_target: Option<&mut crate::kura::NativeFrameRead<'_>>,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        visit: impl FnMut(
+            crate::sumeragi::certified_chain::AdmittedCommittedBlock,
+        ) -> Result<
+            core::ops::ControlFlow<()>,
+            ExecutionAttemptError<QueryExecutionFail>,
+        >,
+    ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
+        self.walk_backwards_staged(
+            start,
+            first,
+            last,
+            original_target,
+            before_read,
+            visit,
+            |work| work(),
+        )
+    }
+
+    /// Retire each original full body before reusing the caller's prepaid stage.
+    /// The visitor may retain only the workspace's bounded metadata and charged frames.
+    pub(crate) fn visit_executed_backwards_staged(
+        &self,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
+        before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
+        visit: impl FnMut(
+            crate::sumeragi::certified_chain::AdmittedCommittedBlock,
+        ) -> Result<
+            core::ops::ControlFlow<()>,
+            ExecutionAttemptError<QueryExecutionFail>,
+        >,
+        workspace: &crate::sumeragi::finality::FinalityDecodeWorkspace,
+    ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
+        let tip = self.walk_tip(first, last)?;
+        self.walk_backwards_staged(
+            WalkStart::tip(tip),
+            first,
+            last,
+            None,
+            before_read,
+            visit,
+            |work| {
+                workspace.stage(|| Ok(work())).map_err(
+                    |error: ExecutionAttemptError<
+                        crate::sumeragi::certified_chain::ChainReadError,
+                    >| {
+                        error.map_rejection(|error| {
+                            QueryExecutionFail::Conversion(error.to_string())
+                        })
+                    },
+                )?
+            },
+        )
+    }
+
+    fn walk_backwards_staged(
+        &self,
+        start: WalkStart,
+        first: NonZeroUsize,
+        last: NonZeroUsize,
         mut original_target: Option<&mut crate::kura::NativeFrameRead<'_>>,
         mut before_read: impl FnMut(u64, u64) -> Result<(), ExecutionAttemptError<QueryExecutionFail>>,
         mut visit: impl FnMut(
@@ -657,6 +725,10 @@ impl<'a> CanonicalHistorySource<'a> {
             core::ops::ControlFlow<()>,
             ExecutionAttemptError<QueryExecutionFail>,
         >,
+        mut stage: impl FnMut(
+            &mut dyn FnMut() -> Result<Option<bool>, ExecutionAttemptError<QueryExecutionFail>>,
+        )
+            -> Result<Option<bool>, ExecutionAttemptError<QueryExecutionFail>>,
     ) -> Result<bool, ExecutionAttemptError<QueryExecutionFail>> {
         let invalid = |message: String| {
             ExecutionAttemptError::Rejected(QueryExecutionFail::Conversion(message))
@@ -687,59 +759,66 @@ impl<'a> CanonicalHistorySource<'a> {
         // and checked below, including on a warmed or subsequent State view.
         let mut validation = iroha_data_model::sumeragi_finality::EpochValidationScope::new();
         for source_height in (target..=start.height).rev() {
-            let index = usize::try_from(source_height)
-                .ok()
-                .and_then(NonZeroUsize::new)
-                .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
-            let journal_hash = self
-                .expected_hash(index)
-                .map_err(QueryExecutionFail::CanonicalHistory)?;
-            if journal_hash != expected_iroha {
-                return Err(invalid(format!(
-                    "native execution parent contradicts State hash at {source_height}"
-                )));
-            }
-            let original = if source_height == selected_last {
-                original_target.as_deref_mut()
-            } else {
-                None
-            };
-            let block = self.block_with_original_admission(index, original, &mut before_read)?;
-            let receipt = crate::sumeragi::certified_chain::AdmittedCommittedBlock::read(
-                block,
-                source_height,
-                scope,
-                &mut validation,
-                &self.budget,
-            )
-            .map_err(|error| {
-                error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string()))
-            })?;
-            Self::require_native_execution_link(&receipt, expected_core, expected_result)?;
-            checkpoints.record(
-                source_height,
-                HistoryCheckpoint {
-                    iroha_hash: journal_hash,
-                    core_hash: expected_core,
-                    result: expected_result,
-                },
-            );
-            if source_height > target {
-                let header = receipt
-                    .header()
-                    .ok_or_else(|| invalid("genesis cannot precede the requested height".into()))?;
-                expected_core = header.parent_hash;
-                expected_result = header.parent_result;
-                expected_iroha =
-                    receipt.block().header().prev_block_hash().ok_or_else(|| {
-                        invalid("native successor omits Iroha parent hash".into())
+            let outcome = stage(&mut || {
+                let index = usize::try_from(source_height)
+                    .ok()
+                    .and_then(NonZeroUsize::new)
+                    .ok_or(QueryExecutionFail::GasBudgetExceeded)?;
+                let journal_hash = self
+                    .expected_hash(index)
+                    .map_err(QueryExecutionFail::CanonicalHistory)?;
+                if journal_hash != expected_iroha {
+                    return Err(invalid(format!(
+                        "native execution parent contradicts State hash at {source_height}"
+                    )));
+                }
+                let original = if source_height == selected_last {
+                    original_target.as_deref_mut()
+                } else {
+                    None
+                };
+                let block =
+                    self.block_with_original_admission(index, original, &mut before_read)?;
+                let receipt = crate::sumeragi::certified_chain::AdmittedCommittedBlock::read(
+                    block,
+                    source_height,
+                    scope,
+                    &mut validation,
+                    &self.budget,
+                )
+                .map_err(|error| {
+                    error.map_rejection(|error| QueryExecutionFail::Conversion(error.to_string()))
+                })?;
+                Self::require_native_execution_link(&receipt, expected_core, expected_result)?;
+                checkpoints.record(
+                    source_height,
+                    HistoryCheckpoint {
+                        iroha_hash: journal_hash,
+                        core_hash: expected_core,
+                        result: expected_result,
+                    },
+                );
+                if source_height > target {
+                    let header = receipt.header().ok_or_else(|| {
+                        invalid("genesis cannot precede the requested height".into())
                     })?;
-            }
-            if source_height <= selected_last && visit(receipt)?.is_break() {
-                return Ok(false);
-            }
-            if source_height == target {
-                return Ok(true);
+                    expected_core = header.parent_hash;
+                    expected_result = header.parent_result;
+                    expected_iroha =
+                        receipt.block().header().prev_block_hash().ok_or_else(|| {
+                            invalid("native successor omits Iroha parent hash".into())
+                        })?;
+                }
+                if source_height <= selected_last && visit(receipt)?.is_break() {
+                    return Ok(Some(false));
+                }
+                if source_height == target {
+                    return Ok(Some(true));
+                }
+                Ok(None)
+            })?;
+            if let Some(exhausted) = outcome {
+                return Ok(exhausted);
             }
         }
         Err(invalid(

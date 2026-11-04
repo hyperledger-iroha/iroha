@@ -24,8 +24,8 @@ MAX_SOURCE_FILES = 4096
 MAX_SOURCE_FILE_BYTES = 16 * 1024 * 1024
 MAX_SOURCE_BYTES = 64 * 1024 * 1024
 MAX_CHECKSUM_BYTES = 1024 * 1024
-PACKAGE_RECIPE_SHA256 = "84eea00669cc7e2341e9f91b0962cf5e22f60dbbcd74123b2a5752d31085824c"
-BUILD_RECIPE_SHA256 = "e57da7145ee2e69fe88d2167689fb86cbcd97d6edc80d9e35b0a3758671814b5"
+PACKAGE_RECIPE_SHA256 = "09e235e43c1e53b3eb021e33cd48f578183bd28dd8b576bc50d607d514bbafbf"
+BUILD_RECIPE_SHA256 = "b80b285c6f46dd75ab618db82952d96a2c3ae5f70abd104f119f2bfead554b16"
 ENGINE_RECIPE_SHA256 = "54fc313b8b4da1c4953a2c68bce5a357d8b52be39b35f3f2fab8ca6a2bf80550"
 ENGINE_CONTRACT_SHA256 = "ffe14c863ca7c189dfea331fb1c832cd15092ce6369955f3af50021ab4446d8c"
 CHECKSUM_MEMBER = "native/iroha_js_host.checksums.json"
@@ -40,7 +40,7 @@ _SOURCE_NAME = re.compile(r"src/(?:public/|kotodamaCompiler/|petal/|query/)?[A-Z
 # Keep this relation with the pinned build-dist recipe: these outputs are
 # mandatory even when a purported complete census omits the same package file.
 REQUIRED_OUTPUTS = frozenset((
-    "address.js", "atomicPrivateSettlement.js", "browser.js", "curveRegistry.js",
+    "address.js", "atomicPrivateSettlement.js", "privateSettlement.js", "browser.js", "curveRegistry.js",
     "ivmArtifact.js", "native.js", "nativeArtifactHash.js",
     "numericV1.js", "strictLosslessJson.js", "boundedByteSnapshot.js", "validationFeeTrust.js", "sorafsOrderbookPreflight.js", "sorafsOrderbookSubmission.js",
     "sorafsOrderbookSubmission.d.ts", "smartContractDeploymentSubmit.js", "sumeragiTyped.js",

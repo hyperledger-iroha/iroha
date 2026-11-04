@@ -1,0 +1,53 @@
+{
+  "baseline_git_revision": "e954df485029e43f323468cccaaa847781114ccb",
+  "current_git_revision": "c63d346bc8ee1313bf39b8ad672aaf95cda10d8a",
+  "reviewed_sources": {
+    "crates/iroha_parliament_ballot_proof/src/profile.rs": {
+      "previous_sha256": "9cc79a448f4199b748923b8b3e6a552fb9f0aa7980a1cb6d1d89746e8b79323d",
+      "current_sha256": "1e1d5e5b40208c06934199b79a2b1b0551c362bab864f0d17ea0c4f9ab385678",
+      "review": "Comparator is now test/diagnostic-only; both row geometries, proof lengths and role-independent Extended context are unchanged. The new report states this build scope explicitly.",
+      "reviewed_diff": "profile.rs.diff.template"
+    },
+    "crates/iroha_zkp_vole/src/bavc.rs": {
+      "previous_sha256": "481b4c7027b46520e848a67d94a6dc7cdda312838e1769a93b9079260b8d4269",
+      "current_sha256": "b6cae7b82973325d3342434201188192896ad5686029f005bedbf06fc4e0f0fd",
+      "review": "Only test oracle SHAKE constructors move from sha3 to shake; production challenge decode, mark_hidden and inclusive opening threshold are unchanged.",
+      "reviewed_diff": "bavc.rs.diff.template"
+    },
+    "crates/iroha_zkp_vole/src/params.rs": {
+      "previous_sha256": "41d18d1bf137496db8bd858bc291e48684c11122c03834828d54d3b6ae8cabba",
+      "current_sha256": "41d18d1bf137496db8bd858bc291e48684c11122c03834828d54d3b6ae8cabba",
+      "review": "Byte-identical to the reviewed source baseline."
+    },
+    "crates/iroha_zkp_vole/src/proof.rs": {
+      "previous_sha256": "f87a7282a56dd75e774edd7082aad132b7267ca075132003c597123d310cf1cc",
+      "current_sha256": "f87a7282a56dd75e774edd7082aad132b7267ca075132003c597123d310cf1cc",
+      "review": "Byte-identical to the reviewed source baseline."
+    },
+    "crates/iroha_zkp_vole/src/variant.rs": {
+      "previous_sha256": "50d8c414309f5ccc315181abefbdabe79ed092f0644dc72e04596c93c58059b9",
+      "current_sha256": "50d8c414309f5ccc315181abefbdabe79ed092f0644dc72e04596c93c58059b9",
+      "review": "Byte-identical to the reviewed source baseline."
+    },
+    "crates/iroha_zkp_vole/src/vole.rs": {
+      "previous_sha256": "5fcfe9c24e0e4a7319a0e4ed8ab99e7fbc83cd07c89f997864e393fbc9d09f31",
+      "current_sha256": "b684143fb2d9df535670e44080af932d10357fe211c5990a29782b9b91126a8e",
+      "review": "Only a test polynomial-degree calculation changes from 31 - leading_zeros to ilog2; production opening delegation is unchanged.",
+      "reviewed_diff": "vole.rs.diff.template"
+    },
+    "scripts/check_parliament_ballot_security_ledger.py": {
+      "previous_sha256": "910e958898c465e70cda88e52cf8f61af05ba8cd343a82812fa1ba103600a359",
+      "current_sha256": "910e958898c465e70cda88e52cf8f61af05ba8cd343a82812fa1ba103600a359",
+      "review": "Byte-identical to the reviewed source baseline."
+    },
+    "specs/parliament_ballot_b6_hybrid_driver.md": {
+      "previous_sha256": "a95739b192f2a431cbf2a95c6964817137a6c5e0856121b20d4465a036f5835a",
+      "current_sha256": "a95739b192f2a431cbf2a95c6964817137a6c5e0856121b20d4465a036f5835a",
+      "review": "Byte-identical to the reviewed source baseline."
+    }
+  },
+  "formula_changes": false,
+  "historical_artifacts_modified": false,
+  "profile_qualified": false,
+  "review_scope": "Source-bound finite combinatorial membership only; no compiled proof, provider memory, security lemma or release qualification."
+}

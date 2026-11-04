@@ -220,8 +220,7 @@ pub async fn publication_proof(
 ) -> Response {
     use iroha_core::state::{StateReadOnlyWithTransactions, TransactionsReadOnly};
     use iroha_data_model::sorafs::publication::{
-        PUBLICATION_PROOF_MAX_BLOCKS_V1, PUBLICATION_PROOF_MAX_BYTES_V1,
-        SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
+        PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationProofRequestV1,
     };
 
     if crate::require_full_ledger_carrier_permission(&state, &verified.account).is_err() {
@@ -255,38 +254,13 @@ pub async fn publication_proof(
                 .get(&hash)
                 .ok_or(StatusCode::ACCEPTED)?
                 .get() as u64;
-            let count = height
-                .checked_sub(request.floor_height)
-                .and_then(|span| span.checked_add(1))
-                .ok_or(StatusCode::CONFLICT)?;
-            if count < 2 || count > PUBLICATION_PROOF_MAX_BLOCKS_V1 as u64 {
-                return Err(StatusCode::PAYLOAD_TOO_LARGE);
-            }
-            let mut lineage = Vec::new();
-            let mut total_bytes = 0usize;
-            for candidate in request.floor_height..=height {
-                let artifact = iroha_core::sumeragi::finality::build_proof(&view, candidate)
-                    .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-                if candidate == request.floor_height
-                    && *artifact.block_header.hash().as_ref() != request.floor_block_hash
-                {
-                    return Err(StatusCode::CONFLICT);
-                }
-                total_bytes = total_bytes
-                    .checked_add(
-                        norito::canonical_frame_len(&artifact)
-                            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
-                    )
-                    .ok_or(StatusCode::PAYLOAD_TOO_LARGE)?;
-                if total_bytes > PUBLICATION_PROOF_MAX_BYTES_V1 {
-                    return Err(StatusCode::PAYLOAD_TOO_LARGE);
-                }
-                lineage.push(artifact);
-            }
-            canonical_response(
-                &SorafsPublicationProofV1 { lineage },
-                PUBLICATION_PROOF_MAX_BYTES_V1,
-            )
+            let proof = publication_lineage(
+                &view,
+                request.floor_height,
+                request.floor_block_hash,
+                height,
+            )?;
+            canonical_response(&proof, PUBLICATION_PROOF_MAX_BYTES_V1)
         }),
     )
     .await;
@@ -299,3 +273,53 @@ pub async fn publication_proof(
         Err(_) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
     }
 }
+
+fn publication_lineage(
+    view: &impl iroha_core::state::StateReadOnly,
+    floor_height: u64,
+    floor_block_hash: [u8; 32],
+    height: u64,
+) -> Result<iroha_data_model::sorafs::publication::SorafsPublicationProofV1, StatusCode> {
+    use iroha_data_model::sorafs::publication::{
+        PUBLICATION_PROOF_MAX_BLOCKS_V1, PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationProofV1,
+    };
+
+    let count = height
+        .checked_sub(floor_height)
+        .and_then(|span| span.checked_add(1))
+        .ok_or(StatusCode::CONFLICT)?;
+    if count < 2 || count > PUBLICATION_PROOF_MAX_BLOCKS_V1 as u64 {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    // Share only the native verifier's bounded cursor. Each proof still passes
+    // independent portable verification and fresh original-source custody checks.
+    iroha_core::sumeragi::finality::with_proof_reader(view, |reader| {
+        let mut lineage = Vec::new();
+        let mut total_bytes = 0usize;
+        for candidate in floor_height..=height {
+            let artifact = reader
+                .proof(candidate)
+                .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+            if candidate == floor_height
+                && *artifact.block_header.hash().as_ref() != floor_block_hash
+            {
+                return Err(StatusCode::CONFLICT);
+            }
+            total_bytes = total_bytes
+                .checked_add(
+                    norito::canonical_frame_len(&artifact)
+                        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?,
+                )
+                .ok_or(StatusCode::PAYLOAD_TOO_LARGE)?;
+            if total_bytes > PUBLICATION_PROOF_MAX_BYTES_V1 {
+                return Err(StatusCode::PAYLOAD_TOO_LARGE);
+            }
+            lineage.push(artifact);
+        }
+        Ok(SorafsPublicationProofV1 { lineage })
+    })
+}
+
+#[cfg(test)]
+#[path = "publisher/proof_tests.rs"]
+mod proof_tests;

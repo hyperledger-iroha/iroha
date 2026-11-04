@@ -1749,6 +1749,10 @@ def test_active_sorafs_todo_inventory_matches_reviewed_open_work() -> None:
         # never a statement that the active candidate still ships that work.
         if relative.parts[:2] == ("docs", "history"):
             continue
+        # Captured validation sources are frozen `.template` evidence copies of
+        # earlier candidates, not live code or open work in this candidate.
+        if relative.parts[:2] == ("docs", "validation") and relative.suffix == ".template":
+            continue
         path = REPO_ROOT / relative
         if not path.is_file():
             continue
@@ -2042,7 +2046,7 @@ def test_moderation_local_snapshot_reads_have_no_empty_projection_fallback() -> 
     for name, checks in required.items():
         for source_call, error_mapper in checks:
             assert source_call in handlers[name]
-            assert f"Err(err) => return {error_mapper}(err)" in handlers[name]
+            assert f"Err(err) => return {error_mapper}(&(err))" in handlers[name]
 
     node = read(SORAFS_NODE_LIB_RS)
     for snapshot in (
@@ -2119,6 +2123,9 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
         "pub enum HandshakeTokenCommand", 1
     )[0]
     assert "pub struct HandshakeUpdateArgs" not in cli
+    prepare_config_update = kiso.split("fn prepare_config_update", 1)[1].split(
+        "fn apply_config_update", 1
+    )[0]
     apply_config_update = kiso.split("fn apply_config_update", 1)[1].split(
         "fn apply_soranet_handshake_update", 1
     )[0]
@@ -2217,9 +2224,10 @@ def test_sorafs_soranet_handshake_admission_has_no_relaxation_path() -> None:
     assert "actual::SoranetPuzzle" in user_config.split(
         "impl SoranetHandshakePuzzle", 1
     )[1].split("/// User-level configuration container for SoraNet privacy telemetry.", 1)[0]
-    assert "SM handshake matching is mandatory" in apply_config_update
-    assert "SM OpenSSL preview matching is mandatory" in apply_config_update
-    assert "if !value" in apply_config_update
+    assert "let next = self.prepare_config_update(dto)?;" in apply_config_update
+    assert "SM handshake matching is mandatory" in prepare_config_update
+    assert "SM OpenSSL preview matching is mandatory" in prepare_config_update
+    assert "if !value" in prepare_config_update
     assert "Self::apply_pow_update(&mut handshake.pow, &pow_update)?" in apply_handshake_update
     assert "-> Result<(), String>" in apply_pow_update
     assert "update.required" not in apply_pow_update
@@ -23310,7 +23318,7 @@ def test_commit_reveal_process_local_node_authority_is_absent() -> None:
         "ModerationCommandRouteV1::SubmitReveal",
         "ModerationCommandRouteV1::FinalizeCase",
         "cached_moderation_snapshot",
-        'json_entry("source", Value::from("finalized_chain"))',
+        'json_entry("source", &(Value::from("finalized_chain")))',
     )
     assert [marker for marker in required_native if marker not in api] == []
 
@@ -23426,7 +23434,7 @@ def test_commit_reveal_torii_no_show_plan_readback_regressions_are_pinned() -> N
         ".filter(|event| event.sequence > since)",
         "moderation_finalized_events_etag(",
         "reputation_not_modified_response(&headers, &etag)",
-        "let next_after = events.last().map(|event| event.cursor())",
+        "let next_after = events\n        .last()\n        .map(sorafs_node::moderation_orchestrator::ModerationFinalizedEventV1::cursor)",
         "sorafs.moderation.finalized_events.v1",
         'Value::from("finalized_chain")',
         '"tip_sequence"',
@@ -28217,10 +28225,10 @@ def test_sorafs_v1_builder_and_provider_advert_are_canonical_production_bins() -
         "signature_payload_bytes",
         "VerifyingKey::from_bytes",
         "is_weak()",
-        "set_no_follow_flag",
-        "nlink() != 1",
+        "RetainedFile::open_regular(&direct_path)",
+        "links() != 1",
         "trusted_metadata_matches",
-        "create_new(true)",
+        "RetainedFile::create_new_private(path)",
     )
     missing = [marker for marker in required_contract if marker not in provider_source]
     assert missing == []

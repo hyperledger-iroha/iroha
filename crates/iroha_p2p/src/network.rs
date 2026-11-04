@@ -6353,8 +6353,6 @@ pub struct ConfiguredPeerBatch {
 // NOTE: safety/high/low network queues are bounded by configuration. The
 // authoritative-consensus safety channel is independent so auxiliary control
 // traffic cannot consume its admission capacity.
-#[derive(derive_more::Debug)]
-#[debug("core::any::type_name::<Self>()")]
 pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     /// Sender to subscribe for messages received form other peers in the network
     subscribe_to_peers_messages_sender: mpsc::Sender<Subscriber<T>>,
@@ -6422,6 +6420,11 @@ pub struct NetworkBaseHandle<T: Pload, E: Enc> {
     subscriber_queue_cap: core::num::NonZeroUsize,
     /// Encryptor used by the network
     _encryptor: core::marker::PhantomData<E>,
+}
+impl<T: Pload, E: Enc> core::fmt::Debug for NetworkBaseHandle<T, E> {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("core::any::type_name::<Self>()")
+    }
 }
 impl<T: Pload, E: Enc> Clone for NetworkBaseHandle<T, E> {
     fn clone(&self) -> Self {

@@ -1,6 +1,5 @@
 //! Contains trigger-related types that are specialized for core-specific needs.
 use crate::smartcontracts::triggers::set::ExecutableRef;
-use derive_more::Constructor;
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     account::AccountId,
@@ -263,12 +262,18 @@ where
     }
 }
 /// Same as [`iroha_data_model::trigger::Trigger`] but generic over the filter type
-#[derive(Constructor)]
 pub struct SpecializedTrigger<F> {
     /// Unique identifier of the [`Trigger`].
     pub id: TriggerId,
     /// Action to be performed when the trigger matches.
     pub action: SpecializedAction<F>,
+}
+impl<F> SpecializedTrigger<F> {
+    /// Construct a trigger from its identifier and specialized action.
+    #[inline]
+    pub const fn new(id: TriggerId, action: SpecializedAction<F>) -> Self {
+        Self { id, action }
+    }
 }
 macro_rules! impl_try_from_box {
     ($($variant:ident => $filter_type:ty),+ $(,)?) => {
@@ -547,6 +552,41 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn trigger_constructor_is_const_and_moves_an_unconstrained_filter() {
+        const fn construct<F>(
+            id: TriggerId,
+            action: SpecializedAction<F>,
+        ) -> SpecializedTrigger<F> {
+            SpecializedTrigger::new(id, action)
+        }
+
+        // This filter intentionally implements neither Clone nor EventFilter.
+        struct Filter(Box<str>);
+        let filter = Filter("owned filter".into());
+        let original_filter = filter.0.as_ptr();
+        let id: TriggerId = "constructor_trigger".parse().expect("valid trigger");
+        let action = SpecializedAction {
+            executable: Vec::<InstructionBox>::new().into(),
+            repeats: Repeats::Exactly(0),
+            authority: iroha_test_samples::ALICE_ID.clone(),
+            filter,
+            retry_policy: None,
+            metadata: Metadata::default(),
+        };
+        let trigger = construct(id.clone(), action);
+        assert_eq!(trigger.id, id);
+        assert_eq!(trigger.action.filter.0.as_ptr(), original_filter);
+        assert_eq!(&*trigger.action.filter.0, "owned filter");
+        assert_eq!(trigger.action.repeats, Repeats::Exactly(0));
+        assert_eq!(trigger.action.authority, *iroha_test_samples::ALICE_ID);
+        assert_eq!(trigger.action.retry_policy, None);
+        assert_eq!(trigger.action.metadata, Metadata::default());
+        assert_eq!(
+            trigger.action.executable,
+            Vec::<InstructionBox>::new().into()
+        );
+    }
     #[cfg(feature = "json")]
     use iroha_crypto::{Algorithm, KeyPair};
     #[cfg(feature = "json")]

@@ -210,7 +210,6 @@ fn sorafs_gateway_refusal_scenarios_match_expectations() {
         ("C4", 428),
         ("C5", 428),
         ("C6", 406),
-        ("C7", 422),
         ("D1", 451),
     ];
     for (id, status) in expected {

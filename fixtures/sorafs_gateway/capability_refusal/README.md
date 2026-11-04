@@ -6,6 +6,12 @@ capability conformance suite (`SF-5c`). Each scenario underpins automated tests
 and the operator self-certification kit so gateways, SDKs, and monitoring
 pipelines agree on the surface of deterministic refusals.
 
+The capability matrix is exactly C1–C6. Proof integrity belongs to the
+authenticated Torii `/v1/sorafs/proof/stream` surface, tested against finalized
+pin state in `crates/iroha_torii/src/sorafs/api.rs` and against the caller's
+trusted root and request in `crates/sorafs_car/src/proof_stream.rs`. This fixture
+bundle does not simulate proof authority or emit a proof-verification verdict.
+
 File layout:
 
 - `scenarios.json` – ordered list of refusal cases with stable identifiers,

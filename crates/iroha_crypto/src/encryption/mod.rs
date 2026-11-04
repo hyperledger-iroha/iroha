@@ -20,25 +20,30 @@
 use crate::SessionKey;
 use aead::{Aead, AeadCore, AeadInOut, KeyInit, Payload, TagPosition};
 pub use chacha20poly1305::ChaCha20Poly1305;
-use displaydoc::Display;
 use rand::rngs::SysError;
 use rand::rngs::SysRng;
 use rand_core::TryRng;
 use std::{convert::TryFrom, mem, vec::Vec};
 /// An error that can occur during encryption or decryption
-#[derive(thiserror::Error, Display, Debug, Clone, Copy)]
+#[derive(thiserror::Error, Debug, Clone, Copy)]
 pub enum Error {
     /// Failed to generate nonce for an encryption operation
+    #[error("Failed to generate nonce for an encryption operation")]
     NonceGeneration(#[source] SysError),
     /// Generated nonce material must not be an inert all-zero placeholder
+    #[error("Generated nonce material must not be an inert all-zero placeholder")]
     InertNonce,
     /// Failed to encrypt data
+    #[error("Failed to encrypt data")]
     Encryption(aead::Error),
     /// Failed to decrypt data
+    #[error("Failed to decrypt data")]
     Decryption(aead::Error),
     /// Not enough data to decrypt message
+    #[error("Not enough data to decrypt message")]
     NotEnoughData,
     /// Provided key material has an invalid length
+    #[error("Provided key material has an invalid length")]
     InvalidKeyLength,
 }
 fn random_nonce<E: AeadCore>() -> Result<aead::Nonce<E>, Error> {
@@ -519,6 +524,9 @@ mod tests {
         assert_eq!(plaintext.as_slice(), message);
     }
 }
+
+#[cfg(test)]
+mod error_tests;
 
 #[cfg(test)]
 mod initialized_tests;

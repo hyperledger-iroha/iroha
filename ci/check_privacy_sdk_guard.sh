@@ -677,10 +677,10 @@ def _check_cargo_workflow(
 ) -> WorkflowDocument:
     workflow = parse_workflow(workflow_source)
     checkout_action = (
-        "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+        "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
     )
     setup_python_action = (
-        "actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065"
+        "actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0"
     )
     setup_python_path = "${{ steps.privacy-python.outputs.python-path }}"
     install_run = "\n".join(
@@ -929,10 +929,10 @@ def _check_cargo_workflow(
         ),
     }
     native_lane_job_digests = {
-        "privacy_swift_sdk_parse": "5073945243d831fd4a3610d1126709aee243b5223f82dc6175bb4e6b4c43a216",
-        "privacy_jvm_sdk_tests": "59a82ce490a66a33b743c656414de255274b94caab02339e5448a6d86af0f1d8",
-        "privacy_csharp_sdk_tests": "c534c7a1eab9ee1217fe69929c2ab9a180f47188405cb13a68fa32d43fdaa01e",
-        "privacy_javascript_sdk_tests": "6a90f43690c01e99f1ec331f24b7c2b03d01d84cc1ba6b8cf32e9fe699c67cda",
+        "privacy_swift_sdk_parse": "b3398cffdf74a72e7f44e7f01c40ea3ebe9e0e604133c5e986677fbfb4a9023a",
+        "privacy_jvm_sdk_tests": "e1965ab9b5f852bb4e3de87a26946ceec4b48530d166f3c31f1f309fadafaa8d",
+        "privacy_csharp_sdk_tests": "3208dd59975a442234fe3cb46a83669c95b2a33cb6a71c6f001c10b2602102e8",
+        "privacy_javascript_sdk_tests": "54ab7f9bc6c370545f2548577e8308ed63680640150fa3a96cbb82e310e2522a",
     }
 
     require(

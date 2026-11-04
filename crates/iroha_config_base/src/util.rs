@@ -1,19 +1,25 @@
 //! Various utilities
-use derive_more::Display;
 use error_stack::Report;
 use norito::{
     DeserializePayload, SerializePayload,
     json::{self, JsonDeserialize, JsonSerialize},
 };
-use std::time::Duration;
+use std::{
+    fmt::{self, Write as _},
+    time::Duration,
+};
 const U64_BYTES: usize = core::mem::size_of::<u64>();
 const DURATION_OVERFLOW: &str = "duration does not fit into u64 milliseconds";
 /// Serialize [`Duration`] as a number of milliseconds.
-#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Display, norito::NoritoSchema)]
+#[derive(Debug, Copy, Clone, Ord, PartialOrd, Eq, PartialEq, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_config_base::util::DurationMs")]
-#[display("{_0:?}")]
 #[repr(transparent)]
 pub struct DurationMs(pub Duration);
+impl fmt::Display for DurationMs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&self.0, f)
+    }
+}
 /// Error produced when parsing a [`DurationMs`] from a string fails.
 #[derive(Debug, Copy, Clone, thiserror::Error)]
 #[error("failed to parse duration in milliseconds")]
@@ -70,7 +76,7 @@ impl<'de> DeserializePayload<'de> for DurationMs {
 impl JsonSerialize for DurationMs {
     fn json_serialize(&self, out: &mut String) {
         match self.to_millis() {
-            Ok(millis) => out.push_str(&millis.to_string()),
+            Ok(millis) => write!(out, "{millis}").expect("writing to String cannot fail"),
             Err(_) => out.push('0'),
         }
     }
@@ -142,7 +148,7 @@ impl<'de> DeserializePayload<'de> for Bytes {
 }
 impl JsonSerialize for Bytes {
     fn json_serialize(&self, out: &mut String) {
-        out.push_str(&self.0.to_string());
+        write!(out, "{}", self.0).expect("writing to String cannot fail");
     }
 }
 impl JsonDeserialize for Bytes {
@@ -242,6 +248,38 @@ impl Drop for DropBomb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_ms_display_preserves_debug_units_and_formatter_options() {
+        for (duration, expected) in [
+            (Duration::ZERO, "0ns"),
+            (Duration::from_nanos(1), "1ns"),
+            (Duration::from_micros(1), "1µs"),
+            (Duration::from_millis(1), "1ms"),
+            (Duration::from_millis(1234), "1.234s"),
+            (Duration::MAX, "18446744073709551615.999999999s"),
+        ] {
+            let value = DurationMs(duration);
+            assert_eq!(format!("{value}"), expected);
+            assert_eq!(format!("{value:>64.3}"), format!("{duration:>64.3?}"));
+            assert_eq!(format!("{value:🦀^64.1}"), format!("{duration:🦀^64.1?}"));
+            assert_eq!(format!("{value:+#064.3}"), format!("{duration:+#064.3?}"));
+        }
+    }
+
+    #[test]
+    fn duration_ms_display_propagates_formatter_failure() {
+        use std::fmt::Write as _;
+
+        struct FailingWriter;
+        impl fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> fmt::Result {
+                Err(fmt::Error)
+            }
+        }
+        let value = DurationMs(Duration::from_millis(1234));
+        assert_eq!(write!(FailingWriter, "{value}"), Err(fmt::Error));
+    }
 
     #[test]
     #[should_panic(expected = "bomb went off")]
@@ -361,6 +399,63 @@ mod tests {
         let parsed: Bytes = json::from_json(&json).expect("deserialize");
         assert_eq!(parsed.get(), 1024);
     }
+
+    #[test]
+    fn scalar_json_preserves_decimal_boundaries_and_appends_to_existing_text() {
+        let mut values = vec![0, u64::MAX];
+        for exponent in 0..=19 {
+            let power = 10_u64.pow(exponent);
+            values.extend([power - 1, power, power + 1]);
+        }
+        for value in values {
+            let expected = format!("prefix:{value}");
+            let mut bytes = String::from("prefix:");
+            Bytes(value).json_serialize(&mut bytes);
+            assert_eq!(bytes, expected);
+            let mut duration = String::from("prefix:");
+            DurationMs(Duration::from_millis(value)).json_serialize(&mut duration);
+            assert_eq!(duration, expected);
+        }
+    }
+
+    #[test]
+    fn duration_json_keeps_submillisecond_truncation_and_overflow_zero() {
+        let maximum_millis = Duration::from_millis(u64::MAX);
+        for (duration, expected) in [
+            (Duration::ZERO, "0"),
+            (Duration::from_nanos(999_999), "0"),
+            (Duration::from_nanos(1_000_001), "1"),
+            (Duration::new(1, 999_999_999), "1999"),
+            (maximum_millis, "18446744073709551615"),
+            (
+                maximum_millis + Duration::from_nanos(999_999),
+                "18446744073709551615",
+            ),
+            (maximum_millis + Duration::from_millis(1), "0"),
+            (Duration::MAX, "0"),
+        ] {
+            let mut output = String::from("prefix:");
+            DurationMs(duration).json_serialize(&mut output);
+            assert_eq!(output, format!("prefix:{expected}"));
+        }
+    }
+
+    #[test]
+    fn scalar_json_keeps_bounded_serialization_unsupported() {
+        for value in [0, u64::MAX] {
+            assert_eq!(
+                json::to_json_bounded(&Bytes(value), usize::MAX),
+                Err(json::BoundedJsonError::Unsupported)
+            );
+        }
+        for duration in [Duration::ZERO, Duration::MAX] {
+            assert_eq!(
+                json::to_json_bounded(&DurationMs(duration), usize::MAX),
+                Err(json::BoundedJsonError::Unsupported)
+            );
+        }
+    }
+
     #[test]
     fn bytes_from_str_parses_numeric() {
         let parsed: Bytes = "2048".parse().expect("parse bytes");

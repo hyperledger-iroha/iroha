@@ -352,7 +352,7 @@ EXPECTED_ROWS = (('StateTelemetry',
   'start_sorafs_gateway_request',
   'atomic_if',
   'forward',
-  'd242d927ba1de0719a636e6a083ae45d721e5ce015f0363ea772559be83257c1'),
+  'd79896a5d83684161bb0b48c9df55427d92d7e03cc65c67ad54718adce9f9c58'),
  ('Telemetry',
   'finish_sorafs_gateway_request',
   'atomic_if',
@@ -362,7 +362,7 @@ EXPECTED_ROWS = (('StateTelemetry',
   'record_sorafs_gateway_proof_verification',
   'atomic_if',
   'explicit',
-  'ac6482955f2129104377ad81452680fa07ec390bf9192fa8338e7257f97c4674'),
+  '5b8386965dac90e1a3f6fcde95aaf9ba9f615563f92fbe1ff4a6184d58e36dd2'),
  ('Telemetry',
   'record_sorafs_chunk_range',
   'atomic_if',
@@ -553,9 +553,9 @@ EXPECTED_ROWS = (('StateTelemetry',
   'atomic_if',
   'explicit',
   '694f24a9b84a4db0604675decfce44ccbfce39b6f49b0a43831bfdb57a556c87'))
-EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (122, '5884fd093625ff4ad84772890379e6bb98535909e9fe9d849529746d787b7ed9'),
+EXPECTED_PUBLIC_METHODS = {'StateTelemetry': (119, '3e8e29fe21bdca8311b53d8ace74f88f2e847c8238935f602a4e9f4556a81024'),
  'StreamingTelemetry': (16, 'e3c87c4656bea8817ad977df0211c5505d70dd214e8b1c34527a80cfd09dad46'),
- 'Telemetry': (120, '1e698a448c872aa988e735f29a2a07169c4ff643ad3c0d26fedd58cee287f112')}
+ 'Telemetry': (121, '05c53ec2f50720bb11611b8c4524028b2f58a0571291842616fee832aa4a00f7')}
 
 RETIRED_CONSENSUS_VRF_METHODS = (
     "inc_vrf_commit_emitted",
@@ -567,6 +567,14 @@ RETIRED_CONSENSUS_VRF_METHODS = (
     "inc_vrf_no_participation_total",
     "inc_vrf_reject_by_reason",
 )
+# Retired with their features: the Halo2 verifier backend, public-lane reward
+# accounting and the runtime-upgrade provenance error type.
+RETIRED_FEATURE_METHODS = (
+    "set_halo2_runtime_config",
+    "record_public_lane_reward",
+    "record_runtime_upgrade_provenance_rejection",
+)
+RETIRED_METHODS = RETIRED_CONSENSUS_VRF_METHODS + RETIRED_FEATURE_METHODS
 
 EXPECTED_MACRO_HASHES = {'state_telemetry_enabled_metric_methods': '82bed9160ac70eee38046fc0e6b3f82af00dbe4391436eb5ac318a84b90833b2',
  'state_telemetry_enabled_metric_methods_early_return': '24eee9e3e063884f4ace2adf22a0f4893958f7d0e81ee089ce36dbc6ebe7238d',
@@ -998,11 +1006,11 @@ def _bind_macro_provider(source: str, provider: str) -> str:
 def validate_source(source: str, provider: str) -> dict[str, int]:
     expanded_source = _bind_macro_provider(source, provider)
     masked = _mask_non_code(expanded_source)
-    for method in RETIRED_CONSENSUS_VRF_METHODS:
+    for method in RETIRED_METHODS:
         direct = re.search(r"\bpub\s+fn\s+" + re.escape(method) + r"\b", masked)
         generated = re.search(r"\[\s*" + re.escape(method) + r"\s*\(", masked)
         if direct or generated:
-            raise GuardFailure(f"retired consensus-VRF method returned: {method}")
+            raise GuardFailure(f"retired telemetry method returned: {method}")
     for name, expected in EXPECTED_MACRO_HASHES.items():
         actual = _macro_digest(expanded_source, masked, name)
         if actual != expected:
@@ -1100,10 +1108,10 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
         self.assertEqual(observed["rows"], 106)
         self.assertEqual(observed["forward_rows"], 61)
 
-    def test_retired_consensus_vrf_methods_are_absent(self) -> None:
+    def test_retired_methods_are_absent(self) -> None:
         expanded = _bind_macro_provider(self.source, self.provider)
         masked = _mask_non_code(expanded)
-        for method in RETIRED_CONSENSUS_VRF_METHODS:
+        for method in RETIRED_METHODS:
             self.assertIsNone(
                 re.search(r"\bpub\s+fn\s+" + re.escape(method) + r"\b", masked),
                 method,
@@ -1164,6 +1172,16 @@ class TelemetryEnabledMetricMethodsGuardTest(unittest.TestCase):
                 self.source,
                 "[record_sorafs_fee_projection(provider: &str, fee: &Quantity);]",
                 "[record_sorafs_fee_projection(provider: &str, value: &Quantity);]",
+            )
+        )
+
+    def test_retired_method_reintroduction_is_rejected(self) -> None:
+        anchor = "    pub fn record_public_lane_slash(&self, lane_id: LaneId) {"
+        self.assert_rejected(
+            _replace_once(
+                self.source,
+                anchor,
+                "    pub fn record_public_lane_reward(&self, lane_id: LaneId) {}\n" + anchor,
             )
         )
 

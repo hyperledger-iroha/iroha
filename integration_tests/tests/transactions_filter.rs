@@ -19,10 +19,10 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
     let client = network.client();
     let alice_id_str = format!("{}", *iroha_test_samples::ALICE_ID);
     // Submit a tx (registering a dummy asset def) to ensure at least one Alice-authored tx exists
-    tokio::task::spawn_blocking({
+    iroha_test_network::read_on_dedicated_thread({
         let client = client.clone();
         move || {
-            let _ = client.submit(
+            client.submit(
                 Register::asset_definition({
                     let __asset_definition_id = AssetDefinitionId::derive_from_components(
                         DomainId::try_new("wonderland", "universal").unwrap(),
@@ -32,11 +32,11 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
                         __asset_definition_id.clone(),
                         "txfilter".to_owned(),
                         iroha_data_model::asset::AssetBalancePolicy::Global,
-                        None,
+                        Some(DomainId::try_new("wonderland", "universal").unwrap()),
                     )
                 }),
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            );
+            )
         }
     })
     .await?;
@@ -91,33 +91,19 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         ),
     ])
     .expect("serialize request envelope");
-    // POST to the endpoint
-    let url = client
-        .client()
-        .endpoint()
-        .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
-        .unwrap();
-    let http = integration_tests::http::client();
-    let resp = http
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .body(norito::json::to_json(&env).unwrap())
-        .send()
+    // The account facade signs the same native JSON collection envelope and
+    // preserves its filter tree while authenticating the exact URL and body.
+    let query: iroha::collections::ListQuery = norito::json::from_value(env)?;
+    let page = client
+        .account_client()
+        .list_page(
+            &iroha::collections::Collection::AccountTransactions(
+                iroha_test_samples::ALICE_ID.clone(),
+            ),
+            &query,
+        )
         .await?;
-    assert!(resp.status().is_success());
-    let txt = resp.text().await?;
-    let body: norito::json::Value = norito::json::from_str(&txt)?;
-    let items = match &body {
-        norito::json::Value::Object(m) => m
-            .get("items")
-            .and_then(|v| match v {
-                norito::json::Value::Array(a) => Some(a.clone()),
-                _ => None,
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let items = page.items;
     assert!(!items.is_empty(), "expected some transactions for Alice");
     for it in items {
         let auth: String = match it {

@@ -53,7 +53,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "ansi", "env-filter"] }
 log = "0.4.28"
 url.workspace = true
-strum = { workspace = true, features = ["derive", "std"] }
 thiserror = { workspace = true }
 hex = { workspace = true, features = ["std"] }
 soranet_pq = { workspace = true }

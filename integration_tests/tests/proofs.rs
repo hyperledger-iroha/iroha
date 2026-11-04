@@ -229,7 +229,11 @@ async fn submit_proof_and_query_record() -> Result<()> {
     let mut accepted = false;
     let mut submit_last_err: Option<Report> = None;
     for submit_client in &peer_clients {
-        match submit_client.submit_transaction(&tx) {
+        match submit_client
+            .account_client()
+            .submit_transaction(&tx)
+            .await
+        {
             Ok(_) => accepted = true,
             Err(err) if is_duplicate_tx_error(&err) => accepted = true,
             Err(err) if is_transient_client_error(&err) => {

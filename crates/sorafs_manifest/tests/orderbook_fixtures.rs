@@ -1,7 +1,5 @@
 #![allow(unexpected_cfgs)]
 //! Round-trip and cross-SDK outcome coverage for committed SoraFS orderbook fixtures.
-#[cfg(feature = "dev-tools")]
-use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     ORDERBOOK_CANCEL_VERSION_V1, ORDERBOOK_ORDER_VERSION_V1, ORDERBOOK_TRADE_EVENT_VERSION_V1,
     OrderCancelV1, OrderRequestV1, OrderbookValidationPayloadKindV1, SETTLEMENT_CHANNEL_VERSION_V1,
@@ -12,7 +10,10 @@ use sorafs_manifest::{
 };
 use std::fs;
 #[cfg(feature = "dev-tools")]
-use std::path::Path;
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
 #[cfg(feature = "dev-tools")]
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
@@ -25,7 +26,8 @@ fn read_fixture_bytes(name: &str) -> Vec<u8> {
 }
 #[cfg(feature = "dev-tools")]
 fn regenerate_fixtures(root: &Path) {
-    let output = cargo_bin_cmd!("generate_orderbook_fixtures")
+    let output = Command::new(env!("CARGO_BIN_EXE_generate_orderbook_fixtures"))
+        .stdin(Stdio::piped())
         .current_dir(root)
         .output()
         .expect("run deterministic orderbook fixture generator");

@@ -583,6 +583,14 @@ pub enum ToriiReadEndpointV1 {
     UaidManifestsQuery,
     /// `POST /v1/accounts/{account_id}/history/query`
     AccountHistoryQuery,
+    /// `GET /v1/roles`
+    RolesList,
+    /// `POST /v1/roles/query`
+    RolesQuery,
+    /// `GET /v1/accounts/{account_id}/roles`
+    AccountRolesGet,
+    /// `POST /v1/accounts/{account_id}/roles/query`
+    AccountRolesQuery,
 }
 /// Canonical routed read executed on an authoritative Torii peer.
 #[derive(norito::NoritoSchema)]
@@ -922,6 +930,10 @@ mod tests {
             (ToriiReadEndpointV1::AccountPermissionsQuery, 46),
             (ToriiReadEndpointV1::UaidManifestsQuery, 47),
             (ToriiReadEndpointV1::AccountHistoryQuery, 48),
+            (ToriiReadEndpointV1::RolesList, 49),
+            (ToriiReadEndpointV1::RolesQuery, 50),
+            (ToriiReadEndpointV1::AccountRolesGet, 51),
+            (ToriiReadEndpointV1::AccountRolesQuery, 52),
         ] {
             assert_eq!(torii_read_endpoint_wire_index(endpoint), expected);
         }

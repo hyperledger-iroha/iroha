@@ -20,6 +20,8 @@ use tokio::io::AsyncWriteExt;
 #[path = "integrity_windows.rs"]
 mod windows;
 
+mod hash_hex;
+
 const STATE_VERSION: u64 = 1;
 const STATE_FILE_PREFIX: &str = "telemetry_integrity_";
 const RECORD_HASH_DOMAIN: &[u8] = b"iroha.telemetry.record.v1";
@@ -286,12 +288,15 @@ impl ChainState {
 
             let mut chain = Map::new();
             chain.insert("seq".into(), Value::from(self.seq));
-            chain.insert("prev_hash".into(), Value::from(hex::encode(self.prev_hash)));
-            chain.insert("hash".into(), Value::from(hex::encode(hash)));
+            chain.insert(
+                "prev_hash".into(),
+                Value::from(hash_hex::encode(&self.prev_hash)),
+            );
+            chain.insert("hash".into(), Value::from(hash_hex::encode(&hash)));
             if let Some(signature) = signature {
                 chain.insert(
                     "signature".into(),
-                    Value::from(hex::encode(signature.as_bytes())),
+                    Value::from(hash_hex::encode(signature.as_bytes())),
                 );
                 if let Some(key_id) = self.config.signing_key_id.as_ref() {
                     chain.insert("key_id".into(), Value::from(key_id.clone()));
@@ -664,13 +669,16 @@ fn decode_hash(value: Option<&Value>, field: &str) -> Result<[u8; 32], String> {
     let encoded = value
         .and_then(Value::as_str)
         .ok_or_else(|| format!("state file missing {field}"))?;
-    let decoded =
-        hex::decode(encoded).map_err(|err| format!("state file {field} is not hex: {err}"))?;
-    decoded.try_into().map_err(|decoded: Vec<u8>| {
-        format!(
-            "state file {field} must be 32 bytes (got {})",
-            decoded.len()
-        )
+    hash_hex::decode(encoded).map_err(|error| match error {
+        hash_hex::DecodeError::Length(length) if length % 2 != 0 => {
+            format!("state file {field} is not hex: Odd number of digits")
+        }
+        hash_hex::DecodeError::Length(length) => {
+            format!("state file {field} must be 32 bytes (got {})", length / 2)
+        }
+        hash_hex::DecodeError::Digit(index) => {
+            format!("state file {field} is not hex: invalid hexadecimal digit at byte {index}")
+        }
     })
 }
 
@@ -859,10 +867,13 @@ fn encode_state_snapshot(
     map.insert("version".into(), Value::from(STATE_VERSION));
     map.insert(
         "sink_fingerprint".into(),
-        Value::from(hex::encode(sink_fingerprint)),
+        Value::from(hash_hex::encode(&sink_fingerprint)),
     );
     map.insert("seq".into(), Value::from(seq));
-    map.insert("prev_hash".into(), Value::from(hex::encode(prev_hash)));
+    map.insert(
+        "prev_hash".into(),
+        Value::from(hash_hex::encode(&prev_hash)),
+    );
     let pending_value = match pending_record {
         Some(bytes) => Value::String(
             std::str::from_utf8(bytes)
@@ -1030,9 +1041,41 @@ mod tests {
     #[test]
     fn record_hash_has_pinned_v1_domain() {
         assert_eq!(
-            hex::encode(compute_hash([0_u8; 32], 1, b"{}")),
+            hash_hex::encode(&compute_hash([0_u8; 32], 1, b"{}")),
             "515b5ddc5d0f355ddd99db1ee8d05d40dd0415c3be8ce7e295d0e98636e8404f"
         );
+    }
+
+    #[test]
+    fn state_hash_decoding_is_fixed_size_and_case_insensitive() {
+        let text = Value::from("aB".repeat(32));
+        assert_eq!(decode_hash(Some(&text), "prev_hash"), Ok([0xab; 32]));
+        assert_eq!(
+            decode_hash(None, "prev_hash"),
+            Err("state file missing prev_hash".to_owned())
+        );
+        assert_eq!(
+            decode_hash(Some(&Value::Null), "prev_hash"),
+            Err("state file missing prev_hash".to_owned())
+        );
+        for (text, reason) in [
+            ("0".repeat(63), "is not hex: Odd number of digits"),
+            ("0".repeat(66), "must be 32 bytes (got 33)"),
+            ("!".repeat(66), "must be 32 bytes (got 33)"),
+            (
+                format!("{}g", "0".repeat(63)),
+                "is not hex: invalid hexadecimal digit at byte 63",
+            ),
+            (
+                format!("é{}", "0".repeat(62)),
+                "is not hex: invalid hexadecimal digit at byte 0",
+            ),
+        ] {
+            assert_eq!(
+                decode_hash(Some(&Value::from(text)), "prev_hash"),
+                Err(format!("state file prev_hash {reason}"))
+            );
+        }
     }
 
     #[tokio::test]
@@ -1048,7 +1091,7 @@ mod tests {
             .and_then(Value::as_object)
             .expect("chain map");
         assert_eq!(first_chain.get("seq").and_then(Value::as_u64), Some(1));
-        let expected_hash_hex = hex::encode(expected_hash);
+        let expected_hash_hex = hash_hex::encode(&expected_hash);
         assert_eq!(
             first_chain.get("hash").and_then(Value::as_str),
             Some(expected_hash_hex.as_str())
@@ -1124,7 +1167,7 @@ mod tests {
             .get("chain")
             .and_then(Value::as_object)
             .expect("chain map");
-        let signature_hex = hex::encode(blake3::keyed_hash(&key, &hash).as_bytes());
+        let signature_hex = hash_hex::encode(blake3::keyed_hash(&key, &hash).as_bytes());
         assert_eq!(
             chain_map.get("signature").and_then(Value::as_str),
             Some(signature_hex.as_str())

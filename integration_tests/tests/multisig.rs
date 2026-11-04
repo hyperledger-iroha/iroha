@@ -11,7 +11,7 @@ use iroha::{
         MultisigProposalEntry, MultisigProposalsQueryRequest, MultisigProposalsResolveRequest,
     },
     config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
-    crypto::{ExposedPrivateKey, KeyPair},
+    crypto::{ExposedPrivateKey, KeyPair, Signature},
     data_model::{
         Level,
         account::{MultisigMember, MultisigPolicy},
@@ -25,18 +25,21 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{
-    ALICE_ID, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, gen_account_in,
 };
 use iroha_torii::{
+    HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method,
     MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsQueryRequestDto,
-    MultisigProposalsResolveRequestDto,
+    MultisigProposalsResolveRequestDto, Uri, canonical_network_request_signature_message,
+    signature_header_value,
 };
 use norito::json::Value as JsonValue;
 use reqwest::header::CONTENT_TYPE;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
-    time::{Duration, Instant},
+    sync::atomic::{AtomicU64, Ordering},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::runtime::Runtime;
 const DOMAIN_REGISTRATION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -294,16 +297,81 @@ fn canonical_multisig_account_id(spec: &MultisigSpec) -> AccountId {
         MultisigPolicy::new(spec.quorum.get(), members).expect("multisig policy should derive");
     AccountId::new_multisig(policy)
 }
+fn fund_runtime_signers(
+    client: &Client,
+    accounts: impl IntoIterator<Item = AccountId>,
+) -> Result<()> {
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()?;
+    let funding_asset = AssetId::new(fee_asset_definition, ALICE_ID.clone());
+    client
+        .submit_all(
+            accounts
+                .into_iter()
+                .map(|id| Transfer::asset_quantity(funding_asset.clone(), 100u32, id)),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .wrap_err("fund multisig runtime signers for transaction fees")?;
+    Ok(())
+}
+fn quoted_transaction(
+    client: &Client,
+    instructions: impl IntoIterator<Item = InstructionBox>,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        instructions,
+        FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = client
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    eyre::ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "multisig transaction fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    account.sign_transaction(payload).map_err(Into::into)
+}
 fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
     rt: &Runtime,
+    client: &Client,
+    key_pair: &KeyPair,
     endpoint: &str,
     body: &T,
 ) -> Result<JsonValue> {
+    static REQUEST_NONCE: AtomicU64 = AtomicU64::new(0);
     let payload = norito::json::to_vec(body)?;
+    let url = reqwest::Url::parse(endpoint)?;
+    let uri: Uri = match url.query() {
+        Some(query) => format!("{}?{query}", url.path()).parse()?,
+        None => url.path().parse()?,
+    };
+    let timestamp_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
+    let nonce = format!(
+        "multisig-fixture-{timestamp_ms}-{}",
+        REQUEST_NONCE.fetch_add(1, Ordering::Relaxed),
+    );
+    let message = canonical_network_request_signature_message(
+        client.client().network_id(),
+        &Method::POST,
+        &uri,
+        &payload,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature = Signature::try_new(key_pair.private_key(), &message)?;
+    let account_header = client.account_client().authority().to_canonical_hex()?;
     let response_body = rt.block_on(async {
         let response = integration_tests::http::client()
             .post(endpoint)
             .header(CONTENT_TYPE, "application/json")
+            .header(HEADER_ACCOUNT, account_header)
+            .header(HEADER_SIGNATURE, signature_header_value(&signature)?)
+            .header(HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+            .header(HEADER_NONCE, nonce)
             .body(payload)
             .send()
             .await?;
@@ -320,6 +388,8 @@ fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
 }
 fn wait_for_multisig_proposal_status(
     rt: &Runtime,
+    client: &Client,
+    key_pair: &KeyPair,
     torii_base: &str,
     selector: &MultisigAccountSelectorDto,
     proposal_id: &str,
@@ -332,6 +402,8 @@ fn wait_for_multisig_proposal_status(
     while Instant::now() < deadline {
         match post_torii_app_json(
             rt,
+            client,
+            key_pair,
             &endpoint,
             &MultisigProposalsResolveRequestDto {
                 selector: selector.clone(),
@@ -566,6 +638,8 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .clone();
     let propose_cancel = post_torii_app_json(
         &rt,
+        &alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client),
+        &BOB_KEYPAIR,
         &format!("{torii_base}/v1/multisig/cancel"),
         &MultisigCancelRequestDto {
             selector: selector.clone(),
@@ -632,6 +706,8 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .wrap_err("submit cancel wrapper approval for cancel route test")?;
     let canceled = wait_for_multisig_proposal_status(
         &rt,
+        &test_client,
+        &ALICE_KEYPAIR,
         &torii_base,
         &selector,
         &target_id.to_string(),
@@ -651,6 +727,8 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
     );
     let canceled_query = post_torii_app_json(
         &rt,
+        &test_client,
+        &ALICE_KEYPAIR,
         &format!("{torii_base}/v1/multisig/proposals/query"),
         &MultisigProposalsQueryRequestDto {
             selector,
@@ -1004,6 +1082,10 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
         materialized.controller().single_signatory().is_some(),
         "materialized signatory must remain a single-key authority"
     );
+    fund_runtime_signers(
+        &test_client,
+        [existing_signer.0.clone(), missing_signer.0.clone()],
+    )?;
     let multisig_account_id = canonical_multisig_account_id(&spec);
     let marker: Name = "materialized_author_marker".parse().unwrap();
     let marker_value = Json::new("materialized-approved");
@@ -1023,19 +1105,9 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
         multisig_account_id.clone(),
         nonce,
         instructions.clone(),
-        None,
+        NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS),
     );
-    let proposal_tx = {
-        let account = proposer_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                core::iter::once::<InstructionBox>(propose.into()),
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let proposal_tx = quoted_transaction(&proposer_client, [propose.into()])?;
     assert_eq!(
         proposal_tx.authority().subject_id(),
         missing_signer.0.subject_id(),
@@ -1062,17 +1134,7 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
     let approver_client = alt_client(existing_signer.clone(), &test_client);
     let approve: InstructionBox =
         MultisigApprove::new(multisig_account_id.clone(), proposal_id, instructions_hash).into();
-    let approve_tx = {
-        let account = approver_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                core::iter::once::<InstructionBox>(approve),
-                FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let approve_tx = quoted_transaction(&approver_client, [approve])?;
     assert_eq!(
         approve_tx.authority().subject_id(),
         existing_signer.0.subject_id(),
@@ -1135,6 +1197,7 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let register = MultisigRegister::with_account(seed_account, domain.clone(), spec);
+    fund_runtime_signers(&test_client, [non_signatory.0.clone()])?;
     alt_client(non_signatory, &test_client)
         .submit::<InstructionBox>(
             register.into(),
@@ -1240,6 +1303,7 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     let register = MultisigRegister::with_account(seed_account, domain.clone(), spec);
+    fund_runtime_signers(&test_client, [non_signatory.0.clone()])?;
     alt_client(non_signatory, &test_client)
         .submit::<InstructionBox>(
             register.into(),
@@ -1290,8 +1354,32 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         find_account(&test_client, &missing_signer.0)?.is_none(),
         "precondition: missing signatory must not exist"
     );
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit::<InstructionBox>(
-        AddSignatory::new(multisig_account_id, missing_signer.1.public_key().clone()).into(),
+    // Domain ownership does not authorize controller mutation. The existing
+    // one-of-one member proposes and approves the exact AddSignatory instruction.
+    fund_runtime_signers(&test_client, [existing_signer.0.clone()])?;
+    let signer_client = alt_client(existing_signer, &test_client);
+    let instructions = vec![
+        AddSignatory::new(
+            multisig_account_id.clone(),
+            missing_signer.1.public_key().clone(),
+        )
+        .into(),
+    ];
+    let instructions_hash = HashOf::new(&instructions);
+    let nonce = proposal_nonce(1);
+    let proposal_id = occurrence(&test_client, &multisig_account_id, nonce);
+    signer_client.submit::<InstructionBox>(
+        MultisigPropose::new(
+            multisig_account_id.clone(),
+            nonce,
+            instructions,
+            NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS),
+        )
+        .into(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    signer_client.submit::<InstructionBox>(
+        MultisigApprove::new(multisig_account_id, proposal_id, instructions_hash).into(),
         FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let created_via_key: Name = "iroha:created_via".parse().unwrap();

@@ -63,6 +63,11 @@ RELEASE_GATE_COMMAND = (
     "cargo nextest run --profile release-gate --locked --offline --no-tests=fail"
 )
 RELEASE_GATE_BUILD = "cargo build --locked --offline --workspace"
+# Complete workspace test routes compile Torii fixtures and the `dev-tools` executables
+# whose unit tests live in the binary (release publisher, Python delivery helper).
+WORKSPACE_TEST_FEATURES = (
+    "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
+)
 RELEASE_GATE_BUILD_STEP = "- name: Build the full workspace"
 DIAGNOSTIC_CONDITION = (
     "    if: ${{ github.event_name == 'schedule' || inputs.run_diagnostics }}"
@@ -687,10 +692,11 @@ def _validate_release_workflow(workflow: str, nextest_config: str | None = None)
             "name: workspace-release-compile-units",
             f"path: {COMPILE_UNIT_REPORT}",
             "if-no-files-found: error",
-            "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+            "cargo test --locked --workspace --no-fail-fast --features " + WORKSPACE_TEST_FEATURES,
         ),
         "coverage": (
-            "mold --run cargo llvm-cov nextest --workspace --locked --features iroha_torii/test-fixtures --branch --no-report",
+            "mold --run cargo llvm-cov nextest --workspace --locked --features "
+            + WORKSPACE_TEST_FEATURES + " --branch --no-report",
             "mold --run cargo llvm-cov --doc --branch --no-report",
             "cargo llvm-cov report --doctests --ignore-filename-regex "
             "'iroha_cli|iroha_torii' --lcov --output-path lcov.info",
@@ -885,6 +891,9 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
             "TEST_NETWORK_BIN_IROHA: bins/iroha",
             "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes",
+            "KAGAMI_BIN: ${{ github.workspace }}/bins/kagami",
+            "TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli",
+            'RUST_TEST_THREADS: "1"',
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" --checks clippy,build,test,doc',
         ),
@@ -1550,10 +1559,11 @@ ReleaseMutation = Callable[[str], str]
         (
             lambda workflow: _replace_once(
                 workflow,
-                "cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
-                "cargo test --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+                "cargo test --locked --workspace --no-fail-fast --features " + WORKSPACE_TEST_FEATURES,
+                "cargo test --workspace --no-fail-fast --features " + WORKSPACE_TEST_FEATURES,
             ),
-            "test is missing required command: cargo test --locked --workspace --no-fail-fast --features iroha_torii/test-fixtures",
+            "test is missing required command: cargo test --locked --workspace --no-fail-fast --features "
+            + WORKSPACE_TEST_FEATURES,
         ),
         (
             lambda workflow: _replace_once_in_job(

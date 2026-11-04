@@ -1106,7 +1106,13 @@ fn an_explicit_fold_resumes_a_background_turn_that_ended_idle_during_its_proof()
     owner.scheduler.set_activity(true, false);
     let folding = thread::spawn(move || fold(id));
     started(&entered);
-    // The worker starts while the explicit sub-proof proves; its turn ends idle and parks.
+    // The explicit call's retry starts a discovery pass while background folding is
+    // disabled. Let that pass park before activity enables folding, so its wake cannot
+    // overlap the activity event and create two background turns in this fixture.
+    wait(&owner, |state| {
+        turns.load(Ordering::SeqCst) == 1 && !state.enabled && !state.running && !state.wake
+    });
+    // The worker folds while the explicit sub-proof proves; its turn ends idle and parks.
     activity(id, true, false).unwrap();
     wait(&owner, |state| {
         turns.load(Ordering::SeqCst) == 2 && !state.running && !state.wake

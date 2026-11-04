@@ -1,5 +1,4 @@
 //! Liquidity haircut tiers applied to conversion results.
-use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
@@ -9,28 +8,32 @@ use norito::{
     Clone,
     Copy,
     Debug,
-    Display,
     Eq,
     PartialEq,
     NoritoSerialize,
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
-    From,
 )]
 #[norito(tag = "profile", content = "value")]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "settlement_router::haircut::LiquidityProfile")]
 pub enum LiquidityProfile {
     /// Deep pools with negligible slippage.
-    #[display("tier1-deep")]
     Tier1,
     /// Medium depth pools with moderate slippage.
-    #[display("tier2-medium")]
     Tier2,
     /// Thin pools or credit-constrained venues.
-    #[display("tier3-thin")]
     Tier3,
+}
+impl core::fmt::Display for LiquidityProfile {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Tier1 => "tier1-deep",
+            Self::Tier2 => "tier2-medium",
+            Self::Tier3 => "tier3-thin",
+        })
+    }
 }
 impl LiquidityProfile {
     /// Return the default haircut in basis points for the profile.

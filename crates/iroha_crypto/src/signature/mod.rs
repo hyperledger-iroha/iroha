@@ -28,7 +28,6 @@ use crate::{
     error::ParseError, hex_decode,
 };
 use core::marker::PhantomData;
-use derive_more::{Deref, DerefMut};
 use iroha_primitives::const_vec::ConstVec;
 use iroha_schema::{IntoSchema, TypeId};
 use norito::core::{self as ncore, DecodeFromSlice};
@@ -37,23 +36,27 @@ use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use std::{cell::RefCell, format, string::String, vec, vec::Vec};
 use zeroize::Zeroize;
 /// Represents a signature of the data (`Block` or `Transaction` for example).
-#[derive(
-    Clone,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    getset::Getters,
-    derive_more::Debug,
-    Hash,
-    IntoSchema,
-    norito::NoritoSchema,
-)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_crypto::signature::Signature")]
 #[repr(transparent)]
-#[debug("{{ {} }}", hex::encode_upper(payload))]
 pub struct Signature {
     payload: ConstVec<u8>,
+}
+impl core::fmt::Debug for Signature {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str("{ ")?;
+        // Public signature bytes can be large; keep formatting scratch space bounded.
+        let mut buffer = [0; 256];
+        for chunk in self.payload.chunks(buffer.len() / 2) {
+            let encoded = &mut buffer[..chunk.len() * 2];
+            hex::encode_to_slice(chunk, encoded)
+                .expect("signature hex buffer has exactly twice the chunk length");
+            encoded.make_ascii_uppercase();
+            let text = core::str::from_utf8(encoded).expect("hex encoding contains only ASCII");
+            f.write_str(text)?;
+        }
+        f.write_str(" }")
+    }
 }
 
 impl Zeroize for Signature {
@@ -677,15 +680,24 @@ impl<T> From<SignatureOf<T>> for Signature {
 /// Represents signature of the data (`Block` or `Transaction` for example).
 // Lint triggers when expanding #[codec(skip)]
 #[allow(clippy::default_trait_access, clippy::unsafe_derive_deserialize)]
-#[derive(Deref, DerefMut, TypeId)]
+#[derive(TypeId)]
 // Transmute guard
 #[repr(transparent)]
-pub struct SignatureOf<T>(
-    #[deref]
-    #[deref_mut]
-    Signature,
-    PhantomData<T>,
-);
+pub struct SignatureOf<T>(Signature, PhantomData<T>);
+impl<T> core::ops::Deref for SignatureOf<T> {
+    type Target = Signature;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T> core::ops::DerefMut for SignatureOf<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl<T> core::fmt::Debug for SignatureOf<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple(core::any::type_name::<Self>())

@@ -168,8 +168,8 @@ FAMILIES = {
                 )
             ),
         ),
-        definition_sha256="24d376896f5fa3e44528fe6722f5956f600eba827fed648e085fd0ffa44bd024",
-        expanded_preimage_sha256="926c35fed300911fe3aab9f0dff9406d94cd0dc662994fd26039e8fce61d3812",
+        definition_sha256="4fe7a3331c189dd34d7c0f9d71ae3fd173b9b7427444ffdc4dc5ad8a122459ea",
+        expanded_preimage_sha256="d24c938c165789a9a074c4b353a919eb27236a13fb6d403e03c0d7e5d7ac7ea2",
     ),
     "iso_lifecycle_submission_handlers": WrapperFamily(
         parameters=("handler", "message_type", "access_context"),
@@ -215,8 +215,8 @@ FAMILIES = {
                 )
             ),
         ),
-        definition_sha256="9409d24394be2a627a2e56e48de200716f229a13f89bfc88ea3603def166dc54",
-        expanded_preimage_sha256="da365df6755156153cc52f91597e7ce091588bffeab679331ece77e6d39d40be",
+        definition_sha256="8d95369a3e4de9ab365e771fcb811cfe435b61d9f1234fd0b34965714eb1ed0e",
+        expanded_preimage_sha256="2842691b643229adfd84cd70724446b8727f7dec95fb6870d0f753500eb261a8",
     ),
 }
 
@@ -229,8 +229,8 @@ ROUTE_MACRO_DEFINITION_SHA256 = {
 }
 ROUTE_POLICY_DECLARATIONS_SHA256 = "c9cd5d54a3818e070e662a1406ee781198ed4ab41411acb583a8c475bdfae006"
 ROUTE_POLICY_NAMES = ('canonical_account_delete', 'canonical_account_get', 'canonical_account_proof_get', 'canonical_account_post', 'canonical_account_proof_post', 'canonical_signature_delete', 'canonical_signature_get', 'optional_canonical_signature_get', 'canonical_signature_post', 'canonical_signed_post', 'layered_canonical_account_post', 'layered_canonical_signature_get', 'layered_canonical_signature_post', 'layered_canonical_signed_post', 'layered_public_get', 'limited_canonical_account_get', 'limited_canonical_account_post', 'limited_canonical_signature_post', 'limited_optional_canonical_signature_post', 'limited_canonical_signed_post', 'limited_hardened_canonical_signature_get', 'limited_operator_get', 'limited_operator_post', 'limited_protocol_handshake_get', 'limited_protocol_handshake_post', 'limited_public_get', 'limited_unauthenticated_get', 'limited_public_post', 'private_root_owner_get', 'onboarding_get', 'onboarding_post', 'operator_credential_post', 'operator_delete', 'operator_get', 'operator_post', 'protocol_handshake_post', 'public_get', 'public_post', 'unauthenticated_any', 'unauthenticated_get')
-ROUTE_ROW_COUNT = 599
-ROUTE_TUPLE_SHA256 = "e64d1c7ce3e93b8506f9c390c457070de131023d2b755b23cd7a8654c1c58652"
+ROUTE_ROW_COUNT = 617
+ROUTE_TUPLE_SHA256 = "ba1cb33ebe54e351f7ad871321e59223a2e7f13a1360acaba0080ea73716d94c"
 
 
 def _normalized_tokens(source: str) -> bytes:
@@ -1037,14 +1037,23 @@ class ToriiWrapperMacroInventoryTest(unittest.TestCase):
     def test_canonical_wallet_issuance_is_an_exact_signed_read(self) -> None:
         descriptor = "route_catalog::contracts_and_verification_keys::KAGEMUSHA_LOAD_ISSUANCE_GET"
         rows = [row for row in _route_table_rows(self.source) if row[2] == descriptor]
+        # Zero-byte canonical-account middleware verifies the signed request
+        # and consumes its nonce before the handler runs.
         self.assertEqual(rows, [(
             'feature="app_api"', "GET", descriptor, "kagemusha_wallet::handler",
-            "none", "handler:CanonicalAccountSignature",
+            "max(0);auth(0)", "canonical-account(app_state.clone())",
         )])
-        mount = "KAGEMUSHA_LOAD_ISSUANCE_GET => canonical_signature_get(kagemusha_wallet::handler)"
+        mount = (
+            "KAGEMUSHA_LOAD_ISSUANCE_GET => "
+            "limited_canonical_account_get(kagemusha_wallet::handler, app_state, 0, 0)"
+        )
         self.assertEqual(self.source.count(mount), 1)
         for changed in (
-            mount.replace("canonical_signature_get", "sdk_get"),
+            mount.replace(
+                "limited_canonical_account_get(kagemusha_wallet::handler, app_state, 0, 0)",
+                "limited_public_get(kagemusha_wallet::handler, 0)",
+            ),
+            mount.replace("app_state, 0, 0", "app_state, 1, 0"),
             mount.replace("kagemusha_wallet::handler", "handler_contracts_get"),
         ):
             with self.subTest(changed=changed):

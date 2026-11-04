@@ -104,6 +104,11 @@ pub enum Collection {
     Rwas,
     /// Balances held by one account: `/v1/accounts/{account_id}/assets`.
     AccountAssets(AccountId),
+    /// Stored role definitions: `/v1/roles`; requires `CanReadAllLedgerData`.
+    Roles,
+    /// Exact assignments: `/v1/accounts/{account_id}/roles`; requires the account's
+    /// signature, `CanReadAccountData`, or `CanReadAllLedgerData`.
+    AccountRoles(AccountId),
     /// Effective permissions of one account: `/v1/accounts/{account_id}/permissions`.
     AccountPermissions(AccountId),
     /// Accounts holding one asset definition: `/v1/assets/{definition_id}/holders`.
@@ -171,6 +176,8 @@ impl Collection {
             Self::Nfts => "nfts",
             Self::Rwas => "rwas",
             Self::AccountAssets(_) => "account_assets",
+            Self::Roles => "roles",
+            Self::AccountRoles(_) => "account_roles",
             Self::AccountPermissions(_) => "account_permissions",
             Self::AssetHolders(_) => "asset_holders",
             Self::Transactions => "transactions",
@@ -208,6 +215,8 @@ impl Collection {
             Self::Nfts => "/v1/nfts",
             Self::Rwas => "/v1/rwas",
             Self::AccountAssets(_) => "/v1/accounts/{account_id}/assets",
+            Self::Roles => "/v1/roles",
+            Self::AccountRoles(_) => "/v1/accounts/{account_id}/roles",
             Self::AccountPermissions(_) => "/v1/accounts/{account_id}/permissions",
             Self::AssetHolders(_) => "/v1/assets/{definition_id}/holders",
             Self::Transactions => "/v1/transactions",
@@ -337,6 +346,8 @@ impl Collection {
             Self::Nfts => "collections.nfts",
             Self::Rwas => "collections.rwas",
             Self::AccountAssets(_) => "collections.account_assets",
+            Self::Roles => "collections.roles",
+            Self::AccountRoles(_) => "collections.account_roles",
             Self::AccountPermissions(_) => "collections.account_permissions",
             Self::AssetHolders(_) => "collections.asset_holders",
             Self::Transactions => "collections.transactions",
@@ -406,6 +417,10 @@ impl Collection {
                 Cow::Owned(definition.to_string()),
                 "holders".into(),
             ],
+            Self::Roles => vec!["v1".into(), "roles".into()],
+            Self::AccountRoles(id) => {
+                vec!["v1".into(), "accounts".into(), account(id)?, "roles".into()]
+            }
             Self::AccountPermissions(id) => vec![
                 "v1".into(),
                 "accounts".into(),
@@ -805,6 +820,18 @@ mod tests {
                 "explorer_instructions_latest",
                 "/v1/explorer/instructions/latest",
                 "/v1/explorer/instructions/latest".to_owned(),
+            ),
+            (
+                Collection::Roles,
+                "roles",
+                "/v1/roles",
+                "/v1/roles".to_owned(),
+            ),
+            (
+                Collection::AccountRoles(account.clone()),
+                "account_roles",
+                "/v1/accounts/{account_id}/roles",
+                format!("/v1/accounts/{literal}/roles"),
             ),
             (
                 Collection::AccountPermissions(account.clone()),

@@ -6,7 +6,7 @@ adjacent parliament_ballot_arena_backend.py for its independently reviewed
 profile_trace. No verifier, build, network request or production mutation runs.
 Default output is JSON on stdout; --output explicitly saves it.
 
-Events describe pinned Rust 1.93.1 Vec/GlobalAlloc source semantics, not a
+Events describe pinned Rust 1.99.1 Vec/GlobalAlloc source semantics, not a
 machine-code trace, stack certificate or exhaustive byte-level decoder. Caller
 establishes that a chosen rejection boundary is reached. Backend rejection and
 success have the same caller-owned suffix. Allocator/runtime failure, panic,
@@ -47,7 +47,7 @@ FRONT_SOURCE_PATHS = (
     "rust-toolchain.toml",
 )
 # Source review pin, not a compiled-binary or dependency-closure certificate.
-REVIEWED_SOURCE_SHA256 = "886945d9dc7d026ccc158fadcdaeb963d8de9143dc05fd77f1fd70a48cf18d18"
+REVIEWED_SOURCE_SHA256 = "7e92e75caf19f2e3fc9f68b5f2207f7e97cd87d255fa86140d9373fcf95b6a35"
 
 
 def source_inventory(repo: Path = ROOT) -> dict:
@@ -73,7 +73,7 @@ def trace_assumptions() -> dict:
         "complete_arena_certificate": False,
         "complete_workspace_certificate": False,
         "profile_qualified": False,
-        "policy": "Rust 1.93.1, 64-bit usize, default GlobalAlloc realloc allocates new before freeing old",
+        "policy": "Rust 1.99.1, 64-bit usize, default GlobalAlloc realloc allocates new before freeing old",
         "layouts": "u8 and Commitment([u8;128]) align1; borrowed slice size16 align8",
         "vec_policy": "with_capacity/to_vec/TrustedLen collect reserve exact count; extend_from_slice doubles or satisfies required capacity with minimum8 for u8",
         "drop_order": "operands reverse creation before aggregate completion; complete struct fields declaration order; locals reverse declaration",

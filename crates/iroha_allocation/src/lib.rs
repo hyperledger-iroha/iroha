@@ -580,8 +580,14 @@ impl AllocationBudget {
 
     /// Observe credits currently held by prepaid or allocated owners.
     /// This snapshot is diagnostic and grants no allocation permission.
+    ///
+    /// Inside this thread's [`Self::with_attempt_credits`] scope, credits the
+    /// attempt kept count as available: only this thread's reservations spend them.
     pub fn reserved_bytes(&self) -> usize {
-        self.pool.reserved.load(Ordering::Acquire)
+        let reserved = self.pool.reserved.load(Ordering::Acquire);
+        AttemptCreditScope::innermost(&self.pool).map_or(reserved, |scope| {
+            reserved.saturating_sub(scope.credits.get())
+        })
     }
 
     /// Admit an original movable scope before acquiring any physical writer.
@@ -656,7 +662,9 @@ impl AllocationBudget {
     /// credit, sequence or deferred wake of the attempt's own releases, its
     /// rollback included, reaches the pool, so a capacity refusal's release
     /// observation can be satisfied only by another owner's release. The attempt
-    /// therefore holds its peak demand until it ends. `retained` credits of the
+    /// therefore holds its peak demand until it ends; inside the scope,
+    /// [`Self::reserved_bytes`] and capacity refusals count its kept credits as
+    /// available. `retained` credits of the
     /// same job's earlier attempt seed the scope; credits of another pool are
     /// first returned to that pool.
     ///
@@ -780,7 +788,7 @@ impl AllocationBudget {
                 limit_bytes: limit,
             });
         }
-        // An attempt spends credits its own rollback retained before the pool's.
+        // An attempt spends the credits it kept before the pool's.
         let attempt = AttemptCreditScope::innermost(&self.pool);
         let retained = attempt.map_or(0, |scope| scope.credits.get());
         if let Some(scope) = attempt
@@ -801,7 +809,8 @@ impl AllocationBudget {
             if needed > limit.saturating_sub(reserved) {
                 return Err(AllocationRefusal::Capacity {
                     requested_bytes: bytes,
-                    reserved_bytes: reserved,
+                    // The same view as `reserved_bytes`: kept credits are available here.
+                    reserved_bytes: reserved.saturating_sub(retained),
                     limit_bytes: limit,
                     release,
                 });
@@ -987,7 +996,7 @@ impl Drop for AllocationReservation {
     }
 }
 
-/// Original-pool credits a refused attempt kept from its own rollback.
+/// Original-pool credits a refused attempt kept from its own refunds, rollback included.
 ///
 /// They stay reserved in the pool, so retaining them cannot wake the attempt's
 /// own refusal. Pass them to the same job's next

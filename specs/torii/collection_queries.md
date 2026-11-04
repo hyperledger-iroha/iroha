@@ -2,7 +2,7 @@
 
 Every Torii collection (domains, accounts, asset definitions, NFTs, RWA lots,
 account assets, asset holders, transactions, account transactions, repo
-agreements, effective account permissions, subscription plans, subscriptions,
+agreements, stored roles, account role assignments, effective account permissions, subscription plans, subscriptions,
 and UAID manifests) is read with one query language and returns one page envelope. The same language is
 used by the SDKs, the `iroha` CLI and the event-stream `filter` parameter.
 The Rust reference implementation is
@@ -37,6 +37,8 @@ Design rules:
 | transactions | — | `POST /v1/transactions/query` |
 | account transactions | `GET /v1/accounts/{account_id}/transactions` | `POST /v1/accounts/{account_id}/transactions/query` |
 | repo agreements | `GET /v1/repo/agreements` | `POST /v1/repo/agreements/query` |
+| roles | `GET /v1/roles` | `POST /v1/roles/query` |
+| account roles | `GET /v1/accounts/{account_id}/roles` | `POST /v1/accounts/{account_id}/roles/query` |
 | account permissions | `GET /v1/accounts/{account_id}/permissions` | `POST /v1/accounts/{account_id}/permissions/query` |
 | subscription plans | `GET /v1/subscriptions/plans` | `POST /v1/subscriptions/plans/query` |
 | subscriptions | `GET /v1/subscriptions` | `POST /v1/subscriptions/query` |
@@ -292,6 +294,8 @@ absent.
 | asset holders | `id` (the partition's canonical asset literal `<definition>#<account>[#dataspace:<id>]`), `account_id`, `asset`, `asset_alias`, `scope` (strings, *sort*), `quantity` (decimal, *sort*) | `id` (holder account, then scope) |
 | transactions, account transactions | `entrypoint_hash`, `block_hash`, `authority` (string or null), `entrypoint_kind` (strings), `block_height`, `block_index`, `timestamp_ms` (number or null) (numbers), `result_ok` (bool), `asset_ids`, `asset_definition_ids` (lists of strings), `metadata.*` | newest first |
 | repo agreements | `id`, `initiator`, `counterparty`, `custodian`, `status`, `cash_source`, `cash_leg.asset_definition_id`, `collateral_leg.asset_definition_id`, `collateral_custody_asset` (strings, *sort*), `cash_leg.quantity`, `collateral_leg.quantity` (decimals, *sort*), `rate_bps`, `maturity_timestamp_ms`, `initiated_timestamp_ms`, `last_margin_check_timestamp_ms`, `settlement_timestamp_ms`, `governance.haircut_bps`, `governance.margin_frequency_secs` (numbers, *sort*), `governance.allow_early_repayment` (bool) | `id` |
+| roles | `id` (string, *sort*), `permissions` (JSON); exact stored permission set | `id` |
+| account roles | `id` (string, *sort*); exact assigned role identity | `id` |
 | account permissions | `name` (string, *sort*), `payload` (JSON); effective grants include direct and role permissions, deduplicated by name and payload | `name`, `payload` |
 | subscription plans | `id`, `provider` (strings, *sort*), `billing`, `pricing` (JSON) | `id` |
 | subscriptions | `id`, `owned_by`, `plan_id`, `provider`, `subscriber`, `status`, `billing_trigger_id` (strings, *sort*), `current_period_start_ms`, `current_period_end_ms`, `next_charge_ms`, `cancel_at_ms`, `failure_count` (numbers, *sort*), `cancel_at_period_end` (bool), `usage_accumulated`, `invoice`, `plan` (JSON) | `id` |
@@ -302,6 +306,15 @@ absent.
 | bond entitlements | `id` (`<index>:<holder>`), `bond`, `holder` (strings, *sort*), `index`, `claimed_at_ms` (number or null) (numbers, *sort*), `units`, `amount` (decimals, *sort*), `claimed` (bool) | `id` (cash flow, then holder) |
 | asset movements | `id` (`<tx_hash>:<movement_index>`), `kind` (`TRANSFER`, `MINT`, `BURN`, `OFFLINE_LOAD`, `OFFLINE_UNLOAD`, `OFFLINE_FEE`, `OFFLINE_CHARGE`), `asset_definition_id`, `tx_hash`, `authority`, `from_account_id` (string or null for `MINT`), `to_account_id` (string or null for `BURN`) (strings), `timestamp_ms`, `block_height`, `block_index`, `movement_index` (numbers), `amount` (decimal), `result_ok` (bool) | newest chain position first, then descending movement index |
 | contract events | `event_id`, `provenance` (always `emitted`), `authority`, `execution_hash_hex`, `block_hash_hex`, `contract_address`, `event_kind` (strings), `schema_version`, `timestamp_ms`, `block_height`, `output_index`, `emission_index` (numbers), `result_ok` (always true), `participants`, `asset_ids` (lists of strings), `numeric_fields`, `payload`, `emission`, `fee_payment` (JSON) | descending `block_height`, `output_index`, `emission_index` |
+
+Stored role reads require canonical account authentication and `CanReadAllLedgerData`.
+Account-role reads require the target account itself, an exact `CanReadAccountData`
+grant, or `CanReadAllLedgerData`; public data space visibility alone does not disclose
+assignments. The authoritative peer rechecks the current grant and exact target.
+Both sources seek their ordered State indexes and share collection scan, row-byte,
+response and cursor limits. Account-role cursors bind the canonical account as well
+as the filter and ordering. Role rows preserve stored permissions; the separate
+account-permissions collection returns their effective union with direct grants.
 
 Subscription status is a lower-case string (`active`, `paused`, `past_due`,
 `canceled`, `suspended`). Manifest status is `Pending`, `Active`, `Expired` or

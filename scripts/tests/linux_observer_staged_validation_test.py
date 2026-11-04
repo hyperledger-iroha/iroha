@@ -25,7 +25,8 @@ class SourceOriginalControls(unittest.TestCase):
     def setUp(self):
         """Open genuine temporary originals without a Git or native-process fixture."""
         self.temporary=tempfile.TemporaryDirectory();self.addCleanup(self.temporary.cleanup)
-        self.root=Path(self.temporary.name);self.path=self.root/'input'
+        # Resolve macOS /var -> /private/var: the keeper refuses symlinked ancestry.
+        self.root=Path(self.temporary.name).resolve();self.path=self.root/'input'
         self.path.write_bytes(b'original source')
         self.keeper=custody.SourceKeeper(self.root);self.addCleanup(self.keeper.close)
         self.keeper.capture(['input','absent'])

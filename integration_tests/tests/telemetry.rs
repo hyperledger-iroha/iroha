@@ -1,6 +1,5 @@
 //! Telemetry and metrics surface integration tests.
 use eyre::ensure;
-use iroha_core::sumeragi::consensus::NPOS_TAG;
 use iroha_data_model::{Level, isi::Log};
 use iroha_model_base::peer::Peer;
 use iroha_test_network::NetworkBuilder;
@@ -12,17 +11,22 @@ const TELEMETRY_REQUIRED_KEYS: &[&str] = &[
     "accounts{domain=\"wonderland\"}",
     "block_height",
     "block_height_non_empty",
-    "commit_time_ms_bucket{le=\"+Inf\"}",
-    "commit_time_ms_bucket{le=\"100\"}",
-    "commit_time_ms_bucket{le=\"1600\"}",
-    "commit_time_ms_bucket{le=\"25600\"}",
-    "commit_time_ms_bucket{le=\"400\"}",
-    "commit_time_ms_bucket{le=\"6400\"}",
-    "commit_time_ms_count",
-    "commit_time_ms_sum",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"+Inf\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"100\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"1500\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"30000\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"500\"}",
+    "sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"5000\"}",
+    "sumeragi_commit_latency_ms_count{lane=\"global\"}",
+    "sumeragi_commit_latency_ms_sum{lane=\"global\"}",
+    "sumeragi_commits_total{lane=\"global\"}",
+    "sumeragi_committed_height{lane=\"global\"}",
+    "sumeragi_applied_height{lane=\"global\"}",
     "connected_peers",
     "domains",
-    "dropped_messages",
+    "sumeragi_dropped_total{lane=\"global\",queue=\"ingress\"}",
+    "sumeragi_dropped_total{lane=\"global\",queue=\"held\"}",
+    "sumeragi_dropped_total{lane=\"global\",queue=\"serve\"}",
     "last_commit_time_ms",
     "queue_size",
     "tx_amount_bucket{le=\"+Inf\"}",
@@ -121,11 +125,13 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             "missing metric key {key}; available keys: {keys:?}"
         );
     }
-    assert_eq!(metrics.get("tx_amount_sum"), 7_000_057.0);
-    assert_eq!(metrics.get("tx_amount_count"), 16.0);
+    // The current signed bootstrap includes all four validators' funded stakes
+    // and the reserved system domains, in addition to the sample account assets.
+    assert_eq!(metrics.get("tx_amount_sum"), 15_000_057.0);
+    assert_eq!(metrics.get("tx_amount_count"), 24.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
-    assert_eq!(metrics.get("domains"), 3.0);
+    assert_eq!(metrics.get("domains"), 8.0);
     assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 0.0);
     assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 0.0);
     assert_eq!(
@@ -173,17 +179,36 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
             .map_err(|err| eyre::Report::msg(format!("decode peers response: {err}")))?;
         assert_eq!(response, others);
     }
-    // commit_time
-    network.client().submit(
-        Log::new(Level::INFO, "mewo".to_owned()),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )?;
+    // Submit outside the Tokio runtime, retaining the SDK's fee quote and finality checks.
+    let client = network.client();
+    integration_tests::sync::run_on_dedicated_thread(move || {
+        client.submit(
+            Log::new(Level::INFO, "mewo".to_owned()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     network.ensure_blocks_with(|x| x.non_empty >= 2).await?;
     for peer in network.peers() {
         let status = peer.status().await?;
         assert!(
             status.commit_time_ms > 0,
             "No peer can commit block immediately, even the leader one"
+        );
+        let snapshot = integration_tests::http::client()
+            .get(peer.client().client().endpoint().join("/metrics")?)
+            .send()
+            .await?
+            .error_for_status()?
+            .text()
+            .await?;
+        let snapshot = MetricsReader::new(&snapshot);
+        assert!(snapshot.get("sumeragi_commits_total{lane=\"global\"}") >= 1.0);
+        assert!(snapshot.get("sumeragi_committed_height{lane=\"global\"}") >= 2.0);
+        assert!(snapshot.get("sumeragi_applied_height{lane=\"global\"}") >= 2.0);
+        assert_eq!(
+            snapshot.get("sumeragi_commit_latency_ms_count{lane=\"global\"}"),
+            snapshot.get("sumeragi_commit_latency_ms_bucket{lane=\"global\",le=\"+Inf\"}")
         );
     }
     Ok(())
@@ -204,8 +229,9 @@ fn status_reports_npos_mode_tag_on_start() -> eyre::Result<()> {
         .sumeragi
         .expect("sumeragi status must be present when telemetry is enabled");
     ensure!(
-        sumeragi.mode_tag == NPOS_TAG,
-        "expected /status mode_tag to be {NPOS_TAG}, got {}",
+        // /status projects the authenticated schedule's mode, not the P2P handshake tag.
+        sumeragi.mode_tag == "npos",
+        "expected /status mode_tag to be npos, got {}",
         sumeragi.mode_tag
     );
     Ok(())

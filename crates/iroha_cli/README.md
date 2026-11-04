@@ -331,6 +331,10 @@ load the witness through a bounded, change-detecting reader and validate its
 schema, account, exact network request hash, and signer set before sending it.
 Configured relative paths resolve from the directory containing the client TOML file.
 
+Agent deployment and renewal use `--lease-blocks`. Lease status reports
+`lease_started_height`, `lease_expires_height`, and `lease_remaining_blocks`;
+control-plane action sequences are separate counters and do not advance leases.
+
 ### Fixed-schedule transaction collection
 
 `iroha tx load` uses persistent SDK clients to prepare and submit a fixed

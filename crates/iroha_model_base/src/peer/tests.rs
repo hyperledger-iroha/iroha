@@ -3,6 +3,15 @@
 use super::*;
 
 #[test]
+fn peer_id_getter_borrows_the_stored_public_key() {
+    let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+    let peer = PeerId::new(literal.parse::<PublicKey>().expect("valid key"));
+    let public_key: &PublicKey = peer.public_key();
+    assert!(std::ptr::eq(public_key, &peer.public_key));
+    assert_eq!(public_key.to_string(), literal);
+}
+
+#[test]
 fn peer_id_bounded_json_delegates_to_public_key_without_scratch() {
     let literal = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
     let peer_id = PeerId::new(literal.parse::<PublicKey>().expect("valid key"));

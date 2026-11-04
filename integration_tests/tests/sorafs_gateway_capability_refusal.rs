@@ -7,8 +7,8 @@ fn capability_refusal_scenarios_match_expected_ids() {
     let scenarios = load_scenarios().expect("load capability refusal scenarios");
     assert_eq!(
         scenarios.len(),
-        7,
-        "capability refusal fixture must contain seven scenarios"
+        6,
+        "capability refusal fixture must contain the six current gateway scenarios"
     );
     let mut ids: HashSet<String> = HashSet::new();
     for scenario in scenarios {
@@ -62,6 +62,14 @@ fn capability_refusal_scenarios_match_expected_ids() {
             scenario.id
         );
     }
+    assert_eq!(
+        ids,
+        ["C1", "C2", "C3", "C4", "C5", "C6"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
+        "the canonical capability matrix must not omit or substitute a refusal"
+    );
 }
 #[test]
 fn capability_refusal_responses_have_expected_shape() {
@@ -119,7 +127,6 @@ fn capability_refusal_responses_have_expected_shape() {
         ("unsupported_capability".to_string(), 428),
         ("missing_header".to_string(), 428),
         ("unsupported_encoding".to_string(), 406),
-        ("proof_mismatch".to_string(), 422),
     ]);
     assert_eq!(
         status_by_error, expected,

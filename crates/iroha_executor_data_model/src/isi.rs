@@ -1,5 +1,4 @@
 //! Types for custom instructions
-use derive_more::{Constructor, From};
 use iroha_data_model::{
     isi::{CustomInstruction, InstructionBox},
     prelude::{Json, *},
@@ -47,6 +46,8 @@ pub mod multisig {
     use iroha_model_base::domain::DomainId;
     use norito::json::{self, JsonDeserialize, JsonSerialize};
     use std::{borrow::ToOwned, collections::BTreeSet};
+    #[cfg(test)]
+    mod constructor_tests;
     mod occurrence;
     pub use occurrence::{MultisigProposalId, MultisigProposalNonce};
     /// Multisig-related instructions
@@ -60,7 +61,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        From,
         norito::NoritoSchema,
     )]
     #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigInstructionBox")]
@@ -75,6 +75,36 @@ pub mod multisig {
         Cancel(MultisigCancel),
         /// Atomically invalidate every outstanding proposal owned by a multisig account
         InvalidateOutstanding(MultisigInvalidateOutstanding),
+    }
+    impl From<MultisigRegister> for MultisigInstructionBox {
+        #[inline]
+        fn from(value: MultisigRegister) -> Self {
+            Self::Register(value)
+        }
+    }
+    impl From<MultisigPropose> for MultisigInstructionBox {
+        #[inline]
+        fn from(value: MultisigPropose) -> Self {
+            Self::Propose(value)
+        }
+    }
+    impl From<MultisigApprove> for MultisigInstructionBox {
+        #[inline]
+        fn from(value: MultisigApprove) -> Self {
+            Self::Approve(value)
+        }
+    }
+    impl From<MultisigCancel> for MultisigInstructionBox {
+        #[inline]
+        fn from(value: MultisigCancel) -> Self {
+            Self::Cancel(value)
+        }
+    }
+    impl From<MultisigInvalidateOutstanding> for MultisigInstructionBox {
+        #[inline]
+        fn from(value: MultisigInvalidateOutstanding) -> Self {
+            Self::InvalidateOutstanding(value)
+        }
     }
     impl JsonSerialize for MultisigInstructionBox {
         fn json_serialize(&self, out: &mut String) {
@@ -350,7 +380,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
         norito::NoritoSchema,
@@ -369,6 +398,23 @@ pub mod multisig {
         #[norito(required)]
         pub transaction_ttl_ms: Option<NonZeroU64>,
     }
+    impl MultisigPropose {
+        /// Construct a proposal with its original occurrence nonce, contents, and TTL choice.
+        #[inline]
+        pub const fn new(
+            account: AccountId,
+            proposal_nonce: MultisigProposalNonce,
+            instructions: Vec<InstructionBox>,
+            transaction_ttl_ms: Option<NonZeroU64>,
+        ) -> Self {
+            Self {
+                account,
+                proposal_nonce,
+                instructions,
+                transaction_ttl_ms,
+            }
+        }
+    }
     /// Approve a certain multisig transaction
     #[derive(
         Debug,
@@ -380,7 +426,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
         norito::NoritoSchema,
@@ -395,6 +440,21 @@ pub mod multisig {
         /// Proposal to approve
         pub instructions_hash: HashOf<Vec<InstructionBox>>,
     }
+    impl MultisigApprove {
+        /// Construct an approval for one exact proposal occurrence and instruction hash.
+        #[inline]
+        pub const fn new(
+            account: AccountId,
+            proposal_id: MultisigProposalId,
+            instructions_hash: HashOf<Vec<InstructionBox>>,
+        ) -> Self {
+            Self {
+                account,
+                proposal_id,
+                instructions_hash,
+            }
+        }
+    }
     /// Cancel a certain multisig transaction before it reaches quorum
     #[derive(
         Debug,
@@ -406,7 +466,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
         norito::NoritoSchema,
@@ -420,6 +479,21 @@ pub mod multisig {
         pub proposal_id: MultisigProposalId,
         /// Proposal to cancel
         pub instructions_hash: HashOf<Vec<InstructionBox>>,
+    }
+    impl MultisigCancel {
+        /// Construct a cancellation for one exact proposal occurrence and instruction hash.
+        #[inline]
+        pub const fn new(
+            account: AccountId,
+            proposal_id: MultisigProposalId,
+            instructions_hash: HashOf<Vec<InstructionBox>>,
+        ) -> Self {
+            Self {
+                account,
+                proposal_id,
+                instructions_hash,
+            }
+        }
     }
     /// Atomically invalidate every outstanding proposal owned by a multisig account.
     ///
@@ -436,7 +510,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         DeriveJsonSerialize,
         DeriveJsonDeserialize,
         norito::NoritoSchema,
@@ -447,6 +520,13 @@ pub mod multisig {
     pub struct MultisigInvalidateOutstanding {
         /// Multisig account whose outstanding proposals must be invalidated.
         pub account: AccountId,
+    }
+    impl MultisigInvalidateOutstanding {
+        /// Construct an invalidation for the supplied multisig account.
+        #[inline]
+        pub const fn new(account: AccountId) -> Self {
+            Self { account }
+        }
     }
     impl_custom_instruction!(
         MultisigInstructionBox,
@@ -585,7 +665,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         norito::NoritoSchema,
     )]
     #[norito_schema(
@@ -605,6 +684,27 @@ pub mod multisig {
         /// Time in milliseconds at which the proposal became terminal.
         pub terminal_at_ms: u64,
     }
+    impl MultisigProposalTerminalState {
+        /// Construct the terminal proposal record from its captured fields.
+        #[inline]
+        pub const fn new(
+            multisig_account_id: AccountId,
+            proposal_id: MultisigProposalId,
+            instructions_hash: HashOf<Vec<InstructionBox>>,
+            proposal: MultisigProposalValue,
+            status: MultisigProposalTerminalStatus,
+            terminal_at_ms: u64,
+        ) -> Self {
+            Self {
+                multisig_account_id,
+                proposal_id,
+                instructions_hash,
+                proposal,
+                status,
+                terminal_at_ms,
+            }
+        }
+    }
     /// Immutable transaction-bound evidence that a multisig proposal became terminal.
     ///
     /// This evidence binds the terminal proposal to the exact transaction entrypoint and
@@ -619,7 +719,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         norito::NoritoSchema,
     )]
     #[norito_schema(
@@ -638,6 +737,23 @@ pub mod multisig {
         pub terminal_block_height: u64,
         /// Hash of the block entrypoint that made the proposal terminal.
         pub terminal_entrypoint_hash: [u8; 32],
+    }
+    impl MultisigProposalTerminalExecutionStateV1 {
+        /// Construct terminal execution evidence from its captured fields.
+        #[inline]
+        pub const fn new(
+            terminal: MultisigProposalTerminalState,
+            entrypoint_account_id: AccountId,
+            terminal_block_height: u64,
+            terminal_entrypoint_hash: [u8; 32],
+        ) -> Self {
+            Self {
+                terminal,
+                entrypoint_account_id,
+                terminal_block_height,
+                terminal_entrypoint_hash,
+            }
+        }
     }
     /// Whether one successful multisig approval entrypoint executed its proposal.
     #[derive(
@@ -673,7 +789,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         norito::NoritoSchema,
     )]
     #[norito_schema(name = "iroha_executor_data_model::isi::multisig::MultisigApprovalOutcomeV1")]
@@ -693,6 +808,29 @@ pub mod multisig {
         /// Hash of the block entrypoint containing the signed approval.
         pub entrypoint_hash: [u8; 32],
     }
+    impl MultisigApprovalOutcomeV1 {
+        /// Construct an approval outcome from its captured entrypoint fields.
+        #[inline]
+        pub const fn new(
+            entrypoint_account_id: AccountId,
+            resolved_multisig_account_id: AccountId,
+            proposal_id: MultisigProposalId,
+            instructions_hash: HashOf<Vec<InstructionBox>>,
+            status: MultisigApprovalOutcomeStatusV1,
+            block_height: u64,
+            entrypoint_hash: [u8; 32],
+        ) -> Self {
+            Self {
+                entrypoint_account_id,
+                resolved_multisig_account_id,
+                proposal_id,
+                instructions_hash,
+                status,
+                block_height,
+                entrypoint_hash,
+            }
+        }
+    }
     /// Metadata value for a multisig account specification
     #[derive(
         Debug,
@@ -704,7 +842,6 @@ pub mod multisig {
         Decode,
         Encode,
         IntoSchema,
-        Constructor,
         norito::JsonDeserialize,
         norito::NoritoSchema,
     )]
@@ -716,6 +853,21 @@ pub mod multisig {
         pub quorum: NonZeroU16,
         /// Multisig transaction time-to-live in milliseconds based on block timestamps. Defaults to [`DEFAULT_MULTISIG_TTL_MS`]
         pub transaction_ttl_ms: NonZeroU64,
+    }
+    impl MultisigSpec {
+        /// Construct a specification with the supplied weights, quorum, and TTL.
+        #[inline]
+        pub const fn new(
+            signatories: BTreeMap<AccountId, Weight>,
+            quorum: NonZeroU16,
+            transaction_ttl_ms: NonZeroU64,
+        ) -> Self {
+            Self {
+                signatories,
+                quorum,
+                transaction_ttl_ms,
+            }
+        }
     }
     /// Metadata value for a multisig transaction proposal.
     ///

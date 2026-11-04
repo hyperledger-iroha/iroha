@@ -1,0 +1,19 @@
+[package]
+name = "iroha_cli_docs"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Shared Markdown command documentation for Iroha native CLIs"
+autobenches = false
+
+[lints]
+workspace = true
+
+[dependencies]
+clap = { workspace = true }
+
+[[bench]]
+name = "render"
+harness = false
+

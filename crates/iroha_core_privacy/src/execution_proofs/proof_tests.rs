@@ -2,58 +2,6 @@
 
 use super::*;
 
-#[test]
-fn borrowed_execution_domains_preserve_refusal_order_and_exact_transcript_framing() {
-    use crate::execution_proofs::stark::aggregate_stark as aggregate;
-
-    let domains = DOMAINS;
-    let original = domains;
-    let profile = GoldilocksDigest384V1::default();
-    let make_transcript = || {
-        TransparentTranscriptV1::new(
-            domains.digest_context,
-            b"borrowed-execution-domain-test-v1",
-            &profile,
-            &profile,
-        )
-        .unwrap()
-    };
-    let mut actual = make_transcript();
-    let initial_state = actual.state();
-    let mut invalid = domains;
-    invalid.digest_context =
-        TransparentStarkDigestContextV1::execution_v1(b"borrowed-domain-other-profile-v1");
-    invalid.query_seed = invalid.base_leaf;
-    assert_eq!(
-        aggregate::absorb_base_roots_v1(&mut actual, &invalid, &[]),
-        Err(aggregate::AggregateStarkErrorV1::InvalidLayout)
-    );
-    assert_eq!(actual.state(), initial_state);
-    invalid.query_seed = domains.query_seed;
-    assert_eq!(
-        aggregate::absorb_base_roots_v1(&mut actual, &invalid, &[]),
-        Err(aggregate::AggregateStarkErrorV1::TranscriptMismatch)
-    );
-    assert_eq!(actual.state(), initial_state);
-    let root = GoldilocksDigest384V1::from_le_bytes([11; 48]).unwrap();
-    let group = aggregate::AggregateTraceGroupProofV1 {
-        base_root: root,
-        aux_root: GoldilocksDigest384V1::default(),
-        base_frontier: Vec::new(),
-        aux_frontier: Vec::new(),
-    };
-    aggregate::absorb_base_roots_v1(&mut actual, &domains, &[group]).unwrap();
-    let mut expected = make_transcript();
-    expected
-        .absorb(
-            domains.base_root_label,
-            &[&0_u16.to_be_bytes(), &root.to_le_bytes()],
-        )
-        .unwrap();
-    assert_eq!(actual.state(), expected.state());
-    assert_eq!(domains, original);
-}
-
 fn admission(players: u8) -> GameAdmissionBodyV1 {
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_data_model::{account::AccountId, game::GameAdmissionParticipantV1};
@@ -135,7 +83,6 @@ fn corrected_binding_rejects_consistently_committed_forfeited_late_finisher_awar
 }
 
 #[test]
-#[ignore = "genuine corrected late-finisher proof qualification; records a multi-thousand-tick native proof"]
 fn late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected() {
     let request = late_finisher_forfeit_request(true);
     let output = std::env::var_os("SORA_CARS_NATIVE_PROOF_OUTPUT").map(std::path::PathBuf::from);
@@ -166,57 +113,40 @@ fn late_finisher_full_native_proof_verifies_and_wrong_profile_is_rejected() {
     assert!(crate::execution_proofs::verify_execution_proof_v1(&wrong_profile).is_err());
 }
 
-/// Test-only entry point. Production proving continues to use `SysRng`; the full
-/// native driver already accepts injected masking entropy internally.
-fn prove_with_test_entropy(request: &RaceProverRequestV1) -> ExecutionProofEnvelopeV1 {
-    use super::super::stark::proof_managed_note_stark::prove_proof_managed_note_stark_v1_with_rng;
-    use rand::SeedableRng as _;
-    use rand_chacha::ChaCha12Rng;
-    let mut payload = race_payload_from_request_v1(request).expect("canonical reference payload");
-    let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("compiled adapter");
-    let size = adapter.compiled.trace_size(&payload.replay);
-    let mut carry = adapter.compiled.initial_carry();
-    let mut columns = vec![Vec::with_capacity(size); adapter.base_width_v1()];
-    for row_index in 0..size {
-        let fixed = adapter.compiled.fixed_row(
-            &payload.replay,
-            row_index,
-            size,
-            payload.checkpoint_state.as_ref().map(|state| state.tick),
-        );
-        let (row, next) = adapter.compiled.witness(&carry, &fixed);
-        carry = next;
-        for column in &mut columns[..NOTE_COPY_WIDTH_V1] {
-            column.push(F::ZERO);
-        }
-        for (column, value) in columns[NOTE_COPY_WIDTH_V1..].iter_mut().zip(row) {
-            column.push(value);
-        }
-    }
-    payload.stark_bytes = prove_proof_managed_note_stark_v1_with_rng(
-        &adapter,
-        &columns,
-        &mut ChaCha12Rng::from_seed([0x53; 32]),
-    )
-    .expect("genuine deterministic native proof");
-    let envelope = ExecutionProofEnvelopeV1 {
-        version: 1,
-        profile_id: race_profile_id_v1(),
-        statement: request.statement,
-        proof_bytes: payload.encode(),
-    };
-    assert!(envelope.encode().len() <= RACE_MAX_PROOF_BYTES_V1);
-    verify_race_proof_v1(&envelope).expect("independent native verification");
-    envelope
+/// Eight cars on zero controls for all 5,400 ticks, a multiple of the six-tick batch: the timeout
+/// path, where the two front-row cars share the distance award.
+fn timeout_request() -> RaceProverRequestV1 {
+    let mut request = request(8);
+    request.replay.frames = (0..RACE_MAX_TICKS_V1)
+        .map(|tick| RaceInputFrameV1 {
+            tick,
+            controls: vec![0; 8],
+        })
+        .collect();
+    request.replay.dnf_events.clear();
+    request.statement.transcript_root =
+        race_transcript_root_v1(&request.statement.network_id, &request.replay);
+    let payload =
+        race_payload_from_request_v1(&request).expect("maximum-duration reference payload");
+    request.statement.outcome_hash = game_message_hash_v1(
+        &request.statement.network_id,
+        "session-outcome",
+        &payload.outcome,
+    );
+    request
 }
 
+/// Release gate: a genuine eight-car, 5,400-tick proof is byte-identical at 1, 2 and 16 Rayon
+/// threads (engine proofs carry no masking), round-trips the complete envelope codec, stays within
+/// every size bound, and verifies through both the adapter and the registry entry.
+/// `IROHA_EXECUTION_PARITY_OUTPUT=<dir>` retains `request.nrt` and `proof.nrt`;
+/// `IROHA_EXECUTION_PARITY_REQUEST=<file>` proves a retained request instead.
 #[test]
-#[ignore = "genuine CPU parity proofs; set IROHA_EXECUTION_PARITY_REQUEST for a retained full request"]
-fn complete_proof_bytes_are_identical_across_cpu_thread_counts() {
+#[ignore = "release gate: three full eight-car, 5,400-tick proofs; run with --release --include-ignored"]
+fn full_duration_eight_car_proof_is_thread_deterministic_and_round_trips() {
     use std::{fs, path::PathBuf, time::Instant};
-    let request = std::env::var_os("IROHA_EXECUTION_PARITY_REQUEST").map_or_else(
-        || request(2),
-        |path| {
+    let request =
+        std::env::var_os("IROHA_EXECUTION_PARITY_REQUEST").map_or_else(timeout_request, |path| {
             let bytes = fs::read(path).expect("retained request");
             assert!(bytes.len() <= RACE_MAX_PROOF_BYTES_V1);
             let mut remaining = bytes.as_slice();
@@ -225,47 +155,83 @@ fn complete_proof_bytes_are_identical_across_cpu_thread_counts() {
             assert_eq!(request.encode(), bytes);
             assert_eq!(request.manifest.profile_id, race_profile_id_v1());
             request
-        },
-    );
+        });
+    // The full-duration claim needs the whole roster for every tick, whichever request is used.
+    assert_eq!(request.replay.player_count, 8);
+    assert_eq!(request.replay.frames.len(), RACE_MAX_TICKS_V1 as usize);
     let output = std::env::var_os("IROHA_EXECUTION_PARITY_OUTPUT").map(PathBuf::from);
     if let Some(output) = &output {
         fs::create_dir_all(output).expect("qualification output");
+        fs::write(output.join("request.nrt"), request.encode()).expect("retained request");
     }
     let mut baseline = None;
-    for requested_width in [1, 2, 0] {
+    for width in [1, 2, 16] {
         let start = Instant::now();
         let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(requested_width)
+            .num_threads(width)
             .build()
             .expect("bounded CPU pool");
-        let width = pool.current_num_threads();
-        eprintln!(
-            "CPU parity proving: requested_width={requested_width} actual_width={width} players={} ticks={}",
-            request.replay.player_count,
-            request.replay.frames.len()
-        );
-        let proof = pool.install(|| prove_with_test_entropy(&request));
+        assert_eq!(pool.current_num_threads(), width);
+        let proof = pool.install(|| prove_race_v1(&request).expect("genuine native proof"));
         let bytes = proof.encode();
+        eprintln!(
+            "RaceV1 release gate: threads={width} players={} ticks={} envelope_bytes={} prove_and_self_verify_seconds={:.3}",
+            request.replay.player_count,
+            request.replay.frames.len(),
+            bytes.len(),
+            start.elapsed().as_secs_f64()
+        );
         if let Some(baseline) = &baseline {
             assert_eq!(
                 &bytes, baseline,
                 "every proof byte, including roots, FRI folds and queries, must agree"
             );
         } else {
-            baseline = Some(bytes.clone());
+            baseline = Some(bytes);
         }
-        if let Some(output) = &output {
-            fs::write(
-                output.join(format!("threads-{requested_width}.nrt")),
-                &bytes,
-            )
-            .expect("retained parity proof");
-        }
-        eprintln!(
-            "CPU parity verified: requested_width={requested_width} actual_width={width} bytes={} elapsed_seconds={:.3}",
-            bytes.len(),
-            start.elapsed().as_secs_f64()
-        );
+    }
+    let bytes = baseline.expect("three proofs");
+    // The complete envelope codec: canonical decoding and re-encoding of envelope, payload and wire.
+    assert!(bytes.len() <= RACE_MAX_PROOF_BYTES_V1);
+    let mut remaining = bytes.as_slice();
+    let envelope = ExecutionProofEnvelopeV1::decode(&mut remaining).expect("canonical envelope");
+    assert!(remaining.is_empty());
+    assert_eq!(envelope.encode(), bytes);
+    let payload = decode_payload(&envelope).expect("canonical payload");
+    assert_eq!(payload.encode(), envelope.proof_bytes);
+    let wire = Proof::from_bytes(&payload.stark_bytes).expect("canonical STARK wire");
+    assert_eq!(wire.to_bytes(), payload.stark_bytes);
+    let circuit = race_circuit::circuit(
+        engine_track(payload.replay.track),
+        usize::from(payload.replay.player_count),
+    );
+    assert!(
+        payload.stark_bytes.len()
+            <= iroha_execution_stark::max_proof_bytes(&circuit, &Params::standard())
+                .expect("bounded wire")
+    );
+    assert!(payload.stark_bytes.len() <= RACE_MAX_STARK_BYTES_V1);
+    eprintln!(
+        "RaceV1 release gate: profile={} envelope_bytes={} stark_bytes={}",
+        envelope.profile_id,
+        bytes.len(),
+        payload.stark_bytes.len()
+    );
+    // Both verification entry points accept it and agree on the distance award.
+    assert_eq!(
+        verify_race_outcome_v1(&envelope)
+            .expect("adapter verification")
+            .winner_slots,
+        vec![0, 1]
+    );
+    assert_eq!(
+        crate::execution_proofs::verify_execution_proof_v1(&envelope)
+            .expect("registry verification")
+            .winner_slots,
+        vec![0, 1]
+    );
+    if let Some(output) = &output {
+        fs::write(output.join("proof.nrt"), &bytes).expect("retained proof");
     }
 }
 
@@ -419,117 +385,353 @@ fn immutable_admission_is_recomputed_and_stock_entitlements_are_exact() {
     assert!(validate_payload(&statement, &wagered).is_err());
 }
 
-#[test]
-fn profile_validates_conditional_fri_geometry() {
-    assert_ne!(race_profile_id_v1(), race_rules_hash_v1());
-    DOMAINS.validate().expect("execution domains are unique");
-    let request = request(8);
-    let payload = race_payload_from_request_v1(&request).expect("reference payload");
-    let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("compiled adapter");
-    adapter
-        .protocol_v1()
-        .validate()
-        .expect("validated conditional FRI geometry");
+/// Largest computed engine wire bound over the closed track/roster catalog (eight-car circuits).
+const MAXIMUM_STARK_WIRE_BYTES: usize = 2_044_445;
+
+fn maximum_stark_wire_bytes() -> usize {
+    let params = Params::standard();
+    [
+        RaceTrackV1::NeonTokyo,
+        RaceTrackV1::Harbor,
+        RaceTrackV1::Sakura,
+    ]
+    .into_iter()
+    .flat_map(|track| {
+        (2..=8).map(move |players| race_circuit::circuit(engine_track(track), players))
+    })
+    .map(|circuit| {
+        assert_eq!(circuit.log_rows, race_circuit::LOG_ROWS);
+        params
+            .check(&circuit)
+            .expect("standard parameters fit every compiled circuit");
+        iroha_execution_stark::max_proof_bytes(&circuit, &params).expect("bounded wire")
+    })
+    .max()
+    .expect("nonempty catalog")
 }
 
 #[test]
-fn fri_certificate_binds_every_actual_binary_fold() {
-    use crate::execution_proofs::stark::aggregate_stark::{
-        AggregateFriTheorem2CertificateV1, AggregateProofLayoutV1, AggregateTraceGroupLayoutV1,
-        validate_affine_batched_fri_theorem2_v1,
-    };
-    let request = request(8);
-    let payload = race_payload_from_request_v1(&request).expect("payload");
-    let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("adapter");
-    for native_log in MIN_TRACE_LOG2..=MAX_TRACE_LOG2 {
-        let mut parameters = adapter.protocol_v1().parameters;
-        parameters.maximum_trace_log2 = native_log;
-        let layout = AggregateProofLayoutV1::new(
-            parameters,
-            vec![AggregateTraceGroupLayoutV1 {
-                native_trace_log2: native_log,
-                segment_instances: 1,
-                base_width: parameters.maximum_base_columns_per_instance,
-                aux_width: parameters.maximum_aux_columns_per_instance,
-            }],
-        )
-        .expect("compiled layout");
-        let folds = layout.fri_rounds(parameters).expect("fold count");
-        let certificate = AggregateFriTheorem2CertificateV1 {
-            l_minus_one_numerator: 3,
-            l_minus_one_denominator: 2,
-            batching_parameter_m: 3,
-            rho_numerator: 1,
-            rho_denominator: 7,
-            affine_arities: vec![2; folds],
-            domain_log2: layout.common_lde_log2(),
-            extension_field_lower_bound_bits: 252,
-            base_field_two_adicity: 32,
-            trace_domains_are_smooth_subgroups: true,
-            evaluation_domain_is_smooth_generator_coset: true,
-            evaluation_domain_is_disjoint_from_trace_domains: true,
-            fold_count: u8::try_from(folds).expect("bounded fixture value"),
-            terminal_log2: 10,
-            terminal_degree_bound: 143,
-            query_count: 136,
-            distinct_queries_without_replacement: true,
-            uniform_rejection_sampling: true,
-            claimed_query_error_bits: 160,
-        };
-        let bound =
-            validate_affine_batched_fri_theorem2_v1(parameters, &layout, &certificate.clone())
-                .expect("every complete schedule qualifies the numeric theorem terms");
-        assert_eq!(bound.query_error_bits, 160);
-        assert_eq!(
-            bound.commitment_error_bits,
-            252 - 2 * u16::from(native_log + 3) - 21
-        );
-        for arities in [
-            vec![2; 3],
-            vec![2; folds - 1],
-            vec![2; folds + 1],
-            vec![3; folds],
-        ] {
-            let mut malformed = certificate.clone();
-            malformed.affine_arities = arities;
-            assert!(
-                validate_affine_batched_fri_theorem2_v1(parameters, &layout, &malformed).is_err()
-            );
+fn every_compiled_circuit_fits_the_explicit_stark_cap() {
+    assert_ne!(race_profile_id_v1(), race_rules_hash_v1());
+    let maximum = maximum_stark_wire_bytes();
+    assert_eq!(maximum, MAXIMUM_STARK_WIRE_BYTES);
+    assert!(maximum <= RACE_MAX_STARK_BYTES_V1);
+}
+
+/// The profile identity commits every engine source the verifier compiles, so a changed or added
+/// engine file cannot keep the RaceV1 identity.
+#[test]
+fn profile_commits_every_engine_source() {
+    fn collect(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<(String, Vec<u8>)>) {
+        for entry in std::fs::read_dir(dir).expect("engine sources") {
+            let path = entry.expect("engine source").path();
+            if path.is_dir() {
+                collect(root, &path, out);
+            } else if path.extension().is_some_and(|extension| extension == "rs") {
+                let relative = path
+                    .strip_prefix(root)
+                    .expect("inside the engine")
+                    .components()
+                    .map(|part| part.as_os_str().to_string_lossy().into_owned())
+                    .collect::<Vec<_>>()
+                    .join("/");
+                out.push((
+                    format!("crates/iroha_execution_stark/src/{relative}"),
+                    std::fs::read(&path).expect("engine source bytes"),
+                ));
+            }
         }
+    }
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../iroha_execution_stark/src");
+    let mut engine = Vec::new();
+    collect(&root, &root, &mut engine);
+    let committed: std::collections::BTreeMap<&str, &[u8]> =
+        RACE_PROFILE_SOURCES_V1.iter().copied().collect();
+    assert_eq!(
+        committed.len(),
+        RACE_PROFILE_SOURCES_V1.len(),
+        "duplicate source"
+    );
+    assert!(engine.len() >= 15);
+    for (name, bytes) in &engine {
+        assert_eq!(
+            committed.get(name.as_str()).copied(),
+            Some(bytes.as_slice()),
+            "{name} must be committed exactly"
+        );
+    }
+    assert_eq!(
+        committed
+            .keys()
+            .filter(|name| name.starts_with("crates/iroha_execution_stark/"))
+            .count(),
+        engine.len()
+    );
+}
+
+/// The full-strength profile commitment frames the descriptor, the rules, the source count and
+/// every (path, bytes) pair, so no edit, omission, reordering or boundary shift keeps it.
+#[test]
+fn profile_commitment_frames_profile_rules_and_every_source() {
+    fn borrowed<'a>(sources: &'a [(&'a str, Vec<u8>)]) -> Vec<(&'a str, &'a [u8])> {
+        sources
+            .iter()
+            .map(|(path, bytes)| (*path, bytes.as_slice()))
+            .collect()
+    }
+    let sources = RACE_PROFILE_SOURCES_V1;
+    let base = profile_commitment(PROFILE, RULES, sources);
+    assert_eq!(base, race_profile_commitment_v1());
+    let mut edited: Vec<(&str, Vec<u8>)> = sources
+        .iter()
+        .map(|(path, bytes)| (*path, bytes.to_vec()))
+        .collect();
+    edited.last_mut().expect("sources").1.push(b'\n');
+    assert_ne!(profile_commitment(PROFILE, RULES, &borrowed(&edited)), base);
+    // Moving one byte across the path/content boundary is a different commitment.
+    let (path, bytes) = sources[0];
+    let shifted_path = format!("{path}{}", char::from(bytes[0]));
+    let mut shifted = sources.to_vec();
+    shifted[0] = (shifted_path.as_str(), &bytes[1..]);
+    assert_ne!(profile_commitment(PROFILE, RULES, &shifted), base);
+    let mut reordered = sources.to_vec();
+    reordered.swap(0, 1);
+    assert_ne!(profile_commitment(PROFILE, RULES, &reordered), base);
+    assert_ne!(profile_commitment(PROFILE, RULES, &sources[1..]), base);
+    assert_ne!(profile_commitment(RULES, PROFILE, sources), base);
+}
+
+/// The descriptor's parameter fields are the compiled parameters, caps and target, not prose.
+#[test]
+fn profile_descriptor_matches_the_compiled_parameters() {
+    fn field<'a>(descriptor: &'a str, name: &str) -> &'a str {
+        descriptor
+            .split(':')
+            .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))
+            .unwrap_or_else(|| panic!("the descriptor names {name}"))
+    }
+    let descriptor = std::str::from_utf8(PROFILE).expect("ASCII descriptor");
+    let params = Params::standard();
+    assert_eq!(field(descriptor, "wire"), "IEB1/1");
+    assert_eq!(
+        field(descriptor, "trace"),
+        format!("2^{}", race_circuit::LOG_ROWS)
+    );
+    assert_eq!(
+        field(descriptor, "digest-bytes"),
+        iroha_execution_stark::hash::DIGEST_BYTES.to_string()
+    );
+    assert_eq!(
+        field(descriptor, "blowup"),
+        (1u32 << params.log_blowup).to_string()
+    );
+    assert_eq!(field(descriptor, "queries"), params.queries.to_string());
+    assert_eq!(
+        field(descriptor, "fri-arity"),
+        (1u32 << params.fri_log_arity).to_string()
+    );
+    assert_eq!(
+        field(descriptor, "final-degree"),
+        (1u32 << params.fri_log_final_degree).to_string()
+    );
+    assert_eq!(
+        field(descriptor, "grinding"),
+        params.grinding_bits.to_string()
+    );
+    assert_eq!(
+        field(descriptor, "round-target"),
+        iroha_execution_stark::params::PER_ROUND_TARGET_BITS.to_string()
+    );
+    assert_eq!(
+        field(descriptor, "security-target"),
+        RACE_TARGET_SECURITY_BITS_V1.to_string()
+    );
+    assert_eq!(
+        field(descriptor, "envelope-max"),
+        RACE_MAX_PROOF_BYTES_V1.to_string()
+    );
+    assert_eq!(
+        field(descriptor, "stark-max"),
+        RACE_MAX_STARK_BYTES_V1.to_string()
+    );
+    assert_eq!(
+        compiled_race_profile_v1().target_soundness_bits,
+        RACE_TARGET_SECURITY_BITS_V1
+    );
+}
+
+/// Every compiled circuit meets the profile's 128-bit target with the standard parameters at the
+/// Core gate, and the same check rejects a weaker query count.
+#[test]
+fn standard_parameters_meet_the_profile_security_target_for_every_circuit() {
+    for track in [
+        RaceTrackV1::NeonTokyo,
+        RaceTrackV1::Harbor,
+        RaceTrackV1::Sakura,
+    ] {
+        for players in 2..=8 {
+            let circuit = race_circuit::circuit(engine_track(track), players);
+            engine_params(&circuit).expect("standard parameters meet the profile target");
+        }
+    }
+    let circuit = race_circuit::circuit(race_circuit::Track::Harbor, 8);
+    let weaker = Params {
+        queries: Params::standard().queries - 8,
+        ..Params::standard()
+    };
+    weaker
+        .check(&circuit)
+        .expect("still a compatible configuration");
+    assert_eq!(
+        weaker.check_security(&circuit, f64::from(RACE_TARGET_SECURITY_BITS_V1)),
+        Err(iroha_execution_stark::params::SecurityError::InsufficientSecurity)
+    );
+}
+
+/// Twelve ticks with a certified checkpoint after six, then both cars removed at the final tick.
+fn checkpoint_request() -> RaceProverRequestV1 {
+    let mut request = request(2);
+    request.replay.frames = (0..12)
+        .map(|tick| RaceInputFrameV1 {
+            tick,
+            controls: vec![1 | 8, 1 | 4 | 32],
+        })
+        .collect();
+    request.replay.dnf_events = vec![RaceDnfEventV1 {
+        tick: 12,
+        slots: vec![0, 1],
+    }];
+    let mut checkpoint = initial_race_state_v1(request.replay.track, 2).expect("grid");
+    for frame in &request.replay.frames[..6] {
+        step_race_v1(&mut checkpoint, frame).expect("reference tick");
+    }
+    request.checkpoint_state = Some(checkpoint);
+    request.statement.transcript_root =
+        race_transcript_root_v1(&request.statement.network_id, &request.replay);
+    let payload = race_payload_from_request_v1(&request).expect("reference payload");
+    request.statement.outcome_hash = game_message_hash_v1(
+        &request.statement.network_id,
+        "session-outcome",
+        &payload.outcome,
+    );
+    request
+}
+
+/// The node's own simulation is the only witness the circuit accepts: one altered register at any
+/// tick is a violated identity, not an alternative provable history.
+#[test]
+fn forged_node_states_cannot_be_proved() {
+    let request = checkpoint_request();
+    let payload = race_payload_from_request_v1(&request).expect("reference payload");
+    let (circuit, statement, public) =
+        engine_statement(&request.statement, &payload).expect("engine statement");
+    let honest = race_register_states(&payload.replay).expect("native states");
+    iroha_execution_stark::check_trace(&circuit, &statement, &public, &honest)
+        .expect("the node simulation satisfies the circuit");
+    // Progress, lateral position, speed and energy of car 0, then car 1's finish flag.
+    for (tick, register) in [(1, 0), (4, 1), (7, 2), (9, 4), (10, 7 + 5)] {
+        let mut forged = honest.clone();
+        forged[tick][register] += 1;
+        assert!(
+            iroha_execution_stark::prove(
+                &circuit,
+                &Params::standard(),
+                &statement,
+                &public,
+                &forged
+            )
+            .is_err(),
+            "forged register {register} at tick {tick}"
+        );
     }
 }
 
+/// A certified checkpoint is a proved boundary: the proof passes through that exact state, and no
+/// other checkpoint state verifies or can be proved for the same replay.
 #[test]
-fn staged_proof_wire_shape_has_explicit_admission_bounds() {
-    use crate::execution_proofs::stark::aggregate_stark::{
-        AggregateProofLayoutV1, AggregateTraceGroupLayoutV1,
-        maximum_encoded_proof_with_deep_bytes_v1,
-    };
-    for (players, trace_log, expected) in [(2, 13, 1_821_312), (8, 19, 3_161_760)] {
-        let request = request(players);
-        let payload = race_payload_from_request_v1(&request).expect("payload");
-        let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("adapter");
-        let parameters = adapter.protocol_v1().parameters;
-        let layout = AggregateProofLayoutV1::new(
-            parameters,
-            vec![AggregateTraceGroupLayoutV1 {
-                native_trace_log2: trace_log,
-                segment_instances: 1,
-                base_width: adapter.base_width_v1(),
-                aux_width: NOTE_COPY_AUX_WIDTH_V1,
-            }],
-        )
-        .expect("layout");
-        assert_eq!(
-            maximum_encoded_proof_with_deep_bytes_v1(parameters, &layout)
-                .expect("canonical wire bound"),
-            expected
-        );
-        assert!(
-            expected > 1_048_576,
-            "current native proof is not qualified for a one-MiB corridor"
-        );
-        assert!(expected <= RACE_MAX_STARK_BYTES_V1);
+fn checkpoint_state_is_a_proved_boundary() {
+    let request = checkpoint_request();
+    let proof = prove_race_v1(&request).expect("genuine checkpointed proof");
+    verify_race_proof_v1(&proof).expect("independent checkpointed verification");
+    let mut forged = request.clone();
+    forged.checkpoint_state.as_mut().expect("checkpoint").cars[0].progress_mm += 1;
+    assert!(prove_race_v1(&forged).is_err());
+    let mut payload = decode_payload(&proof).expect("payload");
+    payload.checkpoint_state.as_mut().expect("checkpoint").cars[0].progress_mm += 1;
+    validate_payload(&proof.statement, &payload).expect("structurally valid forged checkpoint");
+    let mut corrupted = proof.clone();
+    corrupted.proof_bytes = payload.encode();
+    assert!(matches!(
+        verify_race_proof_v1(&corrupted),
+        Err(ExecutionProofErrorV1::Cryptography(_))
+    ));
+    // Removal ticks are public columns, not registers: a consistently re-committed final state
+    // that hides a removal is rejected against the public schedule before any proof work.
+    let mut payload = decode_payload(&proof).expect("payload");
+    payload.final_state.cars[1].dnf_tick = None;
+    payload.relation_inputs.result =
+        race_result_v1(&payload.final_state).expect("bounded forged result");
+    payload.outcome = race_game_outcome_v1(&payload.final_state).expect("forged outcome");
+    let mut corrupted = proof.clone();
+    corrupted.statement.outcome_hash = game_message_hash_v1(
+        &corrupted.statement.network_id,
+        "session-outcome",
+        &payload.outcome,
+    );
+    validate_payload(&corrupted.statement, &payload).expect("consistently committed forgery");
+    corrupted.proof_bytes = payload.encode();
+    assert!(matches!(
+        verify_race_proof_v1(&corrupted),
+        Err(ExecutionProofErrorV1::Replay)
+    ));
+}
+
+/// Final states record every removal, including those at the final tick; a checkpoint records
+/// only removals strictly before its tick, matching the certified transcript prefix.
+#[test]
+fn removal_ticks_follow_the_public_schedule() {
+    let request = checkpoint_request();
+    let payload = race_payload_from_request_v1(&request).expect("reference payload");
+    assert!(removals_match_states(&payload));
+    let mut hidden = payload.clone();
+    hidden.final_state.cars[0].dnf_tick = None;
+    assert!(!removals_match_states(&hidden));
+    let mut invented = payload.clone();
+    invented.final_state.cars[0].dnf_tick = Some(6);
+    assert!(!removals_match_states(&invented));
+    let mut early = payload.clone();
+    early.checkpoint_state.as_mut().expect("checkpoint").cars[0].dnf_tick = Some(12);
+    assert!(!removals_match_states(&early));
+    // A checkpoint at the removal tick itself still predates that removal.
+    let mut at_removal = payload.clone();
+    let mut state = payload.final_state.clone();
+    for car in &mut state.cars {
+        car.dnf_tick = None;
+    }
+    at_removal.checkpoint_state = Some(state.clone());
+    assert!(removals_match_states(&at_removal));
+    state.cars[1].dnf_tick = Some(12);
+    at_removal.checkpoint_state = Some(state);
+    assert!(!removals_match_states(&at_removal));
+}
+
+/// The statement binding carries each field's canonical bytes, length-prefixed and unhashed, so
+/// it is exactly as strong as the engine transcript rather than the 255-bit ledger `Hash`.
+#[test]
+fn engine_binding_carries_canonical_fields_unhashed() {
+    let request = checkpoint_request();
+    let payload = race_payload_from_request_v1(&request).expect("reference payload");
+    let binding = engine_binding(&request.statement, &payload);
+    for field in [
+        race_profile_commitment_v1().to_vec(),
+        request.statement.encode(),
+        payload.admission.encode(),
+        payload.replay.encode(),
+        payload.checkpoint_state.encode(),
+    ] {
+        let framed = [(field.len() as u64).to_le_bytes().as_slice(), &field].concat();
+        assert!(binding.windows(framed.len()).any(|window| window == framed));
     }
 }
 
@@ -545,10 +747,6 @@ fn maximum_duration_replay_and_typed_settlement_fit_the_execution_cap() {
         proof: ExecutionProofEnvelopeV1,
         outcome: GameOutcomeV1,
     }
-    use crate::execution_proofs::stark::aggregate_stark::{
-        AggregateProofLayoutV1, AggregateTraceGroupLayoutV1,
-        maximum_encoded_proof_with_deep_bytes_v1,
-    };
     use iroha_data_model::game::{
         GAME_ADMISSION_MAX_ACCOUNT_ENCODED_BYTES_V1, GAME_ADMISSION_MAX_NFT_ENCODED_BYTES_V1,
     };
@@ -560,44 +758,8 @@ fn maximum_duration_replay_and_typed_settlement_fit_the_execution_cap() {
     // shape need not be reachable: it bounds every reachable transcript.
     let request = request(8);
     let mut payload = race_payload_from_request_v1(&request).expect("payload");
-    let mut maximum_crypto_bytes = 0;
-    for track in [
-        RaceTrackV1::NeonTokyo,
-        RaceTrackV1::Harbor,
-        RaceTrackV1::Sakura,
-    ] {
-        for players in 2..=8 {
-            let compiled = StagedRaceAirV1::compile(
-                &RaceReplayV1 {
-                    track,
-                    player_count: players,
-                    frames: vec![],
-                    dnf_events: vec![],
-                },
-                &initial_race_state_v1(track, players).expect("grid"),
-                None,
-            );
-            let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("adapter");
-            let parameters = adapter.protocol_v1().parameters;
-            for native_trace_log2 in MIN_TRACE_LOG2..=MAX_TRACE_LOG2 {
-                let layout = AggregateProofLayoutV1::new(
-                    parameters,
-                    vec![AggregateTraceGroupLayoutV1 {
-                        native_trace_log2,
-                        segment_instances: 1,
-                        base_width: compiled.width() + NOTE_COPY_WIDTH_V1,
-                        aux_width: NOTE_COPY_AUX_WIDTH_V1,
-                    }],
-                )
-                .expect("validated conditional geometry");
-                maximum_crypto_bytes = maximum_crypto_bytes.max(
-                    maximum_encoded_proof_with_deep_bytes_v1(parameters, &layout)
-                        .expect("wire bound"),
-                );
-            }
-        }
-    }
-    assert_eq!(maximum_crypto_bytes, 3_166_240);
+    let maximum_crypto_bytes = maximum_stark_wire_bytes();
+    assert_eq!(maximum_crypto_bytes, MAXIMUM_STARK_WIRE_BYTES);
     assert!(maximum_crypto_bytes <= RACE_MAX_STARK_BYTES_V1);
     payload.replay.frames = (0..RACE_MAX_TICKS_V1)
         .map(|tick| RaceInputFrameV1 {
@@ -691,9 +853,6 @@ fn maximum_duration_replay_and_typed_settlement_fit_the_execution_cap() {
     );
     assert!(envelope_bound <= RACE_MAX_PROOF_BYTES_V1);
     assert!(settlement_bound <= EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1);
-    // Four MiB is the smallest whole-MiB ceiling covering this closed
-    // maximum-frontier proof shape plus its retained public transcript.
-    assert!(envelope_bound > 3 * 1024 * 1024);
     assert!(!compiled_race_profile_v1().qualified);
 }
 
@@ -727,41 +886,10 @@ fn proof_admission_counts_envelope_framing_and_separate_stark_cap() {
 }
 
 #[test]
-fn execution_queries_match_full_native_race_fixed_lde() {
-    for players in [2, 8] {
-        let request = request(players);
-        let payload = race_payload_from_request_v1(&request).expect("payload");
-        let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("adapter");
-        let lde_size = 1_usize << (adapter.trace_log2_v1() + 3);
-        let queries = [0, 1, 7, 61, 127, 1_023, lde_size / 2, lde_size - 1];
-        assert!(
-            crate::execution_proofs::stark::proof_managed_note_stark::execution_fixed_query_parity_v1(
-                &adapter, &queries
-            )
-            .expect("exact public polynomial parity")
-        );
-    }
-}
-
-#[test]
 fn timeout_outcome_binding_rejects_refund_and_false_distance_winner() {
-    let mut request = request(8);
-    request.replay.frames = (0..RACE_MAX_TICKS_V1)
-        .map(|tick| RaceInputFrameV1 {
-            tick,
-            controls: vec![0; 8],
-        })
-        .collect();
-    request.replay.dnf_events.clear();
-    request.statement.transcript_root =
-        race_transcript_root_v1(&request.statement.network_id, &request.replay);
+    let mut request = timeout_request();
     let mut payload =
         race_payload_from_request_v1(&request).expect("maximum-duration reference payload");
-    request.statement.outcome_hash = game_message_hash_v1(
-        &request.statement.network_id,
-        "session-outcome",
-        &payload.outcome,
-    );
     assert_eq!(payload.outcome.winner_slots, vec![0, 1]);
     validate_payload(&request.statement, &payload).expect("distance winner binding");
     for winners in [vec![], vec![7], vec![0]] {
@@ -781,73 +909,6 @@ fn timeout_outcome_binding_rejects_refund_and_false_distance_winner() {
 }
 
 #[test]
-fn complete_relation_has_exact_degree_four_on_arbitrary_field_lines() {
-    let request = request(8);
-    let payload = race_payload_from_request_v1(&request).expect("reference payload");
-    let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("compiled adapter");
-    let width = adapter.compiled.width();
-    let fixed_width = adapter.profile_fixed_width_v1();
-    let degree=crate::execution_proofs::stark::proof_managed_note_stark::degree_audit::measured_maximum_affine_degree_v1([47;32],[width,width,0,0,fixed_width],8,4,|current,next,_,_,fixed|Ok::<_,()>(adapter.compiled.residues(current,next,fixed)));
-    assert_eq!(degree, 4);
-}
-
-#[test]
-fn recomputed_successor_witness_cannot_forge_carry_transitions_or_padding() {
-    let request = request(8);
-    let payload = race_payload_from_request_v1(&request).expect("reference payload");
-    let adapter = RaceAdapterV1::new(&request.statement, &payload).expect("compiled adapter");
-    let compiled = &adapter.compiled;
-    let size = compiled.trace_size(&payload.replay);
-    let steps = compiled.rows_per_tick();
-    let first_contact = 1 + 3 * 8;
-    let first_finish = first_contact + 8 * 7 / 2;
-    let final_boundary = (payload.replay.frames.len() + 1) * steps;
-    // Offset fields are progress, lateral, speed, vx, energy, finish, DNF;
-    // the last carry cell is the per-car curvature force.
-    for (name, row_index, offset, delta) in [
-        ("boundary progress", 0, 0, 1),
-        ("acceleration", 1, 2, 1),
-        ("curvature", 2, 7 * 8, 1),
-        ("checkpoint skipping", 3, 0, 1_000_000),
-        ("invented collision", first_contact, 1, 900),
-        ("forged finish", first_finish, 5, 1),
-        ("inactive car movement", final_boundary + 3, 0, 1),
-        ("padding movement", size - 2, 1, 1),
-    ] {
-        let mut carry = compiled.initial_carry();
-        for row in 0..row_index {
-            let fixed = compiled.fixed_row(&payload.replay, row, size, None);
-            carry = compiled.witness(&carry, &fixed).1;
-        }
-        let fixed = compiled.fixed_row(&payload.replay, row_index, size, None);
-        let (current, mut next_carry) = compiled.witness(&carry, &fixed);
-        let next_fixed = compiled.fixed_row(&payload.replay, row_index + 1, size, None);
-        let (honest_next, _) = compiled.witness(&next_carry, &next_fixed);
-        let fixed = fixed.into_iter().map(field).collect::<Vec<_>>();
-        assert!(
-            compiled
-                .residues(&current, &honest_next, &fixed)
-                .iter()
-                .all(|value| *value == F::ZERO),
-            "honest {name}"
-        );
-        next_carry[offset] += delta;
-        // Recompute every dependent successor selector, inverse and packed
-        // arithmetic cell from the altered state, rather than flipping only
-        // an isolated byte or leaving a trivially inconsistent witness bank.
-        let (forged_next, _) = compiled.witness(&next_carry, &next_fixed);
-        assert!(
-            compiled
-                .residues(&current, &forged_next, &fixed)
-                .iter()
-                .any(|value| *value != F::ZERO),
-            "accepted forged {name}"
-        );
-    }
-}
-
-#[test]
-#[ignore = "expensive native cryptographic qualification; run explicitly and record peak RSS/proof bytes"]
 fn real_native_proof_roundtrip_and_statement_adversaries() {
     let start = std::time::Instant::now();
     let proof = prove_race_v1(&request(2)).expect("genuine native execution proof");

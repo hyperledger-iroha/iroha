@@ -21,6 +21,8 @@ mod query_derived;
 mod query_parameters;
 #[path = "manual_frame_identity/query_time.rs"]
 mod query_time;
+#[path = "manual_frame_identity/runtime_upgrade.rs"]
+mod runtime_upgrade;
 #[path = "manual_frame_identity/scalar.rs"]
 mod scalar;
 #[path = "manual_frame_identity/time_events.rs"]

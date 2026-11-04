@@ -5,6 +5,7 @@
 //! nothing: signatures, finality and execution belong to the stream and to Core.
 
 use crate::torii::ToriiError;
+use futures::StreamExt as _;
 use iroha::client::AccountClient;
 use iroha_data_model::{
     block::{
@@ -28,7 +29,6 @@ use std::{
     panic::{AssertUnwindSafe, catch_unwind},
     time::Duration,
 };
-use tokio_stream::StreamExt as _;
 
 /// Longest wait for a requested block before reporting that it is not committed.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);

@@ -27,7 +27,7 @@ use iroha_data_model::{
         AtomicSettlementEscrows, AtomicSettlementMovement, AtomicSettlementMovements, Mint,
         Register, SettleAtomic, SettlementId,
     },
-    parameter::system::ConsensusMode,
+    parameter::{Parameter, system::ConsensusMode},
     query::CommittedTransaction,
     sumeragi_finality::{
         SignedGenesisPinsV1, SumeragiFinalityVerifier, authenticate_signed_genesis_v1,
@@ -72,15 +72,18 @@ fn fee_asset() -> AssetDefinitionId {
 
 fn config() -> TestChainConfig {
     let mut config = TestChainConfig::new(World::new(), 1_000);
-    let mut nexus = iroha_config::parameters::actual::Nexus::default();
-    nexus.fees.base_fee = Quantity::one();
-    nexus.fees.per_byte_fee = Quantity::zero();
-    nexus.fees.per_instruction_fee = Quantity::zero();
-    nexus.fees.per_gas_unit_fee = Quantity::zero();
-    nexus.fees.fee_asset_id = fee_asset().clone();
-    nexus.fees.fee_sink_account_id =
-        AccountId::new(config.genesis_key.public_key().clone()).clone();
-    config.nexus = Some(nexus);
+    // Execution consumes the original signed policy, never node-local fee configuration.
+    let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+    fees.base_fee = Quantity::one();
+    fees.per_byte_fee = Quantity::zero();
+    fees.per_instruction_fee = Quantity::zero();
+    fees.per_gas_unit_fee = Quantity::zero();
+    fees.fee_asset_id = fee_asset();
+    fees.fee_sink_account_id = AccountId::new(config.genesis_key.public_key().clone());
+    config.genesis_parameters.push(Parameter::Custom(
+        fees.into_custom_parameter()
+            .expect("authored payment fee policy"),
+    ));
     config.genesis_instructions = vec![
         Register::account(Account::new(payer())).into(),
         Register::account(Account::new(recipient())).into(),
@@ -180,6 +183,17 @@ fn pinned_genesis(chain: &CertifiedTestChain) -> (Vec<u8>, SignedGenesisPinsV1) 
     // A remote response cannot supply or replace these installation pins.
     let wire = chain.genesis().encode_wire().unwrap();
     let configuration = config();
+    let fees = iroha_genesis::signed_genesis_root_fee_policy(chain.genesis())
+        .expect("original signed genesis must authenticate the payment fee policy");
+    assert_eq!(fees.fee_asset_id, fee_asset());
+    assert_eq!(
+        fees.fee_sink_account_id,
+        AccountId::new(configuration.genesis_key.public_key().clone())
+    );
+    assert_eq!(fees.base_fee, Quantity::one());
+    assert_eq!(fees.per_byte_fee, Quantity::zero());
+    assert_eq!(fees.per_instruction_fee, Quantity::zero());
+    assert_eq!(fees.per_gas_unit_fee, Quantity::zero());
     let pins = SignedGenesisPinsV1 {
         chain_id: configuration.chain_id.to_string(),
         network_id: chain.network_id(),

@@ -1,29 +1,18 @@
 //! Corrected stock racing proof with eligibility-first awards and one first-release identity.
 //!
-//! The verifier reconstructs public controls and fixed columns, but never replays vehicle physics.
-//! Transition correctness is checked by the degree-four integer AIR and the existing native
-//! Goldilocks/Fp4 DEEP-ALI/FRI proof driver. Payout admission additionally binds authenticated
-//! checkpoints and every consensus-selected forced control and DNF event.
+//! The verifier rebuilds controls, weather and removals as public columns, but never replays vehicle
+//! physics. Transition correctness is checked by the RaceV1 bounded-integer circuit
+//! (`iroha_execution_stark::games::race_v1`) on the `iroha_execution_stark` engine: a Goldilocks/Fp4
+//! DEEP-ALI/FRI STARK with BLAKE2b-384 commitments and transcript and no masking (replays are
+//! public). Every proof and verification first checks the standard parameters against this
+//! profile's 128-bit security target for the exact circuit. Payout admission additionally binds
+//! authenticated checkpoints and every consensus-selected forced control and DNF event.
 
-use super::stark::{
-    aggregate_stark::{AggregateStarkDomainsV1, AggregateStarkParametersV1},
-    proof_managed_note_stark::{
-        NOTE_COPY_AUX_WIDTH_V1, NOTE_COPY_FIXED_WIDTH_V1, NOTE_COPY_WIDTH_V1, NoteCopyCellPolicyV1,
-        NoteCopyChallengesV1, NoteCopyScheduleV1, PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
-        ProofManagedNoteStarkAdapterV1, ProofManagedNoteStarkErrorV1,
-        ProofManagedNoteStarkProtocolV1, prove_proof_managed_note_stark_v1,
-        verify_proof_managed_note_stark_v1,
-    },
-    transparent_stark::{
-        GoldilocksDigest384V1, GoldilocksFieldV1 as F, TransparentStarkDigestContextV1,
-        TransparentTranscriptV1, goldilocks_digest384_frame_v1,
-    },
-};
 use super::{
     error::ExecutionProofErrorV1,
-    integer_air::field,
-    race::{initial_race_state_v1, race_result_v1, replay_race_v1},
-    staged_race_air::StagedRaceAirV1,
+    race::{
+        apply_race_dnf_v1, initial_race_state_v1, race_result_v1, replay_race_v1, step_race_v1,
+    },
 };
 use iroha_crypto::Hash;
 use iroha_data_model::{
@@ -35,40 +24,25 @@ use iroha_data_model::{
         GameTranscriptV1, game_message_hash_v1, game_roster_hash_v1,
     },
 };
+use iroha_execution_stark::{
+    Checkpoint, Circuit, Params, Proof, Statement,
+    games::race_v1 as race_circuit,
+    hash::{Digest as ProfileDigest, FramedHash},
+};
 use norito::codec::{Decode, Encode};
 
 /// Maximum canonical execution envelope, including this adapter's complete replay.
 /// This does not raise any deployment's independent transaction or transport bounds.
 pub const RACE_MAX_PROOF_BYTES_V1: usize = EXECUTION_PROOF_MAX_ENVELOPE_BYTES_V1;
-/// Rounded bound on the cryptographic wire alone, excluding replay and envelope.
-/// The current maximum-frontier calculation is 3,166,240 bytes; qualification
-/// must additionally record actual generated proof sizes and resource costs.
+/// Rounded bound on the cryptographic wire alone, excluding replay and envelope. Every RaceV1
+/// circuit's computed worst case (`iroha_execution_stark::max_proof_bytes`, 2,044,445 bytes for
+/// eight cars) is below it; actual eight-car proofs are about 1.66 MB.
 pub const RACE_MAX_STARK_BYTES_V1: usize = 3_250_000;
-const MIN_TRACE_LOG2: u8 = 13;
-const MAX_TRACE_LOG2: u8 = 19;
-const MAX_AIR_COLUMNS: usize = 384;
 const RULES:&[u8]=b"iroha-race-rules-v1:ticks=30:max=5400:players=1..8:multiplayer=2..8:laps=3:batch=6:skins=6:grid-progress=-floor(slot/2)*4000:grid-x=even?-1800:1800:grid-speed=0:grid-vx=0:grid-energy=1000:controls=throttle,brake,left,right,drift,boost:boost=bit5&&energy>=25:energy=boost?-25:min(1000,+4):top=boost?3000:2400:accel=brake?-100:throttle?40:-12:speed=clamp(speed+accel,0,top):steer=right-left:vx=clamp(trunc((vx+steer*(drift?28:18))*7/8),-320,320):curve-cell=floor(remEuclid(oldProgress,length)*12/length):force=trunc(curve*speed/120):x=clamp(x+vx+force,-9000,9000):abs(x)>6000=>speed=max(0,speed-90):progress+=speed:contacts=ascending-i-j,abs(dp)<3600&&abs(dx)<1800,push=ceil((1800-abs(dx))/2),low-x-or-low-slot-tie-goes-left,speed=max(0,speed-120):finish=after-contacts,progress>=3*length,clamp-and-freeze:dnf=before-exact-tick,record-key-inactivity-even-after-finish,preserve-earlier-finish-as-history-only,freeze-and-ghost:finished-ghost:terminal=(tick%6==0&&(all-finished-or-dnf||active-keys<2))||tick5400:ranking=eligible-before-all-dnf,then-finish-time,then-distance,slot-display-only:winners=eligible-earliest-finish-ties-else-sole-eligible-survivor-else-tick5400-max-eligible-progress-ties-else-all-forfeit-refund:environment=12-cell-center-floor((2i+1)*length/24):kinds-tree0-sign1-oil2:Tokyo-kinds=0,1,0,2,0,1,2,0,1,0,2,1:Harbor-kinds=1,2,0,1,0,2,1,0,2,1,0,2:Sakura-kinds=0,0,2,1,0,2,0,1,0,2,0,1:object-x=even-negative-odd-positive,magnitudes7400,5600,1800:rain-patterns=Tokyo0010,Harbor0110,Sakura0001:wind-pattern=0,1,2,1,0,-1,-2,-1:wind-strengths=Tokyo4,Harbor16,Sakura8:tree-radius=1400:tree-loss=600:tree-push=1800-clamp9000:sign-radius=1300:sign-loss=260:oil-half-length=9000:oil-half-width=1400:oil-steer=trunc(steer/2):rain-steer=trunc(steer*3/4):slippery-damping=15/16:rain-vx-limit=280:wind=trunc(public90tick8table*speed/2400):rain=public300tick4table:impact=swept-progress-before-ordered-contacts:tracks=NeonTokyo/2000000/[0,1,2,1,0,-1,-2,-1,0,2,-2,0];Harbor/2400000/[0,-2,-2,0,1,3,1,0,-1,-3,-1,0];Sakura/1800000/[0,1,1,0,-2,-1,0,2,3,1,-2,0]";
-const PROFILE:&[u8]=b"iroha-native-execution-race-v1:wire=RCE1/1:eligibility-first-awards:poseidon-x7-goldilocks-six-independent-lanes-6x64:public-replay:trace=2^13..2^19:microcycles=boundary,environment,grip,drive,curve,move,impact,ordered-pair,finish:columns=stage-multiplexed-boolean-radix4-banks:integer-air-degree=4:shared-degree=2:envelope-max=4194304:stark-max=3250000:base-max=392:fri-commitment-error-bits-min=187:aux=118:state=progress,x,speed,vx,energy,finish-tick,dnf-tick-plus-one:all-car-dynamics:all-ordered-contacts:initial-intermediate-final-boundaries";
-const CONTEXT: TransparentStarkDigestContextV1 =
-    TransparentStarkDigestContextV1::execution_v1(b"race-stock-proof-v1");
-const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
-    digest_context: CONTEXT,
-    base_leaf: b"execution-race-base-leaf-v1",
-    base_node: b"execution-race-base-node-v1",
-    aux_leaf: b"execution-race-aux-leaf-v1",
-    aux_node: b"execution-race-aux-node-v1",
-    composition_leaf: b"execution-race-composition-leaf-v1",
-    composition_node: b"execution-race-composition-node-v1",
-    fri_leaf: b"execution-race-fri-leaf-v1",
-    fri_node: b"execution-race-fri-node-v1",
-    layout_label: b"execution-race-layout-v1",
-    base_root_label: b"execution-race-base-root-v1",
-    aux_root_label: b"execution-race-aux-root-v1",
-    composition_root_label: b"execution-race-composition-root-v1",
-    fri_root_label: b"execution-race-fri-root-v1",
-    fri_beta_label: b"execution-race-fri-beta-v1",
-    query_seed: b"execution-race-query-seed-v1",
-};
+const PROFILE:&[u8]=b"iroha-native-execution-race-v1:wire=IEB1/1:engine=iroha_execution_stark:bounded-integer-air:goldilocks-fp4-deep-ali-fri:blake2b-384-merkle-and-transcript:digest-bytes=48:public-replay:no-masking:trace=2^13:one-row-per-tick:state=progress,x,speed,vx,energy,finished,finish-tick:dnf=public-columns:boundaries=initial,checkpoint,final:logup=16-bit-verifier-summed-table,4-lookups-per-helper:blowup=8:queries=87:fri-arity=8:final-degree=16:grinding=20:round-target=129:security-target=128:envelope-max=4194304:stark-max=3250000:all-car-dynamics:all-ordered-contacts:deferred-contact-slowing";
+/// Classical soundness target of this profile, enforced by every proof and verification against
+/// the exact circuit. Meeting it is necessary for, but separate from, release qualification.
+const RACE_TARGET_SECURITY_BITS_V1: u16 = 128;
 
 /// Fail-closed release gate. A compiled profile is not funded until cryptographic and resource
 /// qualification evidence is reviewed; development prover/verifier APIs remain directly testable.
@@ -84,7 +58,7 @@ pub fn compiled_race_profile_v1() -> ExecutionProofProfileV1 {
         profile_id: race_profile_id_v1(),
         rules_hash: race_rules_hash_v1(),
         relation: ExecutionProofRelationV1::RaceV1,
-        target_soundness_bits: 128,
+        target_soundness_bits: RACE_TARGET_SECURITY_BITS_V1,
         maximum_proof_bytes: u32::try_from(RACE_MAX_PROOF_BYTES_V1).expect("bounded circuit index"),
         qualified: race_profile_is_qualified_v1(),
     }
@@ -107,22 +81,6 @@ pub(super) const RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
         include_bytes!("environment.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/execution_proofs/environment_air.rs",
-        include_bytes!("environment_air.rs"),
-    ),
-    (
-        "crates/iroha_core_privacy/src/execution_proofs/integer_air.rs",
-        include_bytes!("integer_air.rs"),
-    ),
-    (
-        "crates/iroha_core_privacy/src/execution_proofs/race_air.rs",
-        include_bytes!("race_air.rs"),
-    ),
-    (
-        "crates/iroha_core_privacy/src/execution_proofs/staged_race_air.rs",
-        include_bytes!("staged_race_air.rs"),
-    ),
-    (
         "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
         include_bytes!("proof.rs"),
     ),
@@ -139,48 +97,68 @@ pub(super) const RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
         include_bytes!("../../../iroha_data_model/src/execution_proofs.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
-        include_bytes!("../privacy_engines/transparent_stark.rs"),
+        "crates/iroha_execution_stark/src/lib.rs",
+        include_bytes!("../../../iroha_execution_stark/src/lib.rs"),
     ),
     (
-        "crates/fastpq_isi/src/lib.rs",
-        include_bytes!("../../../fastpq_isi/src/lib.rs"),
+        "crates/iroha_execution_stark/src/air.rs",
+        include_bytes!("../../../iroha_execution_stark/src/air.rs"),
     ),
     (
-        "crates/fastpq_isi/src/params.rs",
-        include_bytes!("../../../fastpq_isi/src/params.rs"),
+        "crates/iroha_execution_stark/src/circuit.rs",
+        include_bytes!("../../../iroha_execution_stark/src/circuit.rs"),
     ),
     (
-        "crates/fastpq_isi/src/poseidon.rs",
-        include_bytes!("../../../fastpq_isi/src/poseidon.rs"),
+        "crates/iroha_execution_stark/src/field.rs",
+        include_bytes!("../../../iroha_execution_stark/src/field.rs"),
     ),
     (
-        "crates/fastpq_isi/src/poseidon_digest384.rs",
-        include_bytes!("../../../fastpq_isi/src/poseidon_digest384.rs"),
+        "crates/iroha_execution_stark/src/fri.rs",
+        include_bytes!("../../../iroha_execution_stark/src/fri.rs"),
     ),
     (
-        "crates/fastpq_isi/src/assets/poseidon_goldilocks_width3_v1.bin",
-        include_bytes!("../../../fastpq_isi/src/assets/poseidon_goldilocks_width3_v1.bin"),
+        "crates/iroha_execution_stark/src/hash.rs",
+        include_bytes!("../../../iroha_execution_stark/src/hash.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/execution_proofs/stark/mod.rs",
-        include_bytes!("stark/mod.rs"),
+        "crates/iroha_execution_stark/src/merkle.rs",
+        include_bytes!("../../../iroha_execution_stark/src/merkle.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/execution_proofs/stark/transparent_stark.rs",
-        include_bytes!("stark/transparent_stark.rs"),
+        "crates/iroha_execution_stark/src/ntt.rs",
+        include_bytes!("../../../iroha_execution_stark/src/ntt.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/execution_proofs/stark/aggregate_stark.rs",
-        include_bytes!("stark/aggregate_stark.rs"),
+        "crates/iroha_execution_stark/src/params.rs",
+        include_bytes!("../../../iroha_execution_stark/src/params.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/execution_proofs/stark/proof_managed_note_stark.rs",
-        include_bytes!("stark/proof_managed_note_stark.rs"),
+        "crates/iroha_execution_stark/src/proof.rs",
+        include_bytes!("../../../iroha_execution_stark/src/proof.rs"),
     ),
     (
-        "crates/iroha_core_privacy/src/execution_proofs/stark/proof_managed_note_stark_execution_fixed.rs",
-        include_bytes!("stark/proof_managed_note_stark_execution_fixed.rs"),
+        "crates/iroha_execution_stark/src/prover.rs",
+        include_bytes!("../../../iroha_execution_stark/src/prover.rs"),
+    ),
+    (
+        "crates/iroha_execution_stark/src/trace.rs",
+        include_bytes!("../../../iroha_execution_stark/src/trace.rs"),
+    ),
+    (
+        "crates/iroha_execution_stark/src/transcript.rs",
+        include_bytes!("../../../iroha_execution_stark/src/transcript.rs"),
+    ),
+    (
+        "crates/iroha_execution_stark/src/verifier.rs",
+        include_bytes!("../../../iroha_execution_stark/src/verifier.rs"),
+    ),
+    (
+        "crates/iroha_execution_stark/src/games/mod.rs",
+        include_bytes!("../../../iroha_execution_stark/src/games/mod.rs"),
+    ),
+    (
+        "crates/iroha_execution_stark/src/games/race_v1.rs",
+        include_bytes!("../../../iroha_execution_stark/src/games/race_v1.rs"),
     ),
 ];
 /// Commitment to the complete frozen `RaceV1` verifier and native outcome semantics.
@@ -193,15 +171,31 @@ pub(super) const RACE_PROFILE_SOURCES_V1: &[(&str, &[u8])] = &[
 pub fn race_profile_id_v1() -> Hash {
     static ID: std::sync::OnceLock<Hash> = std::sync::OnceLock::new();
     *ID.get_or_init(|| {
-        let mut chunks: Vec<&[u8]> = vec![
-            b"iroha:execution:profile:v1\0".as_slice(),
-            PROFILE,
-            RULES,
-            PROOF_MANAGED_NOTE_STARK_GEOMETRY_DESCRIPTOR_V1,
-        ];
+        let mut chunks: Vec<&[u8]> =
+            vec![b"iroha:execution:profile:v1\0".as_slice(), PROFILE, RULES];
         chunks.extend(RACE_PROFILE_SOURCES_V1.iter().map(|(_, bytes)| *bytes));
         Hash::new_from_chunks(&chunks)
     })
+}
+/// Full-strength commitment to the compiled profile: the descriptor, the rules and every committed
+/// source with its path, as length-framed items under the engine's BLAKE2b-384 suite. The 255-bit
+/// ledger identifier `race_profile_id_v1` stays the registry and envelope key; every proof
+/// statement also binds this commitment.
+fn race_profile_commitment_v1() -> ProfileDigest {
+    static COMMITMENT: std::sync::OnceLock<ProfileDigest> = std::sync::OnceLock::new();
+    *COMMITMENT.get_or_init(|| profile_commitment(PROFILE, RULES, RACE_PROFILE_SOURCES_V1))
+}
+
+fn profile_commitment(profile: &[u8], rules: &[u8], sources: &[(&str, &[u8])]) -> ProfileDigest {
+    let mut hasher = FramedHash::new(b"iroha:execution:race-v1:profile-commitment:v1");
+    hasher.update(profile);
+    hasher.update(rules);
+    hasher.update(&(sources.len() as u64).to_le_bytes());
+    for (path, bytes) in sources {
+        hasher.update(path.as_bytes());
+        hasher.update(bytes);
+    }
+    hasher.finalize()
 }
 /// Exact canonical public replay commitment used by peer and ledger certificates.
 #[must_use]
@@ -386,8 +380,8 @@ pub fn verify_race_outcome_v1(
     envelope: &ExecutionProofEnvelopeV1,
 ) -> Result<GameOutcomeV1, ExecutionProofErrorV1> {
     let payload = decode_payload(envelope)?;
-    let adapter = RaceAdapterV1::new(&envelope.statement, &payload)?;
-    verify_proof_managed_note_stark_v1(&adapter, &payload.stark_bytes)?;
+    validate_payload(&envelope.statement, &payload)?;
+    verify_engine_proof(&envelope.statement, &payload)?;
     Ok(payload.outcome)
 }
 
@@ -520,197 +514,196 @@ fn validate_payload(
     Ok(())
 }
 
-struct RaceAdapterV1<'a> {
-    statement: &'a ExecutionPublicInputsV1,
-    payload: &'a RaceProofPayloadV1,
-    compiled: StagedRaceAirV1,
-}
-impl<'a> RaceAdapterV1<'a> {
-    fn new(
-        statement: &'a ExecutionPublicInputsV1,
-        payload: &'a RaceProofPayloadV1,
-    ) -> Result<Self, ExecutionProofErrorV1> {
-        validate_payload(statement, payload)?;
-        let compiled = StagedRaceAirV1::compile(
-            &payload.replay,
-            &payload.final_state,
-            payload.checkpoint_state.as_ref(),
-        );
-        if compiled.width() > MAX_AIR_COLUMNS {
-            return Err(ExecutionProofErrorV1::Envelope);
-        }
-        Ok(Self {
-            statement,
-            payload,
-            compiled,
-        })
-    }
-}
-impl ProofManagedNoteStarkAdapterV1 for RaceAdapterV1<'_> {
-    type ProfileChallenges = ();
-    fn protocol_v1(&self) -> ProofManagedNoteStarkProtocolV1 {
-        ProofManagedNoteStarkProtocolV1 {
-            parameters: AggregateStarkParametersV1 {
-                proof_magic: *b"RCE1",
-                proof_version: 1,
-                security_lanes: 1,
-                query_count: 136,
-                blowup_log2: 3,
-                terminal_log2: 10,
-                terminal_degree_bound: 143,
-                composition_degree_chunks: 4,
-                minimum_trace_log2: MIN_TRACE_LOG2,
-                maximum_trace_log2: MAX_TRACE_LOG2,
-                maximum_trace_groups: 1,
-                maximum_segment_instances: 1,
-                maximum_base_columns_per_instance: MAX_AIR_COLUMNS + NOTE_COPY_WIDTH_V1,
-                maximum_aux_columns_per_instance: NOTE_COPY_AUX_WIDTH_V1,
-                maximum_proof_bytes: RACE_MAX_STARK_BYTES_V1,
-            },
-            domains: DOMAINS,
-            maximum_constraint_degree: 4,
-            profile_binding_label: b"execution-race-profile-binding-v1",
-            profile_descriptor: PROFILE,
-            relation_layout_domain: b"execution-race-relation-layout-v1",
-        }
-    }
-    fn public_input_digest_v1(
-        &self,
-    ) -> Result<GoldilocksDigest384V1, ProofManagedNoteStarkErrorV1> {
-        goldilocks_digest384_frame_v1(
-            CONTEXT,
-            b"execution-race-public-statement-v1",
-            b"statement",
-            0,
-            0,
-            0,
-            &[
-                race_profile_id_v1().as_ref(),
-                &self.statement.encode(),
-                &self.payload.replay.encode(),
-                &self.payload.final_state.encode(),
-                &self.payload.checkpoint_state.encode(),
-            ],
-        )
-        .map_err(|_| ProofManagedNoteStarkErrorV1::InvalidProfile)
-    }
-    fn trace_log2_v1(&self) -> u8 {
-        u8::try_from(self.compiled.trace_size(&self.payload.replay).ilog2())
-            .expect("word-size logarithm fits a byte")
-    }
-    fn base_width_v1(&self) -> usize {
-        NOTE_COPY_WIDTH_V1 + self.compiled.width()
-    }
-    fn profile_aux_width_v1(&self) -> usize {
-        0
-    }
-    fn profile_fixed_width_v1(&self) -> usize {
-        self.compiled.fixed_width()
-    }
-    fn profile_constraint_count_v1(&self) -> usize {
-        self.compiled.constraint_count()
-    }
-    fn copy_schedule_v1(&self) -> Result<NoteCopyScheduleV1, ProofManagedNoteStarkErrorV1> {
-        Ok(NoteCopyScheduleV1 {
-            policies: vec![
-                [NoteCopyCellPolicyV1::Inactive; NOTE_COPY_WIDTH_V1];
-                self.compiled.trace_size(&self.payload.replay)
-            ],
-            sigma: (0..self.compiled.trace_size(&self.payload.replay))
-                .map(|row| {
-                    std::array::from_fn(|column| {
-                        u32::try_from(row * NOTE_COPY_WIDTH_V1 + column + 1)
-                            .expect("bounded circuit index")
-                    })
-                })
-                .collect(),
-        })
-    }
-    fn profile_fixed_columns_v1(&self) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-        let mut columns = vec![
-            Vec::with_capacity(self.compiled.trace_size(&self.payload.replay));
-            self.profile_fixed_width_v1()
-        ];
-        for row in 0..self.compiled.trace_size(&self.payload.replay) {
-            for (column, value) in columns.iter_mut().zip(
-                self.compiled.fixed_row(
-                    &self.payload.replay,
-                    row,
-                    self.compiled.trace_size(&self.payload.replay),
-                    self.payload
-                        .checkpoint_state
-                        .as_ref()
-                        .map(|state| state.tick),
-                ),
-            ) {
-                column.push(field(value));
-            }
-        }
-        Ok(columns)
-    }
-    fn derive_profile_challenges_v1(
-        &self,
-        _: &mut TransparentTranscriptV1,
-        _: NoteCopyChallengesV1,
-    ) -> Result<(), ProofManagedNoteStarkErrorV1> {
-        Ok(())
-    }
-    fn build_profile_aux_columns_v1(
-        &self,
-        _: &[Vec<F>],
-        _: &[Vec<F>],
-        _: &[Vec<F>],
-        _: NoteCopyChallengesV1,
-        (): &(),
-    ) -> Result<Vec<Vec<F>>, ProofManagedNoteStarkErrorV1> {
-        Ok(vec![])
-    }
-    fn profile_constraint_residues_v1(
-        &self,
-        (current, next): (&[F], &[F]),
-        _: &[F],
-        _: &[F],
-        fixed: &[F],
-        _: NoteCopyChallengesV1,
-        (): &(),
-    ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
-        Ok(self.compiled.residues(
-            &current[NOTE_COPY_WIDTH_V1..],
-            &next[NOTE_COPY_WIDTH_V1..],
-            &fixed[NOTE_COPY_FIXED_WIDTH_V1..],
-        ))
+fn engine_track(track: RaceTrackV1) -> race_circuit::Track {
+    match track {
+        RaceTrackV1::NeonTokyo => race_circuit::Track::NeonTokyo,
+        RaceTrackV1::Harbor => race_circuit::Track::Harbor,
+        RaceTrackV1::Sakura => race_circuit::Track::Sakura,
     }
 }
 
-/// Generate and self-verify a genuine native transparent execution proof using local entropy.
+fn engine_replay(replay: &RaceReplayV1) -> race_circuit::Replay {
+    race_circuit::Replay {
+        track: engine_track(replay.track),
+        players: usize::from(replay.player_count),
+        frames: replay
+            .frames
+            .iter()
+            .map(|frame| frame.controls.clone())
+            .collect(),
+        dnf_events: replay
+            .dnf_events
+            .iter()
+            .map(|event| (event.tick, event.slots.clone()))
+            .collect(),
+    }
+}
+
+/// Circuit registers of a state, in `race_circuit::registers` order. Removals are public columns.
+fn engine_registers(state: &RaceStateV1) -> Vec<i64> {
+    state
+        .cars
+        .iter()
+        .flat_map(|car| {
+            [
+                car.progress_mm,
+                i64::from(car.lateral_mm),
+                i64::from(car.speed_mm_per_tick),
+                i64::from(car.lateral_velocity_mm_per_tick),
+                i64::from(car.boost_energy),
+                i64::from(car.finish_tick.is_some()),
+                i64::from(car.finish_tick.unwrap_or(0)),
+            ]
+        })
+        .collect()
+}
+
+/// Removal ticks must match the public schedule exactly: the final state records every removal
+/// (those at the last tick included) and a checkpoint records those strictly before its tick.
+fn removals_match_states(payload: &RaceProofPayloadV1) -> bool {
+    let removed = race_circuit::removal_ticks(&engine_replay(&payload.replay));
+    payload.final_state.cars.len() == removed.len()
+        && payload
+            .final_state
+            .cars
+            .iter()
+            .zip(&removed)
+            .all(|(car, tick)| car.dnf_tick == *tick)
+        && payload.checkpoint_state.as_ref().is_none_or(|checkpoint| {
+            checkpoint.cars.len() == removed.len()
+                && checkpoint
+                    .cars
+                    .iter()
+                    .zip(&removed)
+                    .all(|(car, tick)| car.dnf_tick == tick.filter(|tick| *tick < checkpoint.tick))
+        })
+}
+
+/// Transcript binding of the engine statement: the exact envelope statement and every payload
+/// field except the proof bytes themselves, as length-prefixed canonical encodings. The engine
+/// absorbs these bytes unhashed, so the binding rests on the transcript hash alone rather than on
+/// the 255-bit ledger `Hash`. It includes the full-strength profile commitment as well as the
+/// ledger profile identifier.
+fn engine_binding(statement: &ExecutionPublicInputsV1, payload: &RaceProofPayloadV1) -> Vec<u8> {
+    let profile = race_profile_id_v1();
+    let commitment = race_profile_commitment_v1();
+    let fields: [&[u8]; 11] = [
+        b"iroha:execution:race-v1:engine-binding:v1",
+        profile.as_ref(),
+        &commitment,
+        &statement.encode(),
+        &payload.manifest.encode(),
+        &payload.admission.encode(),
+        &payload.outcome.encode(),
+        &payload.relation_inputs.encode(),
+        &payload.replay.encode(),
+        &payload.final_state.encode(),
+        &payload.checkpoint_state.encode(),
+    ];
+    let mut binding = Vec::with_capacity(fields.iter().map(|field| 8 + field.len()).sum());
+    for field in fields {
+        binding.extend_from_slice(&(field.len() as u64).to_le_bytes());
+        binding.extend_from_slice(field);
+    }
+    binding
+}
+
+/// The engine circuit, statement and public columns of a validated payload. Checks the replay's
+/// public structure (including the public half of the six-tick terminal rule, which the circuit
+/// does not prove) and the removal ticks of the final and checkpoint states.
+fn engine_statement(
+    statement: &ExecutionPublicInputsV1,
+    payload: &RaceProofPayloadV1,
+) -> Result<(Circuit, Statement, Vec<Vec<i64>>), ExecutionProofErrorV1> {
+    let replay = engine_replay(&payload.replay);
+    race_circuit::validate_replay(&replay).map_err(|_| ExecutionProofErrorV1::Replay)?;
+    if !removals_match_states(payload) {
+        return Err(ExecutionProofErrorV1::Replay);
+    }
+    let initial = initial_race_state_v1(payload.replay.track, payload.replay.player_count)
+        .map_err(|_| ExecutionProofErrorV1::Replay)?;
+    let public =
+        race_circuit::public_columns(&replay).map_err(|_| ExecutionProofErrorV1::Replay)?;
+    let engine_statement = Statement {
+        steps: payload.replay.frames.len(),
+        initial: engine_registers(&initial),
+        final_state: engine_registers(&payload.final_state),
+        checkpoint: payload.checkpoint_state.as_ref().map(|state| Checkpoint {
+            step: state.tick as usize,
+            registers: engine_registers(state),
+        }),
+        binding: engine_binding(statement, payload),
+    };
+    Ok((
+        race_circuit::circuit(replay.track, replay.players),
+        engine_statement,
+        public,
+    ))
+}
+
+/// The standard parameters after checking them, for this exact circuit, against the profile's
+/// immutable security target. Every proof and every verification goes through this check.
+fn engine_params(circuit: &Circuit) -> Result<Params, ExecutionProofErrorV1> {
+    let params = Params::standard();
+    params.check_security(circuit, f64::from(RACE_TARGET_SECURITY_BITS_V1))?;
+    Ok(params)
+}
+
+/// Verify the payload's proof bytes against the engine statement rebuilt from public data.
+fn verify_engine_proof(
+    statement: &ExecutionPublicInputsV1,
+    payload: &RaceProofPayloadV1,
+) -> Result<(), ExecutionProofErrorV1> {
+    let (circuit, engine_statement, public) = engine_statement(statement, payload)?;
+    let params = engine_params(&circuit)?;
+    let proof =
+        Proof::from_bytes(&payload.stark_bytes).map_err(|_| ExecutionProofErrorV1::Envelope)?;
+    if proof.to_bytes() != payload.stark_bytes {
+        return Err(ExecutionProofErrorV1::Envelope);
+    }
+    iroha_execution_stark::verify(&circuit, &params, &engine_statement, &public, &proof)?;
+    Ok(())
+}
+
+/// Register vectors before every tick and after the last, from the node's own simulation.
+fn race_register_states(replay: &RaceReplayV1) -> Result<Vec<Vec<i64>>, ExecutionProofErrorV1> {
+    let mut state = initial_race_state_v1(replay.track, replay.player_count)
+        .map_err(|_| ExecutionProofErrorV1::Replay)?;
+    let mut events = replay.dnf_events.iter().peekable();
+    let mut states = Vec::with_capacity(replay.frames.len() + 1);
+    for frame in &replay.frames {
+        if events.peek().is_some_and(|event| event.tick == state.tick) {
+            let event = events.next().expect("peeked event");
+            apply_race_dnf_v1(&mut state, &event.slots)
+                .map_err(|_| ExecutionProofErrorV1::Replay)?;
+        }
+        states.push(engine_registers(&state));
+        step_race_v1(&mut state, frame).map_err(|_| ExecutionProofErrorV1::Replay)?;
+    }
+    // Removals at the last tick change no register.
+    states.push(engine_registers(&state));
+    Ok(states)
+}
+
+/// Generate and self-verify a genuine native execution proof. Proving is deterministic.
 ///
 /// # Errors
-/// Rejects inconsistent admission, manifest, replay or statement bindings; propagates trace, entropy, proof-generation, size-limit and self-verification failures.
+/// Rejects inconsistent admission, manifest, replay or statement bindings; propagates proving,
+/// size-limit and self-verification failures.
 pub fn prove_race_v1(
     request: &RaceProverRequestV1,
 ) -> Result<ExecutionProofEnvelopeV1, ExecutionProofErrorV1> {
     let mut payload = race_payload_from_request_v1(request)?;
-    let adapter = RaceAdapterV1::new(&request.statement, &payload)?;
-    let size = adapter.compiled.trace_size(&payload.replay);
-    let mut carry = adapter.compiled.initial_carry();
-    let mut columns = vec![Vec::with_capacity(size); adapter.base_width_v1()];
-    for row_index in 0..size {
-        let fixed = adapter.compiled.fixed_row(
-            &payload.replay,
-            row_index,
-            size,
-            payload.checkpoint_state.as_ref().map(|state| state.tick),
-        );
-        let (row, next) = adapter.compiled.witness(&carry, &fixed);
-        carry = next;
-        for column in &mut columns[..NOTE_COPY_WIDTH_V1] {
-            column.push(F::ZERO);
-        }
-        for (column, value) in columns[NOTE_COPY_WIDTH_V1..].iter_mut().zip(row) {
-            column.push(value);
-        }
+    validate_payload(&request.statement, &payload)?;
+    let (circuit, engine_statement, public) = engine_statement(&request.statement, &payload)?;
+    let params = engine_params(&circuit)?;
+    let states = race_register_states(&payload.replay)?;
+    let proof =
+        iroha_execution_stark::prove(&circuit, &params, &engine_statement, &public, &states)?;
+    payload.stark_bytes = proof.to_bytes();
+    if payload.stark_bytes.len() > RACE_MAX_STARK_BYTES_V1 {
+        return Err(ExecutionProofErrorV1::Envelope);
     }
-    payload.stark_bytes = prove_proof_managed_note_stark_v1(&adapter, &columns)?;
     let envelope = ExecutionProofEnvelopeV1 {
         version: 1,
         profile_id: race_profile_id_v1(),
@@ -749,14 +742,13 @@ fn decode_payload(
 /// Verify the complete semantic execution relation, with no replay-only or binding-only mode.
 ///
 /// # Errors
-/// Rejects malformed or oversized envelopes, inconsistent semantic bindings, and invalid native STARK proofs.
+/// Rejects malformed or oversized envelopes, inconsistent semantic bindings, and invalid proofs.
 pub fn verify_race_proof_v1(
     envelope: &ExecutionProofEnvelopeV1,
 ) -> Result<(), ExecutionProofErrorV1> {
     let payload = decode_payload(envelope)?;
-    let adapter = RaceAdapterV1::new(&envelope.statement, &payload)?;
-    verify_proof_managed_note_stark_v1(&adapter, &payload.stark_bytes)?;
-    Ok(())
+    validate_payload(&envelope.statement, &payload)?;
+    verify_engine_proof(&envelope.statement, &payload)
 }
 
 /// Retained chain history against which an execution proof is authenticated.
@@ -950,9 +942,7 @@ pub fn verify_race_proof_for_history_v1(
     if tail < u32::try_from(replay.frames.len()).expect("validated replay duration") {
         return Err(ExecutionProofErrorV1::History);
     }
-    let adapter = RaceAdapterV1::new(statement, &payload)?;
-    verify_proof_managed_note_stark_v1(&adapter, &payload.stark_bytes)?;
-    Ok(())
+    verify_engine_proof(statement, &payload)
 }
 
 #[cfg(test)]

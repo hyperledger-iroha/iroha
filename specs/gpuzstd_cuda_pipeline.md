@@ -29,10 +29,10 @@ Metal helper:
    buffer, then copies them back to pinned host memory after a bounded event
    wait.
 5. The shared zstd frame encoder assembles literals, Huffman/FSE data, block
-   headers, and the frame header. `gpuzstd_cuda` links it from the
-   `gpuzstd_metal` library (`zstd_frame`, with `default-features = false` so
-   the Metal crate's `c-abi` exports are not linked) instead of compiling a
-   second copy.
+   headers, and the frame header. Both GPU backends link the Rust-only
+   `gpuzstd_codec` owner. It has no device code or C exports, so selecting both
+   backend packages in one workspace build cannot import Metal's implementation
+   or duplicate C exports into the CUDA plugin.
 
 The CUDA kernels do not use atomics or scheduling-dependent reductions for
 output bytes. Each chunk owns its hash table and sequence range, so launch order
@@ -71,6 +71,8 @@ instead of silently doing CPU work when CUDA cannot run.
 
 Focused checks:
 
+- `cargo test -p gpuzstd_codec -p gpuzstd_metal -p gpuzstd_cuda`
+- [Co-built plugin export and backend-ownership regression](../crates/gpuzstd_cuda/README.md)
 - `cargo test -p gpuzstd_cuda`
 - `cargo test -p jsonstage1_cuda`
 - `cargo test -p norito gpu_zstd --features gpu-compression`

@@ -59,9 +59,11 @@ fn serve_stub(app: axum::Router) -> Option<StatusStub> {
 fn status_stub_retains_listener_until_its_owner_drops() {
     let _serial = crate::serial_guard();
     let stub = spawn_status_metrics_stub().expect("local status stub");
-    let response = attohttpc::get(format!("http://{}/status", stub.addr))
-        .send()
-        .expect("retained runtime serves status");
+    let response = stub._runtime.block_on(async {
+        reqwest::get(format!("http://{}/status", stub.addr))
+            .await
+            .expect("retained runtime serves status")
+    });
     assert!(response.status().is_success());
     let addr = stub.addr;
     drop(stub);

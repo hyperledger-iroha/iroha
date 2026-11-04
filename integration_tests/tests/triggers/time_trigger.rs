@@ -1,9 +1,12 @@
 //! Time-based trigger execution paths using bounded async waits.
+#[path = "../support/contract_deployment.rs"]
+mod contract_deployment;
 use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     data_model::{Level, asset::AssetId, prelude::*},
 };
 use iroha_model_base::domain::DomainId;
@@ -16,20 +19,92 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
-fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
+/// Bind the callback to its deployed instance and exact declared permission.
+async fn deploy_nft_callback(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+) -> Result<(IvmBytecode, Metadata)> {
+    use iroha_executor_data_model::permission::{
+        nft::CanRegisterNft, smart_contract::CanUseContractPermission,
+    };
+    let bytecode = load_sample_ivm("create_nft_for_every_user_trigger");
+    let artifact = bytecode.clone();
+    let (address, code_hash, _, _) = run_on_dedicated_thread({
+        let client = client.clone();
+        move || {
+            contract_deployment::deploy_contract_locally_signed(
+                &client,
+                artifact.as_ref(),
+                iroha_data_model::smart_contract::ContractAlias::from_components(
+                    "time_trigger_nft",
+                    None,
+                    "universal",
+                )?,
+            )
+        }
+    })
+    .await??;
+    let genesis_key = &iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR;
+    let genesis_id = AccountId::new(genesis_key.public_key().clone());
+    run_on_dedicated_thread({
+        let client = client.clone();
+        let address = address.clone();
+        let genesis_id = genesis_id.clone();
+        move || {
+            client.submit_all::<InstructionBox>(
+                [
+                    Grant::account_permission(
+                        CanUseContractPermission {
+                            contract: address,
+                            permission: "Entry".parse()?,
+                        },
+                        ALICE_ID.clone(),
+                    )
+                    .into(),
+                    Transfer::asset_quantity(
+                        AssetId::new(
+                            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                                .parse()?,
+                            ALICE_ID.clone(),
+                        ),
+                        100_u32,
+                        genesis_id,
+                    )
+                    .into(),
+                ],
+                FeePaymentIntent::authority(Vec::new(), None),
+            )
+        }
+    })
+    .await??;
+    // The genesis domain stays with its owner. Its funded signer delegates the
+    // exact native NFT capability to this deployed contract's immutable subject.
+    let owner_client =
+        network.peers()[0].client_for(&genesis_id, genesis_key.private_key().clone());
+    let subject = address.subject_id();
+    run_on_dedicated_thread(move || {
+        owner_client.submit(
+            Grant::account_permission(
+                CanRegisterNft {
+                    domain: iroha_genesis::GENESIS_DOMAIN_ID.clone(),
+                },
+                subject,
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     let mut metadata = Metadata::default();
-    metadata.insert(
-        "contract_entrypoint"
-            .parse::<Name>()
-            .expect("static contract entrypoint metadata key is valid"),
-        Json::new(entrypoint.to_owned()),
-    );
-    metadata
+    for (key, value) in [
+        ("contract_address", address.to_string()),
+        ("contract_code_hash", code_hash),
+        ("contract_entrypoint", "run".to_owned()),
+    ] {
+        metadata.insert(key.parse::<Name>()?, Json::new(value));
+    }
+    Ok((bytecode, metadata))
 }
 fn curr_time() -> Duration {
     use std::time::SystemTime;
@@ -64,7 +139,7 @@ async fn submit_with_context(
     });
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client
             .submit(
                 instruction,
@@ -91,7 +166,7 @@ async fn submit_all_with_context(
         ));
     });
     let context = context.to_string();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client
             .submit_all(
                 instructions,
@@ -105,7 +180,7 @@ async fn submit_all_with_context(
 async fn leader_client_for_submit(network: &sandbox::SerializedNetwork, probe: &Client) -> Client {
     let peer_count = network.peers().len();
     let status = probe.client().status().get().await.ok();
-    let sumeragi = spawn_blocking({
+    let sumeragi = run_on_dedicated_thread({
         let client = probe.clone();
         move || client.client().get_sumeragi_status()
     })
@@ -203,7 +278,17 @@ async fn time_trigger_scenarios() -> Result<()> {
         attempt += 1;
         let result = Box::pin(async {
             let Some(network) = sandbox::start_network_async_or_skip(
-                NetworkBuilder::new().with_default_block_cadence(),
+                NetworkBuilder::new()
+                    .with_default_block_cadence()
+                    .with_genesis_keypair(iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone())
+                    .with_genesis_instruction(Grant::account_permission(
+                        iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
+                        ALICE_ID.clone(),
+                    ))
+                    .with_genesis_instruction(Grant::account_permission(
+                        contract_deployment::contract_alias_management_permission("time_trigger_nft"),
+                        ALICE_ID.clone(),
+                    )),
                 stringify!(time_trigger_scenarios),
             )
             .await?
@@ -240,7 +325,7 @@ async fn mint_asset_after_3_sec_scenario(
         );
         let account_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
-        let init_quantity = spawn_blocking({
+        let init_quantity = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -257,92 +342,108 @@ async fn mint_asset_after_3_sec_scenario(
             .map(|height| height.total)
             .max()
             .unwrap_or(0);
-        let start_time = curr_time();
+        // Time triggers cannot execute in their registration block. Reserve
+        // half the existing synchronization window for quoting and registration;
+        // the other half covers the one-shot invocation. A missed registration
+        // window is an explicit failure, never a silently retried schedule.
+        let deadline = tokio::time::Instant::now() + sync_timeout;
+        let schedule_at = curr_time() + sync_timeout / 2;
         let pipeline_time = network.block_cadence();
-        let gap = std::cmp::max(
-            Duration::from_millis(200),
-            pipeline_time.checked_div(2).unwrap_or(pipeline_time),
-        );
-        let schedule_at = start_time + gap;
-        let schedule = TimeSchedule::starting_at(schedule_at);
-        let instruction = Mint::asset_quantity(1_u32, asset_id.clone());
-        let register_trigger = Register::trigger(Trigger::new(
-            "mint_rose_schedule".parse().expect("Valid"),
-            Action::new(
-                vec![instruction],
-                Repeats::from(1_u32),
-                account_id.clone(),
-                TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
+        let invocation = async {
+            let schedule = TimeSchedule::starting_at(schedule_at);
+            let trigger_id: TriggerId = "mint_rose_schedule".parse().expect("Valid");
+            let instruction = Mint::asset_quantity(1_u32, asset_id.clone());
+            let register_trigger = Register::trigger(Trigger::new(
+                trigger_id.clone(),
+                Action::new(
+                    vec![instruction],
+                    Repeats::from(1_u32),
+                    account_id.clone(),
+                    TimeEventFilter::new(ExecutionTime::Schedule(schedule)),
+                )
+                .expect("trigger action fixture satisfies validation invariants"),
+            ));
+            submit_with_context(
+                network,
+                &test_client,
+                register_trigger,
+                "mint_asset_after_3_sec register trigger",
             )
-            .expect("trigger action fixture satisfies validation invariants"),
-        ));
-        submit_with_context(
-            network,
-            &test_client,
-            register_trigger,
-            "mint_asset_after_3_sec register trigger",
-        )
-        .await?;
-        target_height = target_height.saturating_add(1);
-        network
-            .ensure_blocks_with(|height| height.total >= target_height)
             .await?;
-        submit_with_context(
-            network,
-            &test_client,
-            Log::new(Level::DEBUG, "Just to create block".to_string()),
-            "mint_asset_after_3_sec create block",
-        )
-        .await?;
-        target_height = target_height.saturating_add(1);
-        network
-            .ensure_blocks_with(|height| height.total >= target_height)
+            target_height = target_height.saturating_add(1);
+            network
+                .ensure_blocks_with(|height| height.total >= target_height)
+                .await?;
+            let registered = test_client
+                .account_client()
+                .query_single(FindTriggerById::new(trigger_id.clone()))
+                .await?;
+            assert_eq!(registered.id(), &trigger_id);
+            let registered_at: u64 = registered
+                .action()
+                .metadata()
+                .get(&"__registered_at_ms".parse::<Name>()?)
+                .expect("native registration timestamp must be present")
+                .try_into_any_norito()?;
+            assert!(
+                Duration::from_millis(registered_at) < schedule_at,
+                "one-shot registration must precede its schedule: {registered_at}ms >= {schedule_at:?}"
+            );
+            submit_with_context(
+                network,
+                &test_client,
+                Log::new(Level::DEBUG, "Just to create block".to_string()),
+                "mint_asset_after_3_sec create block",
+            )
             .await?;
-        let after_registration_quantity = spawn_blocking({
-            let client = test_client.clone();
-            let asset_id = asset_id.clone();
-            move || get_asset_value(&client, &asset_id)
-        })
-        .await??;
-        if after_registration_quantity == expected_value {
-            // Scheduling can fire immediately if the block time already passed the schedule.
-            return Ok(());
-        }
-        assert_eq!(init_quantity, after_registration_quantity);
-        let poll_delay = pipeline_time.checked_div(2).unwrap_or(pipeline_time);
-        // Ensure we create a block after the schedule time; block production can be faster than
-        // pipeline_time, which would otherwise skip the scheduled window entirely.
-        let wait_until = schedule_at.saturating_sub(curr_time());
-        if !wait_until.is_zero() {
-            sleep(wait_until).await;
-        }
-        submit_with_context(
-            network,
-            &test_client,
-            Log::new(Level::DEBUG, "Just to create block".to_string()),
-            "mint_asset_after_3_sec create block after poll delay",
-        )
-        .await?;
-        target_height = target_height.saturating_add(1);
-        network
-            .ensure_blocks_with(|height| height.total >= target_height)
+            target_height = target_height.saturating_add(1);
+            network
+                .ensure_blocks_with(|height| height.total >= target_height)
+                .await?;
+            let after_registration_quantity = run_on_dedicated_thread({
+                let client = test_client.clone();
+                let asset_id = asset_id.clone();
+                move || get_asset_value(&client, &asset_id)
+            })
+            .await??;
+            if after_registration_quantity == expected_value {
+                // Scheduling can fire immediately if the block time already passed the schedule.
+                return Ok(());
+            }
+            assert_eq!(init_quantity, after_registration_quantity);
+            let poll_delay = pipeline_time.checked_div(2).unwrap_or(pipeline_time);
+            // Ensure we create a block after the schedule time; block production can be faster than
+            // pipeline_time, which would otherwise skip the scheduled window entirely.
+            let wait_until = schedule_at.saturating_sub(curr_time());
+            if !wait_until.is_zero() {
+                sleep(wait_until).await;
+            }
+            submit_with_context(
+                network,
+                &test_client,
+                Log::new(Level::DEBUG, "Just to create block".to_string()),
+                "mint_asset_after_3_sec create block after poll delay",
+            )
             .await?;
-        timeout(sync_timeout, async {
+            target_height = target_height.saturating_add(1);
+            network
+                .ensure_blocks_with(|height| height.total >= target_height)
+                .await?;
             loop {
-                let after_wait_quantity = spawn_blocking({
+                let after_wait_quantity = run_on_dedicated_thread({
                     let client = test_client.clone();
                     let asset_id = asset_id.clone();
                     move || get_asset_value(&client, &asset_id)
                 })
                 .await??;
                 if after_wait_quantity == expected_value {
-                    break Ok::<(), eyre::Report>(());
+                    break;
                 }
                 sleep(poll_delay).await;
             }
-        })
-        .await??;
-        Ok(())
+            Ok(())
+        };
+        tokio::time::timeout_at(deadline, invocation).await?
     })
     .await
 }
@@ -391,7 +492,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             network
                 .ensure_blocks_with(|height| height.total >= target_height)
                 .await?;
-            let prev_value = spawn_blocking({
+            let prev_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -406,7 +507,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
                 // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
                 let submit_client = leader_client_for_submit(network, &test_client).await;
                 let context = "pre_commit_trigger_should_be_executed sample ISI".to_string();
-                spawn_blocking(move || {
+                run_on_dedicated_thread(move || {
                     submit_client
                         .submit(
                             sample_isi,
@@ -435,7 +536,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
             );
             timeout(network.sync_timeout(), async {
                 loop {
-                    let new_value = spawn_blocking({
+                    let new_value = run_on_dedicated_thread({
                         let client = test_client.clone();
                         let asset_id = asset_id.clone();
                         move || get_asset_value(&client, &asset_id)
@@ -466,18 +567,42 @@ async fn pre_commit_trigger_should_be_executed_scenario(
     )
     .await
 }
+async fn native_nft_count(client: &Client, owner: &AccountId) -> Result<u64> {
+    let page = client
+        .account_client()
+        .list_page(
+            &Collection::Nfts,
+            &ListQuery::new()
+                .filter(field("owned_by").eq(owner.to_string()))
+                .limit(64),
+        )
+        .await?;
+    eyre::ensure!(
+        page.next_cursor.is_none() && page.items.len() <= 64 && page.total.is_none(),
+        "time-trigger NFT fixture requires a complete bounded owner page"
+    );
+    #[derive(norito::JsonDeserialize)]
+    struct OwnedNft {
+        id: NftId,
+        owned_by: AccountId,
+    }
+    let mut ids = std::collections::BTreeSet::new();
+    for value in page.items {
+        let nft: OwnedNft = norito::json::from_value(value)?;
+        eyre::ensure!(
+            &nft.owned_by == owner && ids.insert(nft.id),
+            "native NFT page changed owner or repeated an identity"
+        );
+    }
+    Ok(u64::try_from(ids.len())?)
+}
 async fn mint_nft_for_every_user_every_1_sec_scenario(
     network: &sandbox::SerializedNetwork,
     test_client: &Client,
 ) -> Result<()> {
     let test_client = test_client.clone();
-    let trigger_period = std::cmp::max(
-        Duration::from_millis(300),
-        network
-            .block_cadence()
-            .checked_div(2)
-            .unwrap_or_else(|| network.block_cadence()),
-    );
+    // Recurring schedules may not run more often than the signed block cadence.
+    let trigger_period = network.block_cadence();
     let expected_count: u64 = 3;
     run_or_skip(stringify!(mint_nft_for_every_user_every_1_sec), || async {
         let alice_id = ALICE_ID.clone();
@@ -488,6 +613,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             gen_account_in("wonderland").0,
             gen_account_in("wonderland").0,
         ];
+        let (bytecode, callback_metadata) = deploy_nft_callback(network, &test_client).await?;
         let mut target_height = network
             .peers()
             .iter()
@@ -515,24 +641,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
         println!("registered additional accounts for time trigger");
         let mut baseline_counts = Vec::with_capacity(accounts.len());
         for account_id in &accounts {
-            let account_id_clone = account_id.clone();
-            let count: u64 = spawn_blocking({
-                let client = test_client.clone();
-                move || {
-                    client
-                        .client()
-                        .query(FindNfts::new())
-                        .execute_all()
-                        .map(|nfts| {
-                            nfts.into_iter()
-                                .filter(|nft| nft.owned_by() == &account_id_clone)
-                                .count()
-                        })
-                }
-            })
-            .await??
-            .try_into()
-            .expect("`usize` should always fit in `u64`");
+            let count = native_nft_count(&test_client, account_id).await?;
             baseline_counts.push(count);
         }
         let offset = trigger_period.saturating_mul(2);
@@ -542,13 +651,13 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
         let register_trigger = Register::trigger(Trigger::new(
             "mint_nft_for_all".parse()?,
             Action::new(
-                load_sample_ivm("create_nft_for_every_user_trigger"),
+                bytecode,
                 Repeats::Exactly(u32::try_from(expected_count)?),
                 alice_id.clone(),
                 filter,
             )
             .expect("trigger action fixture satisfies validation invariants")
-            .with_metadata(contract_entrypoint_metadata("run")),
+            .with_metadata(callback_metadata),
         ));
         submit_with_context(
             network,
@@ -573,6 +682,31 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             blocks_to_drive,
         )
         .await?;
+        // Authenticate persisted callback outcomes so a failed NFT instruction
+        // cannot masquerade as a slow successful schedule until the poll expires.
+        let completions = run_on_dedicated_thread({
+            let client = test_client.clone();
+            move || {
+                client.client().get_trigger_completions(
+                    Some("mint_nft_for_all"),
+                    None,
+                    None,
+                    Some(target_height),
+                    None,
+                    Some(16),
+                    Some(64),
+                )
+            }
+        })
+        .await??;
+        eyre::ensure!(
+            completions
+                .completions
+                .iter()
+                .all(|record| record.completion.outcome == "Success"),
+            "time-trigger NFT callback failed: {:?}",
+            completions.completions
+        );
         let poll_delay = std::cmp::max(
             Duration::from_millis(200),
             trigger_period.checked_div(2).unwrap_or(trigger_period),
@@ -581,24 +715,7 @@ async fn mint_nft_for_every_user_every_1_sec_scenario(
             loop {
                 let mut minted_counts = Vec::with_capacity(accounts.len());
                 for (idx, account_id) in accounts.iter().enumerate() {
-                    let account_id_clone = account_id.clone();
-                    let count: u64 = spawn_blocking({
-                        let client = test_client.clone();
-                        move || {
-                            client
-                                .client()
-                                .query(FindNfts::new())
-                                .execute_all()
-                                .map(|nfts| {
-                                    nfts.into_iter()
-                                        .filter(|nft| nft.owned_by() == &account_id_clone)
-                                        .count()
-                                })
-                        }
-                    })
-                    .await??
-                    .try_into()
-                    .expect("`usize` should always fit in `u64`");
+                    let count = native_nft_count(&test_client, account_id).await?;
                     let baseline = baseline_counts.get(idx).copied().unwrap_or(0);
                     minted_counts.push(count.saturating_sub(baseline));
                 }
@@ -639,7 +756,7 @@ async fn submit_sample_isi_on_every_block_commit(
         // Submit without waiting for tx confirmation to avoid queue-timeout flakiness.
         let submit_client = leader_client_for_submit(network, test_client).await;
         let context = "time_trigger sample ISI".to_string();
-        spawn_blocking(move || {
+        run_on_dedicated_thread(move || {
             submit_client
                 .submit(
                     sample_isi,

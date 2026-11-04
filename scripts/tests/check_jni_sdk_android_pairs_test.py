@@ -47,8 +47,8 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_rejects_helper_argument_reordering(self) -> None:
         mutated = SOURCE.replace(
-            "java_native_public_key_from_private(&mut env, algorithm_code, private_key)",
-            "java_native_public_key_from_private(&mut env, private_key, algorithm_code)",
+            "java_native_public_key_from_private(env, algorithm_code, private_key)",
+            "java_native_public_key_from_private(env, private_key, algorithm_code)",
             1,
         )
         self.assertNotEqual(SOURCE, mutated, "mutation must alter the guarded source")
@@ -57,8 +57,8 @@ class JniSdkAndroidPairGuardTests(unittest.TestCase):
 
     def test_multisig_pairs_keep_network_fee_and_signature_binding(self) -> None:
         for method, old, new in (
-            ("payload", "&mut env,\n            network_id,\n            authority,\n            reporting_account,\n            change,\n            creation_time_ms,",
-             "&mut env,\n            authority,\n            network_id,\n            reporting_account,\n            change,\n            creation_time_ms,"),
+            ("payload", "env,\n            network_id,\n            authority,\n            reporting_account,\n            change,\n            creation_time_ms,",
+             "env,\n            authority,\n            network_id,\n            reporting_account,\n            change,\n            creation_time_ms,"),
             ("finalize", "fee_payment_json,\n            signature,", "signature,\n            fee_payment_json,"),
         ):
             with self.subTest(method=method):

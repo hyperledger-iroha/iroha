@@ -146,8 +146,9 @@ pub fn decode_lower_hex_32(value: &str) -> Option<[u8; 32]> {
     {
         return None;
     }
-    let decoded = hex::decode(value).ok()?;
-    decoded.try_into().ok()
+    let mut decoded = [0; 32];
+    hex::decode_to_slice(value, &mut decoded).ok()?;
+    Some(decoded)
 }
 /// Invalid control representation; the error never contains supplied payloads or credentials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

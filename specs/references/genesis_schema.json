@@ -3624,6 +3624,14 @@
         {
           "mask": 64,
           "name": "ContainmentExpired"
+        },
+        {
+          "mask": 128,
+          "name": "ContainmentReviewed"
+        },
+        {
+          "mask": 256,
+          "name": "ContainmentResolved"
         }
       ],
       "repr": "u32"

@@ -435,6 +435,7 @@ pub(super) fn matched_benchmark_builder(
                 transactions,
                 topology,
                 entries,
+                genesis_staking_policy(),
             )
         })
         .with_genesis_instruction(npos_override_instruction(VALIDATORS_PER_LANE))

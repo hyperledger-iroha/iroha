@@ -204,25 +204,87 @@ def test_all_eight_shapes_lifetimes_and_fail_closed_source_binding(tmp_path):
         MODULE.reviewed_source_inventory(tmp_path)
 
 
-def test_provider_layout_receipt_checks_source_identity_and_target_uniqueness(tmp_path):
+def test_provider_layout_receipt_checks_source_identity_and_target_uniqueness(tmp_path, monkeypatch):
     import hashlib
 
-    evidence = tmp_path / "docs/validation/parliament_ballot_b6"
+    evidence = tmp_path / MODULE.PROVIDER_LAYOUT_RECEIPT.parent
     evidence.mkdir(parents=True)
     source = tmp_path / "provider.rs"
     source.write_text("reviewed provider")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     ir = evidence / "probe.ll.txt"
-    ir.write_text("@B6_SOFT_SIZE = constant [960 x i8] zeroinitializer\n@B6_AUTO_SIZE = constant [960 x i8] zeroinitializer\n")
+    ir.write_text("@B6_SOFT_SIZE = constant [960 x i8] zeroinitializer\n@B6_AUTO_SIZE = constant [960 x i8] zeroinitializer\n@B6_SOFT_ALIGN = constant [8 x i8] zeroinitializer\n@B6_AUTO_ALIGN = constant [8 x i8] zeroinitializer\n")
     target = {"target": "aarch64-apple-darwin", "mode": "portable",
-              "bytes": {"SOFT_SIZE": 960, "AUTO_SIZE": 960}, "llvm_ir_file": ir.name,
+              "bytes": {"SOFT_SIZE": 960, "AUTO_SIZE": 960, "SOFT_ALIGN": 8, "AUTO_ALIGN": 8}, "llvm_ir_file": ir.name,
               "llvm_ir_sha256": hashlib.sha256(ir.read_bytes()).hexdigest()}
     receipt = {"source_sha256": {source.name: digest}, "targets": [target, target],
                "maximum_simultaneous_verifier_provider_boxes": 1}
     path = evidence / "provider-layout.json"
     path.write_text(json.dumps(receipt))
+    monkeypatch.setattr(MODULE, "REVIEWED_PROVIDER_LAYOUT_SHA256", hashlib.sha256(path.read_bytes()).hexdigest())
     with pytest.raises(ValueError, match="duplicate"):
         MODULE.provider_layout_inventory(tmp_path)
     source.write_text("changed provider")
     with pytest.raises(ValueError, match="source changed"):
         MODULE.provider_layout_inventory(tmp_path)
+
+
+@pytest.mark.parametrize("mutation", [
+    "size", "alignment", "duplicate_global", "missing_global", "declared_size",
+    "declared_alignment", "missing_target", "unexpected_target", "receipt",
+])
+def test_provider_measurement_mutations_refuse_even_with_rebound_ir_hashes(tmp_path, monkeypatch, mutation):
+    import hashlib
+
+    evidence = tmp_path / MODULE.PROVIDER_LAYOUT_RECEIPT.parent
+    evidence.mkdir(parents=True)
+    rows = []
+    for target in ("aarch64-apple-darwin", "aarch64-apple-ios", "aarch64-linux-android", "x86_64-unknown-linux-musl"):
+        for mode in ("portable", "accel"):
+            sizes = {"SOFT_SIZE": 960, "AUTO_SIZE": 960, "SOFT_ALIGN": 8,
+                     "AUTO_ALIGN": 8 if mode == "portable" else 16}
+            ir = evidence / f"{target}-{mode}.ll.txt"
+            ir.write_text("".join(f"@B6_{name} = constant [{size} x i8] zeroinitializer\n"
+                                  for name, size in sizes.items()))
+            rows.append({"target": target, "mode": mode, "bytes": sizes,
+                         "llvm_ir_file": ir.name, "llvm_ir_sha256": hashlib.sha256(ir.read_bytes()).hexdigest()})
+    receipt = {"source_sha256": {}, "targets": rows, "maximum_simultaneous_verifier_provider_boxes": 1}
+    path = evidence / "provider-layout.json"
+    path.write_text(json.dumps(receipt))
+    monkeypatch.setattr(MODULE, "REVIEWED_PROVIDER_LAYOUT_SHA256", hashlib.sha256(path.read_bytes()).hexdigest())
+    assert MODULE.provider_layout_inventory(tmp_path)["bytes_per_box"] == 960
+
+    ir = evidence / rows[0]["llvm_ir_file"]
+    content = ir.read_text()
+    if mutation == "size":
+        content = content.replace("[960 x i8]", "[976 x i8]", 1)
+    elif mutation == "alignment":
+        content = content.replace("[8 x i8]", "[16 x i8]", 1)
+    elif mutation == "duplicate_global":
+        content += "@B6_AUTO_SIZE = constant [960 x i8] zeroinitializer\n"
+    elif mutation == "missing_global":
+        content = "\n".join(line for line in content.splitlines() if "AUTO_ALIGN" not in line)
+    elif mutation == "declared_size":
+        rows[0]["bytes"]["SOFT_SIZE"] = 976
+    elif mutation == "declared_alignment":
+        rows[0]["bytes"]["AUTO_ALIGN"] = 16
+    elif mutation == "missing_target":
+        rows.pop()
+    elif mutation == "unexpected_target":
+        rows[0]["target"] = "unmeasured-target"
+    ir.write_text(content)
+    rows[0]["llvm_ir_sha256"] = hashlib.sha256(ir.read_bytes()).hexdigest()
+    path.write_text(json.dumps(receipt) + "\n")
+    if mutation != "receipt":
+        monkeypatch.setattr(MODULE, "REVIEWED_PROVIDER_LAYOUT_SHA256", hashlib.sha256(path.read_bytes()).hexdigest())
+    with pytest.raises(ValueError):
+        MODULE.provider_layout_inventory(tmp_path)
+
+
+def test_current_bindings_preserve_every_historical_numeric_case():
+    historical = json.loads((MODULE.ROOT / "docs/validation/parliament_ballot_b6/resource_accounting.json").read_text())
+    current = MODULE.report()
+    assert current["cases"] == historical["cases"]
+    assert current["standalone_symbolic_bounds"]["cases"] == historical["standalone_symbolic_bounds"]["cases"]
+    assert not current["complete_certificate"]
+    assert not current["profile_qualified"]

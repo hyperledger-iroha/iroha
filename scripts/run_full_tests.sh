@@ -459,9 +459,11 @@ run_segmented_fast_tests() {
     echo "==> segmented fast suite: ${#packages[@]} package cargo test invocations"
     for package in "${packages[@]}"; do
         test_features=()
-        if [[ "${package}" == "iroha_torii" ]]; then
-            test_features=(--features iroha_torii/test-fixtures)
-        fi
+        case "${package}" in
+            iroha_torii) test_features=(--features iroha_torii/test-fixtures) ;;
+            iroha_release_bundle | iroha_native_source_delivery)
+                test_features=(--features "${package}/dev-tools") ;;
+        esac
         if [[ -n "${test_threads}" ]]; then
             echo "==> cargo test --locked -p ${package} ${test_features[*]-} -- --test-threads=${test_threads}"
             run_cargo test --locked -p "${package}" ${test_features[@]+"${test_features[@]}"} -- --test-threads="${test_threads}"
@@ -539,6 +541,9 @@ fi
 if kagami_bin="$(resolve_existing_binary "${target_root}" "kagami")"; then
     export_if_unset KAGAMI_BIN "${kagami_bin}"
 fi
+if sorafs_cli_bin="$(resolve_existing_binary "${target_root}" "sorafs_cli")"; then
+    export_if_unset TEST_NETWORK_BIN_SORAFS_CLI "${sorafs_cli_bin}"
+fi
 if [[ -z "${IROHA_TEST_NETWORK_PERMIT_DIR+x}" ]]; then
     export IROHA_TEST_NETWORK_PERMIT_DIR="$(mktemp -d)"
 fi
@@ -549,11 +554,11 @@ if (( run_fast )); then
     if [[ "${segmented_fast}" == true ]]; then
         run_segmented_fast_tests
     elif [[ -n "${test_threads}" ]]; then
-        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures -- --test-threads=${test_threads}"
-        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures -- --test-threads="${test_threads}"
+        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools -- --test-threads=${test_threads}"
+        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools -- --test-threads="${test_threads}"
     else
-        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures"
-        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures
+        echo "==> cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools"
+        run_cargo test --locked --workspace --exclude integration_tests --features iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,iroha_native_source_delivery/dev-tools
     fi
 else
     echo "==> skipping fast test suite"

@@ -1,7 +1,7 @@
 //! Tests for notifications emitted after trigger execution.
 use eyre::Result;
 use futures_util::StreamExt;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::data_model::{
     ValidationFail, events::pipeline::TransactionEventFilter, prelude::*, query::error::FindError,
 };
@@ -11,10 +11,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::Duration;
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,
@@ -37,35 +34,31 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         .expect("trigger action fixture satisfies validation invariants"),
     ));
     let client = network.client();
-    let register_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [register_trigger],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                <_>::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
-    spawn_blocking(move || client.submit_transaction_and_wait(&register_tx)).await??;
+    let register_tx = super::quoted_transaction(
+        &client,
+        iroha::client::AccountTransactionDraft::new(
+            [register_trigger],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            <_>::default(),
+        ),
+    )
+    .await?;
+    run_on_dedicated_thread(move || client.submit_transaction_and_wait(&register_tx)).await??;
     network.ensure_blocks(2).await?;
     let event_timeout = network.sync_timeout();
     let ready_client = network.client();
-    let ready_tx = {
-        let account = ready_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [Log::new(
-                    Level::INFO,
-                    "trigger_completion_event_stream_ready".to_string(),
-                )],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let ready_tx = super::quoted_transaction(
+        &ready_client,
+        iroha::client::AccountTransactionDraft::new(
+            [Log::new(
+                Level::INFO,
+                "trigger_completion_event_stream_ready".to_string(),
+            )],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ),
+    )
+    .await?;
     let ready_hash = ready_tx.hash();
     let mut events = tokio::time::timeout(
         event_timeout,
@@ -85,7 +78,7 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
         )
     })??;
     let ready_client = network.client();
-    spawn_blocking(move || ready_client.submit_transaction(&ready_tx)).await??;
+    run_on_dedicated_thread(move || ready_client.submit_transaction(&ready_tx)).await??;
     timeout(event_timeout, async {
         loop {
             match events.next().await {
@@ -114,19 +107,17 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     })??;
     let call_trigger = ExecuteTrigger::new(trigger_id.clone());
     let client = network.client();
-    let trigger_tx = {
-        let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [Instruction::into_instruction_box(Box::new(call_trigger))],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+    let trigger_tx = super::quoted_transaction(
+        &client,
+        iroha::client::AccountTransactionDraft::new(
+            [Instruction::into_instruction_box(Box::new(call_trigger))],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ),
+    )
+    .await?;
     let submit_trigger = async {
-        spawn_blocking(move || client.submit_transaction_and_wait(&trigger_tx)).await??;
+        run_on_dedicated_thread(move || client.submit_transaction_and_wait(&trigger_tx)).await??;
         Ok::<(), eyre::Report>(())
     };
     let wait_event = async {
@@ -180,7 +171,7 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
         .expect("trigger action fixture satisfies validation invariants"),
     ));
     let client = network.client();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client.submit(
             register_trigger,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -193,7 +184,7 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
     let err = loop {
         let call_trigger = ExecuteTrigger::new(trigger_id.clone());
         let client = network.client();
-        let err = spawn_blocking(move || {
+        let err = run_on_dedicated_thread(move || {
             client.submit(
                 call_trigger,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

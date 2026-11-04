@@ -39,6 +39,67 @@ fn lane_id_from_lane_index_enforces_bounds() {
 }
 
 #[test]
+fn lane_id_error_preserves_diagnostics_flags_and_source() {
+    use std::error::Error as _;
+
+    fn assert_error_bounds<T: std::error::Error + Send + Sync + 'static>() {}
+    assert_error_bounds::<LaneIdError>();
+    for (index, lane_count, expected) in [
+        (0, 0, "lane index 0 out of bounds for lane count 0"),
+        (0, 1, "lane index 0 out of bounds for lane count 1"),
+        (2, 2, "lane index 2 out of bounds for lane count 2"),
+        (42, 17, "lane index 42 out of bounds for lane count 17"),
+        (
+            u32::MAX,
+            u32::MAX,
+            "lane index 4294967295 out of bounds for lane count 4294967295",
+        ),
+    ] {
+        let error = LaneIdError::OutOfBounds { index, lane_count };
+        assert_eq!(error.to_string(), expected);
+        assert_eq!(format!("{error:>100.3}"), expected);
+        assert_eq!(format!("{error:🦀^100.3}"), expected);
+        assert_eq!(format!("{error:+#0100.3}"), expected);
+        assert!(error.source().is_none());
+    }
+}
+
+#[test]
+fn lane_id_error_stops_at_the_first_writer_failure() {
+    use std::fmt::{self, Write as _};
+
+    struct LimitedWriter {
+        remaining: usize,
+        failed: bool,
+    }
+    impl fmt::Write for LimitedWriter {
+        fn write_str(&mut self, value: &str) -> fmt::Result {
+            assert!(!self.failed, "writing continued after failure");
+            if value.len() > self.remaining {
+                self.failed = true;
+                Err(fmt::Error)
+            } else {
+                self.remaining -= value.len();
+                Ok(())
+            }
+        }
+    }
+    let error = LaneIdError::OutOfBounds {
+        index: u32::MAX,
+        lane_count: 2,
+    };
+    let length = error.to_string().len();
+    for remaining in 0..=length {
+        let mut writer = LimitedWriter {
+            remaining,
+            failed: false,
+        };
+        assert_eq!(write!(writer, "{error}").is_ok(), remaining == length);
+        assert_eq!(writer.failed, remaining < length);
+    }
+}
+
+#[test]
 fn dataspace_id_roundtrip() {
     let original = DataSpaceId::new(7);
     let bytes = Encode::encode(&original);

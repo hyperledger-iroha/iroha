@@ -1,0 +1,25 @@
+from pathlib import Path
+import json,hashlib,gzip,shutil,re,subprocess
+root=Path('/Users/takemiyamakoto/dev/iroha');base=Path('/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/provider-layout');capture=base/'capture';out=root/'docs/validation/parliament_ballot_resource_accounting_20261104'
+assert not (out/'provider-layout.json').exists();out.mkdir(exist_ok=True)
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(n,v):(out/n).write_text(json.dumps(v,indent=2)+'\n')
+build=json.loads((capture/'receipt.json').read_text());assert build['source_stable'] and len(build['commands'])==8 and all(r['exit_code']==0 and not r['source_changes'] for r in build['commands'])
+for src,name in [(base/'producer/src/lib.rs','provider-layout.rs'),(base/'producer/Cargo.toml','provider-layout-Cargo.toml.template'),(base/'producer/Cargo.lock','provider-layout-Cargo.lock.template'),(Path('/tmp/capture-parliament-provider-layout-current.py'),'capture-provider-layout.py.template'),(Path('/tmp/iroha-rust-alloc-independent-review.json'),'rust-alloc-review.json'),(Path('/tmp/iroha-resource-accounting-current-source-review.json'),'source-review.json')]:shutil.copy2(src,out/name)
+for f in capture.iterdir():
+ if f.is_file():shutil.copy2(f,out/('producer-'+f.name if f.name in ('receipt.json','metadata.json') else f.name))
+(out/'rust-alloc-changes.diff.gz').write_bytes(gzip.compress(Path('/tmp/iroha-rust-alloc-1.99-review.diff').read_bytes(),mtime=0))
+alloc=json.loads((out/'rust-alloc-review.json').read_text());sysroot=Path(subprocess.check_output(['rustc','--print','sysroot'],cwd=root,text=True).strip());(out/'rust-alloc').mkdir(exist_ok=True)
+for name,h in alloc['alloc_sha256']['1.99.1'].items():
+ source=sysroot/'lib/rustlib/src/rust/library/alloc/src'/name;assert sha(source)==h
+ dest=out/'rust-alloc'/(name.replace('/','__')+'.gz');dest.write_bytes(gzip.compress(source.read_bytes(),mtime=0))
+repo_sources=sorted((root/'vendor/aes/src').rglob('*.rs'))+[root/'vendor/aes/Cargo.toml',out/'provider-layout.rs',out/'provider-layout-Cargo.toml.template',out/'provider-layout-Cargo.lock.template']
+receipt={'schema':'parliament-provider-layout-current-v1','compiler':build['rustc'],'source_sha256':{str(p.relative_to(root)):sha(p) for p in repo_sources},'producer_receipt':'producer-receipt.json','producer_receipt_sha256':sha(out/'producer-receipt.json'),'targets':[],'maximum_simultaneous_verifier_provider_boxes':1,'compile_only':True,'profile_qualified':False,'scope':'Actual current AES provider requested Layout only. No device execution, allocator internals, stack, provider operation cost, production certificate or release qualification.'}
+for row in build['commands']:
+ name=row['target']+'-'+row['mode']+'.ll.txt';p=out/name;matches=re.findall(r'@B6_(\w+) = [^\n]*constant \[(\d+) x i8\]',p.read_text());assert len(matches)==4 and len(dict(matches))==4;values={k:int(v) for k,v in matches};expected={'SOFT_SIZE':960,'AUTO_SIZE':960,'SOFT_ALIGN':8,'AUTO_ALIGN':8 if row['mode']=='portable' else 16};assert values==expected
+ receipt['targets'].append({'target':row['target'],'mode':row['mode'],'bytes':values,'llvm_ir_file':name,'llvm_ir_sha256':sha(p)})
+save('provider-layout.json',receipt)
+source=json.loads((out/'source-review.json').read_text());assert all(sha(root/n)==h for n,h in source['current'].items());digest=hashlib.sha256(json.dumps(source['current'],sort_keys=True,separators=(',',':')).encode()).hexdigest()
+source['current_aggregate_sha256']=digest;source['provider_layout_review']={'source':'vendor/aes/src/soft.rs wraps backends::soft; backends/fixslice/aes256.rs keeps120NativeWord keys; autodetect.rs owns tagged union selected per architecture; no historical layout inferred. Eight fresh exact LLVM globals confirm960bytes and align8/16.','receipt_sha256':sha(out/'provider-layout.json'),'inputs':len(build['source_inputs']),'stable':True,'internal_costs_not_reviewed':True};source['alloc_review_sha256']=sha(out/'rust-alloc-review.json');save('source-review.json',source)
+save('pending-bindings.json',{'rust_source_aggregate_sha256':digest,'provider_receipt_sha256':sha(out/'provider-layout.json'),'tests_pending':True})
+print(out);print(digest);print(sha(out/'provider-layout.json'))

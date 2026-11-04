@@ -1,0 +1,23 @@
+{
+  "observed_utc": "2026-11-04T05:11:17.705752+00:00",
+  "command": [
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/venv/bin/python",
+    "-m",
+    "pytest",
+    "-q",
+    "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_receipt_keeps_incomplete_status_and_explicit_rejection_scope",
+    "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_source_drift_and_missing_inputs_fail_closed",
+    "scripts/tests/parliament_ballot_prover_accounting_test.py::EvidenceTests::test_report_checks_all_shapes_and_does_not_qualify"
+  ],
+  "cwd": "/Users/takemiyamakoto/dev/iroha",
+  "exit_code": 0,
+  "nodeids": [
+    "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_receipt_keeps_incomplete_status_and_explicit_rejection_scope",
+    "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_source_drift_and_missing_inputs_fail_closed",
+    "scripts/tests/parliament_ballot_prover_accounting_test.py::EvidenceTests::test_report_checks_all_shapes_and_does_not_qualify"
+  ],
+  "log": "historical-three-node-tests.txt",
+  "log_sha256": "9478c0bae33fec8a2161f9785b641c830a3475ee007fdeafbca33f8ea3693897",
+  "source_and_executing_hashes_still_equal_capture": true,
+  "scope": "Exact three formerly failing historical nodes only; not a rerun of all 160 nodes."
+}

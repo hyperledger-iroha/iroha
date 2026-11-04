@@ -2,7 +2,6 @@
 
 pub use self::model::PeerId;
 mod endpoint;
-use derive_more::Constructor;
 pub use endpoint::Peer;
 use iroha_crypto::PublicKey;
 use iroha_data_model_derive::model;
@@ -12,30 +11,12 @@ use std::str::FromStr;
 #[model]
 mod model {
     use super::*;
-    use getset::Getters;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     /// Peer's identification.
     ///
     /// Equality is tested by `public_key` field only. Each peer should have a unique public key.
-    #[derive(
-        derive_more::Debug,
-        derive_more::Display,
-        Clone,
-        Constructor,
-        Ord,
-        PartialOrd,
-        Eq,
-        PartialEq,
-        Hash,
-        Decode,
-        Encode,
-        IntoSchema,
-        Getters,
-    )]
-    #[display("{public_key}")]
-    #[debug("{public_key}")]
-    #[getset(get = "pub")]
+    #[derive(Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Decode, Encode, IntoSchema)]
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::peer::model::PeerId")]
@@ -43,6 +24,30 @@ mod model {
     pub struct PeerId {
         /// Public key identifying this peer.
         pub public_key: PublicKey,
+    }
+}
+
+impl core::fmt::Display for PeerId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.public_key, formatter)
+    }
+}
+impl core::fmt::Debug for PeerId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.public_key, formatter)
+    }
+}
+impl PeerId {
+    /// Construct a peer identity from its validated public key.
+    #[inline]
+    pub const fn new(public_key: PublicKey) -> Self {
+        Self { public_key }
+    }
+
+    /// Public key identifying this peer.
+    #[inline]
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
     }
 }
 

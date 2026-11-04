@@ -7,7 +7,8 @@ or compile the node runtime to perform file custody. It uses `iroha_fs` for all
 native custody and Norito JSON for bounded requests over inherited standard I/O.
 
 Build from the same pinned source with
-`cargo build --locked -p iroha_native_source_delivery`. Pass the absolute executable
+`cargo build --locked -p iroha_native_source_delivery --features dev-tools`; the
+executable is an explicit `dev-tools` target, not a default workspace binary. Pass the absolute executable
 path to the Python `promote` command as `--native-helper`. Windows requires this
 argument. The backup must be an absent direct child of an existing retained parent,
 or an empty directory already satisfying exact private custody. Existing access
@@ -32,7 +33,7 @@ remaining physical objects. A failed helper run never produces successful delive
 evidence. The Python owner separately verifies source identity, wheel contents,
 ABI evidence and the receipt; the helper does not establish build provenance.
 
-Run the Rust controls with `cargo test --locked -p iroha_native_source_delivery`.
+Run the Rust controls with `cargo test --locked -p iroha_native_source_delivery --features dev-tools`.
 For the Python integration controls, build the binary, set the test-only
 `IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER` to its absolute path and run
 `python -m pytest -q scripts/tests/python_native_source_delivery_test.py -k retained_native`.

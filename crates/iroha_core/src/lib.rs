@@ -556,17 +556,23 @@ impl iroha_p2p::network::message::ClassifyTopic for NetworkMessage {
 pub mod role {
     //! Module with extension for [`RoleId`] to be stored inside state.
     use super::*;
-    use derive_more::Constructor;
     /// Sole Model-owned canonical native role-assignment key.
     pub use iroha_data_model::role::RoleIdWithOwner;
     use iroha_primitives::impl_as_dyn_key;
     /// Reference to [`RoleIdWithOwner`].
-    #[derive(Debug, Clone, Copy, Constructor, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct RoleIdWithOwnerRef<'role> {
         /// [`AccountId`] of the owner.
         pub account: &'role AccountId,
         /// [`RoleId`]  of the given role.
         pub role: &'role RoleId,
+    }
+    impl<'role> RoleIdWithOwnerRef<'role> {
+        /// Borrow the owner and role without cloning either identity.
+        #[inline]
+        pub const fn new(account: &'role AccountId, role: &'role RoleId) -> Self {
+            Self { account, role }
+        }
     }
     impl AsRoleIdWithOwnerRef for RoleIdWithOwner {
         fn as_key(&self) -> RoleIdWithOwnerRef<'_> {
@@ -580,6 +586,33 @@ pub mod role {
         target: RoleIdWithOwner,
         key: RoleIdWithOwnerRef<'_>,
         trait: AsRoleIdWithOwnerRef
+    }
+    #[cfg(test)]
+    mod constructor_tests {
+        use super::*;
+
+        #[test]
+        fn role_reference_constructor_is_const_and_keeps_both_borrows() {
+            const fn construct<'a>(
+                account: &'a AccountId,
+                role: &'a RoleId,
+            ) -> RoleIdWithOwnerRef<'a> {
+                RoleIdWithOwnerRef::new(account, role)
+            }
+
+            let account = iroha_test_samples::ALICE_ID.clone();
+            let role: RoleId = "constructor_role".parse().expect("valid role");
+            let key = construct(&account, &role);
+            assert!(core::ptr::eq(key.account, &account));
+            assert!(core::ptr::eq(key.role, &role));
+            assert_eq!(
+                key,
+                RoleIdWithOwnerRef {
+                    account: &account,
+                    role: &role
+                }
+            );
+        }
     }
 }
 // RoleIdWithOwner derives codec implementations in the role module above.

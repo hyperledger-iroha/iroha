@@ -4188,11 +4188,17 @@ fn tlv_payload(envelope: &[u8]) -> &[u8] {
     envelope.get(7..7 + length as usize).unwrap_or(&[])
 }
 fn hex_lower(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let capacity = bytes
+        .len()
+        .checked_mul(2)
+        .expect("hexadecimal text length must fit usize");
+    let mut out = String::with_capacity(capacity);
+    for &byte in bytes {
+        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    out
 }
 /// Kotodama string literal for `text`, using the language's escape set.
 fn kotodama_string_literal(text: &str) -> String {
