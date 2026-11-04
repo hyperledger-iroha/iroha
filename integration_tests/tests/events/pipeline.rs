@@ -33,13 +33,23 @@ async fn test_with_instruction_and_status(
     // When
     let transaction = {
         let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 exec,
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the pipeline transaction payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)
     }
     .expect("build integration-test transaction");
     let hash = transaction.hash();
@@ -94,13 +104,23 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let register = domain_setup_instruction(&kura_domain, client.client().account())?;
     let tx = {
         let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [register],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the pipeline transaction payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)
     }
     .expect("build integration-test transaction");
     let hash = tx.hash();

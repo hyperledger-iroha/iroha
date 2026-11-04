@@ -1,6 +1,7 @@
 //! Subscription trigger integration tests.
 use eyre::{Result, WrapErr, eyre};
-use integration_tests::sandbox;
+use futures_util::StreamExt;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::subscription::{
     SUBSCRIPTION_INVOICE_METADATA_KEY, SUBSCRIPTION_METADATA_KEY, SUBSCRIPTION_PLAN_METADATA_KEY,
     SUBSCRIPTION_TRIGGER_REF_METADATA_KEY,
@@ -16,13 +17,11 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, BOB_KEYPAIR};
 use ivm::{ProgramMetadata, encoding, instruction, syscalls};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
+    num::NonZeroU64,
     time::{Duration, SystemTime},
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 async fn run_or_skip<F, Fut>(context: &'static str, test: F) -> Result<()>
 where
     F: FnOnce() -> Fut,
@@ -67,21 +66,17 @@ fn ivm_syscall_program(syscall: u32) -> IvmBytecode {
     IvmBytecode::from_compiled(blob)
 }
 fn asset_value(client: &Client, asset_id: &AssetId) -> Result<Quantity> {
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
-    let asset = assets
-        .into_iter()
-        .find(|asset| asset.id() == asset_id)
-        .ok_or_else(|| eyre!("asset {asset_id} not found"))?;
+    let asset = client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))
+        .wrap_err_with(|| format!("query asset {asset_id}"))?;
     Ok(asset.value().clone())
 }
 fn nft_metadata_value(client: &Client, nft_id: &NftId, key: &Name) -> Result<Option<Json>> {
     let nft = client
         .client()
-        .query(FindNfts::new())
-        .execute_all()?
-        .into_iter()
-        .find(|nft| nft.id() == nft_id)
-        .ok_or_else(|| eyre!("nft {nft_id} not found"))?;
+        .query_single(FindNftById::new(nft_id.clone()))
+        .wrap_err_with(|| format!("query nft {nft_id}"))?;
     Ok(nft.content().get(key).cloned())
 }
 fn subscription_state_for_nft(client: &Client, nft_id: &NftId) -> Result<SubscriptionState> {
@@ -153,6 +148,68 @@ async fn wait_for_invoice_status(
                     )
                 },
             );
+            // Bound setup, full-block replay, and close with one diagnostic deadline.
+            let block_diagnostics = timeout(sync_timeout, async {
+                let height = client.client().status().get().await?.blocks;
+                if height == 0 {
+                    return Ok::<_, eyre::Report>(
+                        "latest_block=none; time_trigger_blocks=none".to_owned(),
+                    );
+                }
+                let mut blocks = client
+                    .account_client()
+                    .blocks()
+                    .subscribe(NonZeroU64::MIN)
+                    .await?;
+                let result: Result<String> = async {
+                    let mut latest_block = String::new();
+                    let mut hits = VecDeque::new();
+                    for expected_height in 1..=height {
+                        let block = blocks
+                            .next()
+                            .await
+                            .transpose()?
+                            .ok_or_else(|| eyre!("block replay ended before height {expected_height}"))?;
+                        eyre::ensure!(
+                            block.header().height().get() == expected_height,
+                            "block replay returned height {} instead of {expected_height}",
+                            block.header().height(),
+                        );
+                        latest_block = format!(
+                            "latest_block_height={}, latest_block_time_ms={}",
+                            block.header().height().get(),
+                            block.header().creation_time().as_millis(),
+                        );
+                        let time_triggers = block.execution_outputs().iter()
+                            .filter(|output| matches!(output, ExecutionOutputV1::Time(_)))
+                            .count();
+                        if time_triggers > 0 {
+                            let results = block.output_results()
+                                .map(|result| format!("{result:?}"))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            hits.push_front(format!(
+                                "h{expected_height} time_triggers={time_triggers} results=[{results}]",
+                            ));
+                            hits.truncate(3);
+                        }
+                    }
+                    let time_trigger_blocks = if hits.is_empty() {
+                        "none".to_owned()
+                    } else {
+                        hits.into_iter().collect::<Vec<_>>().join(" | ")
+                    };
+                    Ok(format!("{latest_block}; time_trigger_blocks={time_trigger_blocks}"))
+                }.await;
+                let close_result = blocks.close().await;
+                let diagnostics = result?;
+                close_result?;
+                Ok(diagnostics)
+            })
+            .await
+            .map_err(eyre::Report::from)
+            .and_then(std::convert::identity)
+            .unwrap_or_else(|err| format!("block query failed: {err}"));
             let diagnostics = spawn_blocking({
                 let client = client.clone();
                 let nft_id = nft_id.clone();
@@ -161,55 +218,14 @@ async fn wait_for_invoice_status(
                     let invoice = subscription_invoice_for_nft(&client, &nft_id).map_or_else(|err| format!("invoice query failed: {err}"), |invoice| format!("{invoice:?}"));
                     let state = subscription_state_for_nft(&client, &nft_id).map_or_else(|err| format!("state query failed: {err}"), |state| format!("{state:?}"));
                     let trigger = client
-                        .client().query(FindTriggers::new())
-                        .execute_all().map_or_else(|err| format!("trigger query failed: {err}"), |triggers| {
-                            triggers
-                                .into_iter()
-                                .find(|trigger| trigger.id() == &trigger_id).map_or_else(|| "missing".to_string(), |trigger| format!("{:?}", trigger.action()))
-                        });
-                    let latest_block = client
-                        .client().query(FindBlockHeaders)
-                        .execute_all().map_or_else(|err| format!("block header query failed: {err}"), |headers| {
-                            headers.first().map_or_else(
-                                || "latest_block=none".to_string(),
-                                |header| {
-                                    format!(
-                                        "latest_block_height={}, latest_block_time_ms={}",
-                                        header.height().get(),
-                                        header.creation_time().as_millis()
-                                    )
-                                },
-                            )
-                        });
-                    let time_trigger_blocks = client
-                        .client().query(FindBlocks)
-                        .execute_all().map_or_else(|err| format!("block query failed: {err}"), |blocks| {
-                            let hits = blocks
-                                .iter()
-                                .filter(|block| block.execution_outputs().iter().any(|output| matches!(output, ExecutionOutputV1::Time(_))))
-                                .take(3)
-                                .map(|block| {
-                                    let results = block
-                                        .output_results()
-                                        .map(|result| format!("{result:?}"))
-                                        .collect::<Vec<_>>()
-                                        .join(", ");
-                                    format!(
-                                        "h{} time_triggers={} results=[{}]",
-                                        block.header().height().get(),
-                                        block.execution_outputs().iter().filter(|output| matches!(output, ExecutionOutputV1::Time(_))).count(),
-                                        results
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            if hits.is_empty() {
-                                "time_trigger_blocks=none".to_string()
-                            } else {
-                                format!("time_trigger_blocks={}", hits.join(" | "))
-                            }
-                        });
+                        .client()
+                        .query_single(FindTriggerById::new(trigger_id))
+                        .map_or_else(
+                            |err| format!("trigger query failed: {err}"),
+                            |trigger| format!("{:?}", trigger.action()),
+                        );
                     format!(
-                        "{status}; {latest_block}; {time_trigger_blocks}; {state}; {invoice}; billing_trigger={trigger}"
+                        "{status}; {block_diagnostics}; {state}; {invoice}; billing_trigger={trigger}"
                     )
                 }
             })
@@ -280,7 +296,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                             charge_def_id.clone(),
                             "usd".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -299,7 +315,7 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
                             plan_id.clone(),
                             "usage_plan".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -599,7 +615,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                             charge_def_id.clone(),
                             "usd_fixed".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -618,7 +634,7 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
                             plan_id.clone(),
                             "fixed_plan".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -861,7 +877,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                             charge_def_id.clone(),
                             "usd_retry".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),
@@ -880,7 +896,7 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
                             plan_id.clone(),
                             "retry_plan".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )),
                         iroha_data_model::transaction::FeePaymentIntent::authority(
                             Vec::new(),

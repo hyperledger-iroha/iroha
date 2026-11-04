@@ -1,7 +1,10 @@
 //! Tests for event data produced by instruction and IVM execution.
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
-use integration_tests::{sandbox, sync::get_status_with_retry_async};
+use integration_tests::{
+    sandbox,
+    sync::{get_status_with_retry_async, spawn_blocking},
+};
 use iroha::{
     blocking::Client,
     data_model::{
@@ -22,7 +25,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::collections::BTreeSet;
-use tokio::{task::spawn_blocking, time::Instant};
+use tokio::time::Instant;
 const SNS_LEASE_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 fn produce_instructions(
     prefix: &str,
@@ -105,13 +108,27 @@ async fn transaction_execution_should_produce_events(
     let result = async {
         {
             let client = client.clone();
-            let tx ={
-    let account = client.account_client();
-    account
-        .prepare_transaction(iroha::client::AccountTransactionDraft::new(executable, iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None), <_>::default()))
-        .and_then(|payload| account.sign_transaction(payload))
-}.expect("build integration-test transaction");
-            let submit_result = spawn_blocking(move || client.submit_transaction(&tx)).await?;
+            let submit_result = spawn_blocking(move || {
+                let account = client.account_client();
+                let mut payload = account.prepare_transaction(
+                    iroha::client::AccountTransactionDraft::new(
+                        executable,
+                        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                        <_>::default(),
+                    ),
+                )?;
+                let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                    payload: &payload,
+                })?;
+                eyre::ensure!(
+                    payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent),
+                    "fee quote changed the event transaction payer or gas bound"
+                );
+                payload.fee_payment = quote.intent;
+                let tx = account.sign_transaction(payload)?;
+                client.submit_transaction(&tx)
+            })
+            .await?;
             if let Err(err) = submit_result {
                 if is_tx_confirmation_timeout(&err) {
                     eprintln!(
