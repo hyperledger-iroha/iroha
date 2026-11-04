@@ -279,6 +279,17 @@ impl<'a> FrameWindows<'a> {
         expected: HashOf<BlockHeader>,
         work: &'a mut SourceWork,
     ) -> Result<Self, ReadError> {
+        Self::open_with_pool(history, index, height, expected, &history.budget, work)
+    }
+
+    fn open_with_pool(
+        history: &'a CanonicalHistorySource<'_>,
+        index: NonZeroUsize,
+        height: u64,
+        expected: HashOf<BlockHeader>,
+        pool: &'a iroha_allocation::AllocationBudget,
+        work: &'a mut SourceWork,
+    ) -> Result<Self, ReadError> {
         if history.kura.is_canonical_body_missing(index) {
             return Err(missing(height, expected));
         }
@@ -291,7 +302,7 @@ impl<'a> FrameWindows<'a> {
             source,
             height,
             expected,
-            pool: &history.budget,
+            pool,
             work,
         })
     }
@@ -408,6 +419,25 @@ impl<'a> FrameWindows<'a> {
         let bytes = self.read(span)?;
         norito::core::classify_decode_attempt(|| {
             norito::codec::decode_adaptive::<T>(bytes.as_slice())
+        })
+        .map_err(decode_error)
+    }
+
+    /// Decode only this selected piece under its prepaid finite limits; source metadata
+    /// retains the outer caller's limits instead of inheriting a smaller piece's limits.
+    fn decode_bounded<T>(
+        &mut self,
+        span: Span,
+        limits: norito::DecodeLimits,
+    ) -> Result<T, ReadError>
+    where
+        T: for<'de> norito::core::DeserializePayload<'de> + norito::core::SerializePayload,
+    {
+        let bytes = self.read(span)?;
+        norito::with_decode_limits(limits, || {
+            norito::core::classify_decode_attempt(|| {
+                norito::codec::decode_adaptive::<T>(bytes.as_slice())
+            })
         })
         .map_err(decode_error)
     }
@@ -549,6 +579,10 @@ impl<'a> FrameWindows<'a> {
     fn header(&mut self, layout: &BlockLayout) -> Result<BlockHeader, ReadError> {
         let [header] = self.fields::<{ PayloadField::Header as usize + 1 }>(layout.payload)?;
         let header: BlockHeader = self.decode(header)?;
+        self.authenticate_header(header)
+    }
+
+    fn authenticate_header(&self, header: BlockHeader) -> Result<BlockHeader, ReadError> {
         let actual = header.hash();
         if actual != self.expected {
             return Err(QueryExecutionFail::CanonicalHistory(
@@ -1005,6 +1039,106 @@ fn target_outcome(
         &matches,
         execution.transaction_output_commitment,
     )
+}
+
+/// Decoded original header DATA retaining its caller's exact graph reservation.
+pub(crate) struct OriginalConsensusHeaderData {
+    // Drop every decoded field before refunding the caller's original pool.
+    header: iroha_sumeragi::message::BlockHeader,
+    _charge: iroha_allocation::AllocationReservation,
+}
+
+impl OriginalConsensusHeaderData {
+    /// Borrow original DATA without transferring its resource custody or granting authority.
+    pub(crate) fn header(&self) -> &iroha_sumeragi::message::BlockHeader {
+        &self.header
+    }
+}
+
+impl CanonicalHistorySource<'_> {
+    /// Select original consensus-header DATA from one State-pinned durable successor.
+    ///
+    /// This shares the canonical outcome reader's exact windows, layout checks and
+    /// journal-bound Iroha header. Only the native header is decoded: skipped transaction,
+    /// output, QC and availability bytes confer no authority. The caller must authenticate
+    /// every returned value through an independently committed relation before using it.
+    /// SCCP does so by checking all 4,096 parent links against its retained chunk root.
+    /// Physical windows use `pool`; the caller's cumulative decoder scope remains installed
+    /// across every successor and is never replaced or replenished here.
+    ///
+    /// # Errors
+    /// Refuses genesis, out-of-view or unavailable original slots, malformed canonical
+    /// layouts, a changed journal/header relation, and original resource refusal.
+    pub(crate) fn original_consensus_header(
+        &self,
+        height: NonZeroUsize,
+        pool: &iroha_allocation::AllocationBudget,
+    ) -> Result<OriginalConsensusHeaderData, ReadError> {
+        use iroha_data_model::sumeragi_finality::{
+            MAX_COMMIT_CERTIFICATE_BYTES_V1, MAX_FINALITY_BLOCK_BYTES,
+        };
+        if height == NonZeroUsize::MIN {
+            return Err(invalid("a genesis block has no original consensus header"));
+        }
+        let expected = self
+            .expected_hash(height)
+            .map_err(QueryExecutionFail::CanonicalHistory)?;
+        let source_height =
+            u64::try_from(height.get()).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        let mut work = SourceWork {
+            blocks: 0,
+            bytes: 0,
+            max_blocks: 1,
+            // Two bounded header components and their finite record prefixes.
+            max_bytes: (2 * MAX_COMMIT_CERTIFICATE_BYTES_V1) as u64,
+        };
+        work.block()?;
+        let mut frame =
+            FrameWindows::open_with_pool(self, height, source_height, expected, pool, &mut work)?;
+        if frame.wire_len() > MAX_FINALITY_BLOCK_BYTES as u64 {
+            return Err(invalid("original successor frame exceeds its finite bound"));
+        }
+        let layout = frame.layout()?;
+        let reserve = |bytes| {
+            pool.try_reserve_bytes(bytes).map_err(|original| {
+                ReadError::Execution(ExecutionAttemptError::Deferred(original.into()))
+            })
+        };
+        let [iroha_header] = frame.fields::<1>(layout.payload)?;
+        let iroha_header_len =
+            usize::try_from(iroha_header.len).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        let iroha_header_limits = norito::canonical_decode_limits(iroha_header_len);
+        let header_charge = reserve(iroha_header_limits.max_total_allocated_bytes())?;
+        let original_header = frame.decode_bounded(iroha_header, iroha_header_limits)?;
+        frame.authenticate_header(original_header)?;
+        drop(header_charge);
+        let certificate = frame.option(layout.certificate)?.ok_or_else(|| {
+            chain_error(&ChainReadError::MissingCertificate {
+                height: source_height,
+            })
+        })?;
+        let fields = frame.exact_fields::<4>(certificate)?;
+        if fields[0].len > MAX_COMMIT_CERTIFICATE_BYTES_V1 as u64 {
+            return Err(invalid(
+                "original consensus header exceeds its finite bound",
+            ));
+        }
+        let encoded_len =
+            usize::try_from(fields[0].len).map_err(|_| QueryExecutionFail::GasBudgetExceeded)?;
+        let encoded_limits = norito::canonical_decode_limits(encoded_len);
+        let _encoded_charge = reserve(encoded_limits.max_total_allocated_bytes())?;
+        let bytes: Vec<u8> = frame.decode_bounded(fields[0], encoded_limits)?;
+        let limits = norito::canonical_decode_limits(bytes.len());
+        let charge = reserve(limits.max_total_allocated_bytes())?;
+        let header = norito::core::classify_decode_attempt(|| {
+            norito::decode_canonical_with_limits(&bytes, limits)
+        })
+        .map_err(decode_error)?;
+        Ok(OriginalConsensusHeaderData {
+            header,
+            _charge: charge,
+        })
+    }
 }
 
 impl crate::state::State {

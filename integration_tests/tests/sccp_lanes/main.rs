@@ -876,7 +876,17 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
         let client = network.peers()[0].client();
         let anchor = client
             .sccp()
-            .anchor_witness(NonZeroU64::new(normal_height).unwrap())?;
+            .anchor_witness(NonZeroU64::new(normal_height).unwrap())
+            .map_err(|error| {
+                let context = match &error {
+                    iroha::Error::Http { body, .. } => format!(
+                        "original completed anchor height {normal_height}; response body prefix: {:?}",
+                        String::from_utf8_lossy(&body[..body.len().min(512)]),
+                    ),
+                    _ => format!("original completed anchor height {normal_height}"),
+                };
+                eyre::Report::from(error).wrap_err(context)
+            })?;
         ensure!(anchor.height == normal_height && anchor.chunk == 0 && anchor.witness.is_some());
         let witness = anchor
             .witness

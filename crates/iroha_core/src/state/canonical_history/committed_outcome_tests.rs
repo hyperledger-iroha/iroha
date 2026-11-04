@@ -933,3 +933,131 @@ fn bounded_outcome_untrusted_sequence_counts_do_not_establish_permanent_work() {
         );
     }
 }
+
+#[test]
+fn original_header_windows_fit_one_sccp_request_without_replenishing_its_owner() {
+    use crate::{
+        state::StateReadOnly,
+        sumeragi::finality::{NativeCommitCertificateReadErrorV1, read_commit_certificate},
+    };
+    use std::{
+        num::NonZeroU64,
+        time::{Duration, Instant},
+    };
+    let mut chain = CertifiedTestChain::start(TestChainConfig::new(World::new(), 1000)).unwrap();
+    chain.commit(Vec::new());
+    let view = chain.state().view();
+    // The actual unchanged ordinary bodyless native route profile. Its fixed
+    // allowance and fifteen phases are asserted independently by Torii's tests.
+    let working =
+        iroha_config::parameters::defaults::torii::QUERY_FANOUT_MAX_WORKING_SET_BYTES.0 as usize;
+    let fixed =
+        iroha_config::parameters::defaults::torii::QUERY_FANOUT_FIXED_OVERHEAD_BYTES_V1 as usize;
+    let phase = (working - fixed) / 15;
+    let allocated = working - phase - fixed;
+    let limits = DecodeLimits::new(
+        phase,
+        phase,
+        allocated,
+        allocated,
+        norito::core::MAX_VALUE_NESTING_DEPTH,
+    );
+    let old_owner = DecodeBudgetContext::new(limits);
+    let pool = AllocationBudget::new(phase);
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut old_completed = 0;
+    for _ in 0..4096 {
+        match old_owner
+            .with(|| read_commit_certificate(&view, NonZeroU64::new(2).unwrap(), &pool, deadline))
+        {
+            Ok(original) => {
+                drop(original);
+                old_completed += 1;
+            }
+            Err(NativeCommitCertificateReadErrorV1::Frame(error))
+                if error.decode_resource_error().is_some() =>
+            {
+                break;
+            }
+            Err(other) => panic!("expected the actual cumulative decoder refusal: {other:?}"),
+        }
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+    assert!(old_completed > 0 && old_completed < 4096);
+    let original = read_commit_certificate(
+        &view,
+        NonZeroU64::new(2).unwrap(),
+        &pool,
+        Instant::now() + Duration::from_secs(30),
+    )
+    .unwrap();
+    let expected: iroha_sumeragi::message::BlockHeader =
+        norito::decode_canonical(&original.certificate().consensus_header).unwrap();
+    drop(original);
+    let owner = DecodeBudgetContext::new(limits);
+    let history = view.canonical_history();
+    let height = NonZeroUsize::new(2).unwrap();
+    for _ in 0..4096 {
+        let actual = owner
+            .with(|| history.original_consensus_header(height, &pool))
+            .unwrap();
+        assert_eq!(actual.header(), &expected);
+        assert!(pool.reserved_bytes() > 0);
+        drop(actual);
+        assert_eq!(pool.reserved_bytes(), 0);
+    }
+    let spent = owner.consumed_allocated_bytes();
+    assert!(spent > 0 && spent < allocated as u64);
+    owner
+        .with(|| norito::core::reserve_decode_allocation(allocated - spent as usize))
+        .unwrap();
+    assert!(matches!(
+        owner.with(|| history.original_consensus_header(height, &pool)),
+        Err(ReadError::Execution(ExecutionAttemptError::Deferred(_)))
+    ));
+    assert_eq!(owner.consumed_allocated_bytes(), allocated as u64);
+    assert!(
+        history
+            .original_consensus_header(NonZeroUsize::MIN, &pool)
+            .is_err()
+    );
+    assert!(
+        history
+            .original_consensus_header(NonZeroUsize::new(3).unwrap(), &pool)
+            .is_err()
+    );
+    // The daemon keeper calls without a decoder context; graph custody remains
+    // explicit in its original physical pool until the returned DATA is dropped.
+    let unscoped = history.original_consensus_header(height, &pool).unwrap();
+    let graph_bytes = pool.reserved_bytes();
+    assert!(graph_bytes > 0);
+    assert_eq!(unscoped.header(), &expected);
+    drop(unscoped);
+    assert_eq!(pool.reserved_bytes(), 0);
+    let small_graph = AllocationBudget::new(graph_bytes - 1);
+    assert!(matches!(
+        history.original_consensus_header(height, &small_graph),
+        Err(ReadError::Execution(ExecutionAttemptError::Deferred(_)))
+    ));
+    assert_eq!(small_graph.reserved_bytes(), 0);
+    let no_frames = AllocationBudget::new(0);
+    assert!(matches!(
+        history.original_consensus_header(height, &no_frames),
+        Err(ReadError::Execution(ExecutionAttemptError::Deferred(_)))
+    ));
+    assert_eq!(no_frames.reserved_bytes(), 0);
+    drop(history);
+    drop(view);
+    chain
+        .kura()
+        .corrupt_commit_header_for_testing(height, vec![0])
+        .unwrap();
+    assert!(
+        chain
+            .state()
+            .view()
+            .canonical_history()
+            .original_consensus_header(height, &pool)
+            .is_err()
+    );
+}

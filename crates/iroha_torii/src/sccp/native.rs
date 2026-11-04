@@ -319,6 +319,9 @@ pub(super) fn source_error(error: &SccpNativeReadError) -> Response {
         | SccpNativeReadError::CertifiedResult(CertifiedResultError::Body(
             CommitmentError::Resource(_),
         )) => (StatusCode::SERVICE_UNAVAILABLE, "sccp_capacity"),
+        SccpNativeReadError::History(iroha_core::state::CommittedOutcomeReadError::Execution(
+            iroha_core::execution_attempt::ExecutionAttemptError::Deferred(_),
+        )) => (StatusCode::SERVICE_UNAVAILABLE, "sccp_capacity"),
         SccpNativeReadError::Source(NativeCommitCertificateReadErrorV1::Frame(frame))
             if frame.decode_resource_error().is_some() =>
         {

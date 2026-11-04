@@ -155,6 +155,29 @@ async fn missing_unavailable_bad_request_and_stop_are_different_responses() {
             "sccp_capacity",
         ),
         (
+            SccpNativeReadError::History(iroha_core::state::CommittedOutcomeReadError::Execution(
+                iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                    iroha_allocation::AllocationBudget::new(0)
+                        .try_reserve_bytes(1)
+                        .unwrap_err()
+                        .into(),
+                ),
+            )),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sccp_capacity",
+        ),
+        (
+            SccpNativeReadError::History(iroha_core::state::CommittedOutcomeReadError::Execution(
+                iroha_core::execution_attempt::ExecutionAttemptError::Rejected(
+                    iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                        "original successor source differs".into(),
+                    ),
+                ),
+            )),
+            StatusCode::SERVICE_UNAVAILABLE,
+            "sccp_unavailable",
+        ),
+        (
             SccpNativeReadError::Deadline,
             StatusCode::REQUEST_TIMEOUT,
             "request_timeout",

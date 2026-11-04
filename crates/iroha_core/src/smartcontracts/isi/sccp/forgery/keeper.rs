@@ -1,21 +1,31 @@
 //! Bounded reconstruction of completed anchor witnesses from original Kura frames.
 
-use std::num::NonZeroU64;
+use std::num::NonZeroUsize;
 
 use iroha_data_model::sccp::native::SccpAnchorWitnessV1;
 use iroha_sccp::v1::evidence::{
     ANCHOR_PATH_LEN, SCCP_ANCHOR_CHUNK, anchor_chunk_first_height, anchor_leaf, anchor_node,
 };
-use iroha_sumeragi::message::BlockHeader;
 
 use super::*;
-use crate::sumeragi::finality::{NativeCommitCertificateReadErrorV1, read_commit_certificate};
+/// Original witness reconstruction refusal, without collapsing local source custody.
+#[derive(Debug, thiserror::Error)]
+pub enum AnchorWitnessReadError {
+    /// The committed anchor relation, cancellation or original deadline refused.
+    #[error(transparent)]
+    Verification(#[from] ForgeryVerificationError),
+    /// The exact canonical source/decoder refusal and its retained native owner.
+    #[error(transparent)]
+    Source(#[from] crate::state::CommittedOutcomeReadError),
+}
 
 /// Reconstruct one path against an original retained completed chunk root.
 ///
-/// Each leaf comes from the exact original successor's signed parent hash and result;
+/// Each leaf comes from the exact original successor's parent hash and result;
 /// this also covers genesis without inventing a genesis `CommitQC`. Acquisition and bounded
-/// canonical decoding use the caller's pool. A fixed logarithmic stack replaces a copied
+/// canonical decoding use the caller's pool. Only original header windows are read, so
+/// transaction/output bytes do not exhaust the unchanged cumulative decoder owner.
+/// A fixed logarithmic stack replaces a copied
 /// 4096-leaf graph. No DATA becomes an anchor unless the completed root matches the
 /// original committed state. The caller must still verify its complete forgery certificate.
 ///
@@ -27,7 +37,7 @@ pub fn anchor_witness(
     height: u64,
     budget: &AllocationBudget,
     control: SccpNativeReadControl<'_>,
-) -> Result<SccpAnchorWitnessV1> {
+) -> core::result::Result<SccpAnchorWitnessV1, AnchorWitnessReadError> {
     check_control(control)?;
     let (parent, instance) = original_source(view)?;
     let (chunk, position) =
@@ -35,52 +45,46 @@ pub fn anchor_witness(
     let (open, _) = anchor_chunk_position(parent.height())
         .ok_or(ForgeryVerificationError::Unavailable("zero native tip"))?;
     if chunk >= open {
-        return Err(ForgeryVerificationError::NotEvidence);
+        return Err(ForgeryVerificationError::NotEvidence.into());
     }
     let expected = store::anchor_chunks::get(view.world(), &chunk)
         .ok_or(ForgeryVerificationError::EvidenceExpired)?;
     let first = anchor_chunk_first_height(chunk).ok_or(ForgeryVerificationError::NotEvidence)?;
-    let witness = stream_witness(first, position, expected, |anchor_height| {
-        check_control(control)?;
-        let successor =
-            NonZeroU64::new(anchor_height + 1).ok_or(ForgeryVerificationError::NotEvidence)?;
-        let original = read_commit_certificate(view, successor, budget, control.deadline).map_err(
-            |error| match error {
-                NativeCommitCertificateReadErrorV1::Deadline => ForgeryVerificationError::Deadline,
-                _ => ForgeryVerificationError::Unavailable("original anchor successor unavailable"),
-            },
-        )?;
-        check_control(control)?;
-        let bytes = &original.certificate().consensus_header;
-        let limits = norito::canonical_decode_limits(bytes.len());
-        let _charge = budget.try_reserve_bytes(limits.max_total_allocated_bytes())?;
-        let header: BlockHeader =
-            norito::decode_canonical_with_limits(bytes, limits).map_err(|_| {
-                ForgeryVerificationError::Unavailable("original successor header malformed")
-            })?;
-        if header.height != successor.get() || header.instance != instance {
-            return Err(ForgeryVerificationError::Unavailable(
-                "original successor identity differs",
-            ));
-        }
-        check_control(control)?;
-        Ok(SccpAnchorV1 {
-            core_hash: header.parent_hash.0,
-            result: header.parent_result.0,
-        })
-    })?;
+    let history = view.canonical_history();
+    let witness =
+        stream_witness::<AnchorWitnessReadError>(first, position, expected, |anchor_height| {
+            check_control(control)?;
+            let successor = anchor_height
+                .checked_add(1)
+                .and_then(|height| usize::try_from(height).ok())
+                .and_then(NonZeroUsize::new)
+                .ok_or(ForgeryVerificationError::NotEvidence)?;
+            let original = history.original_consensus_header(successor, budget)?;
+            let header = original.header();
+            if header.height != successor.get() as u64 || header.instance != instance {
+                return Err(ForgeryVerificationError::Unavailable(
+                    "original successor identity differs",
+                )
+                .into());
+            }
+            check_control(control)?;
+            Ok(SccpAnchorV1 {
+                core_hash: header.parent_hash.0,
+                result: header.parent_result.0,
+            })
+        })?;
     check_control(control)?;
     Ok(witness)
 }
 
-fn stream_witness(
+fn stream_witness<E: From<ForgeryVerificationError>>(
     first: u64,
     selected: usize,
     expected: &[u8; 32],
-    mut read: impl FnMut(u64) -> Result<SccpAnchorV1>,
-) -> Result<SccpAnchorWitnessV1> {
+    mut read: impl FnMut(u64) -> core::result::Result<SccpAnchorV1, E>,
+) -> core::result::Result<SccpAnchorWitnessV1, E> {
     if selected >= usize::try_from(SCCP_ANCHOR_CHUNK).expect("4096-entry anchor chunk fits usize") {
-        return Err(ForgeryVerificationError::NotEvidence);
+        return Err(ForgeryVerificationError::NotEvidence.into());
     }
     let mut stack = [[0; 32]; ANCHOR_PATH_LEN + 1];
     let mut path = [[0; 32]; ANCHOR_PATH_LEN];
@@ -114,7 +118,7 @@ fn stream_witness(
         }
     }
     if &stack[ANCHOR_PATH_LEN] != expected {
-        return Err(ForgeryVerificationError::BadWitness);
+        return Err(ForgeryVerificationError::BadWitness.into());
     }
     Ok(SccpAnchorWitnessV1 {
         core_hash: selected_anchor.core_hash,
@@ -147,7 +151,10 @@ mod tests {
         let root = anchor_chunk_root(&leaves).unwrap();
         for position in [0, 1, 63, 1024, 2047, 4095] {
             let witness =
-                stream_witness(first, position, &root, |height| Ok(anchor(height))).unwrap();
+                stream_witness::<ForgeryVerificationError>(first, position, &root, |height| {
+                    Ok(anchor(height))
+                })
+                .unwrap();
             assert!(verify_anchor_path(
                 &leaves[position],
                 position,
@@ -155,6 +162,18 @@ mod tests {
                 &root
             ));
             assert_eq!(witness.core_hash, anchor(first + position as u64).core_hash);
+        }
+        for changed in [first, first + 2047, first + SCCP_ANCHOR_CHUNK - 1] {
+            assert!(matches!(
+                stream_witness(first, 0, &root, |height| {
+                    let mut original = anchor(height);
+                    if height == changed {
+                        original.core_hash[0] ^= 1;
+                    }
+                    Ok(original)
+                }),
+                Err(ForgeryVerificationError::BadWitness)
+            ));
         }
         assert!(matches!(
             stream_witness(first, 0, &[0; 32], |height| Ok(anchor(height))),
@@ -183,12 +202,16 @@ mod tests {
         };
         assert!(matches!(
             anchor_witness(&view, 1, &AllocationBudget::new(0), control),
-            Err(ForgeryVerificationError::Unavailable(_))
+            Err(AnchorWitnessReadError::Verification(
+                ForgeryVerificationError::Unavailable(_)
+            ))
         ));
         stop.store(true, Ordering::Relaxed);
         assert!(matches!(
             anchor_witness(&view, 1, &AllocationBudget::new(0), control),
-            Err(ForgeryVerificationError::Cancelled)
+            Err(AnchorWitnessReadError::Verification(
+                ForgeryVerificationError::Cancelled
+            ))
         ));
     }
 }
