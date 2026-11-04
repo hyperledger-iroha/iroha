@@ -358,7 +358,7 @@ finish a CAS-before-publication or publication-before-cleanup crash only when
 the same authority still names the exact fence and canonical checkpoint.
 
 1. Produce a manifest + payload bundle (for example with
-   `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
+   `iroha app sorafs toolkit pack ./payload.bin --pin-retention-epoch "$SORAFS_RETENTION_EPOCH" --pin-min-replicas 3 --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
 2. Submit the canonical caller-signed registration transaction through
    `POST /v1/sorafs/pin/register`, then record the returned finalized height and
    block hash. V1 has no public payload-upload route.
