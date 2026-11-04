@@ -26,3 +26,11 @@ against them. A recipe edit or successful digest preflight does not establish
 Linux runtime qualification. The historical May 2025 image is not represented
 as a current rebuilt image, and this change does not publish or select a new
 image on the owner's behalf.
+
+The image workflow tests each validated candidate digest before promotion. A
+separate Grype job rejects high or critical known vulnerabilities and retains its
+scan. A native Linux container job uses that same digest to exercise installed
+tools, filesystem custody tests and strict Clippy, primitive tests, and workspace
+formatting. These checks establish component/tooling evidence; full release and
+network qualification remain separate. Both jobs must pass before the owner
+selects the candidate, and the workflow never changes `IROHA_CI_IMAGE` itself.

@@ -120,3 +120,37 @@ def test_image_recipe_uses_current_pinned_tools_without_a_remote_installer() -> 
     assert "provenance: mode=max" in publish
     assert "sbom: true" in publish
     assert "${{ steps.build.outputs.digest }}" in publish
+
+
+def candidate_qualification_violations(source: str) -> list[str]:
+    """Require scan and native checks to consume the validated build identity."""
+    blocks = jobs(source)
+    errors = []
+    build = blocks.get("dockerhub", "")
+    if "image: ${{ steps.candidate.outputs.image }}" not in build:
+        errors.append("missing validated build output")
+    for name in ("image_scan", "linux_components"):
+        block = blocks.get(name, "")
+        if ("needs: dockerhub" not in block
+                or "image: ${{ needs.dockerhub.outputs.image }}" not in block
+                or "continue-on-error:" in block):
+            errors.append(name + " lost mandatory candidate custody")
+    scan = blocks.get("image_scan", "")
+    if "fail-build: true" not in scan or "severity-cutoff: high" not in scan:
+        errors.append("vulnerability refusal weakened")
+    return errors
+
+
+def test_candidate_image_checks_cannot_substitute_identity_or_ignore_refusal() -> None:
+    source = (WORKFLOWS / "ci_image.yml").read_text()
+    assert candidate_qualification_violations(source) == []
+    for before, after in (
+        ("image: ${{ steps.candidate.outputs.image }}", "image: mutable:latest"),
+        ("needs: dockerhub", "needs: unrelated"),
+        ("image: ${{ needs.dockerhub.outputs.image }}", "image: mutable:latest"),
+        ("fail-build: true", "fail-build: false"),
+        ("severity-cutoff: high", "severity-cutoff: critical"),
+        ("  linux_components:\n", "  linux_components:\n    continue-on-error: true\n"),
+    ):
+        assert before in source
+        assert candidate_qualification_violations(source.replace(before, after))

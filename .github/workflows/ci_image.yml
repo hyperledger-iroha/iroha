@@ -3,14 +3,21 @@ name: Build iroha2-ci image
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 env:
   IROHA_CI_BUILDER_IMAGE: ${{ vars.IROHA_CI_BUILDER_IMAGE }}
 
 jobs:
   dockerhub:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.candidate.outputs.image }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
       - name: Validate digest-pinned CI base image
         run: |
           python3 scripts/validate_release_image_bases.py \
@@ -35,11 +42,76 @@ jobs:
           # This context specification is required
           context: .
       - name: Record the candidate image digest for Linux qualification
+        id: candidate
         env:
           IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
         run: |
           candidate="hyperledger/iroha2-ci@$IMAGE_DIGEST"
           python3 -I -S scripts/validate_release_image_bases.py \
             --builder "$candidate" --runtime "$candidate"
+          printf 'image=%s\n' "$candidate" >> "$GITHUB_OUTPUT"
           printf 'Candidate CI image: `%s`\n\nQualify and scan these exact Linux image bytes before updating `IROHA_CI_IMAGE`.\n' \
             "$candidate" >> "$GITHUB_STEP_SUMMARY"
+
+  image_scan:
+    name: Scan the exact candidate image
+    needs: dockerhub
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Reject high or critical known vulnerabilities
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          grype-version: v0.121.0
+          image: ${{ needs.dockerhub.outputs.image }}
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+          output-file: ci-image-vulnerabilities.sarif
+          cache-db: true
+      - name: Retain the candidate scan
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: ci-image-scan-${{ github.run_id }}
+          path: ci-image-vulnerabilities.sarif
+          if-no-files-found: error
+
+  linux_components:
+    name: Test native components inside the candidate image
+    needs: dockerhub
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    container:
+      image: ${{ needs.dockerhub.outputs.image }}
+    env:
+      CARGO_BUILD_JOBS: "4"
+      CARGO_INCREMENTAL: "0"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Exercise installed tools and the pinned Python environment
+        run: |
+          set -euo pipefail
+          rustc --version
+          cargo --version
+          cargo clippy --version
+          cargo fmt --version
+          grcov --version
+          poetry --version
+          python3 -I -S -c 'import sys; assert sys.version_info[:2] == (3, 14)'
+          /opt/poetry/bin/python -m pip check
+      - name: Run repository filesystem custody checks
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_fs --all-targets -- --test-threads=1
+          cargo test --locked -p iroha_fs --doc
+          cargo clippy --locked -p iroha_fs --all-targets -- -D warnings
+      - name: Run repository native primitive checks
+        run: cargo test --locked -p iroha_primitives --lib
+      - name: Check workspace formatting
+        run: cargo fmt --all -- --check
