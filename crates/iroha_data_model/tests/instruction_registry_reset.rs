@@ -1,6 +1,10 @@
 //! Test that the global instruction registry can be overridden after it has
 //! been initialized lazily.
-use iroha_data_model::{instruction_registry_with_ids, isi::set_instruction_registry, prelude::*};
+use iroha_data_model::{
+    instruction_registry_with_ids,
+    isi::{decode_instruction_from_pair, framed_instruction_payload, set_instruction_registry},
+    prelude::*,
+};
 
 const REGISTRY_RESET_CHILD: &str = "IROHA_DATA_MODEL_REGISTRY_RESET_CHILD";
 
@@ -45,10 +49,30 @@ fn set_instruction_registry_overrides_existing() {
     let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("deserialize");
     // Type should match when decoded via the configured registry
     assert_eq!(log.id(), decoded.id());
+    let (wire_id, frame) = framed_instruction_payload(&log).expect("registered Log frame");
+    let wire_id = wire_id.to_owned();
+    assert_eq!(
+        decode_instruction_from_pair(&wire_id, &frame)
+            .expect("registered typed decoder")
+            .id(),
+        log.id(),
+    );
     // Replace registry with one that doesn't include `Log`
     set_instruction_registry(instruction_registry_with_ids![SetParameter]);
-    let result = norito::decode_from_bytes::<InstructionBox>(&bytes);
-    assert!(result.is_err(), "registry should have been replaced");
+    assert!(
+        decode_instruction_from_pair(&wire_id, &frame).is_err(),
+        "the replaced registry must refuse the removed typed instruction",
+    );
+    // Envelope decoding keeps unknown instructions byte-for-byte; it does not
+    // restore the removed typed decoder (live_runtime_upgrades.md section 5.2).
+    let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("opaque envelope");
+    let opaque = decoded.as_opaque().expect("Log is no longer registered");
+    assert_eq!(opaque.wire_id(), wire_id);
+    assert_eq!(opaque.frame(), frame);
+    assert_eq!(norito::to_bytes(&decoded).expect("re-encode envelope"), bytes);
     // Restore the default registry so other tests aren't affected
     set_instruction_registry(iroha_data_model::instruction_registry::default());
+    let restored: InstructionBox = norito::decode_from_bytes(&bytes).expect("restored typed Log");
+    assert_eq!(restored.id(), log.id());
+    assert!(restored.as_opaque().is_none());
 }
