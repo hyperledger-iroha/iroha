@@ -212,7 +212,7 @@ fn car_pack_native_entry_points_match_canonical_archives() {
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path().canonicalize().unwrap();
     let (site, plan, payload, _) = site_fixture(&root);
-    let descriptor = manifest_chunker_registry::lookup_by_handle(DEFAULT_CHUNKER_HANDLE).unwrap();
+    let descriptor = chunker_registry::lookup_by_handle(DEFAULT_CHUNKER_HANDLE).unwrap();
     let mut expected_directory = Vec::new();
     sorafs_car::CarWriter::new(&plan, &payload)
         .unwrap()
