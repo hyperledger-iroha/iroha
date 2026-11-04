@@ -29,6 +29,19 @@ SHA-256 `1ce796ba4fe8769f4d298a0ce9fe52acff39a012f5ce6cf4323fbd50c2028b55`.
 Its three benchmark source files retain all 46 pinned timed bodies and the
 complete inventory, including the exact typed-query raw-entity workload.
 
+Typed queries use `scripts/kotodama_query_driver.py` to derive a measurement
+driver outside each clean checkout. The v2 derivation selects the typed-query
+main dispatch and grants the existing `typed-query-authority` fixture reader
+exactly `CanReadAllLedgerData` before constructing the raw-response baseline or
+entering any timed loop. Both revisions receive the same grant through their
+own native state implementation. The entire original fixture is hash-pinned;
+every other setup byte, all raw and typed page cardinality assertions, and all
+46 timed bodies remain unchanged. Receipts bind both original and derived
+fixture hashes and identify the added permission. No original source file or
+lockfile is edited, and a missing, changed or additional grant is refused by the
+exact derivation check. Earlier dispatch-only receipts cannot qualify this
+derivation.
+
 `scripts/check_kotodama_perf.py` retains the 5% regression ceiling and the
 independent zero-slowdown List-sugar median ceiling. Paired revision
 qualification also requires the candidate median confidence upper bound divided

@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Derive and attest a typed-query measurement driver without editing either revision.
 
-Only the original queries bench's main dispatch changes. Cargo still builds the
-revision-native runtime and launches Criterion with its normal environment. This
-is ordinary same-job CI evidence, not release signing or a sandbox against code
-already able to modify the runner. Original source/lock admission remains mandatory.
+The driver selects the typed-query dispatch and grants its existing fixture
+reader CanReadAllLedgerData before raw-response setup or timing. The exact same
+derivation applies to both revisions; every other setup byte, assertion and timed
+body is preserved. Cargo still builds the revision-native runtime and launches
+Criterion with its normal environment. This is ordinary same-job CI evidence,
+not release signing or a sandbox against code already able to modify the runner.
+Original source/lock admission remains mandatory.
 """
 
 from __future__ import annotations
@@ -25,7 +28,26 @@ import uuid
 SOURCE = Path("crates/iroha_core/benches/queries.rs")
 SCRIPT = Path(__file__).resolve()
 PLAN_ENV = "IROHA_KOTODAMA_QUERY_PLAN"
-SCHEMA = "iroha.kotodama.derived-query-driver.v1"
+SCHEMA = "iroha.kotodama.derived-query-driver.v2"
+# Bind the entire untimed fixture from the approved baseline, including its
+# authority, all five 64-entity inventories and raw QueryResponse encoding.
+SETUP_START = "fn build_state_for_typed_core_query_pages()"
+SETUP_END = "fn bench_typed_core_query_pages("
+SETUP_SHA256 = "99f8129019d5881860dbc19c02fbf4411efd137c6da39b7ceae21187fdc963e8"
+WORLD_ARGUMENT = """        World::with_assets(domains, accounts, asset_definitions, assets, nfts),
+"""
+AUTHORIZED_WORLD_ARGUMENT = """        {
+            let mut world =
+                World::with_assets(domains, accounts, asset_definitions, assets, nfts);
+            world.account_permissions_mut_for_testing().insert(
+                authority.clone(),
+                [iroha_executor_data_model::permission::query::CanReadAllLedgerData.into()]
+                    .into_iter()
+                    .collect(),
+            );
+            world
+        },
+"""
 # An exact dispatch contract: additions/reordering require a reviewed driver update.
 DISPATCH = """    bench_find_accounts_small(&mut c);
     bench_find_accounts_large(&mut c);
@@ -101,27 +123,45 @@ def write_json(path: Path, value: dict) -> None:
         destination.write("\n")
 
 
+def typed_setup(text: str) -> str:
+    """Select the unique complete fixture immediately before its benchmark."""
+    require(
+        text.count(SETUP_START) == text.count(SETUP_END) == 1,
+        "typed-query setup boundaries are not unique",
+    )
+    start, end = text.index(SETUP_START), text.index(SETUP_END)
+    require(start < end, "typed-query setup boundaries are reversed")
+    return text[start:end]
+
+
 def derive(original: bytes) -> bytes:
-    """Replace exactly the reviewed main dispatch; preserve all other bytes."""
+    """Apply only the reviewed dispatch and untimed fixture-reader grant."""
     text = original.decode("utf-8")
     require(
         text.count("fn main()") == 1 and text.endswith(MAIN),
         "queries main differs from the reviewed dispatch contract",
     )
     require(text.count(DISPATCH) == 1, "queries dispatch is not unique")
-    return text.replace(
+    setup = typed_setup(text)
+    require(
+        hashlib.sha256(setup.encode()).hexdigest() == SETUP_SHA256,
+        "typed-query setup differs from the reviewed fixture contract",
+    )
+    require(setup.count(WORLD_ARGUMENT) == 1, "typed-query world is not unique")
+    authorized_setup = setup.replace(WORLD_ARGUMENT, AUTHORIZED_WORLD_ARGUMENT, 1)
+    return text.replace(setup, authorized_setup, 1).replace(
         DISPATCH, "    bench_typed_core_query_pages(&mut c);\n", 1
     ).encode()
 
 
 def source_contract(root: Path, derived: Path) -> dict:
-    """Bind the derived source to all 46 original bodies and the full typed setup."""
+    """Bind all 46 original bodies and the exact authorized fixture derivation."""
     p = policy()
     originals = p["_benchmark_sources_at"](root)
     changed = (*originals[:2], derived)
     require(
         derived.read_bytes() == derive((root / SOURCE).read_bytes()),
-        "derived driver does not equal exact dispatch-only derivation",
+        "derived driver does not equal exact dispatch-and-permission derivation",
     )
     p["validate_revision_inventories"](
         base_sources=originals, candidate_sources=changed
@@ -132,11 +172,25 @@ def source_contract(root: Path, derived: Path) -> dict:
     return {
         "original_sha256": sha(root / SOURCE),
         "derived_sha256": sha(derived),
+        "original_setup_sha256": SETUP_SHA256,
+        "derived_setup_sha256": hashlib.sha256(
+            typed_setup(derived.read_text()).encode()
+        ).hexdigest(),
+        "fixture_permission": {
+            "authority_seed": "typed-query-authority",
+            "permission": "CanReadAllLedgerData",
+            "grant_count": 1,
+            "phase": "before raw-response setup and timed queries",
+        },
         "timed_body_sha256": {
             name: hashlib.sha256(body.encode()).hexdigest()
             for name, body in sorted(before.items())
         },
-        "derivation": "replace only main dispatch; full typed setup and assertions byte-identical",
+        "derivation": (
+            "select typed main dispatch and grant the existing fixture reader "
+            "CanReadAllLedgerData; all other setup bytes, assertions and timed "
+            "bodies remain identical"
+        ),
     }
 
 

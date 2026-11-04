@@ -3,8 +3,9 @@
 
 The gate compares every current compiler/runtime workload against Criterion's
 runner-local ``base`` samples captured from the clean reset anchor. Typed queries
-use a separately attested dispatch-only driver; original setup, assertions and
-timed bodies remain bound to each clean revision. Missing or
+use separately attested drivers with identical untimed reader permission grants;
+all other original setup bytes, assertions and timed bodies remain bound to each
+clean revision. Missing or
 malformed samples fail closed. A workload fails when its median is more than
 five percent slower, and List sugar has an independent zero-slowdown check
 against its manual-loop counterpart. Candidate samples can never be captured
@@ -1386,7 +1387,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def validate_query_drivers(
     output: Path, baseline: Path, candidate: Path, expected_candidate: str
 ) -> dict[str, object]:
-    """Require both fresh, dispatch-only driver receipts before qualification."""
+    """Require both fresh, exactly derived driver receipts before qualification."""
     driver = runpy.run_path(str(Path(__file__).with_name("kotodama_query_driver.py")))
     try:
         return driver["validate_pair"](output, baseline, candidate, expected_candidate)

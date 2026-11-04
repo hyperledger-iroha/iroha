@@ -133,7 +133,7 @@ class DerivedQueryDriverTests(unittest.TestCase):
         (self.directory / "compiler.json").write_text(json.dumps(receipt))
         return receipt
 
-    def test_exact_derivation_preserves_all_46_bodies_and_full_typed_setup(
+    def test_exact_derivation_preserves_all_46_bodies_and_authorizes_reader(
         self,
     ) -> None:
         changed = self.derived.read_bytes()
@@ -142,6 +142,10 @@ class DerivedQueryDriverTests(unittest.TestCase):
             self.original.replace(
                 DRIVER.DISPATCH.encode(),
                 b"    bench_typed_core_query_pages(&mut c);\n",
+                1,
+            ).replace(
+                DRIVER.WORLD_ARGUMENT.encode(),
+                DRIVER.AUTHORIZED_WORLD_ARGUMENT.encode(),
                 1,
             ),
         )
@@ -154,6 +158,29 @@ class DerivedQueryDriverTests(unittest.TestCase):
         self.assertEqual(
             (self.revision / "Cargo.lock").read_bytes(), b"original lock bytes\n"
         )
+        self.assertEqual(contract["original_setup_sha256"], DRIVER.SETUP_SHA256)
+        self.assertNotEqual(
+            contract["derived_setup_sha256"], contract["original_setup_sha256"]
+        )
+        self.assertEqual(
+            contract["fixture_permission"],
+            {
+                "authority_seed": "typed-query-authority",
+                "permission": "CanReadAllLedgerData",
+                "grant_count": 1,
+                "phase": "before raw-response setup and timed queries",
+            },
+        )
+        setup = DRIVER.typed_setup(changed.decode())
+        self.assertEqual(setup.count("world.account_permissions_mut_for_testing().insert("), 1)
+        self.assertLess(
+            setup.index("world.account_permissions_mut_for_testing().insert("),
+            setup.index("let raw_query_response_bytes ="),
+        )
+        self.assertEqual(
+            setup.replace(DRIVER.AUTHORIZED_WORLD_ARGUMENT, DRIVER.WORLD_ARGUMENT, 1),
+            DRIVER.typed_setup(self.original.decode()),
+        )
         for marker in (
             b"set_banner_enabled(false);",
             b"Criterion::default().configure_from_args()",
@@ -161,6 +188,41 @@ class DerivedQueryDriverTests(unittest.TestCase):
             b"fn build_state_for_typed_core_query_pages()",
         ):
             self.assertIn(marker, changed)
+
+    def test_original_setup_drift_is_refused_before_derivation(self) -> None:
+        for old, new in (
+            (b'bench_account("typed-query-authority")', b'bench_account("other")'),
+            (b"for i in 0..QUERY_PAGE_CAPACITY_V1", b"for i in 0..1"),
+            (b"if i + 1 < QUERY_PAGE_CAPACITY_V1", b"if i < QUERY_PAGE_CAPACITY_V1"),
+            (
+                b"AssetId::of(asset_definition_id, authority.clone())",
+                b"AssetId::of(asset_definition_id, account_id.clone())",
+            ),
+            (
+                b'Quantity::from(u64::try_from(i).expect("fixture index fits u64") + 1)',
+                b"Quantity::from(1_u64)",
+            ),
+            (
+                b"&authority,\n                family.tag,",
+                b'&bench_account("other"),\n                family.tag,',
+            ),
+        ):
+            with self.subTest(old=old):
+                changed = self.original.replace(old, new)
+                self.assertNotEqual(changed, self.original)
+                with self.assertRaisesRegex(ValueError, "setup differs"):
+                    DRIVER.derive(changed)
+
+    def test_setup_boundaries_must_be_unique_and_ordered(self) -> None:
+        for text in (
+            "missing setup",
+            DRIVER.SETUP_END + DRIVER.SETUP_START,
+            DRIVER.SETUP_START * 2 + DRIVER.SETUP_END,
+        ):
+            with self.subTest(text=text), self.assertRaisesRegex(
+                ValueError, "setup boundaries"
+            ):
+                DRIVER.typed_setup(text)
 
     def test_changed_main_is_refused(self) -> None:
         for old, new in (
@@ -178,10 +240,21 @@ class DerivedQueryDriverTests(unittest.TestCase):
             (b"metrics.host_queries, 1", b"metrics.host_queries, 2"),
             (b"QUERY_PAGE_CAPACITY_V1 as u64", b"1_u64"),
             (b"bench_typed_core_query_pages(&mut c);", b"c.final_summary();"),
+            (b"CanReadAllLedgerData.into()", b"CanManagePeers.into()"),
+            (
+                DRIVER.AUTHORIZED_WORLD_ARGUMENT.encode(),
+                DRIVER.WORLD_ARGUMENT.encode(),
+            ),
+            (
+                b"world.account_permissions_mut_for_testing().insert(\n                authority.clone(),",
+                b'world.account_permissions_mut_for_testing().insert(\n                bench_account("other"),',
+            ),
         ):
             with self.subTest(old=old):
                 self.derived.write_bytes(DRIVER.derive(self.original).replace(old, new))
-                with self.assertRaisesRegex(ValueError, "dispatch-only derivation"):
+                with self.assertRaisesRegex(
+                    ValueError, "dispatch-and-permission derivation"
+                ):
                     DRIVER.source_contract(self.revision, self.derived)
 
     def test_altered_original_timed_body_is_refused_even_if_derivation_matches(
@@ -477,13 +550,44 @@ class DerivedQueryDriverTests(unittest.TestCase):
                     for row in report.values()
                 )
             )
+            self.assertEqual(
+                report["base"]["contract"]["fixture_permission"],
+                report["candidate"]["contract"]["fixture_permission"],
+            )
+            self.assertEqual(
+                report["base"]["contract"]["derived_setup_sha256"],
+                report["candidate"]["contract"]["derived_setup_sha256"],
+            )
+            plan_path = self.directory / "plan.json"
+            measured_path = output / "measurement.json"
+            original_plan = plan_path.read_bytes()
+            original_measurement = measured_path.read_bytes()
+            for field in ("schema", "fixture_permission"):
+                with self.subTest(field=field):
+                    plan = json.loads(original_plan)
+                    measured = json.loads(original_measurement)
+                    if field == "schema":
+                        plan["schema"] = measured["schema"] = (
+                            "iroha.kotodama.derived-query-driver.v1"
+                        )
+                        reason = "unknown driver evidence schema"
+                    else:
+                        plan["contract"]["fixture_permission"]["grant_count"] = 2
+                        reason = "driver source drift"
+                    plan_path.write_text(json.dumps(plan))
+                    measured["plan_sha256"] = DRIVER.sha(plan_path)
+                    measured_path.write_text(json.dumps(measured))
+                    with self.assertRaisesRegex(ValueError, reason):
+                        DRIVER.validate_pair(
+                            pair, self.revision, self.revision, "b" * 40
+                        )
+                    plan_path.write_bytes(original_plan)
+                    measured_path.write_bytes(original_measurement)
             # Recompute the local plan hash to show that the independent paired
             # environment check, rather than a stale outer hash, catches drift.
-            plan_path = self.directory / "plan.json"
             plan = DRIVER.read_json(plan_path)
             plan["build_environment"]["RUSTFLAGS"] = "-C target-cpu=native"
             plan_path.write_text(json.dumps(plan))
-            measured_path = output / "measurement.json"
             measured = DRIVER.read_json(measured_path)
             measured["plan_sha256"] = DRIVER.sha(plan_path)
             measured_path.write_text(json.dumps(measured))
