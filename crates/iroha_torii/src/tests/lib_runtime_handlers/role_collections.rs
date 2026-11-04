@@ -24,7 +24,7 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
         [role.clone(), empty_role.clone()],
     );
     world.grant_role_for_tests(account.clone(), empty_role.id().clone());
-    let app = mk_app_state_for_tests_with_world(world);
+    let app = mk_native_app_state_for_tests_with_world(world);
     let router = Router::new()
         .route("/v1/roles/query", post(crate::role_collections::roles))
         .route(
@@ -66,7 +66,14 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
             .uri(uri.clone())
             .body(Body::from("{}"))
             .unwrap();
-        *request.headers_mut() = signed_app_headers(&account, &key, &Method::POST, &uri, b"{}");
+        *request.headers_mut() = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &account,
+            &key,
+            &Method::POST,
+            &uri,
+            b"{}",
+        );
         request
             .headers_mut()
             .insert("content-type", HeaderValue::from_static("application/json"));
@@ -81,7 +88,14 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
             .uri(uri.clone())
             .body(Body::from("{}"))
             .unwrap();
-        *request.headers_mut() = signed_app_headers(&account, &key, &Method::POST, &uri, b"{}");
+        *request.headers_mut() = signed_network_app_headers(
+            app.state.network_id_ref(),
+            &account,
+            &key,
+            &Method::POST,
+            &uri,
+            b"{}",
+        );
         request
             .headers_mut()
             .insert("content-type", HeaderValue::from_static("application/json"));
