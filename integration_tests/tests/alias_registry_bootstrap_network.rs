@@ -27,7 +27,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr as _, bail, ensure, eyre};
-use futures_util::future::try_join_all;
+use futures_util::{StreamExt as _, future::try_join_all};
 
 use integration_tests::sandbox;
 use iroha::{blocking::Client, sns::SnsNamespacePath};
@@ -86,7 +86,7 @@ use iroha_data_model::{
     },
     transaction::{FeePaymentIntent, SignedTransaction, TransactionEntrypoint},
 };
-use iroha_executor_data_model::permission::peer::CanManagePeers;
+use iroha_executor_data_model::permission::{peer::CanManagePeers, query::CanReadAllLedgerData};
 use iroha_genesis::{GenesisBlock, GenesisTopologyEntry};
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
@@ -284,6 +284,224 @@ async fn read<T: Send + 'static>(
     .await
     .wrap_err("bounded fixture read timed out")?
     .wrap_err("fixture read task failed")
+}
+
+fn same_applied_checkpoint(
+    network_id: NetworkId,
+    before: (NetworkId, u64),
+    after: (NetworkId, u64),
+) -> Result<()> {
+    ensure!(
+        before.0 == network_id && (1..=MAX_RETAINED_HEIGHT).contains(&before.1),
+        "BPNG read checkpoint differs from the original bounded network"
+    );
+    ensure!(
+        before == after,
+        "BPNG applied checkpoint changed during observation"
+    );
+    Ok(())
+}
+
+async fn applied_checkpoint(client: &Client) -> Result<(NetworkId, u64)> {
+    let client = client.clone();
+    read(move || {
+        let manifest = client.client().get_privacy_capabilities()?;
+        Ok((manifest.network_id, manifest.committed_height))
+    })
+    .await
+}
+
+async fn at_applied_checkpoint<T, F, Fut>(client: &Client, operation: F) -> Result<T>
+where
+    F: FnOnce(Client, u64) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    // The scenario requires the original Global root, whose applied height owns
+    // World publication. One peer's unchanged authenticated checkpoint brackets
+    // every page and singular read; the all-ledger permission makes absence exact.
+    let deadline = Instant::now() + READ_TIMEOUT;
+    let client = client.with_request_deadline(deadline.into_std())?;
+    tokio::time::timeout_at(deadline, async {
+        let before = applied_checkpoint(&client).await?;
+        same_applied_checkpoint(*client.client().network_id(), before, before)?;
+        let visibility_client = client.clone();
+        read(move || {
+            ensure!(
+                integration_tests::collections::permissions(
+                    &visibility_client,
+                    visibility_client.client().account(),
+                )?
+                .contains(&Permission::from(CanReadAllLedgerData)),
+                "BPNG observation requires complete ledger visibility"
+            );
+            Ok(())
+        })
+        .await?;
+        let observed = operation(client.clone(), before.1).await?;
+        let after = applied_checkpoint(&client).await?;
+        same_applied_checkpoint(*client.client().network_id(), before, after)?;
+        Ok(observed)
+    })
+    .await
+    .wrap_err("BPNG checkpoint observation exceeded its original read deadline")?
+}
+
+async fn canonical_blocks(client: &Client, height: u64) -> Result<Vec<SignedBlock>> {
+    ensure!(
+        (1..=MAX_RETAINED_HEIGHT).contains(&height),
+        "BPNG canonical history exceeds the retained height bound"
+    );
+    timeout(client.client().torii_request_timeout(), async {
+        let mut stream = client
+            .account_client()
+            .blocks()
+            .subscribe(NonZeroU64::MIN)
+            .await?;
+        let mut blocks = Vec::new();
+        let mut bytes = 0_u64;
+        for expected in 1..=height {
+            let block = stream
+                .next()
+                .await
+                .ok_or_else(|| eyre!("BPNG canonical replay ended before height {expected}"))??;
+            let frame_bytes = stream
+                .last_message_bytes()
+                .ok_or_else(|| eyre!("BPNG canonical replay omitted its wire size"))?;
+            bytes = bytes
+                .checked_add(u64::try_from(frame_bytes)?)
+                .ok_or_else(|| eyre!("BPNG canonical replay byte count overflow"))?;
+            validate_replayed_block(&block, expected, bytes)?;
+            blocks.push(block);
+        }
+        stream.close().await?;
+        Ok::<_, eyre::Report>(blocks)
+    })
+    .await
+    .wrap_err("BPNG canonical replay exceeded its original request deadline")?
+}
+
+fn validate_replayed_block(block: &SignedBlock, expected: u64, bytes: u64) -> Result<()> {
+    ensure!(
+        block.header().height().get() == expected,
+        "BPNG canonical replay skipped or substituted height {expected}"
+    );
+    ensure!(
+        bytes <= MAX_EVIDENCE_BYTES,
+        "BPNG canonical replay exceeds retained byte bound"
+    );
+    Ok(())
+}
+
+#[test]
+fn bpng_checkpoint_refuses_foreign_missing_or_moved_worlds() -> Result<()> {
+    let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"bpng-checkpoint"),
+    ));
+    let foreign = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"foreign-checkpoint"),
+    ));
+    same_applied_checkpoint(network, (network, 2), (network, 2))?;
+    for (before, after) in [
+        ((network, 2), (network, 3)),
+        ((network, 2), (network, 1)),
+        ((network, 2), (foreign, 2)),
+        ((foreign, 2), (foreign, 2)),
+        ((network, 0), (network, 0)),
+        (
+            (network, MAX_RETAINED_HEIGHT + 1),
+            (network, MAX_RETAINED_HEIGHT + 1),
+        ),
+    ] {
+        assert!(same_applied_checkpoint(network, before, after).is_err());
+    }
+    Ok(())
+}
+
+#[test]
+fn bpng_replay_history_requires_exact_bytes_once_and_successful_network_outputs() -> Result<()> {
+    use iroha_data_model::block::{
+        builder::BlockBuilder,
+        execution_output::{ExecutionOutputV1, NetworkExecutionOutputV1},
+        output_budget::ExecutionOutputLimits,
+    };
+    use iroha_data_model::transaction::signed::TransactionResult;
+    // Structural decoder controls only. These outputs confer no execution or
+    // finality authority and never enter the four-validator scenario.
+    let network = NetworkId::from_genesis_hash(HashOf::<BlockHeader>::from_untyped_unchecked(
+        Hash::new(b"bpng-history"),
+    ));
+    let transaction = TransactionBuilder::new(
+        network,
+        BOB_ID.clone(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )
+    .with_instructions([Log::new(Level::INFO, "BPNG observation decoder".to_owned())])
+    .sign(BOB_KEYPAIR.private_key());
+    let mut builder = BlockBuilder::new(BlockHeader::new(NonZeroU64::MIN, None, None, 7, 0));
+    builder.push_transaction(transaction.clone());
+    let proposal = builder.build_with_signature(0, BOB_KEYPAIR.private_key());
+    validate_replayed_block(&proposal, 1, MAX_EVIDENCE_BYTES)?;
+    assert!(validate_replayed_block(&proposal, 2, 1).is_err());
+    assert!(validate_replayed_block(&proposal, 1, MAX_EVIDENCE_BYTES + 1).is_err());
+    assert!(
+        assert_transaction_history(
+            std::slice::from_ref(&proposal),
+            std::slice::from_ref(&transaction)
+        )
+        .is_err()
+    );
+    let limits = ExecutionOutputLimits {
+        max_outputs: 1,
+        max_output_bytes: 1024 * 1024,
+        max_total_output_bytes: 1024 * 1024,
+        max_executed_wire_bytes: MAX_EVIDENCE_BYTES,
+    };
+    let mut rejected = proposal.clone();
+    rejected.set_execution_outputs(
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Err(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted("decoder rejection control".to_owned()),
+            ))),
+            completions: Vec::new(),
+        })],
+        0,
+        BTreeMap::new(),
+        Vec::new(),
+        iroha_data_model::nexus::AxtPolicySnapshot::default(),
+        BTreeSet::new(),
+        &limits,
+    )?;
+    assert!(assert_transaction_history(&[rejected], std::slice::from_ref(&transaction)).is_err());
+    let mut executed = proposal;
+    executed.set_execution_outputs(
+        vec![ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
+            input_index: 0,
+            result: TransactionResult::new(Ok(Vec::new())),
+            completions: Vec::new(),
+        })],
+        0,
+        BTreeMap::new(),
+        Vec::new(),
+        iroha_data_model::nexus::AxtPolicySnapshot::default(),
+        BTreeSet::new(),
+        &limits,
+    )?;
+    assert_transaction_history(
+        std::slice::from_ref(&executed),
+        std::slice::from_ref(&transaction),
+    )?;
+    assert!(assert_transaction_history(&[], std::slice::from_ref(&transaction)).is_err());
+    assert!(
+        assert_transaction_history(
+            &[executed.clone(), executed.clone()],
+            std::slice::from_ref(&transaction)
+        )
+        .is_err()
+    );
+    let decoded = decode_framed_signed_block(&executed.encode_wire()?)?;
+    assert_transaction_history(&[decoded], &[transaction])?;
+    Ok(())
 }
 
 async fn height(client: &Client) -> Result<u64> {
@@ -1247,12 +1465,130 @@ fn balances(client: &Client, leases: &[LeaseExpectation]) -> Result<BTreeMap<Ass
             selected.insert(AssetId::of(definition.clone(), owner), Quantity::zero());
         }
     }
-    for asset in client.client().query(FindAssets::new()).execute_all()? {
-        if let Some(amount) = selected.get_mut(asset.id()) {
-            *amount = asset.value().clone();
-        }
+    let definitions = selected
+        .keys()
+        .map(|id| id.definition().clone())
+        .collect::<BTreeSet<_>>();
+    let mut seen = BTreeSet::new();
+    for definition in definitions {
+        let rows = client
+            .list(
+                iroha::collections::Collection::AssetHolders(definition.clone()),
+                iroha::collections::ListQuery::new()
+                    .filter(iroha::collections::field("scope").eq("global")),
+            )
+            .collect::<iroha::Result<Vec<_>>>()?;
+        merge_holder_balances(&definition, &rows, &mut selected, &mut seen)?;
     }
     Ok(selected)
+}
+
+fn merge_holder_balances(
+    definition: &AssetDefinitionId,
+    rows: &[norito::json::Value],
+    selected: &mut BTreeMap<AssetId, Quantity>,
+    seen: &mut BTreeSet<AssetId>,
+) -> Result<()> {
+    for row in rows {
+        let id: AssetId = integration_tests::collections::field(row, "id")?;
+        let asset: AssetDefinitionId = integration_tests::collections::field(row, "asset")?;
+        let account: AccountId = integration_tests::collections::field(row, "account_id")?;
+        let scope: String = integration_tests::collections::field(row, "scope")?;
+        let quantity: Quantity = integration_tests::collections::field(row, "quantity")?;
+        ensure!(
+            &asset == definition
+                && id.definition() == definition
+                && id.account() == &account
+                && id.scope() == &iroha_data_model::asset::AssetBalanceScope::Global
+                && scope == "global",
+            "BPNG holder collection substituted its asset, owner or scope"
+        );
+        ensure!(
+            seen.insert(id.clone()),
+            "BPNG holder collection duplicated a balance partition"
+        );
+        if let Some(amount) = selected.get_mut(&id) {
+            *amount = quantity;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn bpng_holder_rows_preserve_exact_balances_and_reject_substitution() -> Result<()> {
+    let definition = AssetDefinitionId::parse_address_literal(TAIRA_XOR_ASSET_DEFINITION_ID)?;
+    let payer = AssetId::of(definition.clone(), BOB_ID.clone());
+    let collector = AssetId::of(definition.clone(), iroha_test_samples::ALICE_ID.clone());
+    let id = &payer;
+    let account = payer.account();
+    let good = norito::json!({
+        "id": id,
+        "asset": definition,
+        "account_id": account,
+        "scope": "global",
+        "quantity": "13",
+    });
+    let baseline = BTreeMap::from([
+        (payer.clone(), Quantity::zero()),
+        (collector.clone(), Quantity::zero()),
+    ]);
+    let mut selected = baseline.clone();
+    merge_holder_balances(
+        &definition,
+        std::slice::from_ref(&good),
+        &mut selected,
+        &mut BTreeSet::new(),
+    )?;
+    assert_eq!(selected[&payer], Quantity::from(13_u64));
+    assert_eq!(selected[&collector], Quantity::zero());
+    let mut malformed = vec![vec![good.clone(), good.clone()]];
+    for (field, value) in [
+        (
+            "asset",
+            AssetDefinitionId::derive_from_components(
+                iroha_model_base::domain::DomainId::try_new("other", "universal")?,
+                "other".parse()?,
+            )
+            .to_string(),
+        ),
+        ("account_id", collector.account().to_string()),
+        ("scope", "dataspace:1".to_owned()),
+        ("quantity", "invalid".to_owned()),
+        ("id", collector.canonical_literal()),
+    ] {
+        let mut row = good.clone();
+        row.as_object_mut()
+            .unwrap()
+            .insert(field.to_owned(), value.into());
+        malformed.push(vec![row]);
+    }
+    let mut scoped = good.clone();
+    scoped.as_object_mut().unwrap().insert(
+        "id".to_owned(),
+        AssetId::with_scope(
+            definition.clone(),
+            BOB_ID.clone(),
+            iroha_data_model::asset::AssetBalanceScope::Dataspace(DataSpaceId::new(1)),
+        )
+        .canonical_literal()
+        .into(),
+    );
+    malformed.push(vec![scoped]);
+    let mut missing = good;
+    missing.as_object_mut().unwrap().remove("id");
+    malformed.push(vec![missing]);
+    for rows in malformed {
+        assert!(
+            merge_holder_balances(
+                &definition,
+                &rows,
+                &mut baseline.clone(),
+                &mut BTreeSet::new()
+            )
+            .is_err()
+        );
+    }
+    Ok(())
 }
 
 fn assert_paid_once(
@@ -1295,6 +1631,7 @@ fn ledger_snapshot(
     expectations: &[LeaseExpectation],
     grant: &AliasDataspaceBootstrapGrantV1,
     transactions: &[SignedTransaction],
+    blocks: &[SignedBlock],
 ) -> Result<LedgerSnapshot> {
     let parameters: Parameters = client.client().query_single(FindParameters::new())?;
     let custom = parameters
@@ -1349,46 +1686,63 @@ fn ledger_snapshot(
         leases.push(record);
     }
     let mut domains = BTreeMap::new();
-    for domain in client.client().query(FindDomains::new()).execute_all()? {
-        if [
-            DomainId::try_new("history", "universal")?,
-            DomainId::try_new("mibank", "bpng")?,
-        ]
-        .contains(domain.id())
-        {
-            ensure!(
-                domain.owned_by() == &*BOB_ID,
-                "native domain owner mismatch"
-            );
-            domains.insert(domain.id().clone(), domain.encode());
-        }
+    for id in [
+        DomainId::try_new("history", "universal")?,
+        DomainId::try_new("mibank", "bpng")?,
+    ] {
+        let domain = client
+            .client()
+            .query_single(FindDomainById::new(id.clone()))?;
+        ensure!(
+            domain.id() == &id,
+            "native domain query substituted its identity"
+        );
+        ensure!(
+            domain.owned_by() == &*BOB_ID,
+            "native domain owner mismatch"
+        );
+        domains.insert(domain.id().clone(), domain.encode());
     }
     ensure!(domains.len() == 2, "both native domains must be present");
-    let committed = client
-        .client()
-        .query(FindTransactions::new())
-        .execute_all()?;
-    for transaction in transactions {
-        let matching = committed
-            .iter()
-            .filter(|record| record.entrypoint_hash() == &transaction.hash_as_entrypoint())
-            .collect::<Vec<_>>();
-        ensure!(
-            matching.len() == 1,
-            "exact signed transaction must appear once in committed query history"
-        );
-        ensure!(
-            matching[0].entrypoint() == &TransactionEntrypoint::External(transaction.clone())
-                && matching[0].result().0.is_ok(),
-            "committed transaction bytes/result mismatch"
-        );
-    }
+    assert_transaction_history(blocks, transactions)?;
     Ok(LedgerSnapshot {
         parameters: parameters.encode(),
         leases,
         domains,
         balances: balances(client, expectations)?,
     })
+}
+
+fn assert_transaction_history(
+    blocks: &[SignedBlock],
+    transactions: &[SignedTransaction],
+) -> Result<()> {
+    for transaction in transactions {
+        let matching = blocks
+            .iter()
+            .flat_map(|block| {
+                block
+                    .network_entrypoints()
+                    .enumerate()
+                    .map(move |(index, entrypoint)| (block, index, entrypoint))
+            })
+            .filter(|(_, _, entrypoint)| entrypoint.hash() == transaction.hash_as_entrypoint())
+            .collect::<Vec<_>>();
+        ensure!(
+            matching.len() == 1,
+            "exact signed transaction must appear once in committed query history"
+        );
+        let (block, index, entrypoint) = matching[0];
+        let (_, output) = block
+            .network_output_at(u32::try_from(index)?)
+            .ok_or_else(|| eyre!("committed transaction omitted its Network execution result"))?;
+        ensure!(
+            entrypoint == &TransactionEntrypoint::External(transaction.clone())
+                && output.result.0.is_ok(),
+            "committed transaction bytes/result mismatch"
+        );
+    }
+    Ok(())
 }
 
 async fn wait_for_snapshot(
@@ -1404,8 +1758,12 @@ async fn wait_for_snapshot(
         let expectations = expectations.to_vec();
         let grant = grant.clone();
         let transactions = transactions.to_vec();
-        let observed =
-            read(move || ledger_snapshot(&client, &expectations, &grant, &transactions)).await;
+        let observed = at_applied_checkpoint(&client, |client, height| async move {
+            let blocks = canonical_blocks(&client, height).await?;
+            read(move || ledger_snapshot(&client, &expectations, &grant, &transactions, &blocks))
+                .await
+        })
+        .await;
         match observed {
             Ok(snapshot) if expected.is_none_or(|expected| expected == &snapshot) => {
                 return Ok(snapshot);
@@ -1458,43 +1816,45 @@ async fn wait_for_bpng_frontier(
         for client in clients {
             let client = client.clone();
             let transaction = transaction.clone();
-            let observed = read(move || {
-                let statuses = client.client().get_sumeragi_lanes()?;
-                let status = statuses
-                    .into_iter()
-                    .find(|status| status.record.lane == BPNG_FIXTURE_LANE)
-                    .ok_or_else(|| eyre!("native BPNG lane is absent"))?;
-                ensure!(
-                    status
-                        .instance
-                        .as_ref()
-                        .is_some_and(|instance| instance.halted.is_none()),
-                    "native BPNG instance is unavailable or halted"
-                );
-                let mut blocks = client.client().query(FindBlocks::new()).execute_all()?;
-                blocks.sort_by_key(|block| block.header().height().get());
-                let history = RetainedHistory {
-                    blocks: blocks
-                        .iter()
-                        .map(SignedBlock::encode_wire)
-                        .collect::<Result<_, _>>()?,
-                };
-                let (_, expected) = bpng_transaction_ownership(
-                    &history,
-                    &transaction,
-                    incarnation,
-                    &status
-                        .record
-                        .committee
-                        .iter()
-                        .map(|member| member.peer.clone())
-                        .collect::<Vec<_>>(),
-                )?;
-                ensure!(
-                    status.record == expected,
-                    "live native frontier differs from the transaction's exact global merge"
-                );
-                Ok(status.record)
+            let observed = at_applied_checkpoint(&client, |client, height| async move {
+                let blocks = canonical_blocks(&client, height).await?;
+                read(move || {
+                    let statuses = client.client().get_sumeragi_lanes()?;
+                    let status = statuses
+                        .into_iter()
+                        .find(|status| status.record.lane == BPNG_FIXTURE_LANE)
+                        .ok_or_else(|| eyre!("native BPNG lane is absent"))?;
+                    ensure!(
+                        status
+                            .instance
+                            .as_ref()
+                            .is_some_and(|instance| instance.halted.is_none()),
+                        "native BPNG instance is unavailable or halted"
+                    );
+                    let history = RetainedHistory {
+                        blocks: blocks
+                            .iter()
+                            .map(SignedBlock::encode_wire)
+                            .collect::<Result<_, _>>()?,
+                    };
+                    let (_, expected) = bpng_transaction_ownership(
+                        &history,
+                        &transaction,
+                        incarnation,
+                        &status
+                            .record
+                            .committee
+                            .iter()
+                            .map(|member| member.peer.clone())
+                            .collect::<Vec<_>>(),
+                    )?;
+                    ensure!(
+                        status.record == expected,
+                        "live native frontier differs from the transaction's exact global merge"
+                    );
+                    Ok(status.record)
+                })
+                .await
             })
             .await;
             match observed {
@@ -2376,6 +2736,13 @@ async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> 
         "exactly four original validators required"
     );
     let genesis = network.genesis();
+    ensure!(
+        iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)?
+            .sumeragi_context
+            .root_scope
+            == iroha_data_model::block::consensus::SumeragiRootScope::Global,
+        "BPNG scoped balances and catalogs must share the original global World checkpoint"
+    );
     let original_voters = network
         .peers()
         .iter()
@@ -2468,7 +2835,10 @@ async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> 
     .await?;
     let read_client = authority.clone();
     let baseline_terms = baseline_leases.clone();
-    let baseline_balances = read(move || balances(&read_client, &baseline_terms)).await?;
+    let baseline_balances = at_applied_checkpoint(&read_client, |client, _| async move {
+        read(move || balances(&client, &baseline_terms)).await
+    })
+    .await?;
     let domain_intent = |domain: &str, dataspace: &str, id| -> Result<_> {
         Ok(AliasIntentV1::Domain(AliasDomainIntentV1 {
             domain: ResolvedDomainV1::new(DomainId::try_new(domain, dataspace)?, id),
@@ -2808,14 +3178,9 @@ async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> 
     let sweep_validator = AccountId::new(validator_keypairs[0].public_key().clone());
     let sweep_reader = validator_clients[0].clone();
     let sweep_authority = sweep_validator.clone();
-    let sweep_permissions = read(move || {
-        sweep_reader
-            .client()
-            .query(FindPermissionsByAccountId::new(sweep_authority))
-            .execute_all()
-            .map_err(Into::into)
-    })
-    .await?;
+    let sweep_permissions =
+        read(move || integration_tests::collections::permissions(&sweep_reader, &sweep_authority))
+            .await?;
     ensure!(
         sweep_permissions
             .iter()
