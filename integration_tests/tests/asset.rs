@@ -377,7 +377,7 @@ fn quoted_transaction(
         "the quote must preserve the fixture's payer and gas bound"
     );
     payload.fee_payment = quote.intent;
-    account.sign_transaction(payload)
+    Ok(account.sign_transaction(payload)?)
 }
 
 fn submit_or_tolerate_timeout(

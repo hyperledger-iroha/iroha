@@ -74,18 +74,11 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let mint = Mint::asset_quantity(200_u32, asset_id.clone());
         let instructions: [InstructionBox; 2] = [create_asset.into(), mint.clone().into()];
-        let tx = {
-            let account = test_client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    instructions,
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    metadata,
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
-        test_client.submit_transaction_and_wait(&tx)?;
+        test_client.submit_all_with_metadata(
+            instructions,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            metadata,
+        )?;
         wait_for_asset_value(
             &test_client,
             &asset_id,

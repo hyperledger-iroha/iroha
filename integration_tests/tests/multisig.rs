@@ -36,7 +36,7 @@ use reqwest::header::CONTENT_TYPE;
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use tokio::runtime::Runtime;
 const DOMAIN_REGISTRATION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
@@ -44,6 +44,23 @@ const DOMAIN_REGISTRATION_RECOVERY_POLL: Duration = Duration::from_millis(250);
 const ACCOUNT_VISIBILITY_TIMEOUT: Duration = Duration::from_secs(30);
 const ACCOUNT_VISIBILITY_POLL: Duration = Duration::from_millis(100);
 const CANONICAL_EXECUTOR: &[u8] = include_bytes!("../../defaults/executor.to");
+fn fund_multisig_fixture_authority(
+    network: &Network,
+    client: &Client,
+    account: &AccountId,
+) -> Result<()> {
+    let fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    client.submit(
+        Transfer::asset_quantity(
+            AssetId::new(fee_asset, client.client().account().clone()),
+            10_000_u32,
+            account.clone(),
+        ),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(())
+}
 fn proposal_nonce(seed: u8) -> MultisigProposalNonce {
     MultisigProposalNonce::new([seed; 32]).expect("nonzero fixture nonce")
 }
@@ -296,13 +313,38 @@ fn canonical_multisig_account_id(spec: &MultisigSpec) -> AccountId {
 }
 fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
     rt: &Runtime,
+    client: &Client,
     endpoint: &str,
     body: &T,
 ) -> Result<JsonValue> {
     let payload = norito::json::to_vec(body)?;
+    let now = SystemTime::now().duration_since(UNIX_EPOCH)?;
+    let timestamp_ms = u64::try_from(now.as_millis())?;
+    let nonce = format!("multisig-fixture-{}", now.as_nanos());
+    let endpoint_url = reqwest::Url::parse(endpoint)?;
+    let message = iroha_torii::canonical_network_request_signature_message(
+        client.client().network_id(),
+        &iroha_torii::Method::POST,
+        &endpoint_url.path().parse()?,
+        &payload,
+        timestamp_ms,
+        &nonce,
+    )?;
+    let signature =
+        iroha_crypto::Signature::try_new(client.client().key_pair().private_key(), &message)?;
     let response_body = rt.block_on(async {
         let response = integration_tests::http::client()
             .post(endpoint)
+            .header(
+                iroha_torii::HEADER_ACCOUNT,
+                client.client().account().to_canonical_hex()?,
+            )
+            .header(
+                iroha_torii::HEADER_SIGNATURE,
+                iroha_torii::signature_header_value(&signature)?,
+            )
+            .header(iroha_torii::HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
+            .header(iroha_torii::HEADER_NONCE, nonce)
             .header(CONTENT_TYPE, "application/json")
             .body(payload)
             .send()
@@ -320,6 +362,7 @@ fn post_torii_app_json<T: norito::json::JsonSerialize + ?Sized>(
 }
 fn wait_for_multisig_proposal_status(
     rt: &Runtime,
+    client: &Client,
     torii_base: &str,
     selector: &MultisigAccountSelectorDto,
     proposal_id: &str,
@@ -332,6 +375,7 @@ fn wait_for_multisig_proposal_status(
     while Instant::now() < deadline {
         match post_torii_app_json(
             rt,
+            client,
             &endpoint,
             &MultisigProposalsResolveRequestDto {
                 selector: selector.clone(),
@@ -564,8 +608,10 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .expect("network should expose at least one peer")
         .torii_url()
         .clone();
+    let cancel_client = alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client);
     let propose_cancel = post_torii_app_json(
         &rt,
+        &cancel_client,
         &format!("{torii_base}/v1/multisig/cancel"),
         &MultisigCancelRequestDto {
             selector: selector.clone(),
@@ -632,6 +678,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         .wrap_err("submit cancel wrapper approval for cancel route test")?;
     let canceled = wait_for_multisig_proposal_status(
         &rt,
+        &test_client,
         &torii_base,
         &selector,
         &target_id.to_string(),
@@ -651,6 +698,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
     );
     let canceled_query = post_torii_app_json(
         &rt,
+        &test_client,
         &format!("{torii_base}/v1/multisig/proposals/query"),
         &MultisigProposalsQueryRequestDto {
             selector,
@@ -743,6 +791,7 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
             }),
         "proposer should receive a hashed MULTISIG_SIGNATORY role for the long multisig account"
     );
+    fund_multisig_fixture_authority(&network, &test_client, &proposer.0)?;
     let proposer_client = alt_client(proposer.clone(), &test_client);
     let mut expected_proposal_ids = Vec::new();
     for suffix in ["a", "b", "c"] {
@@ -980,7 +1029,7 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
             (missing_signer.0.clone(), 1),
         ]),
         NonZeroU16::new(2).unwrap(),
-        NonZeroU64::MAX,
+        NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("finite default proposal TTL"),
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -1330,7 +1379,7 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
     let spec = MultisigSpec::new(
         BTreeMap::from([(existing_signer.0.clone(), 1)]),
         NonZeroU16::new(1).unwrap(),
-        NonZeroU64::MAX,
+        NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("finite default proposal TTL"),
     );
     let seed_account = AccountId::new(KeyPair::random().public_key().clone());
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit::<InstructionBox>(
@@ -1343,8 +1392,30 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         find_account(&test_client, &missing_signer.0)?.is_none(),
         "precondition: missing signatory must not exist"
     );
-    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client).submit::<InstructionBox>(
-        AddSignatory::new(multisig_account_id, missing_signer.1.public_key().clone()).into(),
+    // Domain ownership does not authorize another account's controller mutation.
+    // The existing single-member quorum executes the change as the multisig account.
+    fund_multisig_fixture_authority(&network, &test_client, &existing_signer.0)?;
+    let signer_client = alt_client(existing_signer, &test_client);
+    let instructions = vec![
+        AddSignatory::new(
+            multisig_account_id.clone(),
+            missing_signer.1.public_key().clone(),
+        )
+        .into(),
+    ];
+    let instructions_hash = HashOf::new(&instructions);
+    let nonce = proposal_nonce(1);
+    let proposal_id = occurrence(&signer_client, &multisig_account_id, nonce);
+    signer_client.submit::<InstructionBox>(
+        MultisigPropose::new(multisig_account_id.clone(), nonce, instructions, None).into(),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    assert!(
+        find_account(&test_client, &missing_signer.0)?.is_none(),
+        "proposal alone must not execute even when the proposer is the entire quorum"
+    );
+    signer_client.submit::<InstructionBox>(
+        MultisigApprove::new(multisig_account_id, proposal_id, instructions_hash).into(),
         FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let created_via_key: Name = "iroha:created_via".parse().unwrap();

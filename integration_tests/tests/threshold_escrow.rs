@@ -16,7 +16,8 @@ use iroha_data_model::{
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias},
-    asset::CanTransferAsset, smart_contract::CanManageSmartContractCode,
+    asset::CanTransferAsset,
+    smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
@@ -37,7 +38,9 @@ fn threshold_escrow_alias_permission() -> CanManageAccountAlias {
     CanManageAccountAlias {
         scope: AccountAliasPermissionScope::Alias(
             iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                CONTRACT_ALIAS_LITERAL.parse().expect("threshold escrow alias"),
+                CONTRACT_ALIAS_LITERAL
+                    .parse()
+                    .expect("threshold escrow alias"),
                 iroha_model_base::topology::DataSpaceId::UNIVERSAL,
             ),
         ),
@@ -103,7 +106,9 @@ async fn deploy_threshold_escrow(
     client: &Client,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
     let artifact = load_sample_ivm("threshold_escrow");
-    let contract_alias = CONTRACT_ALIAS_LITERAL.parse().expect("threshold escrow alias");
+    let contract_alias = CONTRACT_ALIAS_LITERAL
+        .parse()
+        .expect("threshold escrow alias");
     let (contract_address, _, _, _) = read_on_dedicated_thread({
         let client = client.clone();
         move || {
@@ -415,17 +420,11 @@ async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool>
     let client = client.clone();
     let account_id = account_id.clone();
     read_on_dedicated_thread(move || {
-        match client
-            .client()
-            .query_single(FindAccountById::new(account_id.clone()))
-        {
-            Ok(account) if account.id() == &account_id => Ok(true),
-            Ok(_) => Err(eyre!("exact account query returned a different account")),
-            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                FindError::Account(missing),
-            )))) if missing == account_id => Ok(false),
-            Err(error) => Err(eyre!(error)),
-        }
+        integration_tests::collections::contains_exact_id(
+            &client,
+            iroha::collections::Collection::Accounts,
+            &account_id.to_string(),
+        )
     })
     .await
     .wrap_err("account query worker failed")
@@ -437,19 +436,11 @@ async fn asset_definition_exists(
     let client = client.clone();
     let asset_definition_id = asset_definition_id.clone();
     read_on_dedicated_thread(move || {
-        match client
-            .client()
-            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
-        {
-            Ok(definition) if definition.id() == &asset_definition_id => Ok(true),
-            Ok(_) => Err(eyre!(
-                "exact definition query returned a different asset definition"
-            )),
-            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                FindError::AssetDefinition(missing),
-            )))) if missing == asset_definition_id => Ok(false),
-            Err(error) => Err(eyre!(error)),
-        }
+        integration_tests::collections::contains_exact_id(
+            &client,
+            iroha::collections::Collection::AssetDefinitions,
+            &asset_definition_id.to_string(),
+        )
     })
     .await
     .wrap_err("asset definition query worker failed")

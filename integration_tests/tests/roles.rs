@@ -1,7 +1,7 @@
 //! Integration tests for role registration and assignment flows.
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
-use integration_tests::{collections, metrics::MetricsReader, sandbox};
+use integration_tests::{collections, sandbox};
 use iroha::{
     blocking::Client,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
@@ -10,33 +10,29 @@ use iroha_executor_data_model::permission::account::CanModifyAccountMetadata;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
-fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
-    let http = integration_tests::http::client();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut prepared_seen: f64 = 0.0;
-    let mut merged_seen: f64 = 0.0;
-    let mut fallback_seen: f64 = 0.0;
-    while Instant::now() < deadline {
-        let snapshot = rt.block_on(async {
-            let response = http.get(metrics_url.clone()).send().await?;
-            response.error_for_status()?.text().await
-        })?;
-        let metrics = MetricsReader::new(&snapshot);
-        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
-        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
-        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
-        if merged_seen > 0.0 || fallback_seen > 0.0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok((prepared_seen, merged_seen, fallback_seen))
+fn funded_role_authority_client(
+    network: &Network,
+    account: &AccountId,
+    key: &iroha::crypto::KeyPair,
+) -> Result<Client> {
+    let funder = network.client();
+    let fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    funder.submit(
+        Transfer::asset_quantity(
+            AssetId::new(fee_asset, funder.client().account().clone()),
+            10_000_u32,
+            account.clone(),
+        ),
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(network.peers()[0].client_for(account, key.private_key().clone()))
 }
 fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
@@ -101,6 +97,7 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
         register_mouse,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let mouse_client = funded_role_authority_client(&network, &mouse_id, &mouse_keypair)?;
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role =
@@ -108,11 +105,11 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
             account: mouse_id.clone(),
         });
     let register_role = Register::role(role);
-    test_client.submit(
+    mouse_client.submit(
         register_role,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // Transfer domain ownership to Mouse so Alice no longer has implicit owner privileges.
+    // Transfer domain ownership separately from the canonical account authority.
     let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
     let transfer_domain = Transfer::domain(alice_id.clone(), wonderland, mouse_id.clone());
     test_client.submit(
@@ -140,14 +137,10 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
     );
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
-    let grant_role_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id.clone(),
+    mouse_client.submit(
+        grant_role,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([grant_role])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&grant_role_tx)?;
+    )?;
     // Alice modifies Mouse's metadata
     let set_key_value = SetKeyValue::account(mouse_id, metadata_key, metadata_value);
     test_client.submit(
@@ -307,6 +300,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
         register_mouse,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let mouse_client = funded_role_authority_client(&network, &mouse_id, &mouse_keypair)?;
     // Registering role
     let role_id = "ACCESS_TO_MOUSE_METADATA".parse::<RoleId>()?;
     let role = Role::new(role_id.clone(), mouse_id.clone());
@@ -324,14 +318,10 @@ fn grant_revoke_role_permissions() -> Result<()> {
     )?;
     // Mouse grants role to Alice
     let grant_role = Grant::account_role(role_id.clone(), alice_id.clone());
-    let grant_role_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id.clone(),
+    mouse_client.submit(
+        grant_role,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([grant_role])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&grant_role_tx)?;
+    )?;
     let set_key_value = SetKeyValue::account(mouse_id.clone(), "key".parse()?, Json::from("value"));
     let can_set_key_value_in_mouse = CanModifyAccountMetadata {
         account: mouse_id.clone(),
@@ -356,14 +346,10 @@ fn grant_revoke_role_permissions() -> Result<()> {
         )
         .expect_err("shouldn't be able to modify metadata");
     // Alice can modify Mouse's metadata after permission is granted to role
-    let grant_role_permission_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id.clone(),
+    mouse_client.submit(
+        grant_role_permission,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([grant_role_permission])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&grant_role_permission_tx)?;
+    )?;
     assert!(
         collections::role_ids(
             &test_client,
@@ -376,14 +362,10 @@ fn grant_revoke_role_permissions() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Alice can't modify Mouse's metadata after permission is removed from role
-    let revoke_role_permission_tx = TransactionBuilder::new(
-        network.network_id(),
-        mouse_id,
+    mouse_client.submit(
+        revoke_role_permission,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([revoke_role_permission])
-    .sign(mouse_keypair.private_key());
-    test_client.submit_transaction_and_wait(&revoke_role_permission_tx)?;
+    )?;
     assert!(
         !collections::permissions(&test_client, &alice_id)?
             .iter()
@@ -401,25 +383,18 @@ fn grant_revoke_role_permissions() -> Result<()> {
     Ok(())
 }
 #[test]
-fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+fn role_permission_revoke_then_grant_last_wins_on_all_peers() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
-        .with_default_block_cadence()
-        .with_config_layer(|layer| {
-            layer
-                .write(["pipeline", "parallel_overlay"], true)
-                .write(["pipeline", "parallel_apply"], true)
-                .write("telemetry_profile", "full");
-        });
+        .with_default_block_cadence();
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
-        stringify!(role_permission_revoke_then_grant_last_wins_detached),
+        stringify!(role_permission_revoke_then_grant_last_wins_on_all_peers),
     )?
     else {
         return Ok(());
     };
     let test_client = network.client();
-    let metrics_url = test_client.client().endpoint().join("/metrics")?;
     let alice_id = ALICE_ID.clone();
     let role_id: RoleId = "PERM_LAST_WINS".parse()?;
     test_client.submit(
@@ -436,38 +411,27 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     )?;
     let revoke_role_permission = Revoke::role_permission(perm.clone(), role_id.clone());
     let grant_role_permission = Grant::role_permission(perm.clone(), role_id.clone());
-    let tx = TransactionBuilder::new(
-        network.network_id(),
-        alice_id.clone(),
+    test_client.submit_all(
+        [
+            InstructionBox::from(revoke_role_permission),
+            InstructionBox::from(grant_role_permission),
+        ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(revoke_role_permission),
-        InstructionBox::from(grant_role_permission),
-    ])
-    .sign(ALICE_KEYPAIR.private_key());
-    test_client.submit_transaction_and_wait(&tx)?;
-    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let role = collections::roles(&test_client)?
-        .into_iter()
-        .find(|role| role.id() == &role_id)
-        .expect("role should exist");
-    assert!(
-        role.permissions().any(|permission| permission == &perm),
-        "last grant should keep permission on role"
-    );
-    assert!(
-        prepared_seen > 0.0,
-        "expected detached pipeline to prepare overlays"
-    );
-    assert!(
-        merged_seen > 0.0,
-        "expected detached merge to register in metrics"
-    );
-    assert_eq!(
-        fallback_seen, 0.0,
-        "detached fallback should not register for permission ops"
-    );
+    )?;
+    // The canonical sequential executor commits the whole ordered batch. Check that every
+    // validator applies the last grant, rather than observing retired detached-pipeline counters.
+    let height = test_client.status().get()?.blocks;
+    rt.block_on(network.ensure_blocks_with(|blocks| blocks.total >= height))?;
+    for peer in network.peers() {
+        let role = collections::roles(&peer.client())?
+            .into_iter()
+            .find(|role| role.id() == &role_id)
+            .expect("role should exist on every validator");
+        assert!(
+            role.permissions().any(|permission| permission == &perm),
+            "last grant should keep permission on role on every validator"
+        );
+    }
     Ok(())
 }
 #[tokio::test]
@@ -500,7 +464,8 @@ async fn grant_unexisting_role_in_genesis_fail() {
                         "cannot delegate an unknown role".to_owned(),
                     )),
                 );
-                let register = Register::role(Role::new(role_id, ALICE_ID.clone()));
+                let register =
+                    Register::role(Role::new(role_id, iroha_test_samples::BOB_ID.clone()));
                 try_genesis_factory(
                     vec![vec![register.into(), grant.into()]],
                     topology,

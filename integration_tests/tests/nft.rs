@@ -59,19 +59,13 @@ fn wait_for_nft_absent(client: &Client, nft_id: &NftId, context: &str) {
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "nft was not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query_single(FindNftById::new(nft_id.clone()))
-        {
-            Ok(nft) => {
-                assert_eq!(nft.id(), nft_id);
-                "nft still present".clone_into(&mut last_observed);
-            }
-            Err(iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Find(
-                    iroha_data_model::query::error::FindError::Nft(missing),
-                ),
-            ))) if &missing == nft_id => return,
+        match integration_tests::collections::contains_exact_id(
+            client,
+            iroha::collections::Collection::Nfts,
+            &nft_id.to_string(),
+        ) {
+            Ok(false) => return,
+            Ok(true) => "nft still present".clone_into(&mut last_observed),
             Err(err) => {
                 last_observed = format!("query failed: {err}");
             }

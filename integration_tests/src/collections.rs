@@ -79,6 +79,66 @@ pub fn field<T: JsonDeserialize>(row: &Value, name: &str) -> Result<T> {
     Ok(norito::json::from_value(value.clone())?)
 }
 
+/// Test identity membership through a complete authenticated collection query.
+///
+/// Only a successful empty result proves absence; transport, decoding, duplicate identity,
+/// and mismatched filter results remain errors.
+pub fn contains_exact_id(client: &Client, collection: Collection, id: &str) -> Result<bool> {
+    exact_identity_presence(
+        client
+            .list(
+                collection,
+                ListQuery::new()
+                    .filter(iroha::collections::field("id").eq(id))
+                    .select(["id"]),
+            )
+            .map(|row| Ok(row?)),
+        id,
+    )
+}
+
+fn exact_identity_presence(
+    rows: impl IntoIterator<Item = Result<Value>>,
+    expected: &str,
+) -> Result<bool> {
+    let mut present = false;
+    for row in rows {
+        let actual: String = field(&row?, "id")?;
+        eyre::ensure!(
+            actual == expected,
+            "exact identity filter returned {actual}, expected {expected}"
+        );
+        eyre::ensure!(
+            !present,
+            "exact identity filter returned duplicate {expected}"
+        );
+        present = true;
+    }
+    Ok(present)
+}
+
+#[test]
+fn exact_identity_presence_requires_complete_valid_matching_rows() {
+    assert!(!exact_identity_presence([], "expected").unwrap());
+    let row = norito::json!({"id": "expected"});
+    assert!(exact_identity_presence([Ok(row.clone())], "expected").unwrap());
+    assert!(exact_identity_presence([Ok(row.clone()), Ok(row)], "expected").is_err());
+    assert!(exact_identity_presence([Ok(norito::json!({"id": "other"}))], "expected").is_err());
+    assert!(exact_identity_presence([Ok(norito::json!({"id": 3}))], "expected").is_err());
+    assert!(exact_identity_presence([Ok(norito::json!({}))], "expected").is_err());
+    assert!(exact_identity_presence([Err(eyre!("query failed"))], "expected").is_err());
+    assert!(
+        exact_identity_presence(
+            [
+                Ok(norito::json!({"id": "expected"})),
+                Err(eyre!("next page failed"))
+            ],
+            "expected"
+        )
+        .is_err()
+    );
+}
+
 /// Read the account identities and exact quantities of all definition holders.
 pub fn holder_balances(
     client: &Client,
