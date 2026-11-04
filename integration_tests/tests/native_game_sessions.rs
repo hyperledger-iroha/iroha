@@ -14,6 +14,7 @@ use iroha_model_base::peer::PeerId;
 use std::time::Duration;
 
 use eyre::{Result, ensure, eyre};
+use futures_util::TryStreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
@@ -222,6 +223,59 @@ async fn finalized_state_observation(
     height: u64,
     network: &Network,
 ) -> Result<Option<(HashOf<BlockHeader>, Hash)>> {
+    let client = peer.client();
+    // The account-authorized block stream is the admitted full-history API.
+    // Consume exactly the requested prefix, one retained block at a time;
+    // the enclosing convergence deadline also bounds subscription and reads.
+    let mut blocks = client
+        .account_client()
+        .blocks()
+        .subscribe(std::num::NonZeroU64::MIN)
+        .await?;
+    let original = network.genesis();
+    let first = blocks
+        .try_next()
+        .await?
+        .ok_or_else(|| eyre!("block stream ended before original genesis"))?;
+    ensure!(
+        first.header().height().get() == 1,
+        "block stream did not start at genesis"
+    );
+    ensure!(
+        first.canonical_resultless_proposal()?.encode_wire()?
+            == original.0.canonical_resultless_proposal()?.encode_wire()?,
+        "peer history replaced the independently signed genesis"
+    );
+    // Independent public-history verification owns one finite shared-block pool.
+    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
+    let genesis = iroha_data_model::block::SharedSignedBlock::try_new(first.clone(), &budget)
+        .map_err(|(_, error)| error)?;
+    let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
+        &network.chain_id(),
+        network.network_id(),
+        genesis,
+    )?;
+    let mut verified = None;
+    for expected_height in 2..=height {
+        let block = blocks
+            .try_next()
+            .await?
+            .ok_or_else(|| eyre!("block stream ended before requested finality height"))?;
+        ensure!(
+            block.header().height().get() == expected_height,
+            "block stream skipped or reordered the original native prefix"
+        );
+        let block = iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
+            .map_err(|(_, error)| error)?;
+        let (certified, _) = prefix.push(block)?.into_parts();
+        if certified.committed().height() == height {
+            verified = Some(certified);
+        }
+    }
+    blocks.close().await?;
+    let certified =
+        verified.ok_or_else(|| eyre!("native prefix did not reach requested height"))?;
+    let committed = certified.committed();
     let url = peer
         .client()
         .client()
@@ -248,11 +302,16 @@ async fn finalized_state_observation(
             .is_some_and(|v| v.starts_with("application/json")),
         "ledger-state carrier is not JSON"
     );
+    // Norito JSON spells block_wire as an array of decimal bytes: up to three
+    // digits and a comma per byte. Charge that variable field to the exact
+    // independently certified wire; keep the original fixed metadata allowance.
+    let wire = committed.block().encode_wire()?;
+    let carrier_limit = 2 * 1024 * 1024 + 4 * wire.len();
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         ensure!(
-            bytes.len() + chunk.len() <= 2 * 1024 * 1024,
-            "four-validator finality carrier exceeds bound"
+            chunk.len() <= carrier_limit.saturating_sub(bytes.len()),
+            "four-validator finality carrier exceeds {carrier_limit} bytes at height {height}"
         );
         bytes.extend_from_slice(&chunk);
     }
@@ -290,59 +349,13 @@ async fn finalized_state_observation(
             && decoded.execution().post_state_root == root,
         "state response does not bind its exact native header and witnessed execution"
     );
-    let client = peer.client();
-    let mut blocks = read_on_dedicated_thread(move || {
-        Ok(client.client().query(FindBlocks::new()).execute_all()?)
-    })
-    .await?;
-    blocks.sort_by_key(|block| block.header().height().get());
-    if blocks
-        .last()
-        .is_none_or(|block| block.header().height().get() < height)
-    {
-        return Ok(None);
-    }
-    let original = network.genesis();
-    let first = blocks
-        .first()
-        .ok_or_else(|| eyre!("missing original genesis"))?;
-    ensure!(
-        first.canonical_resultless_proposal()?.encode_wire()?
-            == original.0.canonical_resultless_proposal()?.encode_wire()?,
-        "peer history replaced the independently signed genesis"
-    );
-    // Independent public-history verification owns one finite shared-block pool.
-    let budget = iroha_core::state::AllocationBudget::new(32 * 1024 * 1024);
-    let genesis = iroha_data_model::block::SharedSignedBlock::try_new(first.clone(), &budget)
-        .map_err(|(_, error)| error)?;
-    let mut prefix = iroha_core::sumeragi::certified_chain::CertifiedPrefix::new(
-        &network.chain_id(),
-        network.network_id(),
-        genesis,
-    )?;
-    let mut verified = None;
-    for block in blocks
-        .into_iter()
-        .skip(1)
-        .take_while(|block| block.header().height().get() <= height)
-    {
-        let block = iroha_data_model::block::SharedSignedBlock::try_new(block, &budget)
-            .map_err(|(_, error)| error)?;
-        let (certified, _) = prefix.push(block)?.into_parts();
-        if certified.committed().height() == height {
-            verified = Some(certified);
-        }
-    }
-    let certified =
-        verified.ok_or_else(|| eyre!("native prefix did not reach requested height"))?;
-    let committed = certified.committed();
     ensure!(
         certified
             .commit_qc()
             .is_some_and(|qc| qc.signers.count_ones() == 3)
             && committed.block_hash() == block_hash
             && committed.commitment().execution.post_state_root == root
-            && committed.block().encode_wire()? == proof.block_wire,
+            && wire == proof.block_wire,
         "HTTP carrier differs from independently authenticated exact native finality"
     );
     let voters = iroha_core::sumeragi::schedule::genesis_validators(&original)?;
