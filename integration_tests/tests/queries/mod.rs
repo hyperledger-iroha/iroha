@@ -1,5 +1,5 @@
 //! Integration tests covering Torii query APIs.
-use integration_tests::sandbox;
+use integration_tests::{collections, sandbox};
 use iroha::{
     blocking::Client,
     client::QueryError,
@@ -35,7 +35,6 @@ fn query_client(network: &Network) -> Client {
 mod account;
 /// Asset query regression coverage.
 mod asset;
-mod collections;
 /// Metadata query workflow tests.
 mod metadata;
 /// Proof record query validation.

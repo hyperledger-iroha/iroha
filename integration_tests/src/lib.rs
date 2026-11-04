@@ -2,6 +2,8 @@
 
 /// Shared binary lookup and env-override helpers for CLI integration tests.
 pub mod binary_resolver;
+/// Typed canonical collection projections shared across query fixtures.
+pub mod collections;
 /// Data availability simulators shared with tooling and docs.
 pub mod da;
 /// Bounded HTTP helpers for integration tests.

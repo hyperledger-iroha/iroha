@@ -51,7 +51,7 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    // Submit two transactions so the first fetch-size=1 page has a real
+    // Submit two transactions so the first one-row page has a real
     // continuation even if genesis is not included in the block-header query.
     for name in ["blkcheck_a", "blkcheck_b"] {
         client.submit(
@@ -110,7 +110,7 @@ fn transactions_iterable_non_empty() -> Result<()> {
     };
     let client = network.client();
     // At minimum, genesis should exist. Poll briefly to allow any background commits
-    // to surface before asserting on the iterable query results.
+    // to surface before asserting on the transaction collection results.
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let snapshot = client

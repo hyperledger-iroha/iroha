@@ -1,6 +1,8 @@
 //! Integration tests ensuring executor-enforced permission policies.
 use eyre::Result;
-use integration_tests::{metrics::MetricsReader, sandbox, sync::sync_after_submission};
+use integration_tests::{
+    collections, metrics::MetricsReader, sandbox, sync::sync_after_submission,
+};
 use iroha::{
     blocking::Client,
     crypto::KeyPair,
@@ -70,7 +72,7 @@ fn wait_for_role_permission_state(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "role was not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindRoles::new()).execute_all() {
+        match collections::roles(client) {
             Ok(roles) => {
                 if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
                     let present = role
@@ -106,11 +108,7 @@ fn wait_for_account_permission_state(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "account permissions were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindPermissionsByAccountId::new(account_id.clone()))
-            .execute_all()
-        {
+        match collections::permissions(client, account_id) {
             Ok(permissions) => {
                 let present = permissions
                     .into_iter()
@@ -266,15 +264,19 @@ async fn genesis_transactions_are_validated_by_executor() {
         "startup failure should mention genesis validation; error was:\n{err_text}\nstdout was:\n{stdout_log}\nstderr was:\n{stderr_log}"
     );
 }
-fn get_assets(iroha: &Client, id: &AccountId) -> Vec<Asset> {
-    iroha
-        .client()
-        .query(FindAssets::new())
-        .execute_all()
-        .expect("Failed to execute request.")
-        .into_iter()
-        .filter(|asset| asset.id().account() == id)
-        .collect()
+fn get_assets(client: &Client, id: &AccountId) -> Vec<norito::json::Value> {
+    let rows = client
+        .list(
+            iroha::collections::Collection::AccountAssets(id.clone()),
+            iroha::collections::ListQuery::new(),
+        )
+        .collect::<iroha::Result<Vec<_>>>()
+        .expect("Failed to execute asset collection request");
+    assert!(
+        rows.iter()
+            .all(|row| collections::field::<AccountId>(row, "account_id").unwrap() == *id)
+    );
+    rows
 }
 #[test]
 fn permissions_disallow_asset_transfer() {
@@ -411,10 +413,7 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     .sign(ALICE_KEYPAIR.private_key());
     client.submit_transaction_and_wait(&tx)?;
     let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let permissions = client
-        .client()
-        .query(FindPermissionsByAccountId::new(ALICE_ID.clone()))
-        .execute_all()?;
+    let permissions = collections::permissions(&client, &ALICE_ID)?;
     assert!(
         permissions.iter().any(|permission| permission == &perm),
         "last grant should keep permission on account"

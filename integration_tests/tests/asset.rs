@@ -1,7 +1,7 @@
 //! Integration tests for basic asset lifecycle operations.
 use eyre::{Report, Result, WrapErr, eyre};
 use integration_tests::{
-    sandbox,
+    collections, sandbox,
     sync::{get_status_with_retry_or_storage, sync_after_submission},
 };
 use iroha::query::QueryError;
@@ -171,11 +171,7 @@ fn wait_for_asset_definition_owner(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        let last_err = match client
-            .client()
-            .query(FindAssetDefinitions::new())
-            .execute_all()
-        {
+        let last_err = match collections::definitions(client) {
             Ok(definitions) => definitions
                 .into_iter()
                 .find(|asset_definition| asset_definition.id() == asset_definition_id)
@@ -192,7 +188,7 @@ fn wait_for_asset_definition_owner(
                         }
                     },
                 ),
-            Err(err) => Some(Report::new(err)),
+            Err(err) => Some(err),
         };
         if last_err.is_none() {
             return Ok(());

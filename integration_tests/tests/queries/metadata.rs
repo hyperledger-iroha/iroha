@@ -1,4 +1,4 @@
-//! Tests querying metadata via `FindAccounts`.
+//! Tests querying metadata through the canonical account collection.
 use integration_tests::sandbox;
 use iroha::{client::QueryError, data_model::prelude::*};
 use iroha_data_model::query::error::{FindError, QueryExecutionFail};

@@ -2,7 +2,7 @@
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
 use futures_util::future::join_all;
-use integration_tests::{metrics::MetricsReader, sandbox};
+use integration_tests::{collections, metrics::MetricsReader, sandbox};
 use iroha::{
     blocking::Client,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
@@ -48,7 +48,7 @@ fn wait_for_role(client: &Client, role_id: &RoleId, context: &str) -> Role {
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "roles were not queried".to_owned();
     while Instant::now() < deadline {
-        match client.client().query(FindRoles::new()).execute_all() {
+        match collections::roles(client) {
             Ok(roles) => {
                 last_observed = format!("role_count={}", roles.len());
                 if let Some(role) = roles.into_iter().find(|role| role.id() == role_id) {
@@ -156,10 +156,10 @@ fn register_and_grant_role_for_metadata_access() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Making request to find Alice's roles
-    let found_role_ids = test_client
-        .client()
-        .query(FindRolesByAccountId::new(alice_id))
-        .execute_all()?;
+    let found_role_ids = collections::role_ids(
+        &test_client,
+        iroha::collections::Collection::AccountRoles(alice_id),
+    )?;
     assert!(found_role_ids.contains(&role_id));
     Ok(())
 }
@@ -195,10 +195,10 @@ fn unregistered_role_removed_from_account() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Check that Mouse has root role
-    let found_mouse_roles = test_client
-        .client()
-        .query(FindRolesByAccountId::new(mouse_id.clone()))
-        .execute_all()?;
+    let found_mouse_roles = collections::role_ids(
+        &test_client,
+        iroha::collections::Collection::AccountRoles(mouse_id.clone()),
+    )?;
     assert!(found_mouse_roles.contains(&role_id));
     // Unregister root role
     let unregister_role = Unregister::role(role_id.clone());
@@ -207,10 +207,10 @@ fn unregistered_role_removed_from_account() -> Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     // Check that Mouse doesn't have the root role
-    let found_mouse_roles = test_client
-        .client()
-        .query(FindRolesByAccountId::new(mouse_id.clone()))
-        .execute_all()?;
+    let found_mouse_roles = collections::role_ids(
+        &test_client,
+        iroha::collections::Collection::AccountRoles(mouse_id.clone()),
+    )?;
     assert!(!found_mouse_roles.contains(&role_id));
     Ok(())
 }
@@ -343,10 +343,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
         Revoke::role_permission(can_set_key_value_in_mouse.clone(), role_id.clone());
     // Alice can't modify Mouse's metadata without proper permission
     assert!(
-        !test_client
-            .client()
-            .query(FindPermissionsByAccountId::new(alice_id.clone()))
-            .execute_all()?
+        !collections::permissions(&test_client, &alice_id)?
             .iter()
             .any(|permission| {
                 CanModifyAccountMetadata::try_from(permission)
@@ -369,11 +366,11 @@ fn grant_revoke_role_permissions() -> Result<()> {
     .sign(mouse_keypair.private_key());
     test_client.submit_transaction_and_wait(&grant_role_permission_tx)?;
     assert!(
-        test_client
-            .client()
-            .query(FindRolesByAccountId::new(alice_id.clone()))
-            .execute_all()?
-            .contains(&role_id)
+        collections::role_ids(
+            &test_client,
+            iroha::collections::Collection::AccountRoles(alice_id.clone())
+        )?
+        .contains(&role_id)
     );
     test_client.submit(
         set_key_value.clone(),
@@ -389,10 +386,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     .sign(mouse_keypair.private_key());
     test_client.submit_transaction_and_wait(&revoke_role_permission_tx)?;
     assert!(
-        !test_client
-            .client()
-            .query(FindPermissionsByAccountId::new(alice_id.clone()))
-            .execute_all()?
+        !collections::permissions(&test_client, &alice_id)?
             .iter()
             .any(|permission| {
                 CanModifyAccountMetadata::try_from(permission)
@@ -455,10 +449,7 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     .sign(ALICE_KEYPAIR.private_key());
     test_client.submit_transaction_and_wait(&tx)?;
     let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let role = test_client
-        .client()
-        .query(FindRoles::new())
-        .execute_all()?
+    let role = collections::roles(&test_client)?
         .into_iter()
         .find(|role| role.id() == &role_id)
         .expect("role should exist");

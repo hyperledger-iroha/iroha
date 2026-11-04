@@ -3,22 +3,16 @@ use eyre::Result;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, field},
     data_model::{asset::AssetDefinition, isi::InstructionBox, prelude::*},
 };
-use iroha_data_model::query::dsl::SelectorTuple;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use iroha_primitives::nonzero;
 use iroha_test_network::*;
 #[test]
 fn pagination_behaves() -> Result<()> {
-    // Stored cursors are required to validate multi-batch pagination behavior.
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
-        NetworkBuilder::new()
-            .with_block_cadence(std::time::Duration::from_secs(2))
-            .with_config_layer(|layer| {
-                layer.write(["pipeline", "query_default_cursor_mode"], "stored");
-            }),
+        NetworkBuilder::new().with_block_cadence(std::time::Duration::from_secs(2)),
         stringify!(pagination_behaves),
     )?
     else {
@@ -26,54 +20,70 @@ fn pagination_behaves() -> Result<()> {
     };
     let client = network.client();
     register_assets(&client)?;
-    // limits_should_work
-    let vec = client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
-        .execute_all()?;
-    assert_eq!(vec.len(), 7);
-    // Stored bounded cursors intentionally omit exact remaining counts so the
-    // first response can stay cheap; the iterator reports the current batch as
-    // the lower bound and streams the rest through cursors.
-    let mut iter = client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .with_pagination(Pagination::new(Some(nonzero!(7_u64)), 0))
-        .with_fetch_size(FetchSize::new(Some(nonzero!(3_u64))))
-        .execute()?;
+    let collection = Collection::AssetDefinitions;
+    let fixture_ids = pagination_asset_definitions()
+        .into_iter()
+        .map(|(id, _)| id.to_string())
+        .collect::<Vec<_>>();
+    let bounded = ListQuery::new()
+        .filter(field("id").is_in(fixture_ids))
+        .limit(7);
+    let page = client.list_page(&collection, &bounded)?;
+    assert_eq!(page.items.len(), 7);
+    assert!(
+        page.next_cursor.is_some(),
+        "ten fixtures require another bounded page"
+    );
+    assert_eq!(
+        page.total, None,
+        "default pages do not scan for exact totals"
+    );
+
+    // Restrict the fixture to the seven selected identities, then ask the server
+    // for three-row pages. The lazy SDK iterator retains only its current batch.
+    let selected = page
+        .items
+        .iter()
+        .map(|row| row["id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let query = ListQuery::new()
+        .filter(field("id").is_in(selected.clone()))
+        .limit(3);
+    let mut iter = client.list(collection.clone(), query.clone()).peekable();
+    assert_eq!(iter.size_hint(), (0, None));
+    assert!(iter.peek().is_some());
     assert_eq!(iter.size_hint(), (3, None));
+    let mut observed = Vec::new();
     for _ in 0..4 {
-        iter.next().unwrap().unwrap();
+        observed.push(iter.next().unwrap()?);
     }
     assert_eq!(iter.size_hint(), (2, None));
-    let remaining = iter.collect::<Result<Vec<_>, _>>()?;
+    let remaining = iter.collect::<iroha::Result<Vec<_>>>()?;
     assert_eq!(remaining.len(), 3);
-    // fetch_size_should_work
-    {
-        use iroha::data_model::query::{
-            QueryBox, QueryOutputBatchBox, QueryWithFilter, QueryWithParams,
-            builder::QueryExecutor as _,
-            dsl::CompoundPredicate,
-            parameters::{FetchSize, QueryParams, Sorting},
-        };
-        let with_filter: QueryWithFilter<AssetDefinition> =
-            QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
-        let qbox: QueryBox<QueryOutputBatchBox> = with_filter.into();
-        let query = QueryWithParams::new(
-            &qbox,
-            QueryParams::new(
-                Pagination::new(Some(nonzero!(7_u64)), 0),
-                Sorting::default(),
-                FetchSize::new(Some(nonzero!(3_u64))),
-            ),
-        )
-        .expect("asset-definition query type has a canonical mapping");
-        let (first_batch, remaining_items, _continue_cursor) =
-            client.client().start_query(query)?;
-        assert_eq!(first_batch.len(), 3);
-        assert_eq!(remaining_items, None);
-    }
+    observed.extend(remaining);
+    assert_eq!(
+        observed
+            .iter()
+            .map(|row| row["id"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        selected.iter().map(String::as_str).collect::<Vec<_>>()
+    );
+
+    let first = client.list_page(&collection, &query)?;
+    assert_eq!(first.items.len(), 3);
+    assert_eq!(first.total, None);
+    let next = query
+        .next_page(&first)
+        .expect("seven matches have another page");
+    let second = client.list_page(&collection, &next)?;
+    assert_eq!(second.items.len(), 3);
+    assert!(second.items.iter().all(|row| !first.items.contains(row)));
+    let last = client.list_page(
+        &collection,
+        &query.next_page(&second).expect("one final row"),
+    )?;
+    assert_eq!(last.items.len(), 1);
+    assert!(last.next_cursor.is_none());
     Ok(())
 }
 fn register_assets(client: &Client) -> Result<()> {
@@ -87,7 +97,7 @@ fn register_assets(client: &Client) -> Result<()> {
                     __asset_definition_id.clone(),
                     name,
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
                 )
             })
             .into()

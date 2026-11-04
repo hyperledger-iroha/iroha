@@ -22,7 +22,7 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    // Execute a simple iterable query; default fetch size is fine for smoke test.
+    // Read Alice's balances through the canonical signed account collection.
     let assets = client
         .list(
             Collection::AccountAssets(ALICE_ID.clone()),

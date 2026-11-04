@@ -1,15 +1,18 @@
 //! Tests for sorting and pagination queries
 use eyre::{Result, WrapErr as _};
-use integration_tests::sandbox;
+use integration_tests::{
+    collections::{self, AccountRow, DomainRow},
+    sandbox,
+};
 use iroha::{
     blocking::Client,
+    collections::{Collection, ListQuery, SortKey, field},
     crypto::{KeyPair, PublicKey},
-    data_model::{account::Account, prelude::*, query::parameters::SortOrder},
+    data_model::{account::Account, prelude::*},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
-use iroha_primitives::nonzero;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use rand::{SeedableRng, seq::SliceRandom};
@@ -36,7 +39,6 @@ fn sorting_account_public_key_fixture_uses_checked_randomness() {
     let _public_key = checked_random_public_key();
 }
 #[test]
-#[allow(clippy::cast_possible_truncation)]
 fn correct_pagination_assets_after_creating_new_one() {
     const N_ASSETS: usize = 12;
     if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
@@ -45,88 +47,90 @@ fn correct_pagination_assets_after_creating_new_one() {
         );
         return;
     }
-    // 0 < pagination.start < missing_idx < pagination.end < N_ASSETS
-    let missing_indices = vec![N_ASSETS / 2];
-    let pagination = Pagination::new(Some(nonzero!(N_ASSETS as u64 / 3)), N_ASSETS as u64 / 3);
-    let xor_filter = CompoundPredicate::<Asset>::PASS; // lightweight DSL stub
-    let sort_by_metadata_key = "sort".parse::<Name>().expect("Valid");
-    let sorting = Sorting::by_metadata_key(sort_by_metadata_key.clone());
-    let account_id = ALICE_ID.clone();
-    let builder = NetworkBuilder::new();
     let Some((network, _rt)) = start_network(
-        builder,
+        NetworkBuilder::new(),
         stringify!(correct_pagination_assets_after_creating_new_one),
     ) else {
         return;
     };
-    let test_client = network.client();
-    let mut tester_assets = vec![];
-    let mut register_asset_definitions = vec![];
-    let mut register_assets = vec![];
-    let mut missing_tester_assets = vec![];
-    let mut missing_register_asset_definitions = vec![];
-    let mut missing_register_assets = vec![];
-    for i in 0..N_ASSETS {
-        let asset_name = format!("xor{i}");
-        let asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("wonderland", "universal").expect("Valid"),
-            asset_name.parse().expect("Valid"),
-        );
-        let asset_definition = AssetDefinition::numeric(
-            asset_definition_id.clone(),
-            asset_name,
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        );
-        let asset = Asset::new(AssetId::new(asset_definition_id, account_id.clone()), 1u32);
-        if missing_indices.contains(&i) {
-            missing_tester_assets.push(asset.clone());
-            missing_register_asset_definitions.push(Register::asset_definition(asset_definition));
-            missing_register_assets.push(Mint::asset_quantity(1u32, asset.id().clone()));
-        } else {
-            tester_assets.push(asset.clone());
-            register_asset_definitions.push(Register::asset_definition(asset_definition));
-            register_assets.push(Mint::asset_quantity(1u32, asset.id().clone()));
-        }
-    }
+    let client = network.client();
+    let account = ALICE_ID.clone();
+    let domain = DomainId::try_new("wonderland", "universal").unwrap();
+    let mut fixtures = (0..N_ASSETS)
+        .map(|index| {
+            let name = format!("xor{index}");
+            let definition =
+                AssetDefinitionId::derive_from_components(domain.clone(), name.parse().unwrap());
+            let asset = Asset::new(AssetId::new(definition.clone(), account.clone()), 1u32);
+            let register = Register::asset_definition(AssetDefinition::numeric(
+                definition,
+                name,
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(domain.clone()),
+            ));
+            (asset, register)
+        })
+        .collect::<Vec<_>>();
+    // Sort the known fixture identities in the same declared order as the server;
+    // returned rows are compared directly and are never sorted locally.
+    fixtures.sort_by_key(|(asset, _)| asset.id().definition().to_string());
+    let all_ids = fixtures
+        .iter()
+        .map(|(asset, _)| asset.id().definition().to_string())
+        .collect::<Vec<_>>();
+    let missing = fixtures.remove(N_ASSETS / 2);
+    let mut registrations = fixtures
+        .iter()
+        .map(|(_, register)| register.clone())
+        .collect::<Vec<_>>();
+    let mut mints = fixtures
+        .iter()
+        .map(|(asset, _)| Mint::asset_quantity(1u32, asset.id().clone()))
+        .collect::<Vec<_>>();
     let mut rng = ChaCha8Rng::seed_from_u64(0x534f_5254);
-    register_asset_definitions.shuffle(&mut rng);
-    register_assets.shuffle(&mut rng);
-    submit_chunked(&test_client, &register_asset_definitions).expect("Valid");
-    submit_chunked(&test_client, &register_assets).expect("Valid");
-    let queried_assets = test_client
-        .client()
-        .query(FindAssets::new())
-        .filter(xor_filter.clone())
-        .with_pagination(pagination)
-        .with_sorting(sorting.clone())
-        .execute_all()
-        .expect("Valid");
-    tester_assets
-        .iter()
-        .skip(N_ASSETS / 3)
-        .take(N_ASSETS / 3)
-        .zip(queried_assets)
-        .for_each(|(tester, queried)| assert_eq!(*tester, queried));
-    for (i, missing_idx) in missing_indices.into_iter().enumerate() {
-        tester_assets.insert(missing_idx, missing_tester_assets[i].clone());
-    }
-    submit_chunked(&test_client, &missing_register_asset_definitions).expect("Valid");
-    submit_chunked(&test_client, &missing_register_assets).expect("Valid");
-    let queried_assets = test_client
-        .client()
-        .query(FindAssets::new())
-        .filter(xor_filter)
-        .with_pagination(pagination)
-        .with_sorting(sorting)
-        .execute_all()
-        .expect("Valid");
-    tester_assets
-        .iter()
-        .skip(N_ASSETS / 3)
-        .take(N_ASSETS / 3)
-        .zip(queried_assets)
-        .for_each(|(tester, queried)| assert_eq!(*tester, queried));
+    registrations.shuffle(&mut rng);
+    mints.shuffle(&mut rng);
+    submit_chunked(&client, &registrations).unwrap();
+    submit_chunked(&client, &mints).unwrap();
+    let collection = Collection::AccountAssets(account.clone());
+    let query = ListQuery::new()
+        .filter(field("asset").is_in(all_ids))
+        .sort_by(SortKey::asc("asset"))
+        .limit(4);
+    let assert_second_page = |expected: &[(Asset, Register<AssetDefinition>)]| {
+        let first = client.list_page(&collection, &query).unwrap();
+        assert_eq!(first.items.len(), 4);
+        let next = query.next_page(&first).unwrap();
+        let second = client.list_page(&collection, &next).unwrap();
+        assert_eq!(second.items.len(), 4);
+        for ((asset, _), row) in expected.iter().skip(4).take(4).zip(second.items) {
+            assert_eq!(
+                collections::field::<AssetDefinitionId>(&row, "asset").unwrap(),
+                *asset.id().definition()
+            );
+            assert_eq!(
+                collections::field::<AccountId>(&row, "account_id").unwrap(),
+                account
+            );
+            assert_eq!(
+                collections::field::<Quantity>(&row, "quantity").unwrap(),
+                *asset.value()
+            );
+            assert_eq!(
+                collections::field::<String>(&row, "scope").unwrap(),
+                "global"
+            );
+        }
+    };
+    assert_second_page(&fixtures);
+    submit_chunked(&client, std::slice::from_ref(&missing.1)).unwrap();
+    submit_chunked(
+        &client,
+        &[Mint::asset_quantity(1u32, missing.0.id().clone())],
+    )
+    .unwrap();
+    fixtures.insert(N_ASSETS / 2, missing);
+    assert_second_page(&fixtures);
 }
 const MAX_INSTRUCTIONS_PER_TX: usize = 5;
 fn submit_chunked<I>(client: &Client, instructions: &[I]) -> Result<()>
@@ -145,7 +149,7 @@ where
 }
 fn wait_for_sorted_asset_definitions(
     client: &Client,
-    sorting: &Sorting,
+    sorting: &SortKey,
     included_asset_definitions: &HashSet<AssetDefinitionId>,
     expected_asset_definitions: &[AssetDefinitionId],
 ) -> Result<Vec<AssetDefinition>> {
@@ -154,11 +158,7 @@ fn wait_for_sorted_asset_definitions(
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "asset definitions were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindAssetDefinitions::new())
-            .with_sorting(sorting.clone())
-            .execute_all()
+        match collections::definitions_with_query(client, ListQuery::new().sort_by(sorting.clone()))
         {
             Ok(asset_definitions) => {
                 let observed = asset_definitions
@@ -192,21 +192,20 @@ fn wait_for_sorted_asset_definitions(
 }
 fn wait_for_sorted_accounts(
     client: &Client,
-    sorting: &Sorting,
+    sorting: &SortKey,
     included_accounts: &HashSet<AccountId>,
     expected_accounts: &[AccountId],
-) -> Result<Vec<Account>> {
+) -> Result<Vec<AccountRow>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "accounts were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindAccounts::new())
-            .with_sorting(sorting.clone())
-            .execute_all()
-        {
+        match collections::rows::<AccountRow>(
+            client,
+            Collection::Accounts,
+            ListQuery::new().sort_by(sorting.clone()),
+        ) {
             Ok(accounts) => {
                 let observed = accounts
                     .into_iter()
@@ -218,7 +217,7 @@ fn wait_for_sorted_accounts(
                     .collect::<Vec<_>>();
                 last_observed = observed
                     .iter()
-                    .map(Identifiable::id)
+                    .map(|entity| entity.id())
                     .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(", ");
@@ -238,21 +237,20 @@ fn wait_for_sorted_accounts(
 }
 fn wait_for_sorted_domains(
     client: &Client,
-    sorting: &Sorting,
+    sorting: &SortKey,
     included_domains: &HashSet<DomainId>,
     expected_domains: &[DomainId],
-) -> Result<Vec<Domain>> {
+) -> Result<Vec<DomainRow>> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "domains were not queried".to_owned();
     while Instant::now() < deadline {
-        match client
-            .client()
-            .query(FindDomains::new())
-            .with_sorting(sorting.clone())
-            .execute_all()
-        {
+        match collections::rows::<DomainRow>(
+            client,
+            Collection::Domains,
+            ListQuery::new().sort_by(sorting.clone()),
+        ) {
             Ok(domains) => {
                 let observed = domains
                     .into_iter()
@@ -310,7 +308,7 @@ fn correct_sorting_of_entities() -> Result<()> {
             asset_definition_id.clone(),
             asset_name,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
         )
         .with_metadata(asset_metadata.clone());
         metadata_of_assets.push(asset_metadata);
@@ -323,13 +321,13 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_asset_definitions = asset_definitions.iter().rev().cloned().collect::<Vec<_>>();
     let res = wait_for_sorted_asset_definitions(
         &test_client,
-        &Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &SortKey::asc(format!("metadata.{sort_by_metadata_key}")),
         &included_asset_definitions,
         &expected_asset_definitions,
     )?;
     assert!(
         res.iter()
-            .map(Identifiable::id)
+            .map(|entity| entity.id())
             .eq(asset_definitions.iter().rev())
     );
     assert!(
@@ -361,14 +359,18 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_accounts = accounts.iter().rev().cloned().collect::<Vec<_>>();
     let res = wait_for_sorted_accounts(
         &test_client,
-        &Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &SortKey::asc(format!("metadata.{sort_by_metadata_key}")),
         &included_accounts,
         &expected_accounts,
     )?;
-    assert!(res.iter().map(Identifiable::id).eq(accounts.iter().rev()));
     assert!(
         res.iter()
-            .map(Account::metadata)
+            .map(|entity| entity.id())
+            .eq(accounts.iter().rev())
+    );
+    assert!(
+        res.iter()
+            .map(AccountRow::metadata)
             .eq(metadata_of_accounts.iter().rev())
     );
     // Test sorting domains
@@ -397,14 +399,18 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_domains = domains.iter().rev().cloned().collect::<Vec<_>>();
     let res = wait_for_sorted_domains(
         &test_client,
-        &Sorting::by_metadata_key(sort_by_metadata_key.clone()),
+        &SortKey::asc(format!("metadata.{sort_by_metadata_key}")),
         &included_domains,
         &expected_domains,
     )?;
-    assert!(res.iter().map(Identifiable::id).eq(domains.iter().rev()));
     assert!(
         res.iter()
-            .map(Domain::metadata)
+            .map(|entity| entity.id())
+            .eq(domains.iter().rev())
+    );
+    assert!(
+        res.iter()
+            .map(DomainRow::metadata)
             .eq(metadata_of_domains.iter().rev())
     );
     // Naive test sorting of domains
@@ -433,7 +439,7 @@ fn correct_sorting_of_entities() -> Result<()> {
     let expected_domains = vec![domains[1].clone(), domains[0].clone(), domains[2].clone()];
     let res = wait_for_sorted_domains(
         &test_client,
-        &Sorting::by_metadata_key(sort_by_metadata_key),
+        &SortKey::asc(format!("metadata.{sort_by_metadata_key}")),
         &included_domains,
         &expected_domains,
     )?;
@@ -470,7 +476,7 @@ fn metadata_sorting_descending() {
             asset_definition_id.clone(),
             asset_name,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
         )
         .with_metadata(asset_metadata.clone());
         metadata_of_assets.push(asset_metadata);
@@ -479,21 +485,17 @@ fn metadata_sorting_descending() {
         instructions.push(create_asset_definition);
     }
     submit_chunked(&test_client, &instructions).expect("Valid");
-    let res = test_client
-        .client()
-        .query(FindAssetDefinitions::new())
-        .with_sorting(Sorting::new(
-            Some(sort_by_metadata_key),
-            Some(SortOrder::Desc),
-        ))
-        .execute_all()
-        .expect("Valid")
-        .into_iter()
-        .filter(|asset_definition| asset_definitions.contains(asset_definition.id()))
-        .collect::<Vec<_>>();
+    let res = collections::definitions_with_query(
+        &test_client,
+        ListQuery::new().sort_by(SortKey::desc(format!("metadata.{sort_by_metadata_key}"))),
+    )
+    .expect("Valid")
+    .into_iter()
+    .filter(|asset_definition| asset_definitions.contains(asset_definition.id()))
+    .collect::<Vec<_>>();
     assert!(
         res.iter()
-            .map(Identifiable::id)
+            .map(|entity| entity.id())
             .eq(asset_definitions.iter())
     );
     assert!(
@@ -550,18 +552,35 @@ fn sort_only_elements_which_have_sorting_key() -> Result<()> {
         .chain(accounts_b.iter())
         .cloned()
         .collect::<HashSet<_>>();
-    let accounts = accounts_a
+    accounts_b.sort_by_key(ToString::to_string);
+    let ascending = accounts_b
         .iter()
-        .rev()
+        .chain(accounts_a.iter().rev())
+        .cloned()
+        .collect::<Vec<_>>();
+    let descending = accounts_a
+        .iter()
         .chain(accounts_b.iter())
         .cloned()
         .collect::<Vec<_>>();
-    let _ = wait_for_sorted_accounts(
-        &test_client,
-        &Sorting::by_metadata_key(sort_by_metadata_key),
-        &included_accounts,
-        &accounts,
-    )
-    .wrap_err("Failed to observe sorted accounts")?;
+    for (sort, expected) in [
+        (
+            SortKey::asc(format!("metadata.{sort_by_metadata_key}")),
+            ascending,
+        ),
+        (
+            SortKey::desc(format!("metadata.{sort_by_metadata_key}")),
+            descending,
+        ),
+    ] {
+        let observed = wait_for_sorted_accounts(&test_client, &sort, &included_accounts, &expected)
+            .wrap_err("Failed to observe sorted accounts")?;
+        for account in observed {
+            assert_eq!(
+                account.metadata().get(&sort_by_metadata_key).is_none(),
+                accounts_b.contains(account.id())
+            );
+        }
+    }
     Ok(())
 }
