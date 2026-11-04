@@ -1,8 +1,12 @@
 //! Integration tests for domain permissions and transfers.
-use eyre::{Result, eyre};
+use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*};
+use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*, query::QueryError};
 use iroha_data_model::alias_setup::{AccountAliasRoleV1, AccountProvisionV1};
+use iroha_data_model::{
+    ValidationFail,
+    query::error::{FindError, QueryExecutionFail},
+};
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanUnregisterAccount},
     asset::{CanTransferAsset, CanTransferAssetWithDefinition},
@@ -26,6 +30,27 @@ fn start_network(
 ) -> Result<Option<(sandbox::SerializedNetwork, Runtime)>> {
     sandbox::start_network_blocking_or_skip(builder, context)
 }
+fn quote_and_sign(
+    client: &Client,
+    draft: TransactionBuilder,
+    keypair: &KeyPair,
+) -> Result<SignedTransaction> {
+    let mut payload = draft.into_payload()?;
+    let mut builder = client.client().to_builder();
+    builder.account = payload.authority().clone();
+    builder.key_pair = keypair.clone();
+    let signer = Client::from_client(builder.build()?)?;
+    let quote = signer
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "domain fixture fee quote changed the selected payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    Ok(signer.account_client().sign_transaction(payload)?)
+}
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -47,17 +72,24 @@ fn wait_for_domain_owner(
     let deadline = Instant::now() + DOMAIN_VISIBILITY_TIMEOUT;
     let mut last_owner = None;
     loop {
-        let domain = client
+        match client
             .client()
-            .query(FindDomains::new())
-            .execute_all()?
-            .into_iter()
-            .find(|domain| domain.id() == domain_id);
-        if let Some(domain) = domain {
-            if domain.owned_by() == expected_owner {
-                return Ok(domain);
+            .query_single(FindDomainById::new(domain_id.clone()))
+        {
+            Ok(domain) => {
+                ensure!(
+                    domain.id() == domain_id,
+                    "exact domain query returned another domain"
+                );
+                if domain.owned_by() == expected_owner {
+                    return Ok(domain);
+                }
+                last_owner = Some(domain.owned_by().clone());
             }
-            last_owner = Some(domain.owned_by().clone());
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Domain(missing),
+            )))) if &missing == domain_id => {}
+            Err(error) => return Err(error.into()),
         }
         if Instant::now() >= deadline {
             return Err(eyre!(
@@ -85,7 +117,7 @@ fn domain_owner_domain_permissions() -> Result<()> {
         coin_id.clone(),
         "coin".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(kingdom_id.clone()),
     );
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -209,7 +241,7 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     };
     let test_client = network.client();
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
-    let (bob_id, bob_keypair) = gen_account_in("kingdom");
+    let (bob_id, _bob_keypair) = gen_account_in("kingdom");
     let (rabbit_id, _rabbit_keypair) = gen_account_in("kingdom");
     let coin_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
         DomainId::try_new("kingdom", "universal")?,
@@ -228,21 +260,25 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         Register::account(rabbit),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // Register asset definition by "bob@kingdom" so he is owner of it.
+    // Alice registers in her domain, then transfers the definition to Bob so
+    // domain ownership and definition ownership remain separate for the assertions.
     let coin = AssetDefinition::numeric(
         coin_id.clone(),
         "coin".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(kingdom_id.clone()),
     );
-    let transaction = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
+    test_client.submit_all::<InstructionBox>(
+        [
+            Register::asset_definition(coin).into(),
+            Transfer::asset_definition(ALICE_ID.clone(), coin_id.clone(), bob_id.clone()).into(),
+        ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Register::asset_definition(coin)])
-    .sign(bob_keypair.private_key());
-    test_client.submit_transaction_and_wait(&transaction)?;
+    )?;
+    let definition = test_client
+        .client()
+        .query_single(FindAssetDefinitionById::new(coin_id.clone()))?;
+    assert_eq!(definition.owned_by(), &bob_id);
     // Asset definitions are issuer-owned in first-release semantics.
     let err = test_client
         .submit(
@@ -305,21 +341,25 @@ fn domain_owner_asset_permissions() -> Result<()> {
         Register::account(bob),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    // Register asset definition by "bob@kingdom" so he is owner of it.
+    // Alice registers in her domain, then transfers the definition to Bob so
+    // domain ownership and definition ownership remain separate for the assertions.
     let coin = AssetDefinition::numeric(
         coin_id.clone(),
         "coin".to_owned(),
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        None,
+        Some(kingdom_id.clone()),
     );
-    let transaction = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
+    test_client.submit_all::<InstructionBox>(
+        [
+            Register::asset_definition(coin).into(),
+            Transfer::asset_definition(ALICE_ID.clone(), coin_id.clone(), bob_id.clone()).into(),
+        ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Register::asset_definition(coin)])
-    .sign(bob_keypair.private_key());
-    test_client.submit_transaction_and_wait(&transaction)?;
+    )?;
+    let definition = test_client
+        .client()
+        .query_single(FindAssetDefinitionById::new(coin_id.clone()))?;
+    assert_eq!(definition.owned_by(), &bob_id);
     // Domain ownership still covers mint/burn, but asset transfers require the source owner or an explicit grant.
     let bob_coin_id = AssetId::new(coin_id, bob_id.clone());
     test_client.submit(
@@ -345,31 +385,37 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let exact_permission = CanTransferAsset {
         asset: bob_coin_id.clone(),
     };
-    let grant_exact = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Grant::account_permission(
-        exact_permission.clone(),
-        alice_id.clone(),
-    )])
-    .sign(bob_keypair.private_key());
+    let grant_exact = quote_and_sign(
+        &test_client,
+        TransactionBuilder::new(
+            network.network_id(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Grant::account_permission(
+            exact_permission.clone(),
+            alice_id.clone(),
+        )]),
+        &bob_keypair,
+    )?;
     test_client.submit_transaction_and_wait(&grant_exact)?;
     test_client.submit(
         Transfer::asset_quantity(bob_coin_id.clone(), 5u32, alice_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let revoke_exact = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Revoke::account_permission(
-        exact_permission,
-        alice_id.clone(),
-    )])
-    .sign(bob_keypair.private_key());
+    let revoke_exact = quote_and_sign(
+        &test_client,
+        TransactionBuilder::new(
+            network.network_id(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Revoke::account_permission(
+            exact_permission,
+            alice_id.clone(),
+        )]),
+        &bob_keypair,
+    )?;
     test_client.submit_transaction_and_wait(&revoke_exact)?;
     let _ = test_client
         .submit(
@@ -380,16 +426,19 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let definition_permission = CanTransferAssetWithDefinition {
         asset_definition: bob_coin_id.definition().clone(),
     };
-    let grant_definition = TransactionBuilder::new(
-        network.network_id(),
-        bob_id,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Grant::account_permission(
-        definition_permission,
-        alice_id.clone(),
-    )])
-    .sign(bob_keypair.private_key());
+    let grant_definition = quote_and_sign(
+        &test_client,
+        TransactionBuilder::new(
+            network.network_id(),
+            bob_id,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Grant::account_permission(
+            definition_permission,
+            alice_id.clone(),
+        )]),
+        &bob_keypair,
+    )?;
     test_client.submit_transaction_and_wait(&grant_definition)?;
     test_client.submit(
         Transfer::asset_quantity(bob_coin_id, 5u32, alice_id),
@@ -436,7 +485,11 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     client.submit(
-        Transfer::domain(alias_owner.clone(), asset_domain, definition_owner.clone()),
+        Transfer::domain(
+            alias_owner.clone(),
+            asset_domain.clone(),
+            definition_owner.clone(),
+        ),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     client.submit(
@@ -448,21 +501,24 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
         )?,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let issue = TransactionBuilder::new(
-        network.network_id(),
-        definition_owner.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([
-        InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
-            asset_definition,
-            "alias-safe coin".to_owned(),
-            iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
-        ))),
-        InstructionBox::from(Mint::asset_quantity(10_u32, source_asset.clone())),
-    ])
-    .sign(definition_owner_keypair.private_key());
+    let issue = quote_and_sign(
+        &client,
+        TransactionBuilder::new(
+            network.network_id(),
+            definition_owner.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([
+            InstructionBox::from(Register::asset_definition(AssetDefinition::numeric(
+                asset_definition,
+                "alias-safe coin".to_owned(),
+                iroha_data_model::asset::AssetBalancePolicy::Global,
+                Some(asset_domain),
+            ))),
+            InstructionBox::from(Mint::asset_quantity(10_u32, source_asset.clone())),
+        ]),
+        &definition_owner_keypair,
+    )?;
     client.submit_transaction_and_wait(&issue)?;
     let error = client
         .submit(
@@ -509,13 +565,16 @@ fn domain_owner_nft_permissions() -> Result<()> {
     )?;
     // register NFT by "bob@kingdom" so he is owner of it
     let nft = Nft::new(nft_id.clone(), Metadata::default());
-    let transaction = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Register::nft(nft.clone())])
-    .sign(bob_keypair.private_key());
+    let transaction = quote_and_sign(
+        &test_client,
+        TransactionBuilder::new(
+            network.network_id(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Register::nft(nft.clone())]),
+        &bob_keypair,
+    )?;
     test_client.submit_transaction_and_wait(&transaction)?;
     // check that the canonical ALICE account as owner of domain can edit metadata of NFT in her domain
     let key: Name = "key".parse()?;
@@ -594,26 +653,32 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         err.chain()
             .any(|cause| cause.to_string().contains("Missing CanRegisterTrigger"))
     );
-    let grant_register_permission = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([Grant::account_permission(
-        iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
-            authority: bob_id.clone(),
-        },
-        bob_id.clone(),
-    )])
-    .sign(bob_keypair.private_key());
+    let grant_register_permission = quote_and_sign(
+        &test_client,
+        TransactionBuilder::new(
+            network.network_id(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: bob_id.clone(),
+            },
+            bob_id.clone(),
+        )]),
+        &bob_keypair,
+    )?;
     test_client.submit_transaction_and_wait(&grant_register_permission)?;
-    let transaction = TransactionBuilder::new(
-        network.network_id(),
-        bob_id.clone(),
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([register_trigger])
-    .sign(bob_keypair.private_key());
+    let transaction = quote_and_sign(
+        &test_client,
+        TransactionBuilder::new(
+            network.network_id(),
+            bob_id.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .with_instructions([register_trigger]),
+        &bob_keypair,
+    )?;
     test_client.submit_transaction_and_wait(&transaction)?;
     test_client.submit(
         Mint::trigger_repetitions(1_u32, trigger_id.clone()),
@@ -719,19 +784,13 @@ fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
     let client = network.client();
     let domain = client
         .client()
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .find(|domain| domain.id() == &foo_domain)
-        .expect("Failed to execute Iroha Query");
+        .query_single(FindDomainById::new(foo_domain.clone()))?;
+    assert_eq!(domain.id(), &foo_domain);
     assert_eq!(domain.owned_by(), &user1);
     let users_domain_record = client
         .client()
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .find(|domain| domain.id() == &users_domain)
-        .expect("Failed to execute Iroha Query");
+        .query_single(FindDomainById::new(users_domain.clone()))?;
+    assert_eq!(users_domain_record.id(), &users_domain);
     assert_eq!(users_domain_record.owned_by(), &user1);
     // Client authority is "alice@wonderlang".
     // `foo_domain` is owned by `user1@users`.

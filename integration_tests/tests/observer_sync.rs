@@ -240,11 +240,11 @@ fn observer_node_catches_up() -> Result<()> {
         let mut last_zone_note: Option<String> = None;
         loop {
             let client = peer.client();
-            let accounts = client.client().query(FindAccounts).execute_all().unwrap();
-            let alice = accounts
-                .into_iter()
-                .find(|a| a.id() == &ALICE_ID.clone())
-                .expect("Alice account must exist");
+            let alice = client
+                .client()
+                .query_single(FindAccountById::new(ALICE_ID.clone()))
+                .wrap_err("Alice account must exist on each synchronized peer")?;
+            assert_eq!(alice.id(), &*ALICE_ID);
             if let Some(note) = alice.metadata().get(&note_key) {
                 last_note = Some(note.as_ref().to_string());
             }
