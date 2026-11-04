@@ -298,7 +298,8 @@ jobs:
         run: |
           set -euo pipefail
           # Give fixture callers a valid explicit compiler environment; refusal tests inject overrides.
-          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN
+          # setup-python exports its pkg-config search path on hosted Linux.
+          unset RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTUP_TOOLCHAIN PKG_CONFIG_PATH
           export IROHA_TEST_PROCESS_BRIDGE_LIBRARY="$(python -c 'import os; from pathlib import Path; print((Path("target/debug") / ("iroha_process_bridge.dll" if os.name == "nt" else "libiroha_process_bridge.so")).resolve(), end="")')"
           export IROHA_TEST_PROVENANCE_EMITTER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/examples/provenance_fixture" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q --junitxml=target/platform-native/release-process-python.xml \
