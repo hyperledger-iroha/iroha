@@ -32,7 +32,10 @@ WORKDIR /src
 COPY scripts/ci_image_buildx.go.mod /src/go.mod
 COPY scripts/ci_image_buildx.go.sum /src/go.sum
 COPY scripts/ci_image_buildx-tests.patch /tmp/buildx-tests.patch
-RUN git apply --check /tmp/buildx-tests.patch && git apply /tmp/buildx-tests.patch
+# Bind the context-free test patch to both complete source file hashes.
+RUN printf '%s  policy/validate_test.go\n' 465fd2ede51fcbd7a7c1a5e1381b27d958c620b6b9d25ad6175ea2cdc60ed4eb | sha256sum --check --strict && \
+    git apply --check --unidiff-zero /tmp/buildx-tests.patch && git apply --unidiff-zero /tmp/buildx-tests.patch && \
+    printf '%s  policy/validate_test.go\n' d69975416b03cf120f97fcaedb262816cfc34116b585e0be802e8c64a9acccb2 | sha256sum --check --strict
 RUN mkdir /out && \
     cp LICENSE /out/buildx-LICENSE && \
     go mod verify && \

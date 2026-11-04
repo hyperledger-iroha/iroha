@@ -1,17 +1,8 @@
 --- a/policy/validate_test.go
 +++ b/policy/validate_test.go
-@@ -35,7 +35,6 @@
- 		{"http", "Example.com", "example.com"},
- 		{"https", "\u0130.EXAMPLE.COM:443", "xn--i-9bb.example.com"},
- 		{"https", "\u00c9XAMPLE.COM", "xn--xample-9ua.com"},
+@@ -38 +37,0 @@
 -		{"https", "\x94.EXAMPLE.COM", "xn--zn7c.example.com"},
- 		{"https", "EXAMPLE.COM:000443", "example.com"},
- 		{"https", "eXaMpLe.CoM:8443", "example.com:8443"},
- 		{"https", "example.com:443", "example.com"},
-@@ -78,6 +77,15 @@
- 			require.NoError(t, err)
- 			require.Equal(t, tt.want, host)
- 		})
+@@ -80,0 +80,9 @@
 +	}
 +}
 +
@@ -21,6 +12,3 @@
 +		normalized, err := normalizeHTTPHost(&url.URL{Scheme: "https", Host: host})
 +		require.ErrorContains(t, err, "invalid http host")
 +		require.Empty(t, normalized)
- 	}
- }
- 
