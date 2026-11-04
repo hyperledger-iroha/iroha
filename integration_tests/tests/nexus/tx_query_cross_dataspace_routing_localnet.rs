@@ -1225,18 +1225,28 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     rt.block_on(async {
         let alice_probe = {
             let account = alice_via_ds2.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [InstructionBox::from(Log::new(
                         Level::INFO,
                         "wrong ingress route probe ds1".to_owned(),
                     ))],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "fee quote changed the selected payer, sponsor revision, or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
+
         submit_transaction_and_expect_route(
             &alice_via_ds2,
             &alice_on_ds1,
@@ -1248,18 +1258,28 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         .await?;
         let bob_probe = {
             let account = bob_via_ds1.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [InstructionBox::from(Log::new(
                         Level::INFO,
                         "wrong ingress route probe ds2".to_owned(),
                     ))],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
-        }
-        .expect("build integration-test transaction");
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "fee quote changed the selected payer, sponsor revision, or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)?
+        };
+
         submit_transaction_and_expect_route(
             &bob_via_ds1,
             &bob_on_ds2,
@@ -1474,19 +1494,29 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         )?,
         "bob should not expose ds2 manifest publish permission before grant"
     );
-    let unauthorized_publish_tx = {
+    let unauthorized_publish_tx = rt.block_on(async {
         let account = bob_via_ds1.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [InstructionBox::from(PublishSpaceDirectoryManifest {
                     manifest: ds2_manifest.clone(),
                 })],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the selected payer, sponsor revision, or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        Ok::<_, eyre::Report>(account.sign_transaction(payload)?)
+    })?;
+
     rt.block_on(submit_transaction_and_expect_route(
         &bob_via_ds1,
         &bob_on_ds2,
