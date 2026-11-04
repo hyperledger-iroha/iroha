@@ -18,6 +18,41 @@ fn fee_payment_with_gas_limit(bytecode: &IvmBytecode) -> Result<FeePaymentIntent
         NonZeroU64::new(gas_limit),
     ))
 }
+
+fn query_contract_metadata() -> Metadata {
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "contract_entrypoint".parse().expect("static metadata key"),
+        Json::new("run"),
+    );
+    metadata
+}
+
+#[test]
+fn query_contract_samples_select_their_declared_entrypoint() -> Result<()> {
+    let metadata = query_contract_metadata();
+    let name: String = metadata
+        .get(&"contract_entrypoint".parse::<Name>()?)
+        .expect("explicit entrypoint")
+        .try_into_any()?;
+    for sample in [
+        "query_assets_and_save_cursor",
+        "smart_contract_can_filter_queries",
+    ] {
+        let bytecode = load_sample_ivm(sample);
+        let artifact = ivm::verify_contract_artifact(bytecode.as_ref())
+            .map_err(|error| eyre::eyre!("verify {sample}: {error}"))?;
+        let entrypoint = artifact
+            .contract_interface
+            .entrypoints
+            .iter()
+            .find(|entrypoint| entrypoint.name == name)
+            .expect("the signed metadata selects the sample's declared entrypoint");
+        assert!(entrypoint.params.is_empty());
+        assert!(entrypoint.argument_schema.is_none());
+    }
+    Ok(())
+}
 #[test]
 fn smart_contract_query_scenarios() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -43,7 +78,7 @@ fn smart_contract_query_scenarios() -> Result<()> {
                 account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     bytecode,
                     fee_payment,
-                    Metadata::default(),
+                    query_contract_metadata(),
                 ))?;
             let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
                 payload: &payload,
@@ -86,7 +121,7 @@ fn smart_contract_query_scenarios() -> Result<()> {
                 account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     bytecode,
                     fee_payment,
-                    Metadata::default(),
+                    query_contract_metadata(),
                 ))?;
             let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
                 payload: &payload,

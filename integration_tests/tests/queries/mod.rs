@@ -111,7 +111,7 @@ fn query_basic_scenarios() -> eyre::Result<()> {
         let txs = client
             .list(Collection::Transactions, ListQuery::new())
             .collect::<iroha::Result<Vec<_>>>()?;
-        let hash = collections::field(&txs[0], "entrypoint_hash")?;
+        let hash = collections::field::<String>(&txs[0], "entrypoint_hash")?.parse()?;
         let details = client.client().get_transaction_details(hash)?;
         let TransactionEntrypoint::External(entrypoint) = details.transaction.entrypoint() else {
             eyre::bail!("entrypoint should be external transaction");

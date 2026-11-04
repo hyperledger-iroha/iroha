@@ -67,18 +67,6 @@ fn disjoint_builder() -> Result<NetworkBuilder> {
             LANES.len() * MEMBERS,
         )?)?
         .with_auto_populated_trusted_peers()
-        .with_genesis_instruction(iroha_data_model::isi::SetParameter::new(
-            iroha_data_model::parameter::Parameter::Custom({
-                let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
-                fees.fee_sink_account_id = iroha_test_samples::ALICE_ID.clone();
-                fees.base_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_byte_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_instruction_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.per_gas_unit_fee = ("0").parse().expect("explicit fixture fee quantity");
-                fees.into_custom_parameter()
-                    .expect("explicit signed fixture fee policy")
-            }),
-        ))
         .with_config_layer(|layer| {
             layer.write(
                 ["nexus", "storage", "local_budget_bytes"],
@@ -86,6 +74,18 @@ fn disjoint_builder() -> Result<NetworkBuilder> {
             );
         })
         .with_genesis_block_and_committee_validator_entries(|global, voters, participants| {
+            // A custom genesis replaces the builder's ordinary instruction list.
+            // Author this consensus-only fixture's fee policy in that signed block.
+            let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
+            fees.fee_sink_account_id = ALICE_ID.clone();
+            fees.base_fee = "0".parse().expect("explicit fixture fee quantity");
+            fees.per_byte_fee = "0".parse().expect("explicit fixture fee quantity");
+            fees.per_instruction_fee = "0".parse().expect("explicit fixture fee quantity");
+            fees.per_gas_unit_fee = "0".parse().expect("explicit fixture fee quantity");
+            let fee_policy = SetParameter::new(Parameter::Custom(
+                fees.into_custom_parameter()
+                    .expect("explicit signed fixture fee policy"),
+            ));
             let mut instructions = participants
                 .iter()
                 .map(|entry| {
@@ -103,12 +103,32 @@ fn disjoint_builder() -> Result<NetworkBuilder> {
                 .into(),
             );
             unexecuted_genesis_factory_with_post_topology(
-                Vec::new(),
+                vec![vec![fee_policy.into()]],
                 vec![instructions],
                 global,
                 voters,
             )
         }))
+}
+
+#[test]
+fn disjoint_genesis_preserves_its_signed_zero_fee_policy() -> Result<()> {
+    let _guard = sandbox::serial_guard();
+    init_instruction_registry();
+    let network = disjoint_builder()?.build();
+    let fees = iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?;
+    assert_eq!(fees.fee_sink_account_id, *ALICE_ID);
+    assert_eq!(
+        fees.fee_asset_id,
+        iroha_config::parameters::defaults::nexus::fees::genesis_policy().fee_asset_id
+    );
+    assert!(fees.base_fee.is_zero());
+    assert!(fees.per_byte_fee.is_zero());
+    assert!(fees.per_instruction_fee.is_zero());
+    assert!(fees.per_gas_unit_fee.is_zero());
+    assert_eq!(network.validators().len(), MEMBERS);
+    assert_eq!(network.committee_validators().len(), LANES.len() * MEMBERS);
+    Ok(())
 }
 
 /// Check signer ownership on the original observed processes, including global lane observers.
