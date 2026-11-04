@@ -260,6 +260,7 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_aggregate.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_arithmetic_fixed_basis.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_avx2_butterfly_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_links.rs",
@@ -297,6 +298,10 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_value_fixed_tests.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
         }
       ]
     },
@@ -691,6 +696,9 @@
       },
       "owner_paths": [
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_dif_test_kernel.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_goldilocks_avx2.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_fft_grain_tests.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_prefix_fft_tests.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_product_difference.rs",
@@ -822,6 +830,8 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/projection_air.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/projection_air_fp4_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/proof_instance.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation_worker_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_aux_replay.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_copy_census_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/rfc5280_inverse_window.rs",
@@ -856,6 +866,7 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/der_and_native_proof_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/io_fp4_air_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_avx2_butterfly_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_common22_coarse_diagnostic_tests.rs",
@@ -866,6 +877,7 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_coset.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fixed_replay_batch_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_forward_transform_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_full_coset_avx2_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_full_coset_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_full_dispatch_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_initial_readonly_tests.rs",
@@ -881,6 +893,7 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_coset_powers_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_crl_times_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_public_sha_digests_tests.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_cache_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_denominator_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_quotient_stripes.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_resource_tests.rs",
@@ -898,11 +911,20 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_terminal_weighted.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform_observation.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_weighted_deep_cost_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/native_registration_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/registration_phase_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/support_and_io_tests.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_avx2_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_persistent_avx2_tests.rs",
+          "role": "test"
         }
       ]
     },
@@ -1075,6 +1097,14 @@
         },
         {
           "path": "crates/iroha_js_host/src/privacy_x509_transaction/tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_avx2_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_persistent_avx2_tests.rs",
           "role": "test"
         }
       ]
@@ -2714,6 +2744,10 @@
       "engine": "fastpq-q77"
     },
     {
+      "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
+      "engine": "fastpq-q77"
+    },
+    {
       "path": "crates/fastpq_prover/src/proof.rs",
       "engine": "fastpq-legacy-replay"
     },
@@ -3134,6 +3168,7 @@
         {
           "tree": "crates/iroha_core_privacy/src/privacy_engines/zk_x509/",
           "files": [
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_avx2_butterfly_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_cpu_metal_geometry_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_fft_scheduler_tests.rs",
@@ -3154,6 +3189,10 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_trace_replay_inverse_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
         }
       ]
     },
@@ -3510,6 +3549,7 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/prover_observation.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_aggregate.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_arithmetic_fixed_basis.rs",
+            "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_avx2_butterfly_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_bounded_transform_tests.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_ca_links.rs",
@@ -3542,6 +3582,10 @@
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_transform.rs",
             "crates/iroha_core_privacy/src/privacy_engines/zk_x509/stark/main_value_fixed_tests.rs"
           ]
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
         }
       ]
     },
@@ -4238,6 +4282,14 @@
         {
           "path": "crates/fastpq_prover/src/proof.rs",
           "role": "source"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/rns_chain_air.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/fastpq_prover/tests/rns_chain_air/extension_cases.rs",
+          "role": "test"
         }
       ]
     },
