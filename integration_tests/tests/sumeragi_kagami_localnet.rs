@@ -312,12 +312,17 @@ async fn wait_for_validator_count_and_reducer(
         if let Ok(status) = client.client().status().get().await {
             last_status_peers = Some(status.peers);
             // Status.peers excludes the reporting peer, so add 1 for the validator count.
-            if status.peers.saturating_add(1) == expected_peers
-                && let Ok(sumeragi) = client.client().get_sumeragi_status()
-            {
-                reducer_available = sumeragi.halted.is_none();
-                if reducer_available {
-                    return Ok(());
+            if status.peers.saturating_add(1) == expected_peers {
+                let reader = client.clone();
+                if let Ok(sumeragi) = integration_tests::sync::spawn_blocking(move || {
+                    reader.client().get_sumeragi_status()
+                })
+                .await?
+                {
+                    reducer_available = sumeragi.halted.is_none();
+                    if reducer_available {
+                        return Ok(());
+                    }
                 }
             }
         }

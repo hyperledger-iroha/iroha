@@ -2224,7 +2224,7 @@ async fn run_realistic_30tps_localnet(
     let client_ttl = Duration::from_secs(duration_secs.saturating_add(120));
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        client_ttl.as_millis().to_string(),
+        format!("{}ms", client_ttl.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(REALISTIC_30TPS_PEERS)
@@ -3045,7 +3045,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        SOAK_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", SOAK_CLIENT_TTL.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -3078,6 +3078,10 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         else {
             return Ok(());
         };
+        ensure!(
+            network.client().client().transaction_ttl() == Some(SOAK_CLIENT_TTL),
+            "the explicit two-hour fixture TTL must retain its millisecond unit"
+        );
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let baseline_height = baseline_statuses
@@ -3283,7 +3287,7 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
     // Extend TTL so early transactions do not expire during the soak run.
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        SOAK_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", SOAK_CLIENT_TTL.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(4)
@@ -3443,7 +3447,7 @@ async fn permissioned_localnet_throughput_10k_tps() -> Result<()> {
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", THROUGHPUT_CLIENT_TTL.as_millis()),
     );
     let builder = NetworkBuilder::new()
         .with_peers(7)
@@ -3982,7 +3986,7 @@ async fn npos_localnet_throughput_10k_tps() -> Result<()> {
     let previous_ttl = std::env::var_os("IROHA_TEST_CLIENT_TTL_MS");
     set_env_var(
         "IROHA_TEST_CLIENT_TTL_MS",
-        THROUGHPUT_CLIENT_TTL.as_millis().to_string(),
+        format!("{}ms", THROUGHPUT_CLIENT_TTL.as_millis()),
     );
     let npos_params = SumeragiNposParameters::default();
     let builder = NetworkBuilder::new()

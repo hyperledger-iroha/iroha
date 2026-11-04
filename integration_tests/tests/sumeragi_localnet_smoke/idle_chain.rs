@@ -339,9 +339,15 @@ pub(super) async fn run() -> Result<()> {
             }
         }
         let trigger_id: iroha::data_model::trigger::TriggerId =
-            "proposal_work_precommit_once".parse()?;
+            "proposal_work_schedule_once".parse()?;
         let marker_key: Name = "proposal_work_precommit_marker".parse()?;
         let marker_value = Json::new("executed");
+        // Only an opted-in committed Schedule creates native proposal work
+        // (Sumeragi §4.5); PreCommit callbacks cannot wake an idle chain.
+        let schedule_at = SystemTime::now().duration_since(UNIX_EPOCH)?
+            + Duration::from_secs(30);
+        let mut progress_metadata = Metadata::default();
+        progress_metadata.insert("native_progress_attempts".parse()?, Json::new(1_u32));
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
@@ -352,9 +358,12 @@ pub(super) async fn run() -> Result<()> {
                 ))],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
-                TimeEventFilter::new(ExecutionTime::PreCommit),
+                TimeEventFilter::new(ExecutionTime::Schedule(
+                    iroha_data_model::events::time::Schedule::starting_at(schedule_at),
+                )),
             )
-            .expect("one-shot PreCommit trigger is a valid action"),
+            .expect("one-shot scheduled trigger is a valid action")
+            .with_metadata(progress_metadata),
         );
         let registration_transaction = {
             let account = client.account_client();
@@ -377,7 +386,7 @@ pub(super) async fn run() -> Result<()> {
         let submitter = client.clone();
         integration_tests::sync::spawn_blocking(move || submitter.submit_transaction(&registration_transaction))
             .await?
-            .wrap_err("register one-shot proposal-work PreCommit trigger")?;
+            .wrap_err("register one-shot native proposal-work schedule")?;
         let registration_height = external_height.saturating_add(1);
         let internal_height = registration_height.saturating_add(1);
         wait_for_converged_height(&network, internal_height, PROGRESS_TIMEOUT).await?;
@@ -419,7 +428,7 @@ pub(super) async fn run() -> Result<()> {
                 .collect::<Vec<_>>();
             ensure!(
                 trigger_blocks.len() == 1,
-                "peer {index} recorded the one-shot PreCommit trigger in {} blocks",
+                "peer {index} recorded the one-shot scheduled trigger in {} blocks",
                 trigger_blocks.len()
             );
             let trigger_block = trigger_blocks[0];
@@ -445,7 +454,7 @@ pub(super) async fn run() -> Result<()> {
         }).await??;
         ensure!(
             alice.metadata().get(&marker_key) == Some(&marker_value),
-            "one-shot PreCommit carrier did not apply its queryable state effect"
+            "one-shot scheduled carrier did not apply its queryable state effect"
         );
         let post_work_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
         let expected_non_empty = baseline_non_empty.saturating_add(3);
