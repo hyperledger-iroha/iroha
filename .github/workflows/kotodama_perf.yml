@@ -119,7 +119,7 @@ jobs:
   representative-regression:
     # Both revision-native runtimes are measured serially on this same hosted VM.
     # Source checkouts remain immutable; typed queries use the separately
-    # attested main-dispatch-only driver described below.
+    # attested typed dispatch and identical untimed fixture-reader grant below.
     # Conservative median confidence bounds must establish the unchanged 5%
     # ceiling; noisy/inconclusive paired runs cannot qualify. List retains its
     # zero-slowdown median policy and reports interval overlap separately.
@@ -184,9 +184,10 @@ jobs:
       - name: Clear cached benchmark evidence
         run: rm -rf "$CARGO_TARGET_DIR/criterion" "$CARGO_TARGET_DIR/kotodama-query-drivers"
 
-      # Runtime and original benchmark sources remain revision-native. Only the
-      # query driver main dispatch is derived outside both checkouts, with its
-      # original/derived bytes and fresh compiled artifact independently admitted.
+      # Runtime and original benchmark sources remain revision-native. The external
+      # query driver selects typed dispatch and grants its fixture reader the same
+      # ledger-read permission before setup assertions and timing on both revisions.
+      # Original/derived bytes and the fresh compiled artifact are independently admitted.
       # The policy also requires the
       # exact selected Git commit and the policy-pinned digest of that
       # revision's original Cargo.lock before any timing comparison.
