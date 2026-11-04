@@ -64,6 +64,8 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("iroha_cli", "gov_instruction"),
         ("iroha_cli", "taira_fee_sponsor_program"),
         ("iroha_core", "fastpq_fixture_capture"),
+        ("iroha_core", "ironwood_activation_preflight"),
+        ("iroha_core", "trigger_lifecycle_preflight"),
         ("iroha_core", "privacy_exact12_action_driver"),
         ("iroha_core", "validation_fee_rewards_evidence_verify"),
         ("iroha_core_zk", "kagemusha_wallet_artifacts"),

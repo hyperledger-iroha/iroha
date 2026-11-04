@@ -14,7 +14,7 @@ committed inputs; this document does not invent Taira values or permissions.
 2. Read committed `runtime_upgrade_policy_v1`, any provenance policy, selection and
    scheduled records from the intended network. Export `/v1/runtime/upgrades` as
    **JSON** (not a Norito frame) to `runtime-upgrades.json` and run:
-   `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node --bin ironwood_activation_preflight -- runtime-upgrades.json H`.
+   `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node,dev-tools --bin ironwood_activation_preflight -- runtime-upgrades.json H`.
    It checks current and scheduled projected predecessors and same-height conflicts.
    A status response alone is not finality; authenticate the complete selection cut
    with `authenticate_runtime_selection_at` and independently authenticated history.
@@ -28,7 +28,7 @@ committed inputs; this document does not invent Taira values or permissions.
    After the read-only preflight passes, produce the exact proposal JSON:
 
    ```sh
-   CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node \
+   CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo run --offline --jobs 6 -p iroha_core --features node,dev-tools \
      --bin ironwood_activation_preflight -- runtime-upgrades.json H \
      --emit-change-set NETWORK_HEX qualification-evidence.json > change_set.json
    ```
@@ -225,7 +225,7 @@ Regeneration is explicit maintenance, never an automatic runtime fallback:
 
 ```sh
 CARGO_INCREMENTAL=0 CARGO_TARGET_DIR="$PWD/target" cargo test -p iroha_core \
-  --features node,privacy-release-evidence --lib \
+  --features node,dev-tools,privacy-release-evidence --lib \
   regenerate_merged_lifecycle_supported_pairs --offline --jobs 6 -- --ignored
 ```
 
