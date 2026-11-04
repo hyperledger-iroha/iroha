@@ -7,6 +7,8 @@ on:
       - "Cargo.lock"
       - ".github/workflows/numeric_v1_fuzz.yml"
       - ".github/actions/setup-native-ci/**"
+      - "scripts/ci_private_fixture_root.py"
+      - "pytests/scripts/ci_private_fixture_root_test.py"
       - "scripts/requirements.txt"
       - "crates/iroha_primitives/src/bigint.rs"
       - "crates/iroha_primitives/src/numeric.rs"

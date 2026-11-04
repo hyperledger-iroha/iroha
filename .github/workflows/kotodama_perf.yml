@@ -5,6 +5,8 @@ on:
     paths:
       - ".github/workflows/kotodama_perf.yml"
       - ".github/actions/setup-native-ci/**"
+      - "scripts/ci_private_fixture_root.py"
+      - "pytests/scripts/ci_private_fixture_root_test.py"
       - "crates/ivm/benches/bench_kotodama.rs"
       - "crates/ivm/Cargo.toml"
       - "crates/ivm/src/**"

@@ -1260,6 +1260,14 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-24.04", representative_job)
         self.assertNotIn("self-hosted", representative_job)
         self.assertIn('".github/actions/setup-native-ci/**"', workflow)
+        pull_request = workflow.split("  pull_request:\n", 1)[1].split(
+            "  workflow_dispatch:", 1
+        )[0]
+        for source in (
+            "scripts/ci_private_fixture_root.py",
+            "pytests/scripts/ci_private_fixture_root_test.py",
+        ):
+            self.assertIn(f'      - "{source}"\n', pull_request)
         self.assertLess(
             representative_job.index(setup_marker),
             representative_job.index("      - name: Test regression checker\n"),

@@ -305,6 +305,14 @@ class FuzzSmokeTests(unittest.TestCase):
         self.assertNotIn("CARGO_TARGET_DIR", workflow)
         self.assertNotIn("continue-on-error", workflow)
         self.assertIn('".github/actions/setup-native-ci/**"', workflow)
+        pull_request = workflow.split("  pull_request:\n", 1)[1].split(
+            "  push:", 1
+        )[0]
+        for source in (
+            "scripts/ci_private_fixture_root.py",
+            "pytests/scripts/ci_private_fixture_root_test.py",
+        ):
+            self.assertIn(f'      - "{source}"\n', pull_request)
         check = workflow.split(
             "      - name: Exercise strict fuzz prerequisite and routing regressions\n", 1
         )[1].split("\n      - ", 1)[0]
