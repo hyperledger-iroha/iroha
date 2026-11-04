@@ -54,10 +54,19 @@ jobs:
     if: needs.rust_changes.outputs.has_binaries == 'true'
     needs: [rust_changes]
     runs-on: ubuntu-24.04
-    # The first of two isolated cold release builds outlasted one hour.
+    # Selected shipping, route-control, and disposable-broker feature graphs build separately.
     timeout-minutes: 240
+    env:
+      VERGEN_GIT_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - name: Verify compiled source identity matches checkout
+        run: |
+          set -eu
+          test "$(git rev-parse --verify HEAD)" = "${VERGEN_GIT_SHA:?}" || {
+            echo "compiled source identity must equal the checked-out commit" >&2
+            exit 1
+          }
       - uses: ./.github/actions/setup-native-ci
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
@@ -611,13 +620,24 @@ jobs:
       matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}
     env:
       IROHA_TEST_REQUIRE_NETWORK: "1"
-      TEST_NETWORK_BIN_IROHAD: bins/iroha3d
-      TEST_NETWORK_BIN_IROHA: bins/iroha
-      TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes
+      VERGEN_GIT_SHA: ${{ github.sha }}
+      TEST_NETWORK_BIN_IROHAD: ${{ github.workspace }}/bins/iroha3d
+      TEST_NETWORK_BIN_IROHA: ${{ github.workspace }}/bins/iroha
+      TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: ${{ github.workspace }}/bins/iroha3d_private_settlement_routes
+      TEST_NETWORK_BIN_IROHAD_TAIRA: ${{ github.workspace }}/bins/iroha3d_taira
+      TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER: ${{ github.workspace }}/bins/iroha_test_runtime_provider_broker
+      KAGAMI_BIN: ${{ github.workspace }}/bins/kagami
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
+      - name: Verify compiled source identity matches checkout
+        run: |
+          set -eu
+          test "$(git rev-parse --verify HEAD)" = "${VERGEN_GIT_SHA:?}" || {
+            echo "compiled source identity must equal the checked-out commit" >&2
+            exit 1
+          }
       - uses: ./.github/actions/setup-native-ci
       - uses: actions-rust-lang/setup-rust-toolchain@ecabd13d1c56bd1345c230e542e9144811ad706f
         with:

@@ -59,9 +59,14 @@ class BinaryArtifact:
 
 BINARY_ARTIFACTS = {
     "iroha3d": BinaryArtifact("irohad", "iroha3d"),
+    "iroha3d_taira": BinaryArtifact("irohad", "iroha3d_taira"),
     "iroha": BinaryArtifact("iroha_cli", "iroha"),
     "kagami": BinaryArtifact("iroha_kagami", "kagami"),
     "koto": BinaryArtifact("kotodama_toolchain", "koto"),
+    "iroha_test_runtime_provider_broker": BinaryArtifact(
+        "irohad", "iroha_test_runtime_provider_broker",
+        ("test-network-disposable-broker",), "disposable-broker"
+    ),
     "iroha3d_private_settlement_routes": BinaryArtifact(
         "irohad", "iroha3d", ("test-network-private-settlement-route-control",), "private-settlement-route-control"
     ),

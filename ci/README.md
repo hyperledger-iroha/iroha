@@ -29,8 +29,22 @@ receive `iroha3d` and `iroha`. The first and third also receive
 `iroha3d_private_settlement_routes` through `TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES`.
 Its `irohad/test-network-private-settlement-route-control` feature is compiled separately under
 `target/ci-binaries/private-settlement-route-control`; shipping artifacts use
-`target/ci-binaries/shipping`. Staging preserves both distinct daemon files.
-Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other package tests.
+`target/ci-binaries/shipping`. Both suites also receive `kagami` through
+`KAGAMI_BIN` and `iroha_test_runtime_provider_broker` through
+`TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER`. The broker's
+`irohad/test-network-disposable-broker` feature uses its own
+`target/ci-binaries/disposable-broker` directory. Only `iroha_test_network`
+requires the shipping `iroha3d_taira` launcher through `TEST_NETWORK_BIN_IROHAD_TAIRA`.
+Staging preserves each exact artifact; every network override is an absolute
+workspace path. Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other
+package tests.
+
+The ordinary binary producer and Rust network jobs bind `VERGEN_GIT_SHA` to
+`github.sha` and verify it equals the checkout's `HEAD` before building. This
+also supplies exact source metadata to test executables whose macros capture
+metadata without a build script. The binding does not set a sealed release
+marker or change benchmark source selection; release admission remains owned
+by the existing qualification checks.
 
 Foundation-only source changes retain the affected library and local CLI
 checks, while deferring node-launching packages and the manifest's

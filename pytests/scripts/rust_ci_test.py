@@ -72,6 +72,58 @@ def test_python_network_consumers_share_the_binary_producer_host() -> None:
     assert "working-directory: pytests/iroha_cli_tests" in consumer
 
 
+@pytest.mark.parametrize("job_name", ("pre_build", "rust_network"))
+@pytest.mark.parametrize("identity", ("matching", "different", "missing", "missing-checkout"))
+def test_network_compiled_identity_requires_the_exact_checkout(
+    tmp_path: Path, job_name: str, identity: str,
+) -> None:
+    """Execute each real preflight against Git, including missing metadata and failed Git reads."""
+    job = _workflow_job(job_name)
+    assert "      VERGEN_GIT_SHA: ${{ github.sha }}\n" in job
+    step_name = "      - name: Verify compiled source identity matches checkout\n"
+    assert job.index(step_name) < job.index("uses: ./.github/actions/setup-native-ci")
+    body = job.split(step_name, 1)[1].split("        run: |\n", 1)[1]
+    command = textwrap.dedent(body.split("      - uses:", 1)[0])
+    actual = subprocess.check_output(
+        ["git", "rev-parse", "--verify", "HEAD"], cwd=ROOT, text=True,
+    ).strip()
+    environment = {key: value for key, value in os.environ.items() if key != "VERGEN_GIT_SHA"}
+    if identity != "missing":
+        environment["VERGEN_GIT_SHA"] = "0" * 40 if identity == "different" else actual
+    result = subprocess.run(
+        ["/bin/sh", "-c", command], cwd=tmp_path if identity == "missing-checkout" else ROOT,
+        env=environment, capture_output=True, text=True, check=False,
+    )
+    assert (result.returncode == 0) is (identity == "matching"), result.stderr
+
+
+def test_network_source_binding_cannot_change_benchmark_or_sealed_metadata() -> None:
+    """Only the ordinary binary producer and its Rust consumers bind the checkout SHA."""
+    workflow = (ROOT / ".github/workflows/pr.yml").read_text()
+    assert len(re.findall(r"^      VERGEN_GIT_SHA:", workflow, re.MULTILINE)) == 2
+    assert "VERGEN_GIT_SHA" not in workflow.split("jobs:", 1)[0]
+    assert "IROHA_GIT_COMMIT_HASH" not in workflow
+    assert "VERGEN_GIT_SHA" not in (ROOT / ".github/actions/setup-native-ci/action.yml").read_text()
+
+
+def test_network_artifact_overrides_are_absolute_and_complete() -> None:
+    """The executable owners receive canonical workspace paths, including strict fixture readers."""
+    job = _workflow_job("rust_network")
+    overrides = dict(re.findall(r"^      ((?:TEST_NETWORK_BIN_\w+)|KAGAMI_BIN): (.+)$", job, re.MULTILINE))
+    expected = {
+        "TEST_NETWORK_BIN_IROHAD": "iroha3d",
+        "TEST_NETWORK_BIN_IROHA": "iroha",
+        "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES": "iroha3d_private_settlement_routes",
+        "TEST_NETWORK_BIN_IROHAD_TAIRA": "iroha3d_taira",
+        "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER": "iroha_test_runtime_provider_broker",
+        "KAGAMI_BIN": "kagami",
+    }
+    assert overrides == {key: "${{ github.workspace }}/bins/" + binary for key, binary in expected.items()}
+    manifest = rust_ci.load_lane_manifest()
+    assert set(expected.values()) == set(manifest.package_binaries["iroha_test_network"])
+    assert '      IROHA_TEST_REQUIRE_NETWORK: "1"' in job
+
+
 def test_core_host_capacity_policy_preserves_every_test_command() -> None:
     """Only the two heavy Core jobs bound build concurrency; every suite stays selected."""
     workflow = (ROOT / ".github/workflows/pr.yml").read_text()
@@ -115,7 +167,8 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
     job = _workflow_job("pre_build")
     assert "    timeout-minutes: 240\n" in job
     assert "CARGO_BUILD_JOBS" not in job
-    body = job.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    body = job.split("      - name: Build selected release binaries\n", 1)[1]
+    body = body.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     command = textwrap.dedent(body)
     original = command.replace("python3 -I -S ci/observe_build_capacity.py -- ", "")
     assert original.splitlines() == [
@@ -146,7 +199,8 @@ def test_pre_build_capacity_observer_preserves_release_build_command(
 def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: Path) -> None:
     """Run the workflow and real staging owner; substitute only the external Cargo producer."""
     job = _workflow_job("pre_build")
-    body = job.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
+    body = job.split("      - name: Build selected release binaries\n", 1)[1]
+    body = body.split("        run: |\n", 1)[1].split("      - name:", 1)[0]
     command = textwrap.dedent(body)
     assert "          path: ${{ runner.temp }}/iroha-prebuilt-binaries\n" in job
     workspace = tmp_path / "workspace"
@@ -181,7 +235,7 @@ def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: P
     environment = {
         **os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
         "RUNNER_TEMP": str(runner_temp), "CARGO_CALLS": str(calls),
-        "REQUIRED_BINARIES": "iroha,iroha3d,iroha3d_private_settlement_routes,kagami,koto",
+        "REQUIRED_BINARIES": "iroha,iroha3d,iroha3d_private_settlement_routes,iroha3d_taira,iroha_test_runtime_provider_broker,kagami,koto",
     }
     result = subprocess.run(["/bin/sh", "-c", command], cwd=workspace, env=environment,
                             capture_output=True, text=True, check=False)
@@ -190,9 +244,16 @@ def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: P
     assert sorted(path.name for path in output.iterdir()) == sorted(environment["REQUIRED_BINARIES"].split(","))
     assert (output / "iroha3d").read_bytes() == b"shipping:iroha3d"
     assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"private-settlement-route-control:iroha3d"
-    assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
+    assert (output / "iroha3d_taira").read_bytes() == b"shipping:iroha3d_taira"
+    assert (output / "iroha_test_runtime_provider_broker").read_bytes() == b"disposable-broker:iroha_test_runtime_provider_broker"
     invocations = calls.read_bytes()
-    assert len(invocations.splitlines()) == 2
+    assert len(invocations.splitlines()) == 3
+    groups = {Path(args[args.index("--target-dir") + 1]).name: args
+              for args in map(json.loads, invocations.splitlines())}
+    assert "--features" not in groups["shipping"]
+    assert groups["disposable-broker"][-2:] == ["--features", "irohad/test-network-disposable-broker"]
+    assert groups["private-settlement-route-control"][-2:] == ["--features", "irohad/test-network-private-settlement-route-control"]
+    assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
     # Repeated publication and the old restored-cache destination both refuse
     # before Cargo; neither can overwrite the original binaries or reuse them.
     for refused_command in (
@@ -1146,8 +1207,14 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     manifest = rust_ci.load_lane_manifest()
     assert manifest.daemon_packages == ("irohad", "irohad_lib")
     assert manifest.package_binaries == {
-        "integration_tests": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
-        "iroha_test_network": ("iroha", "iroha3d", "iroha3d_private_settlement_routes"),
+        "integration_tests": (
+            "iroha", "iroha3d", "iroha3d_private_settlement_routes",
+            "iroha_test_runtime_provider_broker", "kagami",
+        ),
+        "iroha_test_network": (
+            "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
+            "iroha_test_runtime_provider_broker", "kagami",
+        ),
         "izanami": ("iroha", "iroha3d"),
     }
     assert manifest.consumers["consistency"].binaries == ("iroha", "kagami")
@@ -1469,12 +1536,31 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
     assert not result.foundation_only and not result.full
     assert result.deferred_packages == result.deferred_consumers == ()
     assert "irohad" in result.lane_packages["node"]
-    assert result.binaries == ("iroha", "iroha3d", "iroha3d_private_settlement_routes", "kagami")
+    assert result.binaries == (
+        "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
+        "iroha_test_runtime_provider_broker", "kagami",
+    )
     assert result.as_dict()["binary_matrix"]["include"] == [
         {"lane": "node", "packages": "iroha_test_network", "package_count": 1},
         {"lane": "integration", "packages": "integration_tests", "package_count": 1},
     ]
     assert result.consumers["sora_parliament_lifecycle"]
+
+
+def test_integration_only_selection_requires_kagami_and_broker_without_taira(tmp_path: Path) -> None:
+    """Direct integration work builds its real external programs without widening to a launcher."""
+    metadata, manifest = _real_owner_routing_fixture(tmp_path)
+    result = rust_ci.classify_paths(
+        ["integration_tests/tests/sumeragi_npos_committee_transition.rs"],
+        metadata=metadata, manifest=manifest, root=tmp_path,
+    )
+    assert result.binaries == (
+        "iroha", "iroha3d", "iroha3d_private_settlement_routes",
+        "iroha_test_runtime_provider_broker", "kagami",
+    )
+    assert result.as_dict()["binary_matrix"]["include"] == [
+        {"lane": "integration", "packages": "integration_tests", "package_count": 1},
+    ]
 
 
 def test_foundation_and_direct_python_input_retains_python_network_consumer(tmp_path: Path) -> None:
@@ -1627,22 +1713,34 @@ def test_rust_ownership_still_precedes_non_prose_directory_ignores(tmp_path: Pat
     assert result.has_rust
 
 
-def test_isolated_only_union_does_not_build_shipping_daemon(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Selecting only the control artifact never widens to a shipping build."""
+@pytest.mark.parametrize(("name", "binary", "feature", "group"), (
+    ("iroha3d_private_settlement_routes", "iroha3d",
+     "test-network-private-settlement-route-control", "private-settlement-route-control"),
+    ("iroha_test_runtime_provider_broker", "iroha_test_runtime_provider_broker",
+     "test-network-disposable-broker", "disposable-broker"),
+))
+def test_isolated_only_union_does_not_build_shipping_daemon(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    name: str, binary: str, feature: str, group: str,
+) -> None:
+    """An isolated artifact never widens to a shipping build or another test feature."""
 
     calls = []
     def fake_run(command: list[str], **kwargs: Any) -> None:
         calls.append(command)
         target = Path(command[command.index("--target-dir") + 1]) / "release"
         target.mkdir(parents=True)
-        (target / "iroha3d").write_bytes(b"control only")
+        (target / binary).write_bytes(b"control only")
     monkeypatch.setattr(rust_ci, "_run", fake_run)
     output = tmp_path / "artifacts"
-    rust_ci.build_binaries(("iroha3d_private_settlement_routes",), output, root=tmp_path)
-    assert len(calls) == 1
-    assert calls[0][-2:] == ["--features", "irohad/test-network-private-settlement-route-control"]
-    assert sorted(path.name for path in output.iterdir()) == ["iroha3d_private_settlement_routes"]
-    assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"control only"
+    rust_ci.build_binaries((name,), output, root=tmp_path)
+    assert calls == [[
+        "cargo", "build", "--locked", "--release", "--target-dir",
+        str(tmp_path / "target/ci-binaries" / group),
+        "-p", "irohad", "--bin", binary, "--features", "irohad/" + feature,
+    ]]
+    assert sorted(path.name for path in output.iterdir()) == [name]
+    assert (output / name).read_bytes() == b"control only"
     assert not (tmp_path / "target/ci-binaries/shipping").exists()
 
 
