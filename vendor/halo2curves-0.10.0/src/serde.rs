@@ -298,12 +298,6 @@ where
         Self::pos_idetity().map(|pos| Flag::get(pos, self.flag_byte()))
     }
 
-    fn set_flags(&mut self, c: &C) {
-        self.set_identity(c);
-        self.set_sign(c);
-        self.set_compressed();
-    }
-
     fn encode(c: &C) -> Self {
         use crate::serde::endian::EndianRepr;
         let mut this = Self::default();
@@ -317,7 +311,9 @@ where
             }
             _ => this.as_mut()[..x_bytes.len()].copy_from_slice(&x_bytes),
         };
-        this.set_flags(c);
+        this.set_identity(c);
+        this.set_sign(c);
+        this.set_compressed();
         this
     }
 
