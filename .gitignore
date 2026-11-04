@@ -43,6 +43,7 @@ netflix/*
 target_migrate/*
 !artifacts/android/
 artifacts/android/*
+!artifacts/android/codegen_parity_summary.json
 !artifacts/android/attestation/
 !artifacts/android/attestation/**
 !artifacts/android/fixture_runs/

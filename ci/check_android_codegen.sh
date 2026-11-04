@@ -112,6 +112,18 @@ if [[ -n "$(GIT_OPTIONAL_LOCKS=0 git -C "${ROOT_DIR}" status --porcelain=v1 --un
   echo "[android-codegen] error: deterministic binding generation requires a clean checkout" >&2
   exit 1
 fi
+require_tracked_parity_summary() {
+  if [[ ! -f "${ROOT_DIR}/${SUMMARY_REL}" || -L "${ROOT_DIR}/${SUMMARY_REL}" ]]; then
+    echo "[android-codegen] error: checked-in Android parity summary is not regular" >&2
+    exit 1
+  fi
+  if ! git -C "${ROOT_DIR}" ls-files --error-unmatch -- "${SUMMARY_REL}" >/dev/null 2>&1; then
+    echo "[android-codegen] error: Android parity summary is not tracked in the clean source" >&2
+    exit 1
+  fi
+}
+require_tracked_parity_summary
+
 if [[ ! -f "${ROOT_DIR}/Cargo.lock" || -L "${ROOT_DIR}/Cargo.lock" ]]; then
   echo "[android-codegen] error: the pinned tracked root Cargo.lock must be a regular file" >&2
   exit 1
@@ -441,10 +453,7 @@ run_replay "${FIRST_SOURCE}" "${FIRST_TARGET}" "${FIRST_STAGE}"
 run_replay "${SECOND_SOURCE}" "${SECOND_TARGET}" "${SECOND_STAGE}"
 
 validate_regular_tree "${ROOT_DIR}/${DOCS_REL}" "checked-in Android generated documentation"
-if [[ ! -f "${ROOT_DIR}/${SUMMARY_REL}" || -L "${ROOT_DIR}/${SUMMARY_REL}" ]]; then
-  echo "[android-codegen] error: checked-in Android parity summary is not regular" >&2
-  exit 1
-fi
+require_tracked_parity_summary
 
 if ! diff -ru "${FIRST_STAGE}/generated" "${SECOND_STAGE}/generated" >/dev/null; then
   diff -ru "${FIRST_STAGE}/generated" "${SECOND_STAGE}/generated" >&2 || true

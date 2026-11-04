@@ -117,6 +117,57 @@ def test_android_codegen_gate_obeys_shared_cargo_policy() -> None:
         assert not has_forbidden_process_control(read(relative)), relative
 
 
+def test_android_codegen_summary_is_a_source_input_checked_before_replay() -> None:
+    """A clean checkout supplies the deterministic summary before expensive replay."""
+    relative = "artifacts/android/codegen_parity_summary.json"
+    summary = REPO_ROOT / relative
+    assert summary.is_file() and not summary.is_symlink()
+    assert f"!{relative}" in read(".gitignore").splitlines()
+    gate = read("ci/check_android_codegen.sh")
+    assert gate.index("\nrequire_tracked_parity_summary\n") < gate.index(
+        'create_replay_clone "${FIRST_SOURCE}"'
+    )
+    assert gate.count("\nrequire_tracked_parity_summary\n") == 2
+
+
+@pytest.mark.parametrize("kind", ["tracked", "missing", "untracked", "symlink", "directory"])
+def test_android_codegen_summary_preflight_rejects_non_source_inputs(
+    tmp_path: Path, kind: str,
+) -> None:
+    """Exercise the actual preflight with real Git tracking and file kinds."""
+    gate = read("ci/check_android_codegen.sh")
+    start = gate.index("require_tracked_parity_summary() {\n")
+    preflight = gate[start:gate.index("\n}\n", start) + 3]
+    root = tmp_path / "source root"
+    root.mkdir()
+    subprocess.run(["git", "init", "--quiet", str(root)], check=True)
+    relative = "artifacts/android/codegen_parity_summary.json"
+    summary = root / relative
+    summary.parent.mkdir(parents=True)
+    if kind == "directory":
+        summary.mkdir()
+    elif kind == "symlink":
+        target = root / "external.json"
+        target.write_text("{}", encoding="utf-8")
+        summary.symlink_to(target)
+    else:
+        summary.write_text("{}", encoding="utf-8")
+    if kind in {"tracked", "missing", "symlink"}:
+        subprocess.run(["git", "-C", str(root), "add", "--", relative], check=True)
+    if kind == "missing":
+        summary.unlink()
+    result = subprocess.run(
+        ["bash", "-c", "set -euo pipefail\n" + preflight + "\nrequire_tracked_parity_summary\n"],
+        env={**os.environ, "ROOT_DIR": str(root), "SUMMARY_REL": relative},
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == (0 if kind == "tracked" else 1), result.stderr
+    if kind == "untracked":
+        assert "not tracked in the clean source" in result.stderr
+    elif kind != "tracked":
+        assert "not regular" in result.stderr
+
+
 @pytest.mark.parametrize("status", [0, 37])
 def test_android_replay_selects_exporter_and_preserves_cargo_failure(
     tmp_path: Path, status: int,
