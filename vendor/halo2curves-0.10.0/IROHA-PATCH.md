@@ -18,5 +18,5 @@ Rust 1.99 warning repairs retain the original arithmetic: remove the inapplicabl
 `must_use` attribute from a trait implementation and an unused `Vec` import.
 Re-export the existing public `CurveEndo` extension so its scalar decomposition
 and supporting constants remain reachable outside the private arithmetic module.
-Compressed encoding calls its existing `set_flags` helper, which performs the
-same three flag updates in the same order. No encoding or group law changes.
+Remove the unused private `set_flags` helper. Compressed encoding retains its
+original three flag updates unchanged. No encoding or group law changes.
