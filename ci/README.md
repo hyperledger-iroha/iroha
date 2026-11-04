@@ -5,6 +5,14 @@ This directory hosts the developer-facing shell helpers that gate CI jobs
 `target/`, so keep that layout unchanged unless the entire toolchain is updated
 as part of a coordinated migration.
 
+## Function coverage
+
+`ci/check_tests_guard.sh` requires unit-test references for changed Rust
+functions. A complete file with identical parsed `rustfmt` output before and
+after the edit is formatting-only. String literals and attributes remain
+significant. If rustfmt is missing, fails to parse either version, or exceeds
+its bounded runtime, the ordinary coverage requirement remains in force.
+
 ## Affected Rust lanes
 
 `ci/rust_lanes.toml` assigns every Cargo workspace package to exactly one
@@ -397,3 +405,18 @@ fixture helpers, simulator coverage and explicitly isolated test-network feature
 remain selected; this diagnostic matrix does not qualify a shipping feature graph.
 A supported feature or dependency that forwards a mutation selector fails before
 Cargo starts and requires an explicit ownership review.
+
+## Native platform fixtures
+
+The hosted Windows component job assigns its OS-selected LocalAppData directory
+owner to the runner's effective user before testing current-user custody. This
+setup is restricted to ephemeral GitHub-hosted runners and changes only the
+selected directory's owner. Native application admission retains its existing
+ownership and ancestor checks and never repairs a user's permissions.
+
+When the base environment inventory omits a reference, the environment guard
+reconstructs it from original Git source blobs using the unchanged classifier.
+Every current production reference must match the base path, context and
+production scope, including duplicate counts. Unrelated source edits do not
+create a new toggle; new reads, changed contexts, test-to-production moves and
+classifier edits require ordinary review.

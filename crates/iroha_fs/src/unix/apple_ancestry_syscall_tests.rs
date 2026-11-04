@@ -14,7 +14,7 @@ impl Drop for RestoreModes {
 }
 struct Fixture {
     // Restore before TempDir removes the search-only fixture.
-    restore: RestoreModes,
+    _restore: RestoreModes,
     _temporary: tempfile::TempDir,
     root: PathBuf,
     search: PathBuf,
@@ -36,7 +36,7 @@ fn fixture() -> Fixture {
     fs::set_permissions(&leaf, fs::Permissions::from_mode(0o700)).unwrap();
     fs::set_permissions(&search, fs::Permissions::from_mode(0o100)).unwrap();
     Fixture {
-        restore: RestoreModes(vec![search.clone(), leaf.clone()]),
+        _restore: RestoreModes(vec![search.clone(), leaf.clone()]),
         _temporary: temporary,
         root,
         search,
@@ -117,11 +117,17 @@ fn apple_kernel_revoked_search_and_readless_selected_directory_are_rejected() {
 
 #[test]
 fn apple_kernel_search_ancestor_replacement_and_alias_are_rejected() {
-    let mut fixture = fixture();
+    let fixture = fixture();
     let directory = Directory::open_exact(&fixture.leaf).unwrap();
-    let retired = fixture.root.join("retired");
-    fixture.restore.0.push(retired.clone());
-    fs::rename(&fixture.search, &retired).unwrap();
+    let parking = tempfile::tempdir().unwrap();
+    let retired = parking.path().canonicalize().unwrap().join("retired");
+    let retired_search = retired.join("search-only");
+    let _restore_retired =
+        RestoreModes(vec![retired_search.clone(), retired_search.join("wallet")]);
+    // Hosted Darwin refused renaming the search-only directory. Move its
+    // writable ancestor so the original search-only directory stays unchanged.
+    fs::rename(&fixture.root, &retired).unwrap();
+    fs::create_dir(&fixture.root).unwrap();
     fs::create_dir(&fixture.search).unwrap();
     fs::create_dir(&fixture.leaf).unwrap();
     fs::set_permissions(&fixture.leaf, fs::Permissions::from_mode(0o700)).unwrap();
@@ -130,7 +136,7 @@ fn apple_kernel_search_ancestor_replacement_and_alias_are_rejected() {
     fs::set_permissions(&fixture.search, fs::Permissions::from_mode(0o700)).unwrap();
     fs::remove_dir(&fixture.leaf).unwrap();
     fs::remove_dir(&fixture.search).unwrap();
-    symlink(&retired, &fixture.search).unwrap();
+    symlink(&retired_search, &fixture.search).unwrap();
     assert!(directory.revalidate().is_err());
     assert!(Directory::open_exact(&fixture.leaf).is_err());
 }

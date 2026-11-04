@@ -138,6 +138,10 @@ cargo run -p iroha_execution_stark --release --example race_census
 cargo test -p iroha_execution_stark --release
 ```
 
+`IROHA_EXECUTION_STARK_TIMINGS` reports per-phase wall time on all platforms.
+Process CPU time is available on Unix; other platforms print `n/a` for that
+optional diagnostic. Neither report changes proof computation or verification.
+
 `race_bench` takes `<NeonTokyo|Harbor|Sakura> <players 1-8> <throttle-percent 0-100> <seed>` and an
 optional lookups-per-helper (1–4); anything else exits with status 2. It prints the binary hash,
 arguments, Rayon threads, circuit identity, replay digest and proof hash before the timings. The

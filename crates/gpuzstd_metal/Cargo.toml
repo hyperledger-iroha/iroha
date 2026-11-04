@@ -18,4 +18,4 @@ zstd = { workspace = true }
 cc = "1.2.45"
 
 [dev-dependencies]
-gpuzstd_codec = { path = "../gpuzstd_codec", features = ["test-support"] }
+gpuzstd_codec = { path = "../gpuzstd_codec", features = ["test"] }
