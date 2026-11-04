@@ -342,11 +342,8 @@ pub async fn create_and_publish(
     .with_config_layer(move |layer| {
         layer
             .write(["sorafs", "storage", "enabled"], false)
-            .write(["governance", "sorafs_pin_fee_asset_id"], fee_asset.clone())
-            .write(
-                ["governance", "sorafs_pin_fee_treasury_account"],
-                treasury.clone(),
-            );
+            .write(["gov", "sorafs_pin_fee_asset_id"], fee_asset.clone())
+            .write(["gov", "sorafs_pin_fee_treasury_account"], treasury.clone());
     })
     .with_genesis_instruction(Register::domain(Domain::new(domain)))
     .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(

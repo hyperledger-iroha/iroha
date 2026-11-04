@@ -19,7 +19,9 @@ use iroha_executor_data_model::permission::{
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, gen_account_in};
+use iroha_test_samples::{
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
+};
 use std::{
     io::ErrorKind,
     path::PathBuf,
@@ -755,7 +757,13 @@ fn associated_permissions_removed_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let Some((network, rt)) = start_network_with_builder(
         NetworkBuilder::new()
-            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone())))
+            .next_genesis_transaction()
+            .with_genesis_instruction(Transfer::domain(
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                kingdom_id.clone(),
+                ALICE_ID.clone(),
+            )),
         stringify!(associated_permissions_removed_on_unregister),
     ) else {
         return;
@@ -822,7 +830,13 @@ fn associated_permissions_removed_from_role_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let Some((network, rt)) = start_network_with_builder(
         NetworkBuilder::new()
-            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone())))
+            .next_genesis_transaction()
+            .with_genesis_instruction(Transfer::domain(
+                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                kingdom_id.clone(),
+                ALICE_ID.clone(),
+            )),
         stringify!(associated_permissions_removed_from_role_on_unregister),
     ) else {
         return;
