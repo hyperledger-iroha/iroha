@@ -5200,6 +5200,7 @@ def require_signed_deferred_authority_and_native_fees(
     require(authority_path, recursive, (
         "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
+        "crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)",
         "MultisigInstructionBox::Propose(proposal)",
         "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "MultisigInstructionBox::Approve(approval)",
