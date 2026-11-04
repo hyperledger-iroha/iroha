@@ -14,9 +14,11 @@
 //!
 //! Genesis is today's Kagami Taira network re-targeted to the profile (the P2 genesis builder
 //! replaces this, TODO(P2)): content of the Taira catalog the profile omits (the Digital Shekel
-//! dataspace and validator seats on lanes the profile does not define) is removed, the protocol
-//! custody account becomes the profile's keyless account, the `NPoS` epoch becomes the qual
-//! profile's, and Kagami signs it against the flattened profile render of validator 0.
+//! data space and retired lane routes) is removed. The signed lane policy and original
+//! non-global stake owner are retargeted to the profile's public catalog, and protocol custody
+//! becomes the profile's keyless account. Both committed epoch schedules select the qual
+//! profile's short epoch; the separate SCCP service's one-hour epoch scope is omitted.
+//! Kagami signs it against the flattened profile render of validator 0.
 //!
 //! Requires `TEST_NETWORK_BIN_IROHAD` (stock `iroha3d`) and `KAGAMI_BIN`, both absolute. The test
 //! name contains `four_peer`, so the nextest release gate skips it (TODO(P4)).
@@ -68,7 +70,6 @@ use iroha_test_network::{
 };
 use norito::json::{self, Value};
 use std::{
-    collections::BTreeSet,
     fs,
     num::NonZeroU64,
     path::{Path, PathBuf},
@@ -80,6 +81,8 @@ mod profile_files;
 use profile_files::{owner_only_dir, private_file, workspace};
 #[path = "support/profile_peers.rs"]
 mod profile_peers;
+#[path = "support/short_epoch_genesis.rs"]
+mod short_epoch_genesis;
 use profile_peers::{Peers, configure_lifecycle};
 
 #[cfg(windows)]
@@ -102,9 +105,6 @@ const PHASE: Duration = Duration::from_secs(300);
 const STATUS_RETRY: Duration = Duration::from_secs(30);
 /// Effective heights each authorizing validator pre-signs.
 const INSTALL_RANGE: u16 = 16;
-/// Kagami's Digital Shekel asset and domain, which live in the Taira-only `is` dataspace.
-const TAIRA_ONLY_MARKERS: [&str; 2] = ["7ZepsJTHCVLKsrFFNZGSRGZgvBhv", "\"boi.is\""];
-
 fn required_binary(variable: &str, kind: BinaryKind) -> Result<ResolvedProgram> {
     let qualified = resolve_release_prebuilt_binary(kind)?;
     let path = std::env::var_os(variable)
@@ -246,44 +246,6 @@ fn read_profile_node(node_file: &Path) -> Result<actual::Root> {
     user.parse().map_err(|report| eyre!("{report:?}"))
 }
 
-/// Lane indices the profile's baseline catalog defines.
-fn profile_lanes(profile: &Profile) -> Result<BTreeSet<i64>> {
-    profile
-        .static_config()
-        .get("nexus")
-        .and_then(|nexus| nexus.get("lane_catalog"))
-        .and_then(toml::Value::as_array)
-        .ok_or_else(|| eyre!("profile has no lane catalog"))?
-        .iter()
-        .map(|lane| {
-            lane.get("index")
-                .and_then(toml::Value::as_integer)
-                .ok_or_else(|| eyre!("lane without index"))
-        })
-        .collect()
-}
-
-/// Whether a Kagami Taira genesis instruction belongs to the Taira catalog the profile omits.
-fn taira_catalog_only(instruction: &Value, lanes: &BTreeSet<i64>) -> Result<bool> {
-    let text = json::to_string(instruction)?;
-    if TAIRA_ONLY_MARKERS
-        .iter()
-        .any(|marker| text.contains(marker))
-    {
-        return Ok(true);
-    }
-    for kind in ["RegisterPublicLaneValidator", "ActivatePublicLaneValidator"] {
-        if let Some(lane) = instruction
-            .get(kind)
-            .and_then(|body| body.get("lane_id"))
-            .and_then(Value::as_i64)
-        {
-            return Ok(!lanes.contains(&lane));
-        }
-    }
-    Ok(false)
-}
-
 /// Read the explicitly committed gas receiver and require both root fee custody roles to agree.
 fn committed_fee_custody(parameters: &Parameters) -> Result<AccountId> {
     let _discriminant = ChainDiscriminantGuard::enter(369);
@@ -312,29 +274,14 @@ fn profile_manifest(
     profile_custody: &str,
 ) -> Result<()> {
     let _discriminant = ChainDiscriminantGuard::enter(369);
-    let lanes = profile_lanes(profile)?;
     let raw = RawGenesisTransaction::from_path(kagami.join("genesis.json"))?;
-    let mut value = json::value::to_value(&raw)?;
+    let mut value = short_epoch_genesis::manifest_value(&raw)?;
+    short_epoch_genesis::retarget_public_catalog(&mut value, profile, None)?;
     let transactions = value
         .get_mut("transactions")
         .and_then(Value::as_array_mut)
         .ok_or_else(|| eyre!("Kagami manifest has no transactions"))?;
-    let mut removed = 0;
     for transaction in transactions.iter_mut() {
-        if let Some(instructions) = transaction
-            .get_mut("instructions")
-            .and_then(Value::as_array_mut)
-        {
-            let before = instructions.len();
-            let mut kept = Vec::with_capacity(before);
-            for instruction in instructions.drain(..) {
-                if !taira_catalog_only(&instruction, &lanes)? {
-                    kept.push(instruction);
-                }
-            }
-            removed += before - kept.len();
-            *instructions = kept;
-        }
         let Some(parameters) = transaction.get_mut("parameters") else {
             continue;
         };
@@ -342,36 +289,9 @@ fn profile_manifest(
             continue;
         }
         let mut typed: Parameters = json::value::from_value(parameters.clone())?;
-        let id = SumeragiNposParameters::parameter_id();
-        let mut npos = typed
-            .custom
-            .get(&id)
-            .map(SumeragiNposParameters::from_custom_parameter)
-            .transpose()?
-            .flatten()
-            .ok_or_else(|| eyre!("Kagami genesis omitted NPoS parameters"))?;
-        let epoch = profile.genesis_recipe().epoch_length_blocks;
-        npos.epoch_length_blocks = NonZeroU64::new(epoch).ok_or_else(|| eyre!("zero epoch"))?;
-        npos.evidence_horizon_blocks = epoch;
-        npos.slashing_delay_blocks = epoch;
-        npos.validate().map_err(|error| eyre!(error))?;
-        typed.custom.insert(npos.into_custom_parameter());
+        apply_profile_epoch(&mut typed, profile.genesis_recipe().epoch_length_blocks)?;
         *parameters = json::value::to_value(&typed)?;
     }
-    transactions.retain(|transaction| {
-        ["instructions", "topology"].iter().any(|key| {
-            transaction
-                .get(*key)
-                .and_then(Value::as_array)
-                .is_some_and(|entries| !entries.is_empty())
-        }) || transaction
-            .get("parameters")
-            .is_some_and(|parameters| !parameters.is_null())
-    });
-    ensure!(
-        removed > 0,
-        "Kagami Taira genesis carried no Taira-only content"
-    );
     ensure!(
         replace_text(&mut value, kagami_custody, profile_custody) > 0,
         "Kagami Taira genesis never names its custody account"
@@ -384,6 +304,25 @@ fn profile_manifest(
         "profile manifest did not replace every committed fee custody role"
     );
     fs::write(output, json::to_vec(&raw)?)?;
+    Ok(())
+}
+
+/// Retarget both committed epoch schedules together, retaining the original election policy.
+fn apply_profile_epoch(typed: &mut Parameters, epoch: u64) -> Result<()> {
+    let id = SumeragiNposParameters::parameter_id();
+    let mut npos = typed
+        .custom
+        .get(&id)
+        .map(SumeragiNposParameters::from_custom_parameter)
+        .transpose()?
+        .flatten()
+        .ok_or_else(|| eyre!("Kagami genesis omitted NPoS parameters"))?;
+    npos.epoch_length_blocks = NonZeroU64::new(epoch).ok_or_else(|| eyre!("zero epoch"))?;
+    npos.evidence_horizon_blocks = epoch;
+    npos.slashing_delay_blocks = epoch;
+    npos.validate().map_err(|error| eyre!(error))?;
+    typed.sumeragi.epoch_length_blocks = npos.epoch_length_blocks;
+    typed.custom.insert(npos.into_custom_parameter());
     Ok(())
 }
 
@@ -1512,4 +1451,45 @@ fn committed_fee_custody_requires_explicit_matching_roles() {
         changed.custom.insert(fees.into_custom_parameter().unwrap());
         assert!(committed_fee_custody(&changed).is_err());
     }
+}
+
+#[test]
+fn profile_epoch_preserves_election_identity_and_rejects_invalid_schedule() {
+    let mut parameters = Parameters::default();
+    let original = SumeragiNposParameters::default();
+    parameters
+        .custom
+        .insert(original.clone().into_custom_parameter());
+    let epoch = Profile::compiled(PROFILE)
+        .unwrap()
+        .genesis_recipe()
+        .epoch_length_blocks;
+    apply_profile_epoch(&mut parameters, epoch).unwrap();
+    let selected = SumeragiNposParameters::from_custom_parameter(
+        parameters
+            .custom
+            .get(&SumeragiNposParameters::parameter_id())
+            .unwrap(),
+    )
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        parameters.sumeragi.epoch_length_blocks,
+        selected.epoch_length_blocks
+    );
+    assert_eq!(selected.epoch_length_blocks.get(), epoch);
+    assert_eq!(selected.epoch_seed, original.epoch_seed);
+    assert_eq!(selected.max_validators, original.max_validators);
+    assert_eq!(
+        selected.xor_asset_definition_id,
+        original.xor_asset_definition_id
+    );
+    assert_eq!(selected.min_self_bond, original.min_self_bond);
+    assert_eq!(selected.min_nomination_bond, original.min_nomination_bond);
+    assert_eq!(selected.evidence_horizon_blocks, epoch);
+    assert_eq!(selected.slashing_delay_blocks, epoch);
+    let before = json::to_vec(&parameters).unwrap();
+    assert!(apply_profile_epoch(&mut parameters, 0).is_err());
+    assert_eq!(json::to_vec(&parameters).unwrap(), before);
+    assert!(apply_profile_epoch(&mut Parameters::default(), epoch).is_err());
 }

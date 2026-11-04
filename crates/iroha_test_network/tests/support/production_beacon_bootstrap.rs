@@ -1666,12 +1666,12 @@ fn assert_native_routes(
             .lanes()
             .iter()
             .find(|lane| lane.id.as_u32() == 3)
-            .ok_or_else(|| eyre!("native PayNet lane absent"))?;
+            .ok_or_else(|| eyre!("native public route lane absent"))?;
         ensure!(
             selected.lane == lane.id
                 && selected.dataspace == Some(lane.dataspace_id)
                 && selected.matcher.instruction.is_none(),
-            "explicit account route changed native lane or dataspace"
+            "explicit account route changed native lane or data space"
         );
     }
     Ok(())
@@ -1746,14 +1746,31 @@ fn catalog_fixture(
         "retained paid transition is not bound to the exact native baseline"
     );
     ensure!(
+        baseline.lane_count == 4,
+        "paid fixture must start from the authenticated four-lane public catalog"
+    );
+    ensure!(
         transition.lane_additions.len() == 1
-            && transition.lane_additions[0].id == LaneId::new(6)
+            && transition.lane_additions[0].id == LaneId::new(baseline.lane_count)
             && transition.dataspace_additions.len() == 1
             && transition.manifest_additions.len() == 1,
         "paid fixture no longer has its exact single catalog addition"
     );
     let mut lanes = first.configured_lane_catalog.lanes().to_vec();
     lanes.extend(transition.lane_additions.clone());
+    ensure!(
+        lanes.iter().all(|lane| lane.id != LaneId::new(5))
+            && transition
+                .dataspace_additions
+                .iter()
+                .all(|data_space| data_space.id != DataSpaceId::new(56_005))
+            && first
+                .configured_dataspace_catalog
+                .entries()
+                .iter()
+                .all(|data_space| { data_space.id != DataSpaceId::new(56_005) }),
+        "retained recovery addition IDs must remain unoccupied"
+    );
     let lane_count = lanes
         .iter()
         .map(|lane| lane.id.as_u32() + 1)
