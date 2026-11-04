@@ -662,13 +662,19 @@ jobs:
           --packages "${{ matrix.packages }}"
           --checks "${{ matrix.checks || 'clippy,build,test,doc' }}"
           --test-target "${{ matrix.test_target }}"
+      - name: Stage failed test-network process logs
+        if: failure()
+        run: >-
+          python3 scripts/collect_test_network_logs.py
+          --source "$TEST_NETWORK_TMP_DIR"
+          --destination target/test-network-logs
       - name: Upload failed test-network artifacts
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: test-network-${{ matrix.lane }}
           path: |
-            ${{ env.TEST_NETWORK_TMP_DIR }}/irohad_test_network_*
+            target/test-network-logs/
             target/sccp-continuation/
           if-no-files-found: ignore
           retention-days: 3
