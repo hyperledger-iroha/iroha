@@ -1,5 +1,6 @@
 //! Orphaned trigger cleanup scenarios.
 use integration_tests::sandbox;
+use integration_tests::sync::spawn_blocking;
 use iroha::{
     blocking::Client,
     data_model::{prelude::*, query::trigger::FindTriggers},
@@ -9,7 +10,6 @@ use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
 use std::time::{Duration, Instant};
-use tokio::task::spawn_blocking;
 const TRIGGER_STATE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const TRIGGER_STATE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> eyre::Result<Option<sandbox::SerializedNetwork>> {

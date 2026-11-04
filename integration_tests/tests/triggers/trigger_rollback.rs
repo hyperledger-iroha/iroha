@@ -1,12 +1,12 @@
 //! Tests that state changes made by failing triggers are reverted.
 use eyre::Result;
 use integration_tests::sandbox;
+use integration_tests::sync::spawn_blocking;
 use iroha::data_model::{ValidationFail, prelude::*, query::error::FindError, trigger::TriggerId};
 use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use tokio::task::spawn_blocking;
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn failed_trigger_revert() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
@@ -31,7 +31,7 @@ async fn failed_trigger_revert() -> Result<()> {
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         )
     });
     let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
@@ -48,7 +48,7 @@ async fn failed_trigger_revert() -> Result<()> {
         )
         .expect("trigger action fixture satisfies validation invariants"),
     ));
-    let _ = spawn_blocking({
+    spawn_blocking({
         let client = client.clone();
         move || {
             client.submit(
@@ -57,7 +57,7 @@ async fn failed_trigger_revert() -> Result<()> {
             )
         }
     })
-    .await?;
+    .await??;
     let call_trigger = ExecuteTrigger::new(trigger_id);
     let err = spawn_blocking({
         let client = client.clone();
@@ -107,11 +107,15 @@ async fn failed_trigger_revert() -> Result<()> {
     let query_result = match sandbox::handle_result(
         spawn_blocking({
             let client = client.clone();
+            let asset_definition_id = asset_definition_id.clone();
             move || {
+                use iroha::collections::{Collection, ListQuery, field};
                 client
-                    .client()
-                    .query(FindAssetDefinitions::new())
-                    .execute_all()
+                    .list(
+                        Collection::AssetDefinitions,
+                        ListQuery::new().filter(field("id").eq(asset_definition_id.to_string())),
+                    )
+                    .collect::<iroha::Result<Vec<_>>>()
             }
         })
         .await?
@@ -122,9 +126,8 @@ async fn failed_trigger_revert() -> Result<()> {
         None => return Ok(()),
     };
     assert!(
-        query_result
-            .iter()
-            .all(|asset_definition| asset_definition.id() != &asset_definition_id)
+        query_result.is_empty(),
+        "failed trigger retained its asset definition"
     );
     Ok(())
 }

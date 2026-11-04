@@ -1,6 +1,6 @@
 //! Tests that a restarted peer restores its state.
 use eyre::{Result, eyre};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::prelude::*;
 use iroha::{blocking::Client, crypto::KeyPair};
 use iroha_config_base::toml::WriteExt as _;
@@ -12,10 +12,7 @@ use std::{
     path::Path,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 use toml::Table;
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
@@ -57,7 +54,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
                             __asset_definition_id.clone(),
                             "xor".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(DomainId::try_new("wonderland", "universal")?),
                         )
                     })
                     .into(),
@@ -95,18 +92,17 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         let assets = sandbox::handle_result(
             spawn_blocking({
                 let client = client.clone();
-                move || client.client().query(FindAssets::new()).execute_all()
+                let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+                move || super::find_asset(&client, &asset_id)
             })
-            .await?
-            .map_err(eyre::Report::new),
+            .await?,
             stringify!(restarted_peer_should_restore_its_state),
         )?;
         let Some(assets) = assets else { return Ok(()) };
-        if assets.iter().any(|asset| {
-            *asset.id().account() == ALICE_ID.clone()
-                && *asset.id().definition() == asset_definition_id
-                && asset.value() == &quantity
-        }) {
+        if assets
+            .as_ref()
+            .is_some_and(|asset| asset.value() == &quantity)
+        {
             break true;
         }
         if Instant::now() >= mint_deadline {
@@ -183,19 +179,16 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
         let assets = match sandbox::handle_result(
             spawn_blocking({
                 let client = client.clone();
-                move || client.client().query(FindAssets::new()).execute_all()
+                let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+                move || super::find_asset(&client, &asset_id)
             })
-            .await?
-            .map_err(eyre::Report::new),
+            .await?,
             stringify!(restarted_peer_should_restore_its_state),
         )? {
             Some(assets) => assets,
             None => return Ok(()),
         };
-        if let Some(asset) = assets.into_iter().find(|asset| {
-            *asset.id().account() == ALICE_ID.clone()
-                && *asset.id().definition() == asset_definition_id
-        }) {
+        if let Some(asset) = assets {
             break Some(asset.value().clone());
         }
         if Instant::now() >= deadline {
@@ -256,6 +249,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let submit_definition = asset_definition_id.clone();
     let submit_asset = asset_id.clone();
     let submit_quantity = quantity.clone();
+    let submit_domain = domain_id.clone();
     let submit_res: eyre::Result<()> = spawn_blocking(move || {
         submit_client
             .submit_all::<InstructionBox>(
@@ -268,7 +262,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
                             definition_id.clone(),
                             "routecoin".to_owned(),
                             iroha_data_model::asset::AssetBalancePolicy::Global,
-                            None,
+                            Some(submit_domain),
                         )
                     })
                     .into(),

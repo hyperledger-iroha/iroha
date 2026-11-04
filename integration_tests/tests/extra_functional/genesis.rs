@@ -45,7 +45,10 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
         return Ok(());
     }
     let domain_id: DomainId = DomainId::try_new("foo", "universal").expect("Valid");
-    let submit_result = ensure_domain_setup_for_network(&network, &domain_id);
+    let submit_result = integration_tests::sync::spawn_blocking(move || {
+        ensure_domain_setup_for_network(&network, &domain_id)
+    })
+    .await?;
     if sandbox::handle_result(submit_result, stringify!(multiple_genesis_peers))?.is_none() {
         return Ok(());
     }

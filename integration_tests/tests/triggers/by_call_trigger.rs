@@ -2,7 +2,7 @@
 use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use futures_util::StreamExt as _;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::{
     crypto::KeyPair,
     data_model::{
@@ -28,10 +28,7 @@ use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
-use tokio::{
-    task::spawn_blocking,
-    time::{Duration, Instant, sleep, timeout},
-};
+use tokio::time::{Duration, Instant, sleep, timeout};
 const TRIGGER_NAME: &str = "mint_rose";
 fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
     let mut metadata = Metadata::default();
@@ -758,11 +755,7 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 move || -> Result<()> {
                     client
                         .client()
-                        .query(FindAccounts::new())
-                        .execute_all()
-                        .expect("Account not found")
-                        .into_iter()
-                        .find(|account| account.id() == &rabbit_account_id)
+                        .query_single(FindAccountById::new(rabbit_account_id.clone()))
                         .expect("Account not found");
                     Ok(())
                 }

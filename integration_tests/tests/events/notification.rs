@@ -1,7 +1,7 @@
 //! Tests for notifications emitted after trigger execution.
 use eyre::Result;
 use futures_util::StreamExt;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::{
     ValidationFail, events::pipeline::TransactionEventFilter, prelude::*, query::error::FindError,
 };
@@ -11,10 +11,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::Duration;
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("wonderland", "universal")?,

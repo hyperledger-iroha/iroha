@@ -3482,6 +3482,37 @@ impl Network {
             .expect("there is at least one peer")
             .client()
     }
+    /// Bind a newly created peer to this network's exact genesis and client policy.
+    ///
+    /// This prepares clients for an explicitly joining peer without adding its vote
+    /// to the committee or changing the network's signed genesis.
+    ///
+    /// # Errors
+    /// Rejects a foreign environment, a previously started or attached peer, or
+    /// a source identity that no longer matches the network's signed genesis.
+    pub fn attach_peer(&self, peer: &NetworkPeer) -> Result<()> {
+        if peer.dir.parent() != Some(self.env.dir.as_path()) {
+            return Err(eyre!(
+                "joining peer belongs to a different test environment"
+            ));
+        }
+        if peer.runs_count.load(Ordering::Acquire) != 0 || peer.retained_client.get().is_some() {
+            return Err(eyre!("joining peer must be attached before its first use"));
+        }
+        let source = self
+            .peers
+            .first()
+            .and_then(|source| source.client_config.get())
+            .ok_or_else(|| eyre!("test network has no bound client identity"))?;
+        if source.chain != self.chain_id() || source.network_id != self.network_id() {
+            return Err(eyre!(
+                "test network client identity differs from its signed genesis"
+            ));
+        }
+        peer.client_config
+            .set(source.clone())
+            .map_err(|_| eyre!("joining peer already has an immutable client identity"))
+    }
     /// Chain ID of the network
     pub fn chain_id(&self) -> ChainId {
         self.consensus_profile.chain_id.clone()
@@ -11637,6 +11668,49 @@ mod tests {
             );
         }
         assert_eq!(network.genesis().0.hash(), original_hash);
+        Ok(())
+    }
+
+    #[test]
+    fn joining_peer_retains_exact_network_identity_and_refuses_rebinding() -> Result<()> {
+        let mut network = build_with_isolated_permit(NetworkBuilder::new().with_peers(4));
+        let peer = NetworkPeer::builder().build(network.env());
+        assert!(peer.client_config.get().is_none());
+        network.attach_peer(&peer)?;
+        let selected = peer.client_config.get().unwrap();
+        let source = network.peers()[0].client_config.get().unwrap();
+        assert_eq!(selected.chain, network.chain_id());
+        assert_eq!(selected.network_id, network.network_id());
+        assert_eq!(selected.chain_discriminant, source.chain_discriminant);
+        assert_eq!(selected.policy.status_timeout, source.policy.status_timeout);
+        assert_eq!(
+            selected.policy.request_timeout,
+            source.policy.request_timeout
+        );
+        assert_eq!(selected.policy.ttl, source.policy.ttl);
+        assert_eq!(*peer.client().client().network_id(), network.network_id());
+        assert!(network.attach_peer(&peer).is_err());
+
+        let foreign_root = tempdir()?;
+        let foreign = NetworkPeer::builder().build(&Environment {
+            dir: foreign_root.path().to_path_buf(),
+        });
+        assert!(network.attach_peer(&foreign).is_err());
+        assert!(foreign.client_config.get().is_none());
+
+        let started = NetworkPeer::builder().build(network.env());
+        started.runs_count.store(1, Ordering::Release);
+        assert!(network.attach_peer(&started).is_err());
+        assert!(started.client_config.get().is_none());
+
+        let unbound = NetworkPeer::builder().build(network.env());
+        network.consensus_profile.chain_id = ChainId::from("changed-joining-source");
+        assert!(network.attach_peer(&unbound).is_err());
+        assert!(unbound.client_config.get().is_none());
+        assert_eq!(
+            peer.client_config.get().unwrap().network_id,
+            selected.network_id
+        );
         Ok(())
     }
 

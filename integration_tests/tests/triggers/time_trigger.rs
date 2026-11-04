@@ -1,7 +1,7 @@
 //! Time-based trigger execution paths using bounded async waits.
 use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::{
     blocking::Client,
     data_model::{Level, asset::AssetId, prelude::*},
@@ -16,10 +16,7 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Duration,
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 static NEXT_SUBMIT_PEER_INDEX: AtomicUsize = AtomicUsize::new(0);
 fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
     let mut metadata = Metadata::default();

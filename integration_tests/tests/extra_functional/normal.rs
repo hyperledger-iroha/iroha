@@ -62,12 +62,12 @@ fn transactions_should_be_applied() -> Result<()> {
             })?;
         target_height += 1;
         wait_for_height(target_height, "after set_parameter")?;
-        let domain_id = DomainId::try_new("and", "universal")?;
+        let domain_id = DomainId::try_new("normal-throughput", "universal")?;
         let account_pk: PublicKey =
             "ed01201F803CB23B1AAFB958368DF2F67CB78A2D1DFB47FFFC3133718F165F54DFF677".parse()?;
         let account_id = AccountId::new(account_pk);
         let asset_definition_id = AssetDefinitionId::derive_from_components(
-            DomainId::try_new("and", "universal")?,
+            DomainId::try_new("normal-throughput", "universal")?,
             "MAY".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
@@ -91,7 +91,7 @@ fn transactions_should_be_applied() -> Result<()> {
                 __asset_definition_id.clone(),
                 "MAY".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(domain_id.clone()),
             )
         });
         iroha
@@ -154,10 +154,7 @@ fn transactions_should_be_applied() -> Result<()> {
         wait_for_height(target_height, "after second mint")?;
         iroha
             .client()
-            .query(FindAssets::new())
-            .execute_all()?
-            .into_iter()
-            .find(|asset| asset.id() == &asset_id)
+            .query_single(FindAssetById::new(asset_id))
             .expect("asset not found");
         Ok(())
     };

@@ -1,7 +1,7 @@
 //! Adversarial relay and partition scenarios for unstable networks.
 use eyre::{Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha_config::parameters::defaults;
 use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::Topology;
@@ -31,7 +31,6 @@ use std::{
 };
 use tokio::{
     self,
-    task::spawn_blocking,
     time::{sleep, timeout},
 };
 use toml::{Table, Value as TomlValue};
@@ -913,8 +912,8 @@ async fn block_after_genesis_is_synced() -> Result<()> {
             let network = NetworkBuilder::new()
                 .with_base_seed(SEED)
                 .with_peers(7)
-                // Align test timing with the new consensus pipeline (3s block, 6s commit).
-                .with_block_cadence(Duration::from_secs(9))
+                // Keep the signed cadence inside the default five-second payload retry window.
+                .with_block_cadence(Duration::from_secs(3))
                 .build();
             let network = sandbox::SerializedNetwork::new(network, guard);
             let relay = P2pRelay::for_network(&network);

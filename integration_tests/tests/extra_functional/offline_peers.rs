@@ -1,6 +1,6 @@
 //! Startup and operation with subsets of peers offline.
 use eyre::{OptionExt, Result, eyre};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::{
     crypto::{Algorithm, KeyPair, bls_normal_pop_prove},
     data_model::{isi::register::RegisterPeerWithPop, prelude::*},
@@ -10,7 +10,7 @@ use iroha_model_base::peer::PeerId;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
 use std::time::{Duration, Instant};
-use tokio::{task::spawn_blocking, time::sleep};
+use tokio::time::sleep;
 #[tokio::test]
 async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
     // Given
@@ -58,10 +58,7 @@ async fn genesis_block_is_committed_with_some_offline_peers() -> Result<()> {
         .expect("there are two running peers")
         .client();
     spawn_blocking(move || -> Result<()> {
-        let assets = client.client().query(FindAssets::new()).execute_all()?;
-        let asset = assets
-            .iter()
-            .find(|asset| *asset.id().account() == alice_id && *asset.id().definition() == roses)
+        let asset = super::find_asset(&client, &AssetId::new(roses, alice_id))?
             .ok_or_eyre("asset should be found")?;
         assert_eq!(&alice_has_roses, asset.value());
         Ok(())

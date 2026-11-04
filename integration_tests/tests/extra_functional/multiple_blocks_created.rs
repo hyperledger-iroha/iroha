@@ -1,6 +1,9 @@
 //! Stress block production with randomized mint bursts.
 use eyre::{Result, eyre};
-use integration_tests::{sandbox, sync::get_status_with_retry_async};
+use integration_tests::{
+    sandbox,
+    sync::{get_status_with_retry_async, spawn_blocking},
+};
 use iroha::data_model::{parameter::BlockParameter, prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
@@ -11,7 +14,7 @@ use std::{
     num::NonZero,
     time::{Duration, Instant},
 };
-use tokio::{task::spawn_blocking, time::sleep};
+use tokio::time::sleep;
 /// Bombard random peers with random mints in multiple rounds, ensuring they all have
 /// a consistent total amount in the end.
 #[tokio::test]
@@ -42,12 +45,12 @@ async fn multiple_blocks_created() -> Result<()> {
             client.transaction_status_timeout = sync_timeout;
             client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
         });
-    let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
+    let domain_id: DomainId = DomainId::try_new("mint-bursts", "universal")?;
     let create_domain = domain_setup_instruction(&domain_id, submit_client.client().account())?;
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id: AssetDefinitionId = AssetDefinitionId::derive_from_components(
-        DomainId::try_new("domain", "universal")?,
+        DomainId::try_new("mint-bursts", "universal")?,
         "xor".parse()?,
     );
     let create_asset = Register::asset_definition({
@@ -56,7 +59,7 @@ async fn multiple_blocks_created() -> Result<()> {
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(domain_id.clone()),
         )
     });
     {
@@ -170,18 +173,16 @@ async fn multiple_blocks_created() -> Result<()> {
             let client = peer.client();
             let account_id = account_id.clone();
             let definition = asset_definition_id.clone();
-            let assets: Vec<Asset> = match sandbox::handle_result(
-                spawn_blocking(move || client.client().query(FindAssets::new()).execute_all())
-                    .await?
-                    .map_err(eyre::Report::from),
+            let asset = match sandbox::handle_result(
+                spawn_blocking(move || {
+                    super::find_asset(&client, &AssetId::new(definition, account_id))
+                })
+                .await?,
                 stringify!(multiple_blocks_created),
             )? {
                 Some(v) => v,
                 None => return Ok(()),
             };
-            let asset = assets.into_iter().find(|asset| {
-                *asset.id().account() == account_id && *asset.id().definition() == definition
-            });
             if let Some(asset) = asset {
                 if *asset.value() != expected_value {
                     all_ok = false;

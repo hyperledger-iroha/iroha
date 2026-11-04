@@ -1,7 +1,7 @@
 //! Connected peers count and reconfiguration under register/unregister.
 use eyre::{Result, WrapErr, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::{
     Level,
     isi::{InstructionBox, Log, Unregister, register::RegisterPeerWithPop},
@@ -12,10 +12,7 @@ use iroha_test_network::*;
 use rand::{SeedableRng, prelude::IteratorRandom};
 use rand_chacha::ChaCha8Rng;
 use std::{fmt::Write as _, time::Duration};
-use tokio::{
-    task::spawn_blocking,
-    time::{Instant, sleep, timeout},
-};
+use tokio::time::{Instant, sleep, timeout};
 fn leader_peer<'a>(peers: impl IntoIterator<Item = &'a NetworkPeer>) -> &'a NetworkPeer {
     peers
         .into_iter()
@@ -52,6 +49,7 @@ async fn register_new_peer() -> Result<()> {
         return Ok(());
     };
     let peer = NetworkPeerBuilder::new().build(network.env());
+    network.attach_peer(&peer)?;
     let submit_timeout = network
         .sync_timeout()
         .saturating_add(network.da_commit_quorum_timeout());

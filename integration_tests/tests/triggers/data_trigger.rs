@@ -1,6 +1,7 @@
 //! Data-trigger execution and rollback scenarios.
 use eyre::Result;
 use integration_tests::sandbox;
+use integration_tests::sync::spawn_blocking;
 use iroha::{blocking, data_model::prelude::*};
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
@@ -12,7 +13,6 @@ use iroha_model_base::topology::DataSpaceId;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 use std::time::{Duration, Instant};
-use tokio::task::spawn_blocking;
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
@@ -41,11 +41,9 @@ where
     Ok(())
 }
 fn asset_value(client: &blocking::Client, asset_id: &AssetId) -> Result<Quantity> {
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
-    let asset = assets
-        .into_iter()
-        .find(|asset| asset.id() == asset_id)
-        .ok_or_else(|| eyre::eyre!("asset {asset_id} not found"))?;
+    let asset = client
+        .client()
+        .query_single(FindAssetById::new(asset_id.clone()))?;
     Ok(asset.value().clone())
 }
 fn wait_for_asset_value(

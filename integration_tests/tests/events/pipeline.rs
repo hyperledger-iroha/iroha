@@ -1,7 +1,7 @@
 //! Pipeline transaction and block event surface coverage.
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
-use integration_tests::sandbox;
+use integration_tests::{sandbox, sync::spawn_blocking};
 use iroha::data_model::{
     ValidationFail,
     events::pipeline::{TransactionEventFilter, TransactionStatus},
@@ -17,10 +17,7 @@ use std::{
     io::{Read as _, Seek as _, SeekFrom},
     time::{Duration, Instant},
 };
-use tokio::{
-    task::spawn_blocking,
-    time::{sleep, timeout},
-};
+use tokio::time::{sleep, timeout};
 fn pipeline_event_timeout(network: &Network) -> Duration {
     network.sync_timeout().max(Duration::from_secs(60))
 }

@@ -3089,11 +3089,17 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         let warmup_height = baseline_height.saturating_add(1);
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
-            peer.client()
-                .submit::<InstructionBox>(Log::new(Level::INFO, message).into(), iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None))
-                .wrap_err_with(|| {
-                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
-                })?;
+            let client = peer.client();
+            integration_tests::sync::spawn_blocking(move || {
+                client.submit::<InstructionBox>(
+                    Log::new(Level::INFO, message).into(),
+                    iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                )
+            })
+            .await?
+            .wrap_err_with(|| {
+                format!("failed to submit warmup log instruction to {}", peer.mnemonic())
+            })?;
         }
         wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
         let warmup_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
@@ -3125,18 +3131,18 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             let message = format!("localnet block {idx} via {}", peer.mnemonic());
             let mut metadata = Metadata::default();
             metadata.insert(sequence_key.clone(), idx.saturating_add(1));
-            peer.client()
-                .submit_with_metadata::<InstructionBox>(
+            let client = peer.client();
+            integration_tests::sync::spawn_blocking(move || {
+                client.submit_with_metadata::<InstructionBox>(
                     Log::new(Level::INFO, message).into(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     metadata,
                 )
-                .wrap_err_with(|| {
-                    format!(
-                        "failed to submit log instruction {idx} to {}",
-                        peer.mnemonic()
-                    )
-                })?;
+            })
+            .await?
+            .wrap_err_with(|| {
+                format!("failed to submit log instruction {idx} to {}", peer.mnemonic())
+            })?;
             next_height = next_height.saturating_add(1);
             let remaining = timeout.saturating_sub(start.elapsed());
             let block_timeout = if remaining < per_block_timeout {
@@ -3335,12 +3341,15 @@ async fn permissioned_localnet_soak_thousands() -> Result<()> {
             .ok_or_else(|| eyre!("network must have at least one peer"))?;
         let client = submit_peer.client();
         for idx in 0..target_blocks {
-            client
-                .submit::<InstructionBox>(
+            let client = client.clone();
+            integration_tests::sync::spawn_blocking(move || {
+                client.submit::<InstructionBox>(
                     Log::new(Level::INFO, format!("localnet soak {idx}")).into(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
-                .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
+            })
+            .await?
+            .wrap_err_with(|| format!("failed to submit log instruction {idx}"))?;
             if (idx + 1) % submit_batch == 0 {
                 wait_for_queue_depth(&network, queue_soft_limit, SOAK_STATUS_POLL_TIMEOUT).await?;
             }
