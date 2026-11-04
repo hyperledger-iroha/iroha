@@ -151,7 +151,7 @@ commands keep their default feature selection.
 
 The five dedicated build jobs also provision one additional 16 GiB swap file on
 their GitHub-hosted Linux runner. Generic affected Rust jobs use the same setup
-for the execution lane or when their selected package list contains `iroha_core`:
+for every execution job or when their selected package list contains `iroha_core`:
 the latter's `cargo test` command compiles the same Core library-test target.
 Captured Core and execution builds showed little available RAM and no free space
 in the existing 3 GiB swap immediately before shutdown. The execution capture recorded 77,488 KiB

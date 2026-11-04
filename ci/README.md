@@ -14,6 +14,12 @@ workspace reverse-dependency graph. The PR workflow runs locked Clippy, build,
 test, and documentation commands for the resulting package sets, then exposes
 one required aggregate result.
 
+The execution lane retains its logical package ownership and splits selected
+packages into four independent hosted jobs: data models, IVM/Kotodama,
+KAGEMUSHA proofs, and the remaining execution packages. Each selected package
+still runs all four checks exactly once. Empty groups are omitted, and newly
+added execution packages remain in the general execution job.
+
 Torii integration tests require its explicit `test-fixtures` feature. The routed
 test command enables it whenever Torii is selected; a direct full Torii run uses
 `cargo test -p iroha_torii --features test-fixtures`. Owning mutation checks use
@@ -103,7 +109,7 @@ artifacts. Executable component checks qualify the current source candidate.
 
 ## Compile-unit ratchet
 
-The affected execution lane and the full-workspace test gate both run
+The affected job containing `iroha_data_model` and the full-workspace test gate both run
 `scripts/check_compile_unit_budget.py` before their ordinary tests. The guard
 compiles the `iroha_data_model` library test graph with the locked dependency
 set, writes JSON evidence under `target/ci/`, and enforces the checked-in

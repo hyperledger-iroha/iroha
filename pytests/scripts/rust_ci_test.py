@@ -1160,6 +1160,53 @@ def test_packages_in_one_lane_can_have_different_binary_requirements(tmp_path: P
     assert document["binary_matrix"]["include"][0]["packages"] == "integration"
 
 
+@pytest.mark.parametrize("requires_binaries", (False, True))
+def test_execution_jobs_preserve_all_packages_and_checks(requires_binaries: bool) -> None:
+    """Bound hosted duration without losing owners, checks, or binary requirements."""
+
+    manifest = rust_ci.tomllib.loads((ROOT / "ci/rust_lanes.toml").read_text())
+    packages = tuple(manifest["lanes"]["execution"]["packages"])
+    result = rust_ci.Classification(
+        changed_paths=(), changed_packages=packages, impacted_packages=packages,
+        lane_packages={"execution": packages}, full=True, reasons=(),
+        package_binaries={package: ("iroha3d",) for package in packages} if requires_binaries else {},
+    )
+    document = result.as_dict()
+    rows = document["binary_matrix" if requires_binaries else "binary_free_matrix"]["include"]
+    assert document["binary_free_matrix" if requires_binaries else "binary_matrix"] == {"include": []}
+    assert {row["lane"] for row in rows} == {
+        "execution", "execution-model", "execution-vm", "execution-kagemusha",
+    }
+    observed = [package for row in rows for package in row["packages"].split(",")]
+    assert sorted(observed) == sorted(packages)
+    assert len(observed) == len(set(observed))
+    for row in rows:
+        assert set(row) == {"lane", "packages", "package_count"}
+        assert row["package_count"] == len(row["packages"].split(","))
+    assert document["lanes"] == [{"name": "execution", "packages": list(packages)}]
+    assert document["matrix"]["include"] == [{
+        "lane": "execution", "packages": ",".join(packages), "package_count": len(packages),
+    }]
+
+
+@pytest.mark.parametrize("package,job", (
+    ("iroha_data_model", "execution-model"),
+    ("kotodama_lang", "execution-vm"),
+    ("iroha_kagemusha_proof", "execution-kagemusha"),
+    ("new_execution_package", "execution"),
+))
+def test_execution_jobs_omit_empty_groups_and_keep_future_owners(package: str, job: str) -> None:
+    """A focused edit runs only its selected owner, including newly added owners."""
+
+    result = rust_ci.Classification(
+        changed_paths=(), changed_packages=(package,), impacted_packages=(package,),
+        lane_packages={"execution": (package,)}, full=False, reasons=(),
+    )
+    assert result.as_dict()["binary_free_matrix"]["include"] == [{
+        "lane": job, "packages": package, "package_count": 1,
+    }]
+
+
 @pytest.mark.parametrize("path", ("new/unknown.rs", "Cargo.toml"))
 def test_full_and_unknown_changes_select_all_binary_consumers(tmp_path: Path, path: str) -> None:
     """Fail-closed routing selects all consumers and the complete binary union."""

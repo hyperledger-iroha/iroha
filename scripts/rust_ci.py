@@ -45,6 +45,19 @@ sys.modules[_DOCS_SPEC.name] = KOTODAMA_DOCS
 _DOCS_SPEC.loader.exec_module(KOTODAMA_DOCS)
 DEFAULT_MANIFEST = ROOT / "ci" / "rust_lanes.toml"
 CHECK_NAMES = ("clippy", "build", "test", "doc")
+# Preserve logical ownership while bounding independent hosted execution jobs.
+# The combined lane exceeded four hours before its proof tests had finished.
+EXECUTION_JOB_PACKAGES = {
+    "execution-model": frozenset({
+        "iroha_data_model", "iroha_data_model_derive",
+        "iroha_executor_data_model", "iroha_executor_data_model_derive",
+    }),
+    "execution-vm": frozenset({
+        "ivm", "ivm_abi", "ivm_artifact_admission", "kotodama_lang",
+        "kotodama_surface", "kotodama_toolchain",
+    }),
+    "execution-kagemusha": frozenset({"iroha_kagemusha_proof"}),
+}
 
 
 @dataclass(frozen=True)
@@ -171,7 +184,19 @@ class Classification:
                         "packages": ",".join(selected),
                         "package_count": len(selected),
                     }
-                    if kind == "binary" and "integration_tests" in selected:
+                    if lane == "execution":
+                        groups: dict[str, list[str]] = {}
+                        for package in selected:
+                            job = next((
+                                name for name, members in EXECUTION_JOB_PACKAGES.items()
+                                if package in members
+                            ), lane)
+                            groups.setdefault(job, []).append(package)
+                        matrices[kind].extend({
+                            "lane": job, "packages": ",".join(members),
+                            "package_count": len(members),
+                        } for job, members in groups.items())
+                    elif kind == "binary" and "integration_tests" in selected:
                         others = tuple(package for package in selected if package != "integration_tests")
                         if others:
                             matrices[kind].append({**row, "packages": ",".join(others), "package_count": len(others)})

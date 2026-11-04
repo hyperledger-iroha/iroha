@@ -180,7 +180,7 @@ def test_only_observed_build_owners_provision_before_their_work():
     # Comma boundaries select the exact router package, including first/last positions;
     # similarly named packages such as iroha_core_privacy cannot match the Core arm.
     assert step == (
-        "        if: matrix.lane == 'execution' || contains(format(',{0},', matrix.packages), ',iroha_core,')\n"
+        "        if: contains(',execution,execution-model,execution-vm,execution-kagemusha,', format(',{0},', matrix.lane)) || contains(format(',{0},', matrix.packages), ',iroha_core,')\n"
         f"        run: {command}"
     )
     assert generic.index(command) < generic.index("      - name: Run locked affected checks")
@@ -197,6 +197,9 @@ def test_only_observed_build_owners_provision_before_their_work():
 @pytest.mark.parametrize("lane,packages,expected", [
     ("execution", "ivm,iroha_core_privacy", True),
     ("execution", "iroha_plonk_recursion", True),
+    ("execution-model", "iroha_data_model", True),
+    ("execution-vm", "ivm", True),
+    ("execution-kagemusha", "iroha_kagemusha_proof", True),
     ("node", "iroha_core", True),
     ("node", "iroha_core,iroha", True),
     ("node", "iroha,iroha_core,irohad", True),
