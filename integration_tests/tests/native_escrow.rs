@@ -79,29 +79,25 @@ fn wait_for_asset_value(
         "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
     ))
 }
-fn wait_for_buyer_escrow(
+fn wait_for_escrow_buyer(
     client: &Client,
     buyer: &AccountId,
     escrow_id: EscrowId,
     context: &str,
-) -> Result<Vec<AssetEscrowRecord>> {
+) -> Result<AssetEscrowRecord> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
-    let mut last_observed = "buyer escrow index was not queried".to_owned();
+    let mut last_observed = "escrow buyer was not queried".to_owned();
     while Instant::now() < deadline {
         match client
             .client()
-            .query(FindAssetEscrowsByBuyer::new(buyer.clone()))
-            .execute_all()
+            .query_single(FindAssetEscrowById::new(escrow_id))
         {
-            Ok(records) => {
-                last_observed = format!(
-                    "{:?}",
-                    records.iter().map(|record| record.id).collect::<Vec<_>>()
-                );
-                if records.iter().any(|record| record.id == escrow_id) {
-                    return Ok(records);
+            Ok(record) => {
+                last_observed = format!("escrow={:?}, buyer={:?}", record.id, record.buyer);
+                if record.id == escrow_id && record.buyer.as_ref() == Some(buyer) {
+                    return Ok(record);
                 }
             }
             Err(err) => {
@@ -111,7 +107,7 @@ fn wait_for_buyer_escrow(
         std::thread::sleep(POLL_INTERVAL);
     }
     Err(eyre!(
-        "timed out waiting for buyer escrow index to include {escrow_id:?} after {context}; last_observed={last_observed}"
+        "timed out waiting for escrow {escrow_id:?} to record buyer {buyer} after {context}; last_observed={last_observed}"
     ))
 }
 #[test]
@@ -214,13 +210,14 @@ fn native_asset_escrow_aitai_flow_on_multi_peer_network() -> Result<()> {
         )?;
         assert_eq!(*buyer_asset.value(), Quantity::from(40_u64));
         assert_eq!(*seller_asset.value(), Quantity::from(60_u64));
-        let buyer_escrows = wait_for_buyer_escrow(
+        let buyer_escrow = wait_for_escrow_buyer(
             &client,
             released.buyer.as_ref().expect("buyer recorded"),
             escrow_id,
-            "release escrow buyer index",
+            "release escrow buyer association",
         )?;
-        assert!(buyer_escrows.iter().any(|record| record.id == escrow_id));
+        assert_eq!(buyer_escrow.id, escrow_id);
+        assert_eq!(buyer_escrow.buyer, Some(buyer));
         Ok(())
     })();
     if sandbox::handle_result(result, context)?.is_none() {
