@@ -1,11 +1,16 @@
 //! Genuine four-validator `NPoS` alias bootstrap and retained-Kura replay.
 //!
+//! Default development coverage and explicit `bpng-release-qualification` use
+//! the same scenario. Only the latter enforces sealed release admission; see
+//! `specs/bpng_native_bootstrap_test_contract.md`.
+//!
 //! This isolated network uses the native SNS policy, signed planner and paid
 //! leases. Ordinary transaction fees are zero from genesis to isolate lease
 //! accounting; this is not production-fee qualification. Paid alias routing
 //! uses the universal registry from genesis, before any private catalog entry.
 //! No unchecked blocks, fabricated certificates, injected WSV or storage reset
 //! may substitute for the original persisted history and Strict daemon replay.
+#[cfg(feature = "bpng-release-qualification")]
 use iroha_fs::{ProcessCommand as Command, ProcessStdio as Stdio};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -87,9 +92,11 @@ use iroha_model_base::chain::ChainId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::json::Json;
 use iroha_sumeragi::types::{Hash32, HeightConfig};
+#[cfg(feature = "bpng-release-qualification")]
+use iroha_test_network::{BinaryKind, resolve_release_prebuilt_binary};
 use iroha_test_network::{
-    BinaryKind, NetworkBuilder, NetworkPeer, genesis_participant_committee_key_instructions,
-    init_instruction_registry, resolve_release_prebuilt_binary,
+    NetworkBuilder, NetworkPeer, genesis_participant_committee_key_instructions,
+    init_instruction_registry, resolve_development_binary,
     unexecuted_genesis_factory_with_post_topology,
 };
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
@@ -116,6 +123,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(200);
 const TRANSACTION_TTL: Duration = Duration::from_secs(600);
 const MAX_RETAINED_HEIGHT: u64 = 128;
 const MAX_EVIDENCE_BYTES: u64 = 128 * 1024 * 1024;
+#[cfg(feature = "bpng-release-qualification")]
 const MAX_RELEASE_IDENTITY_BYTES: u64 = 32 * 1024;
 const MAX_RELEASE_TOOL_OUTPUT_BYTES: usize = 64 * 1024;
 
@@ -128,15 +136,9 @@ fn validator_keypair(index: usize) -> KeyPair {
 }
 
 fn staking_custody_account() -> AccountId {
-    AccountId::new(
-        KeyPair::try_from_seed(
-            format!("{NETWORK_SEED}-staking-custody").into_bytes(),
-            Algorithm::Ed25519,
-        )
-        .expect("derive fixture custody identity")
-        .public_key()
-        .clone(),
-    )
+    // The custom genesis factory signs this original staking policy and registers
+    // its custody account before the fixture's post-topology transactions.
+    defaults::nexus::fees::genesis_policy().fee_sink_account_id
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
@@ -194,7 +196,6 @@ fn custom_genesis_post_topology(
                 .expect("canonical original fee policy"),
         ))
         .into(),
-        Register::account(Account::new(staking_custody_account())).into(),
         Register::domain(Domain::new(
             DomainId::try_new("universal", "universal").expect("XOR domain"),
         ))
@@ -258,7 +259,7 @@ fn custom_genesis_post_topology(
                     AssetId::new(stake_asset_definition_id(), staking_custody_account()),
                     registration.initial_stake.clone(),
                 ),
-                "fixture registration must agree with its explicitly authored staking config"
+                "fixture registration must agree with its original signed staking policy"
             );
         }
     }
@@ -693,6 +694,7 @@ fn transaction(client: &Client, instruction: impl Into<InstructionBox>) -> Signe
     .expect("build integration-test transaction")
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 #[derive(Debug, PartialEq, Eq)]
 struct ReleaseSourceIdentity {
     head_commit: String,
@@ -735,6 +737,7 @@ fn required_canonical_path(name: &str, directory: bool) -> Result<PathBuf> {
     Ok(path)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn bounded_tool_output(mut command: Command, label: &str) -> Result<Vec<u8>> {
     command.stdin(Stdio::null());
     let output = integration_tests::process::output_with_timeout(
@@ -751,6 +754,200 @@ fn bounded_tool_output(mut command: Command, label: &str) -> Result<Vec<u8>> {
     Ok(output.stdout)
 }
 
+#[derive(Clone, Copy, Debug)]
+enum DevelopmentTool {
+    Daemon,
+    Client,
+    Kagami,
+}
+
+impl DevelopmentTool {
+    fn arguments(self) -> &'static [&'static str] {
+        match self {
+            Self::Daemon | Self::Kagami => &["--version"],
+            Self::Client => &["--output-format", "json", "tools", "version"],
+        }
+    }
+}
+
+fn development_source_revision(source: Option<&str>) -> Result<&str> {
+    let source =
+        source.ok_or_else(|| eyre!("BPNG development test needs compiled VERGEN_GIT_SHA"))?;
+    ensure!(
+        matches!(source.len(), 40 | 64)
+            && source
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+        "BPNG development source must be a full lowercase Git revision"
+    );
+    Ok(source)
+}
+
+fn validate_development_tool_identity(
+    tool: DevelopmentTool,
+    output: &[u8],
+    source: &str,
+    version: &str,
+) -> Result<()> {
+    match tool {
+        DevelopmentTool::Client => {
+            let value: norito::json::Value = norito::json::from_slice(output)?;
+            let object = value
+                .as_object()
+                .ok_or_else(|| eyre!("client version must be one JSON object"))?;
+            ensure!(
+                object.keys().map(String::as_str).collect::<BTreeSet<_>>()
+                    == BTreeSet::from(["client_git_sha", "client_version", "server_version"])
+                    && object
+                        .get("client_git_sha")
+                        .and_then(norito::json::Value::as_str)
+                        == Some(source)
+                    && object
+                        .get("client_version")
+                        .and_then(norito::json::Value::as_str)
+                        == Some(version)
+                    && object
+                        .get("server_version")
+                        .is_some_and(norito::json::Value::is_null),
+                "BPNG development client must match the test source/version without a node read"
+            );
+        }
+        DevelopmentTool::Daemon | DevelopmentTool::Kagami => {
+            let name = match tool {
+                DevelopmentTool::Daemon => "iroha3d",
+                DevelopmentTool::Kagami => "kagami",
+                DevelopmentTool::Client => unreachable!("client handled above"),
+            };
+            let output = std::str::from_utf8(output)?;
+            ensure!(
+                output.trim_end_matches(['\r', '\n'])
+                    == format!("{name} {version} (source {source})"),
+                "BPNG development {name} must match the test source/version"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn required_development_prebuilt_binaries() -> Result<()> {
+    let source = development_source_revision(option_env!("VERGEN_GIT_SHA"))?;
+    let directory = tempfile::tempdir()?;
+    for (name, tool) in [
+        ("TEST_NETWORK_BIN_IROHAD", DevelopmentTool::Daemon),
+        ("TEST_NETWORK_BIN_IROHA", DevelopmentTool::Client),
+        ("KAGAMI_BIN", DevelopmentTool::Kagami),
+    ] {
+        let path = required_canonical_path(name, false)?;
+        // Existing developer admission rejects active or partial release anchors.
+        // This explicit entry never converts a failed release check into a diagnostic.
+        let program = resolve_development_binary(&path)?;
+        let mut command = program.command()?;
+        command
+            .args(tool.arguments())
+            .env_clear()
+            .current_dir(directory.path());
+        let output = integration_tests::process::output_with_timeout(
+            command,
+            integration_tests::process::process_timeout(),
+        )
+        .wrap_err_with(|| format!("failed to inspect development {name}"))?;
+        ensure!(
+            output.status.success(),
+            "development {name} version probe failed"
+        );
+        ensure!(
+            output.stdout.len() <= MAX_RELEASE_TOOL_OUTPUT_BYTES
+                && output.stderr.len() <= MAX_RELEASE_TOOL_OUTPUT_BYTES,
+            "development {name} version probe exceeded its fixed output budget"
+        );
+        validate_development_tool_identity(
+            tool,
+            &output.stdout,
+            source,
+            env!("CARGO_PKG_VERSION"),
+        )?;
+    }
+    Ok(())
+}
+
+#[test]
+fn development_source_requires_an_exact_revision() {
+    for source in [
+        None,
+        Some(""),
+        Some("local-fast-build"),
+        Some("abc123"),
+        Some(&"A".repeat(40)),
+    ] {
+        assert!(development_source_revision(source).is_err());
+    }
+    for source in ["a".repeat(40), "b".repeat(64)] {
+        assert_eq!(development_source_revision(Some(&source)).unwrap(), source);
+    }
+}
+
+#[test]
+fn development_tool_identity_refuses_stale_or_unbound_binaries() {
+    let source = "a".repeat(40);
+    let version = "2.0.0-test";
+    for (tool, name) in [
+        (DevelopmentTool::Daemon, "iroha3d"),
+        (DevelopmentTool::Kagami, "kagami"),
+    ] {
+        assert_eq!(tool.arguments(), ["--version"]);
+        let matching = format!("{name} {version} (source {source})\n");
+        validate_development_tool_identity(tool, matching.as_bytes(), &source, version).unwrap();
+        for wrong in [
+            format!("{name} {version}\n"),
+            format!("{name} {version} (source {})\n", "b".repeat(40)),
+            format!("{name} 0.0.0 (source {source})\n"),
+            format!("other {version} (source {source})\n"),
+            format!("{matching}extra\n"),
+        ] {
+            assert!(
+                validate_development_tool_identity(tool, wrong.as_bytes(), &source, version)
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[test]
+fn development_client_identity_requires_an_offline_exact_response() {
+    let source = "a".repeat(40);
+    let version = "2.0.0-test";
+    assert_eq!(
+        DevelopmentTool::Client.arguments(),
+        ["--output-format", "json", "tools", "version"]
+    );
+    let response = norito::json!({
+        "client_git_sha": (source.clone()), "client_version": version, "server_version": null,
+    });
+    let check = |value: &norito::json::Value| {
+        validate_development_tool_identity(
+            DevelopmentTool::Client,
+            &norito::json::to_vec(value).unwrap(),
+            &source,
+            version,
+        )
+    };
+    check(&response).unwrap();
+    for (key, value) in [
+        ("client_git_sha", norito::json::Value::from("b".repeat(40))),
+        ("client_version", norito::json::Value::from("0.0.0")),
+        ("server_version", norito::json::Value::from(version)),
+        ("extra", norito::json::Value::Null),
+    ] {
+        let mut wrong = response.clone();
+        wrong.as_object_mut().unwrap().insert(key.to_owned(), value);
+        assert!(check(&wrong).is_err());
+    }
+    let mut missing = response;
+    missing.as_object_mut().unwrap().remove("client_git_sha");
+    assert!(check(&missing).is_err());
+}
+
+#[cfg(feature = "bpng-release-qualification")]
 fn parse_release_source_identity(bytes: &[u8]) -> Result<ReleaseSourceIdentity> {
     ensure!(
         !bytes.is_empty() && u64::try_from(bytes.len())? <= MAX_RELEASE_IDENTITY_BYTES,
@@ -814,6 +1011,7 @@ fn parse_release_source_identity(bytes: &[u8]) -> Result<ReleaseSourceIdentity> 
     Ok(identity)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn read_release_identity(path: &Path) -> Result<Vec<u8>> {
     let before = fs::symlink_metadata(path)?;
     ensure!(
@@ -842,6 +1040,7 @@ fn read_release_identity(path: &Path) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn verify_clean_release_source(repo_root: &Path) -> Result<ReleaseSourceIdentity> {
     ensure!(
         required_exact_env("IROHA_RELEASE_SEALED_WORKTREE")? == "1",
@@ -910,6 +1109,7 @@ fn verify_clean_release_source(repo_root: &Path) -> Result<ReleaseSourceIdentity
     Ok(observed)
 }
 
+#[cfg(feature = "bpng-release-qualification")]
 fn required_prebuilt_binaries() -> Result<()> {
     ensure!(
         std::env::var("IROHA_TEST_SKIP_BUILD").as_deref() == Ok("1"),
@@ -2096,8 +2296,26 @@ async fn stop_all(peers: &[NetworkPeer]) -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn bpng_development_bootstrap_survives_four_peer_retained_kura_catalog_expansion()
+-> Result<()> {
+    required_development_prebuilt_binaries()?;
+    run_bpng_retained_kura_scenario(stringify!(
+        bpng_development_bootstrap_survives_four_peer_retained_kura_catalog_expansion
+    ))
+    .await
+}
+
+#[cfg(feature = "bpng-release-qualification")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion() -> Result<()> {
     required_prebuilt_binaries()?;
+    run_bpng_retained_kura_scenario(stringify!(
+        bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion
+    ))
+    .await
+}
+
+async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> {
     init_instruction_registry();
     let npos = SumeragiNposParameters {
         xor_asset_definition_id: stake_asset_definition_id(),
@@ -2136,18 +2354,6 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
             // The original signed genesis fixes fees across restarts.
             // Keep one fluent borrow of the configuration writer.
             layer
-                .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_definition_id().to_string(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    staking_custody_account().to_string(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    staking_custody_account().to_string(),
-                )
                 .write(["snapshot", "mode"], "disabled")
                 .write(["kura", "init_mode"], "strict")
                 .write(
@@ -2157,17 +2363,12 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
         });
     let network = timeout(
         NETWORK_TIMEOUT,
-        sandbox::start_network_async_or_skip(
-            builder,
-            stringify!(
-                bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansion
-            ),
-        ),
+        sandbox::start_network_async_or_skip(builder, test_name),
     )
     .await??
     .ok_or_else(|| {
         eyre!(
-            "this retained-Kura qualification requires a real four-peer network; skipping is forbidden"
+            "this retained-Kura scenario requires a real four-peer network; skipping is forbidden"
         )
     })?;
     ensure!(
@@ -2929,7 +3130,7 @@ async fn bpng_native_bootstrap_survives_four_peer_retained_kura_catalog_expansio
 }
 
 #[test]
-fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
+fn genesis_staking_plans_bind_funded_validators_to_original_signed_custody() {
     iroha_test_network::init_instruction_registry();
     let entries = (0..4)
         .map(|index| {
@@ -2950,6 +3151,41 @@ fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
         .map(|entry| entry.peer.clone())
         .collect::<Vec<_>>();
     let transactions = custom_genesis_post_topology(&topology, &entries);
+    let genesis = unexecuted_genesis_factory_with_post_topology(
+        Vec::new(),
+        transactions.clone(),
+        topology.iter().cloned().collect(),
+        entries,
+    );
+    let policies = genesis
+        .0
+        .external_transactions()
+        .filter_map(|transaction| match transaction.instructions() {
+            Executable::Instructions(instructions) => Some(instructions.iter()),
+            _ => None,
+        })
+        .flatten()
+        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
+        .filter_map(|set| match set.inner() {
+            Parameter::Custom(custom)
+                if custom.id()
+                    == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
+            {
+                Some(
+                    iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(
+                        custom,
+                    )
+                    .expect("original signed staking policy"),
+                )
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(policies.len(), 1, "one original signed staking policy");
+    let policy = &policies[0];
+    assert_eq!(policy.stake_asset_id, stake_asset_definition_id());
+    assert_eq!(policy.stake_escrow_account_id, staking_custody_account());
+    assert_eq!(policy.slash_sink_account_id, staking_custody_account());
     let committee_registrations = transactions
         .iter()
         .flatten()
@@ -2986,8 +3222,8 @@ fn genesis_staking_plans_bind_funded_validators_to_configured_custody() {
         assert_eq!(
             registration.monetary_plan.destination_asset,
             iroha_data_model::asset::AssetId::new(
-                stake_asset_definition_id(),
-                staking_custody_account()
+                policy.stake_asset_id.clone(),
+                policy.stake_escrow_account_id.clone()
             )
         );
         assert_eq!(
