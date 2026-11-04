@@ -1,8 +1,11 @@
 //! Torii iterable queries smoke test: ensure genesis assets are discoverable
-//! and batching works end-to-end via the HTTP `/query` path.
+//! and batching works through the canonical account collection endpoints.
 use eyre::Result;
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::{
+    collections::{Collection, ListQuery},
+    data_model::prelude::*,
+};
 use iroha_model_base::domain::DomainId;
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // not used in this smoke test
 use iroha_test_network::NetworkBuilder;
@@ -20,7 +23,12 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     };
     let client = network.client();
     // Execute a simple iterable query; default fetch size is fine for smoke test.
-    let assets = client.client().query(FindAssets::new()).execute_all()?;
+    let assets = client
+        .list(
+            Collection::AccountAssets(ALICE_ID.clone()),
+            ListQuery::new(),
+        )
+        .collect::<iroha::Result<Vec<_>>>()?;
     assert!(
         !assets.is_empty(),
         "expected at least one asset from genesis"
@@ -35,9 +43,15 @@ fn find_genesis_assets_via_torii_iterable() -> Result<()> {
     );
     let rose = assets
         .into_iter()
-        .find(|a| a.id() == &asset_id)
+        .find(|a| {
+            a.get("asset").and_then(norito::json::Value::as_str)
+                == Some(asset_id.definition().to_string().as_str())
+        })
         .expect("genesis rose asset not found");
-    assert_eq!(*rose.value(), Quantity::from(13_u32));
+    assert_eq!(
+        rose.get("quantity").and_then(norito::json::Value::as_str),
+        Some("13")
+    );
     let http = HttpClient::new();
     let peer = match network.peers().first() {
         Some(p) => p,

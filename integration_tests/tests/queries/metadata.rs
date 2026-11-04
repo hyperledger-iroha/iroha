@@ -37,11 +37,7 @@ fn find_accounts_with_asset() {
             )
             .unwrap();
         // Ensure Bob account exists (defaults genesis may omit it).
-        let existing_accounts = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
-            .expect("fetch accounts");
+        let existing_accounts = super::collections::accounts(&test_client).expect("fetch accounts");
         let bob_missing = existing_accounts.iter().all(|acc| acc.id() != &*BOB_ID);
         if bob_missing {
             test_client
@@ -94,10 +90,7 @@ fn find_accounts_with_asset() {
         // ALICE    "value"             -
         // BOB      {"funny": "value"}  "value"
         // check that bulk retrieval works as expected
-        let key_values = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
+        let key_values = super::collections::accounts(&test_client)
             .unwrap()
             .into_iter()
             .filter(|account| account.id() == &*ALICE_ID || account.id() == &*BOB_ID)
@@ -124,10 +117,7 @@ fn find_accounts_with_asset() {
         );
         assert_eq!(key_values.get(&*BOB_ID), Some(&expected_bob));
         // check that missing metadata key produces an error
-        let alice_no_key_err = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
+        let alice_no_key_err = super::collections::accounts(&test_client)
             .unwrap()
             .into_iter()
             .find(|account| account.id() == &*ALICE_ID)
@@ -146,10 +136,7 @@ fn find_accounts_with_asset() {
         };
         assert_eq!(returned_key, another_key);
         // check single key retrieval
-        let another_key_value = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
+        let another_key_value = super::collections::accounts(&test_client)
             .unwrap()
             .into_iter()
             .find(|account| account.id() == &*BOB_ID)
@@ -157,10 +144,7 @@ fn find_accounts_with_asset() {
             .unwrap();
         assert_eq!(another_key_value, "value".into());
         // check predicates on non-existing metadata (they should just evaluate to false)
-        let accounts = test_client
-            .client()
-            .query(FindAccounts)
-            .execute_all()
+        let accounts = super::collections::accounts(&test_client)
             .unwrap()
             .into_iter()
             .filter(|account| {

@@ -2,13 +2,14 @@
 //! multiple item types (blocks, transactions).
 use eyre::{Result, WrapErr};
 use integration_tests::sandbox;
-use iroha::data_model::prelude::*;
+use iroha::{
+    collections::{Collection, ListQuery},
+    data_model::prelude::*,
+};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use std::{thread::sleep, time::Duration};
 // use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test
-use iroha_data_model::query::dsl::SelectorTuple;
-use iroha_primitives::nonzero;
 use iroha_test_network::NetworkBuilder;
 use sandbox::start_network_blocking_or_skip as start_network_or_skip;
 fn is_permission_grant_repetition(
@@ -40,12 +41,6 @@ fn is_permission_grant_repetition(
 }
 #[test]
 fn blocks_iterable_start_and_continue() -> Result<()> {
-    use iroha::data_model::query::{
-        QueryBox, QueryOutputBatchBox, QueryWithFilter, QueryWithParams,
-        builder::QueryExecutor as _,
-        dsl::CompoundPredicate,
-        parameters::{FetchSize, QueryParams, Sorting},
-    };
     let Some((network, rt)) = start_network_or_skip(
         NetworkBuilder::new().with_config_layer(|layer| {
             layer.write(["pipeline", "query_default_cursor_mode"], "stored");
@@ -69,7 +64,7 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
                     __asset_definition_id.clone(),
                     name.to_owned(),
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    None,
+                    Some(DomainId::try_new("wonderland", "universal")?),
                 )
             }),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -81,44 +76,27 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         headers.len() >= 2,
         "expected at least two block headers before testing cursor continuation"
     );
-    // Build an iterable query over block headers with fetch_size = 1
-    let with_filter: QueryWithFilter<BlockHeader> =
-        QueryWithFilter::new_with_query((), CompoundPredicate::PASS, SelectorTuple::default());
-    let boxed: QueryBox<QueryOutputBatchBox> = with_filter.into();
-    let qwp = QueryWithParams::new(
-        &boxed,
-        QueryParams::new(
-            Pagination::default(),
-            Sorting::default(),
-            FetchSize::new(Some(nonzero!(1_u64))),
-        ),
-    )
-    .expect("block-header query type has a canonical mapping");
-    let (first_batch, remaining, cursor) = client.client().start_query(qwp)?;
-    let v = match first_batch.into_iter().next().expect("slice") {
-        QueryOutputBatchBox::BlockHeader(v) => v,
-        other => panic!("unexpected batch variant: {other:?}"),
-    };
-    assert_eq!(v.len(), 1, "expected single header in first batch");
-    // Stored cursors may not expose an exact remaining count, but the first
-    // page should still advertise continuation for genesis + the new block.
-    if let Some(remaining) = remaining {
-        assert!(remaining >= 1);
-    }
-    assert!(cursor.is_some(), "expected continuation cursor");
-    if let Some(cur) = cursor {
-        let (next_batch, _rem2, _next) = <iroha::client::Client as iroha::data_model::query::builder::QueryExecutor>::continue_query(cur)?;
-        let v2 = match next_batch.into_iter().next().expect("slice") {
-            QueryOutputBatchBox::BlockHeader(v) => v,
-            other => panic!("unexpected batch variant: {other:?}"),
-        };
-        assert!(!v2.is_empty(), "expected another header in second batch");
-    }
+    let query = ListQuery::new().limit(1);
+    let first = client.list_page(&Collection::ExplorerBlocks, &query)?;
+    assert_eq!(first.items.len(), 1, "expected one block in the first page");
+    let next = query
+        .next_page(&first)
+        .expect("expected continuation cursor");
+    let second = client.list_page(&Collection::ExplorerBlocks, &next)?;
+    assert!(
+        !second.items.is_empty(),
+        "expected another block in the second page"
+    );
+    let first_height = first.items[0]["height"].as_u64().expect("block height");
+    let second_height = second.items[0]["height"].as_u64().expect("block height");
+    assert!(
+        first_height > second_height,
+        "cursor must advance to an older block"
+    );
     Ok(())
 }
 #[test]
 fn transactions_iterable_non_empty() -> Result<()> {
-    use iroha::data_model::query::transaction::prelude::FindTransactions;
     use std::{
         thread,
         time::{Duration, Instant},
@@ -136,9 +114,8 @@ fn transactions_iterable_non_empty() -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let snapshot = client
-            .client()
-            .query(FindTransactions)
-            .execute_all()
+            .list(Collection::Transactions, ListQuery::new())
+            .collect::<iroha::Result<Vec<_>>>()
             .expect("query transactions");
         if !snapshot.is_empty() {
             break;
@@ -173,7 +150,7 @@ fn find_block_headers_descending() -> Result<()> {
                 __asset_definition_id.clone(),
                 "blkcheck2".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         }),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -188,7 +165,7 @@ fn find_block_headers_descending() -> Result<()> {
                 __asset_definition_id.clone(),
                 "blkcheck3".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         }),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -199,17 +176,20 @@ fn find_block_headers_descending() -> Result<()> {
     assert!(headers.windows(2).all(|w| {
         // Compare block heights explicitly; derived ordering for `BlockHeader`
         // includes additional fields that do not mirror ledger height.
-        let left_height = w[0].height().get();
-        let right_height = w[1].height().get();
+        let left_height = w[0]["height"].as_u64().expect("block height");
+        let right_height = w[1]["height"].as_u64().expect("block height");
         left_height >= right_height
     }));
     Ok(())
 }
-fn retry_block_headers(client: &iroha::blocking::Client) -> Result<Vec<BlockHeader>> {
+fn retry_block_headers(client: &iroha::blocking::Client) -> Result<Vec<norito::json::Value>> {
     const RETRIES: usize = 5;
     const DELAY: Duration = Duration::from_millis(200);
     for attempt in 0..RETRIES {
-        match client.client().query(FindBlockHeaders).execute_all() {
+        match client
+            .list(Collection::ExplorerBlocks, ListQuery::new())
+            .collect::<iroha::Result<Vec<_>>>()
+        {
             Ok(headers) => return Ok(headers),
             Err(_err) if attempt + 1 < RETRIES => sleep(DELAY),
             Err(err) => return Err(err.into()),
@@ -237,7 +217,7 @@ fn find_triggers_includes_registered() -> Result<()> {
         trig_id.clone(),
         Action::new(
             vec![InstructionBox::from(instr)],
-            Repeats::Exactly(1),
+            Repeats::Indefinitely,
             ALICE_ID.clone(),
             TimeEventFilter::new(ExecutionTime::PreCommit),
         )
@@ -471,15 +451,13 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect_err("execute should be rejected for depleted trigger");
-    // Inspect deepest cause for FindError::Trigger
-    let downcasted = err
-        .chain()
-        .last()
-        .expect("At least two error causes expected")
-        .downcast_ref::<iroha::data_model::query::error::FindError>();
+    let expected = format!("permission references unknown trigger `{trig_id}`");
     assert!(
-        matches!(downcasted, Some(iroha::data_model::query::error::FindError::Trigger(id)) if *id == trig_id),
-        "Unexpected error: {err:?}"
+        err.chain().any(|cause| matches!(
+            cause.downcast_ref::<iroha::data_model::ValidationFail>(),
+            Some(iroha::data_model::ValidationFail::NotPermitted(reason)) if reason == &expected
+        )),
+        "unexpected rejection for the depleted trigger: {err:?}"
     );
     // And confirm it's not among active IDs
     let snapshot = client

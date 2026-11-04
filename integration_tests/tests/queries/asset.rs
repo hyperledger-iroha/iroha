@@ -104,7 +104,7 @@ fn test_total_quantity(
             definition_name,
             asset_spec,
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal")?),
         )
     };
     test_client.submit(
@@ -134,11 +134,7 @@ fn test_total_quantity(
         const MAX_ATTEMPTS: usize = 5;
         let mut last_err = None;
         for attempt in 1..=MAX_ATTEMPTS {
-            match test_client
-                .client()
-                .query(FindAssetDefinitions::new())
-                .execute_all()
-            {
+            match super::collections::definitions(test_client) {
                 Ok(defs) => {
                     if let Some(def) = defs
                         .into_iter()
@@ -149,7 +145,7 @@ fn test_total_quantity(
                     last_err = Some(SingleQueryError::ExpectedOneGotNone);
                 }
                 Err(err) => {
-                    last_err = Some(SingleQueryError::QueryError(err));
+                    last_err = Some(SingleQueryError::QueryError(QueryError::Other(err)));
                 }
             }
             if attempt < MAX_ATTEMPTS {
@@ -181,26 +177,22 @@ fn test_total_quantity(
     // Assert that total asset quantity is equal to: `n_accounts * (initial_value + to_mint - to_burn)`
     let total_asset_quantity = observed_after_burn;
     let log_balances = |stage: &str, definition_total: &Quantity| -> Result<Quantity> {
-        let assets = test_client
-            .client()
-            .query(FindAssets::new())
-            .execute_all()
-            .map_err(|e| eyre!("failed to fetch assets: {e}"))?;
+        let assets = super::collections::holder_balances(test_client, definition_id)?;
         let mut manual_total = Quantity::zero();
         let mut missing_accounts = Vec::new();
         println!(
             "[{stage}] balances for asset definition {definition_id} (definition total {definition_total})"
         );
-        for (account_id, asset_id) in accounts.iter().zip(&asset_ids) {
+        for account_id in accounts {
             let balance = assets
                 .iter()
-                .find(|asset| asset.id() == asset_id)
+                .find(|(holder, _)| holder == account_id)
                 .map_or_else(
                     || {
                         missing_accounts.push(account_id.clone());
                         Quantity::zero()
                     },
-                    |asset| asset.value().clone(),
+                    |(_, quantity)| quantity.clone(),
                 );
             println!("    account {account_id}: balance {balance}");
             manual_total = manual_total
@@ -260,16 +252,21 @@ fn test_total_quantity(
             last_value
         ));
     }
-    let remaining_assets = test_client
-        .client()
-        .query(FindAssets::new())
-        .execute_all()?;
-    assert!(
-        remaining_assets
-            .iter()
-            .all(|asset| asset.id().definition() != definition_id),
-        "expected assets for {definition_id} to be removed after unregister"
-    );
+    for account in accounts {
+        let remaining_assets = test_client
+            .list(
+                iroha::collections::Collection::AccountAssets(account.clone()),
+                iroha::collections::ListQuery::new(),
+            )
+            .collect::<iroha::Result<Vec<_>>>()?;
+        assert!(
+            remaining_assets.iter().all(|asset| {
+                asset.get("asset").and_then(norito::json::Value::as_str)
+                    != Some(definition_id.to_string().as_str())
+            }),
+            "expected assets for {definition_id} to be removed after unregister"
+        );
+    }
     Ok(())
 }
 fn wait_for_quantity<F>(get_quantity: &F, expected: &Quantity, context: &str) -> Result<Quantity>

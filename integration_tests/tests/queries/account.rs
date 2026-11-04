@@ -27,7 +27,7 @@ fn find_accounts_with_asset() -> Result<()> {
                 __asset_definition_id.clone(),
                 "test_coin".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some(DomainId::try_new("wonderland", "universal")?),
             )
         };
         test_client.submit(
@@ -35,10 +35,7 @@ fn find_accounts_with_asset() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         // Checking results before all
-        let received_asset_definition = test_client
-            .client()
-            .query(FindAssetDefinitions::new())
-            .execute_all()?
+        let received_asset_definition = super::collections::definitions(&test_client)?
             .into_iter()
             .find(|asset_definition| asset_definition.id() == &definition_id)
             .expect("asset definition should exist");
@@ -72,22 +69,16 @@ fn find_accounts_with_asset() -> Result<()> {
         )?;
         let accounts = HashSet::from(accounts);
         // Checking results
-        let received_asset_definition = test_client
-            .client()
-            .query(FindAssetDefinitions::new())
-            .execute_all()?
+        let received_asset_definition = super::collections::definitions(&test_client)?
             .into_iter()
             .find(|asset_definition| asset_definition.id() == &definition_id)
             .expect("asset definition should exist");
         assert_eq!(received_asset_definition.id(), asset_definition.id());
         assert_eq!(received_asset_definition.spec(), NumericSpec::default());
-        let found_accounts = test_client
-            .client()
-            .query(FindAccountsWithAsset::new(definition_id))
-            .execute_all()?;
+        let found_accounts = super::collections::holder_balances(&test_client, &definition_id)?;
         let found_ids = found_accounts
             .into_iter()
-            .map(|account| account.id().clone())
+            .map(|(account_id, _)| account_id)
             .collect::<HashSet<_>>();
         assert_eq!(found_ids, accounts);
         Ok(())

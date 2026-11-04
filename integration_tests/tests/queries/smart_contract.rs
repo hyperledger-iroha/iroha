@@ -39,21 +39,27 @@ fn smart_contract_query_scenarios() -> Result<()> {
         let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
         let transaction = {
             let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     bytecode,
                     fee_payment,
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
+                ))?;
+            let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                payload: &payload,
+            })?;
+            assert!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent)
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)
         }
         .expect("build integration-test transaction");
         client.submit_transaction_and_wait(&transaction)?;
         let cursor_key: Name = "cursor".parse().unwrap();
-        let asset_cursor = client
-            .client()
-            .query(FindAccounts)
-            .execute_all()? // lightweight DSL: filter/select on client
+        let asset_cursor = super::collections::accounts(&client)? // lightweight DSL: filter/select on client
             .into_iter()
             .find(|account| account.id() == client.client().account())
             .and_then(|account| account.metadata().get(&cursor_key).cloned())
@@ -76,13 +82,22 @@ fn smart_contract_query_scenarios() -> Result<()> {
         let fee_payment = fee_payment_with_gas_limit(&bytecode)?;
         let transaction = {
             let account = client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     bytecode,
                     fee_payment,
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
+                ))?;
+            let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                payload: &payload,
+            })?;
+            assert!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent)
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)
         }
         .expect("build integration-test transaction");
         client
