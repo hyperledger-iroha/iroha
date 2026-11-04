@@ -15,6 +15,7 @@ use iroha_data_model::{
     query::error::{FindError, QueryExecutionFail},
 };
 use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
     asset::CanTransferAsset, smart_contract::CanManageSmartContractCode,
 };
 use iroha_model_base::metadata::Metadata;
@@ -31,6 +32,17 @@ use std::{
 const TX_TIMEOUT: Duration = Duration::from_secs(60);
 const CONTRACT_GAS_LIMIT: u64 = 100_000;
 const SAMPLE_ASSET_DEFINITION_LITERAL: &str = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
+const CONTRACT_ALIAS_LITERAL: &str = "threshold_escrow@universal";
+fn threshold_escrow_alias_permission() -> CanManageAccountAlias {
+    CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Alias(
+            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                CONTRACT_ALIAS_LITERAL.parse().expect("threshold escrow alias"),
+                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+            ),
+        ),
+    }
+}
 fn sample_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SAMPLE_ASSET_DEFINITION_LITERAL)
         .expect("sample asset definition literal must parse")
@@ -91,12 +103,7 @@ async fn deploy_threshold_escrow(
     client: &Client,
 ) -> Result<iroha_data_model::smart_contract::ContractAddress> {
     let artifact = load_sample_ivm("threshold_escrow");
-    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
-        "threshold_escrow",
-        None,
-        "universal",
-    )
-    .expect("threshold escrow alias");
+    let contract_alias = CONTRACT_ALIAS_LITERAL.parse().expect("threshold escrow alias");
     let (contract_address, _, _, _) = read_on_dedicated_thread({
         let client = client.clone();
         move || {
@@ -569,6 +576,10 @@ async fn threshold_escrow_releases_when_fully_funded_impl() -> Result<()> {
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            threshold_escrow_alias_permission(),
+            ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -864,6 +875,10 @@ async fn threshold_escrow_refunds_when_unresolved_impl() -> Result<()> {
         .with_genesis_instruction(Grant::account_permission(
             register_permission,
             ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            threshold_escrow_alias_permission(),
+            ALICE_ID.clone(),
         ));
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -997,6 +1012,19 @@ async fn threshold_escrow_refunds_when_unresolved_impl() -> Result<()> {
     )
     .await?;
     Ok(())
+}
+
+#[test]
+fn threshold_escrow_alias_permission_is_exact() {
+    let AccountAliasPermissionScope::Alias(resolved) = threshold_escrow_alias_permission().scope
+    else {
+        panic!("threshold deployment permission must not cover a whole domain or data space");
+    };
+    assert_eq!(resolved.canonical_text(), CONTRACT_ALIAS_LITERAL);
+    assert_eq!(
+        resolved.dataspace_id,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL
+    );
 }
 
 #[test]
