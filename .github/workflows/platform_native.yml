@@ -82,7 +82,9 @@ jobs:
   native:
     name: Native ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    # Cold native builds exercise both default and feature-off DIF before the
+    # configuration, journal, source-delivery and supervision checks below.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -215,7 +217,7 @@ jobs:
           set -euo pipefail
           cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
             2>&1 | tee target/platform-native/dif-default.log
-          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib full_native_ -- --nocapture --test-threads=1 \
+          cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib privacy_engines::zk_x509::stark::main_aggregate::main_transform::full_dispatch_tests::full_native_ -- --nocapture --test-threads=1 \
             2>&1 | tee target/platform-native/dif-feature-off.log
           set +e
           cargo test --locked --config profile.test.package.iroha_core_privacy.opt-level=3 -p iroha_core_privacy --no-default-features --features zk-stark --lib required_avx2_dif -- --ignored --nocapture --test-threads=1 \
@@ -469,6 +471,16 @@ jobs:
           set -euo pipefail
           cargo check --locked --tests -p iroha_test_network -p integration_tests -p iroha_cli --features integration_tests/atomic-private-settlement-smoke \
             2>&1 | tee target/platform-consumers/check.log
+      - name: Exercise packed archive publication and retained readers on Windows
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_core --lib query::native_context_archive::packed::tests:: -- --nocapture \
+            2>&1 | tee target/platform-consumers/packed-archive.log
+      - name: Exercise native evidence publication barriers on Windows
+        run: |
+          set -euo pipefail
+          cargo test --locked -p iroha_core --lib native_evidence_publication_syncs_and_never_replaces_existing_bytes -- --nocapture \
+            2>&1 | tee target/platform-consumers/evidence-publication.log
       - name: Retain native consumer compilation results
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
