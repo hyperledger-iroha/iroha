@@ -27,6 +27,13 @@ jobs:
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Match the unprivileged hosted runner identity
+        id: builder_identity
+        run: |
+          set -euo pipefail
+          test "$(id -u)" -gt 0
+          test "$(id -g)" -gt 0
+          printf 'uid=%s\ngid=%s\n' "$(id -u)" "$(id -g)" >> "$GITHUB_OUTPUT"
       - name: Build and push iroha2-ci image
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc
@@ -39,6 +46,8 @@ jobs:
           file: Dockerfile.build
           build-args: |
             "IROHA_CI_BUILDER_IMAGE=${{ env.IROHA_CI_BUILDER_IMAGE }}"
+            "BUILDER_UID=${{ steps.builder_identity.outputs.uid }}"
+            "BUILDER_GID=${{ steps.builder_identity.outputs.gid }}"
           # This context specification is required
           context: .
       - name: Record the candidate image digest for Linux qualification
@@ -97,6 +106,7 @@ jobs:
       - name: Exercise installed tools and the pinned Python environment
         run: |
           set -euo pipefail
+          test "$(id -u)" -gt 0
           rustc --version
           cargo --version
           cargo clippy --version

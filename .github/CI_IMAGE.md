@@ -27,6 +27,12 @@ Linux runtime qualification. The historical May 2025 image is not represented
 as a current rebuilt image, and this change does not publish or select a new
 image on the owner's behalf.
 
+The image workflow passes the hosted runner's actual non-root UID/GID into the
+existing builder arguments. This keeps GitHub's mounted workspace and command
+files writable without running the build or custody tests as root. A self-hosted
+consumer must use matching mount ownership, as described in
+[`specs/docker_build.md`](../specs/docker_build.md).
+
 The image workflow tests each validated candidate digest before promotion. A
 separate Grype job rejects high or critical known vulnerabilities and retains its
 scan. A native Linux container job uses that same digest to exercise installed
