@@ -5762,3 +5762,89 @@ def test_reintroduced_daemon_tle_signer_item_fails_the_full_checker(
     monkeypatch.setattr(guard, "read", lambda path: changed if path == relative else original_read(path))
     with pytest.raises(RuntimeError, match=re.escape(relative)):
         guard.main()
+
+
+@pytest.mark.parametrize("original,replacement", (
+    (
+        """        if let Err(error) = state_access.check_runtime_payload(checked.as_accepted()) {
+            return Err(Self::refused(error, checked));
+        }
+""", "",
+    ),
+    (
+        """allows_unregistered_authority_with_selection(
+                    transaction.instructions(),
+                    authority,
+                    state_access.runtime_selection(),
+                )""",
+        "allows_unregistered_authority(transaction.instructions(), authority)",
+    ),
+    (
+        """instructions_allow_multisig_envelope_authority_with_selection(
+                        instructions,
+                        state_access.runtime_selection(),
+                    )""",
+        "instructions_allow_multisig_envelope_authority(instructions)",
+    ),
+    (
+        """Self::enforce_manifest_quorum(
+                    &alias,
+                    authority_rules,
+                    &checked,
+                    state_access.runtime_selection(),
+                )""",
+        "Self::enforce_manifest_quorum(&alias, authority_rules, &checked)",
+    ),
+))
+def test_queue_signed_proposal_gas_pins_merged_runtime_admission(
+    original: str, replacement: str,
+) -> None:
+    """Each merged payload/selection admission check remains mandatory before gas quoting."""
+    sources = [guard.read(path) for path in QUEUE_GAS_PATHS]
+    guard.require_queue_signed_proposal_gas(*sources)
+    item = guard.rust_item(sources[1], GAS_ADMISSION, QUEUE_GAS_PATHS[1])
+    assert item.count(original) == 1
+    sources[1] = sources[1].replace(item, item.replace(original, replacement, 1), 1)
+    with pytest.raises(RuntimeError, match="signed proposal gas admission prefix changed"):
+        guard.require_queue_signed_proposal_gas(*sources)
+
+
+@pytest.mark.parametrize("expression", (
+    "proposal.instructions.iter()", "instructions.iter()", "nested.iter()",
+    "proved.overlay.iter()", "std::slice::from_ref(instruction)",
+))
+def test_native_fee_boundary_requires_original_selection_in_every_recursive_call(expression: str) -> None:
+    """All five deferred instruction forms retain their original committed selection."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    path = FEE_BOUNDARY_PATHS[1]
+    declaration = "fn reject_opaque_committee_operations_with<'a, F>("
+    body = guard.rust_item(sources[path], declaration, path)
+    pattern = (r"reject_opaque_committee_operations_with\(\s*" + re.escape(expression)
+               + r",\s*visited,\s*depth \+ 1,\s*resolve,\s*selection,\s*\)\?;")
+    matches = list(re.finditer(pattern, body))
+    assert len(matches) == 1
+    original = matches[0].group(0)
+    mutated = original.replace("selection,", "foreign_selection,")
+    sources[path] = sources[path].replace(body, body.replace(original, mutated, 1), 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("declaration,original", (
+    ("pub fn reject_opaque_instruction_authority<'a>(", "state_transaction.world.runtime_selection.get(),"),
+    ("fn reject_opaque_committee_operations_with<'a, F>(",
+     "crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)"),
+))
+def test_native_fee_boundary_requires_committed_selection_at_entry_and_decode(
+    declaration: str, original: str,
+) -> None:
+    """The recursive owner receives State selection and uses it during multisig admission."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    path = FEE_BOUNDARY_PATHS[1]
+    body = guard.rust_item(sources[path], declaration, path)
+    assert body.count(original) == 1
+    sources[path] = sources[path].replace(body, body.replace(original, "foreign_selection,", 1), 1)
+    with pytest.raises(RuntimeError, match=re.escape(path)):
+        _check_fee_boundary(sources)

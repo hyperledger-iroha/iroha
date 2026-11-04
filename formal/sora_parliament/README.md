@@ -220,6 +220,12 @@ python3 -m pytest -q scripts/tests/check_sora_parliament_source_contract_test.py
   scripts/tests/check_sora_parliament_broker_source_contract_test.py
 ```
 
+The signed-proposal gas prefix also binds committed runtime-payload admission and
+selection-bound authority, multisig-envelope and manifest-quorum checks. The
+deferred-authority checker requires the same committed runtime selection at
+entry, multisig decoding and each recursive instruction traversal. Mutation
+tests reject removed or substituted selection inputs.
+
 The source contract is deliberately structural. It detects accidental removal
 of the code-side guards represented by the model and separately pins the
 authority-bound registration/dropout and reducer-derived registration/survivor

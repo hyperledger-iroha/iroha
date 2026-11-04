@@ -4399,6 +4399,7 @@ def require_signed_deferred_authority_and_native_fees(
         "Result<(), Attempt<ValidationFail>>",
         "reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve|",
         "live_proposal_instructions_for_approval(state_transaction, approve)",
+        "state_transaction.world.runtime_selection.get(),",
         ".map_err(|error| {error.map_rejection(|error| {ValidationFail::NotPermitted(",
     ))
     refusal = item(fee, "fn transaction_attempt_rejection(", fee_path)
@@ -4426,8 +4427,9 @@ def require_signed_deferred_authority_and_native_fees(
     require(authority_path, recursive, (
         "if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {return Err(OpaqueDeferredAuthorityError::ProposalDepthExceeded.into());}",
         "reject_opaque_committee_operation(instruction, index)?;",
+        "crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)",
         "MultisigInstructionBox::Propose(proposal)",
-        "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proposal.instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "MultisigInstructionBox::Approve(approval)",
         "Result<(), Attempt<OpaqueDeferredAuthorityError>>",
         "multisig_instruction_decode_attempt(error, |_| ())",
@@ -4435,15 +4437,15 @@ def require_signed_deferred_authority_and_native_fees(
         "Attempt::Rejected(()) => None",
         "let Some((authority, instructions)) = resolve(&approval).map_err(|error| {"
         "error.map_rejection(|error| {OpaqueDeferredAuthorityError::ProposalReadFailed(error.to_string())})})?else",
-        "reject_opaque_committee_operations_with(instructions.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(instructions.iter(), visited, depth + 1, resolve, selection,)?;",
         "return Err(OpaqueDeferredAuthorityError::UnresolvedMultisigApproval",
         "if visited.insert(identity)",
         "Executable::Instructions(nested)",
-        "reject_opaque_committee_operations_with(nested.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(nested.iter(), visited, depth + 1, resolve, selection,)?;",
         "Executable::IvmProved(proved)",
-        "reject_opaque_committee_operations_with(proved.overlay.iter(), visited, depth + 1, resolve,)?;",
+        "reject_opaque_committee_operations_with(proved.overlay.iter(), visited, depth + 1, resolve, selection,)?;",
         "Executable::Batch(items)",
-        "std::slice::from_ref(instruction), visited, depth + 1, resolve,",
+        "std::slice::from_ref(instruction), visited, depth + 1, resolve, selection,",
     ))
     require(authority_path, re.sub(r"\s+", "", mask_rust(authority)), (
         "const MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH: usize = 64;",
@@ -5122,8 +5124,10 @@ def require_queue_signed_proposal_gas(executable: str, queue: str) -> None:
     # The pre-quote code may have early rejections, but textual `return Err`
     # alone cannot prove rejection: Err can be shadowed or recovered with
     # or_else. Pin the complete reviewed prefix instead of interpreting it.
+    # Includes committed runtime-payload admission and selection-bound authority,
+    # multisig-envelope and manifest-quorum checks from the merged queue owner.
     quote = re.search(r"\blet\s+zk_gas\s*=", admission)
-    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "1d1a06e6d648e7a616754be6ab73be7c32ce02c0cd84ce15fa4d6ba83c7194a4":
+    if quote is None or rust_token_digest(original_admission[:quote.start()]) != "77477cdb08deb99ea3f9a0a82efaa6c9d1cec363874355dbbcaa25b57a034ebf":
         raise RuntimeError(f"{queue_path}: signed proposal gas admission prefix changed")
     literal_admission = re.sub(r"\s+", "", strip_rust_comments(original_admission))
     if not literal_admission.endswith(re.sub(r"\s+", "", tail)):
