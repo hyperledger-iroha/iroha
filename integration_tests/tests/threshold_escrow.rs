@@ -465,7 +465,10 @@ async fn setup_ledger_for_sample(
                 asset_definition_id.clone(),
                 "threshold_escrow_asset".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                Some("wonderland".parse()?),
+                Some(iroha_model_base::domain::DomainId::try_new(
+                    "wonderland",
+                    "universal",
+                )?),
             ))
             .into(),
         );
