@@ -1195,9 +1195,8 @@ mod frame_owner_identity_tests {
         crate::frame_owner_identity_tests::assert_bidirectional::<
             super::ProposeRuntimeUpgradeProposal,
         >("iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal");
-        crate::frame_owner_identity_tests::assert_bidirectional::<
-            super::ProposeEndorsedRuntimeUpgradeProposal,
-        >("iroha_data_model::isi::governance::ProposeEndorsedRuntimeUpgradeProposal");
+        // Endorsed proposals were added after this capture; their current frame identity
+        // is checked independently in the norito_golden_scaffold integration tests.
         crate::frame_owner_identity_tests::assert_bidirectional::<super::ProposeSccpRouteGovernance>(
             "iroha_data_model::isi::governance::ProposeSccpRouteGovernance",
         );
