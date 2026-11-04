@@ -128,7 +128,7 @@ impl State {
         budget: &AllocationBudget,
     ) -> Result<NativeZkX509StateV1, WorldStateSnapshotError> {
         self.with_native_world_state_snapshot_cut_v1(tip, None, budget, |snapshot, world| {
-            if snapshot.schema_hash != Self::native_world_schema_hash_v1()?
+            if snapshot.schema_hash != selection_schema(world.runtime_selection.get())?
                 || crate::sumeragi::lanes::routing::read_routing_root_scope(world)
                     .map_err(WorldStateSnapshotError::RootScopeRead)?
                     != Some(tip.root_scope())

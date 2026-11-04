@@ -107,6 +107,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     ),
     function(
         "crates/iroha_core/src/query/native_receipts.rs",
+        "lifecycle_runtime_proof_for_testing",
+        1,
+        UseOwner::Other(Use::Test, TEST_ONLY),
+    ),
+    function(
+        "crates/iroha_core/src/query/native_receipts.rs",
         "parliament_casting_proof",
         1,
         UseOwner::Roots(&[
@@ -400,6 +406,33 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
     function(
+        "crates/iroha_core/src/smartcontracts/isi/triggers/invocation_identity.rs",
+        "lifecycle_action_hash",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Persistent trigger Action and retry state commitment bound by the authenticated execution row; no independent table or State root",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/triggers/invocation_identity.rs",
+        "persistent_action_hash",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Persistent trigger Action and retry state commitment bound by the authenticated execution row; no independent table or State root",
+        ),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/triggers/invocation_identity.rs",
+        "persistent_action_hash_inner",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Persistent trigger Action and retry state commitment bound by the authenticated execution row; no independent table or State root",
+        ),
+    ),
+    function(
         "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
         "contracts",
         2,
@@ -408,6 +441,12 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
     function(
         "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
         "get_original_contract_with_code_hash",
+        1,
+        UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/smartcontracts/isi/triggers/set.rs",
+        "verified_original_contract",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
     ),
@@ -1136,6 +1175,15 @@ pub(super) const STATE_HASH_FUNCTIONS: &[StateHashFunction] = &[
         "validate_quantity_retirement_invocation",
         1,
         UseOwner::Other(Use::Record, RECORD_IDENTITY),
+    ),
+    function(
+        "crates/iroha_core/src/state/lifecycle_configuration.rs",
+        "lifecycle_consensus_config_fingerprint",
+        1,
+        UseOwner::Other(
+            Use::Record,
+            "Rollout identity over original signed genesis and committed runtime activation lineage; no State table digest",
+        ),
     ),
     function(
         "crates/iroha_core/src/state/native_execution_tip.rs",

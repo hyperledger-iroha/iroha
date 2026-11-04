@@ -7,13 +7,13 @@
 use iroha_core_privacy::privacy_profiles::{CompiledPrivacyProfileV1, compiled_privacy_profile_v1};
 use iroha_data_model::id::NetworkId;
 #[cfg(test)]
-use iroha_data_model::privacy::PrivacyProofEnvelopeV1;
+use iroha_data_model::privacy::{PrivacyProofEnvelopeV1, PrivacyRuntimeProofEnvelopeV1};
 use iroha_data_model::privacy::{
     PrivacyCapabilityReadinessV1, PrivacyCapabilityUnavailableReasonV1,
     PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusLimitsV1, PrivacyEngineIdV1,
     PrivacyExact12CapabilityManifestV1, PrivacyExact12CapabilityRowV1, PrivacyProofSystemIdV1,
-    PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyStatementV1,
+    PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1,
     validate_privacy_capability_archive_v1,
 };
 use pyo3::{
@@ -95,7 +95,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
     }
     pub(crate) fn require_network_profile(
         &self,
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
     ) -> PyResult<CompiledPrivacyProfileV1> {
         let network_id = self.authenticated_network_id.ok_or_else(|| PyValueError::new_err(
             "Exact12 admission requires an authenticated Torii response; decoded archives are inspection-only",
@@ -151,7 +151,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
     }
     pub(crate) fn require_governed_statement(
         &self,
-        statement: &PrivacyStatementV1,
+        statement: &PrivacyRuntimeStatementV1,
     ) -> PyResult<()> {
         self.require_authenticated_network(statement.context().network_id)?;
         let profile = self
@@ -177,18 +177,18 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         expected: NetworkId,
     ) -> PyResult<(
         PrivacyCompiledProfileSnapshotV1,
-        PrivacyProtocolLimitsV1,
+        PrivacyRuntimeProtocolLimitsV1,
         PrivacyConsensusLimitsV1,
     )> {
         self.require_authenticated_network(expected)?;
         let profile = self
-            .require_network_profile(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)?
+            .require_network_profile(PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)?
             .snapshot();
         let protocol_limits = self
             .manifest
             .protocols
             .iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .and_then(|row| row.effective_protocol_limits_v1())
             .ok_or_else(|| PyValueError::new_err("selected native X509 profile is unavailable"))?;
         Ok((
@@ -199,7 +199,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
     }
     #[cfg(test)]
     pub(crate) fn test_fetched_binding_for_protocol(
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         network_id: NetworkId,
     ) -> Self {
         // Unit fixture for the post-fetch boundary; archive inspection itself grants no origin.
@@ -208,7 +208,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
             .expect("validated test response at the authenticated transport boundary")
     }
     #[cfg(test)]
-    pub(crate) fn test_binding_for_protocol(protocol_id: PrivacyProtocolIdV1) -> Self {
+    pub(crate) fn test_binding_for_protocol(protocol_id: PrivacyRuntimeProtocolIdV1) -> Self {
         let network = crate::PyNetworkId::from_exact_bytes(&[0xA5; 32])
             .unwrap()
             .inner;
@@ -216,7 +216,7 @@ impl PyPrivacyExact12CapabilityManifestV1 {
     }
     #[cfg(test)]
     fn test_binding_for_protocol_on_network(
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         network_id: NetworkId,
     ) -> Self {
         use iroha_data_model::privacy::{
@@ -250,9 +250,9 @@ impl PyPrivacyExact12CapabilityManifestV1 {
 }
 
 fn require_governed_statement_v1(
-    statement: &PrivacyStatementV1,
+    statement: &PrivacyRuntimeStatementV1,
     profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: &PrivacyProtocolLimitsV1,
+    protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> PyResult<()> {
     profile
@@ -291,9 +291,9 @@ fn require_governed_statement_v1(
 
 #[cfg(test)]
 fn require_governed_envelope_v1(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: &PrivacyProtocolLimitsV1,
+    protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> PyResult<()> {
     envelope
@@ -363,8 +363,8 @@ impl PyPrivacyExact12CapabilityManifestV1 {
         self.require_authenticated_network(network_id.inner)
     }
 }
-fn parse_protocol_id(label: &str) -> PyResult<PrivacyProtocolIdV1> {
-    PrivacyProtocolIdV1::from_canonical_label(label).ok_or_else(|| {
+fn parse_protocol_id(label: &str) -> PyResult<PrivacyRuntimeProtocolIdV1> {
+    PrivacyRuntimeProtocolIdV1::from_canonical_label(label).ok_or_else(|| {
         PyValueError::new_err(
             "protocol_id must be one exact retained Exact12 identifier; aliases and retired identifiers are rejected",
         )
@@ -562,18 +562,24 @@ mod tests {
     use super::*;
     use iroha_data_model::privacy::PrivacyCapabilityArchiveValidationStatusV1;
 
-    fn x509_governed_fixture() -> (PrivacyProofEnvelopeV1, PrivacyCompiledProfileSnapshotV1) {
+    fn x509_governed_fixture() -> (
+        PrivacyRuntimeProofEnvelopeV1,
+        PrivacyCompiledProfileSnapshotV1,
+    ) {
         use iroha_data_model::privacy::{
-            PrivacyProtocolLimitsV1, privacy_exact12_fixture_bundle_v1,
+            PrivacyRuntimeProtocolLimitsV1, privacy_exact12_fixture_bundle_v1,
         };
         let row = privacy_exact12_fixture_bundle_v1()
             .expect("canonical model fixture")
             .rows
             .into_iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .expect("one X509 fixture row");
-        let envelope: PrivacyProofEnvelopeV1 = norito::decode_from_bytes(&row.envelope_norito)
+        // The fixture owns frozen Exact12 wire; runtime dispatch uses an explicit
+        // typed conversion after authenticating that original schema.
+        let envelope: PrivacyProofEnvelopeV1 = norito::decode_canonical(&row.envelope_norito)
             .expect("canonical X509 envelope fixture");
+        let envelope = PrivacyRuntimeProofEnvelopeV1::from(envelope);
         let profile = PrivacyCompiledProfileSnapshotV1 {
             protocol_id: envelope.protocol_id,
             proof_system_id: envelope.proof_system_id,
@@ -583,7 +589,7 @@ mod tests {
             verifier_digest: envelope.verifier_digest,
             statement_schema_digest: envelope.statement_schema_digest,
             engine_manifest_digest: envelope.engine_manifest_digest,
-            protocol_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+            protocol_limits: PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1,
         };
         (envelope, profile)
     }
@@ -605,7 +611,7 @@ mod tests {
             require_governed_statement_v1(
                 &envelope.statement,
                 &profile,
-                &PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+                &PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1,
                 &limits
             )
             .is_err()
@@ -660,13 +666,13 @@ mod tests {
         let mut action_tightened = limits;
         action_tightened.max_proof_bytes_per_action = 3;
         action_tightened.max_statement_and_encrypted_output_bytes_per_transaction = u32::try_from(
-            norito::to_bytes(&envelope.statement)
+            envelope.statement.canonical_wire_bytes_v1()
                 .expect("statement bytes")
                 .len(),
         )
         .unwrap();
         action_tightened.max_action_bytes =
-            u32::try_from(norito::to_bytes(&envelope).expect("envelope bytes").len() - 1).unwrap();
+            u32::try_from(envelope.canonical_wire_bytes_v1().expect("envelope bytes").len() - 1).unwrap();
         assert!(action_tightened.validate().is_ok());
         assert!(
             require_governed_envelope_v1(
@@ -723,7 +729,7 @@ mod tests {
     #[test]
     fn validated_archive_preserves_bytes_and_fails_closed_without_authenticated_origin() {
         let binding = PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
         );
         assert_eq!(
             binding.canonical_archive,
@@ -734,19 +740,19 @@ mod tests {
         );
         assert!(
             binding
-                .require_network_profile(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+                .require_network_profile(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
                 .is_err()
         );
         assert!(
             binding
-                .require_network_profile(PrivacyProtocolIdV1::VegaExistingCredentialZkV1)
+                .require_network_profile(PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1)
                 .is_err()
         );
     }
     #[test]
     fn offline_archives_cannot_acquire_origin_and_fetched_bindings_pin_the_network() {
         let inspected = PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
         );
         let network = crate::PyNetworkId::from_exact_bytes(&[0xA5; 32])
             .expect("marked canonical network")
@@ -780,7 +786,7 @@ mod tests {
         assert!(replayed.require_authenticated_network(network).is_err());
         assert!(
             fetched
-                .require_network_profile(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+                .require_network_profile(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
                 .is_ok()
         );
     }
@@ -788,7 +794,7 @@ mod tests {
     fn optional_policy_preserves_native_defaults_and_exact_selected_tuple() {
         use iroha_data_model::privacy::{PrivacyParameterDigestV1, PrivacyProtocolPolicyV1};
         Python::initialize();
-        let protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+        let protocol = PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1;
         let network = crate::PyNetworkId::from_exact_bytes(&[0xA5; 32])
             .unwrap()
             .inner;
@@ -812,7 +818,7 @@ mod tests {
             .find(|row| row.protocol_id == protocol)
             .unwrap();
         let mut limits = profile.protocol_limits;
-        let PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut pgc) = limits else {
+        let PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut pgc) = limits else {
             panic!("selected PGC limits")
         };
         pgc.max_recipient_count = 1;
@@ -864,7 +870,7 @@ mod tests {
             .unwrap()
             .inner;
         let fetched = PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             network,
         );
         let error = fetched

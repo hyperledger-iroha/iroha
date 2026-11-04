@@ -56,7 +56,9 @@ pub mod execution_output;
 pub mod header;
 /// Canonical routing and QueuePlan admission input values.
 pub mod lane_admission;
+mod lifecycle_custody;
 mod native_results;
+pub use lifecycle_custody::LifecycleOutputCustody;
 /// Explicit applying output policy and bounded reservation arithmetic.
 pub mod output_budget;
 #[cfg(test)]
@@ -337,6 +339,7 @@ impl SignedBlock {
             axt_envelopes,
             axt_policy_snapshot,
             axt_transitioned_dataspaces,
+            lifecycle_custody: LifecycleOutputCustody::default(),
         };
         let candidate = SignedBlockOutputCandidate {
             signatures: OutputFieldRef(&self.signatures),

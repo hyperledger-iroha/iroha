@@ -26,7 +26,9 @@ fn fixture() -> (ZkX509ReleaseFixtureV1, PrivacyCompiledProfileSnapshotV1) {
         reference_statement_context_v1(),
         NOW,
         match sample.envelope.statement {
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) => statement.wallet_account,
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) => {
+                statement.wallet_account
+            }
             _ => unreachable!(),
         },
     )
@@ -143,7 +145,7 @@ fn genuine_attached_x509_proof_acceptance_requires_current_readiness() {
 fn genuine_attached_x509_proof_acceptance_body() {
     use rand::SeedableRng as _;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
     )
     .expect("current native readiness must pass; this is not a skip");
     let profile = profile.snapshot();
@@ -237,7 +239,7 @@ fn genuine_attached_x509_proof_acceptance_body() {
         verify_privacy_zk_x509_attached_v1(&request, &fixture.statement, &proof, &current).unwrap();
     assert_eq!(
         accepted.protocol_id(),
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
     );
     assert_eq!(
         accepted.encoded_action_bytes(),

@@ -198,3 +198,20 @@ scripts/cargo_fast.sh --stable-local-metadata --incremental -- test -p iroha_cor
 The ordinary suite preserves protocol assertions and ignored qualification
 tests. Passing component tests does not establish native privacy release
 qualification or whole-network settlement readiness.
+
+The Orchard-family module exposes two fixed profiles. The deployed Orchard V3
+entry points retain `CROSS_ADDRESS_DISABLED`, `ORC1` framing, and their existing
+identities. Ironwood V3 entry points use `Flags::ENABLED`, V3 notes, `IRW1`
+framing, a distinct signature domain, and separate parameter/verifier/manifest
+identities while sharing the PostNu6_3 keys. Both admit at most two actions and
+exact authorization lengths of 5,125 or 7,461 bytes. Ironwood recipient outputs
+need only a recipient address; preparation fixes the actions and proof before
+consuming authorization binds the transaction intent. Payer change is another
+explicit output. Pool namespaces and bootstrap digests select the profile.
+
+The V1 compiled catalog and capability snapshots retain their original twelve
+rows. Ironwood has direct local profile lookup but no discovery or activation
+claim. Core currently refuses Ironwood state writes: the frozen recursive privacy
+storage schemas need new definitions and a governed accumulator transition before
+an executable Ironwood selection can be published. See root `PROGRESS.md` for the
+milestone boundary and validation evidence.

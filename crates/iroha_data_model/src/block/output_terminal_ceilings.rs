@@ -50,6 +50,14 @@ impl ExecutionOutputTerminalCeilings {
     /// Rejects failure to construct the bounded Name or count canonical bytes.
     /// Such failure is local refusal, never a canonical execution rejection.
     pub fn derive() -> Result<Self, String> {
+        Self::derive_for_lifecycle(false)
+    }
+
+    /// Derive terminals for the execution semantics selected by the caller's root.
+    /// V2 adds explicit empty coverage; this scalar never authenticates activation.
+    /// # Errors
+    /// Returns canonical construction or sizing failures.
+    pub fn derive_for_lifecycle(lifecycle: bool) -> Result<Self, String> {
         let trigger = TriggerUseV1 {
             trigger_id: "x"
                 .repeat(MAX_NAME_BYTES)
@@ -58,7 +66,10 @@ impl ExecutionOutputTerminalCeilings {
             registered_at_height: u64::MAX - 1,
             action_hash: Hash::prehashed([0xff; Hash::LENGTH]),
         };
-        let network = output_bytes(&ExecutionOutputV1::network_output_limit_rejection(u32::MAX))?;
+        let network = output_bytes(&coverage(
+            ExecutionOutputV1::network_output_limit_rejection(u32::MAX),
+            lifecycle,
+        ))?;
         let mut pipeline = 0;
         for event in [
             PipelineEventPositionV1::Network(u32::MAX),
@@ -69,10 +80,10 @@ impl ExecutionOutputTerminalCeilings {
                 candidate_index: u32::MAX,
                 trigger: trigger.clone(),
             });
-            pipeline = pipeline.max(output_bytes(&row)?);
+            pipeline = pipeline.max(output_bytes(&coverage(row, lifecycle))?);
         }
-        let time = output_bytes(&ExecutionOutputV1::time_output_limit_rejection(
-            TimeInvocationV1 {
+        let mut time = output_bytes(&coverage(
+            ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
                 schedule_index: u32::MAX,
                 event: TimeEvent {
                     interval: TimeInterval {
@@ -81,8 +92,53 @@ impl ExecutionOutputTerminalCeilings {
                     },
                 },
                 trigger,
-            },
+            }),
+            lifecycle,
         ))?;
+        if lifecycle {
+            // A native failure policy changes only its root: one Update (retry
+            // or quarantine), one progress debit, or one Remove (exhaustion).
+            // Retry advancement includes its debit in the same Update. Two compact states
+            // bound either case independently of executable/metadata size.
+            let trigger = TriggerUseV1 {
+                trigger_id: "x"
+                    .repeat(MAX_NAME_BYTES)
+                    .parse()
+                    .map_err(|_| "terminal name")?,
+                registered_at_height: u64::MAX - 1,
+                action_hash: Hash::prehashed([0xff; Hash::LENGTH]),
+            };
+            let mut row = coverage(
+                ExecutionOutputV1::time_output_limit_rejection(TimeInvocationV1 {
+                    schedule_index: u32::MAX,
+                    event: TimeEvent {
+                        interval: TimeInterval {
+                            since_ms: u64::MAX - 1,
+                            length_ms: 1,
+                        },
+                    },
+                    trigger: trigger.clone(),
+                }),
+                true,
+            );
+            reserve_policy_shape(&mut row, &trigger)?;
+            time = time.max(output_bytes(&row)?);
+            for event in [
+                PipelineEventPositionV1::Network(u32::MAX),
+                PipelineEventPositionV1::BlockApproved,
+            ] {
+                let mut row = coverage(
+                    ExecutionOutputV1::pipeline_output_limit_rejection(PipelineInvocationV1 {
+                        event,
+                        candidate_index: u32::MAX,
+                        trigger: trigger.clone(),
+                    }),
+                    true,
+                );
+                reserve_policy_shape(&mut row, &trigger)?;
+                pipeline = pipeline.max(output_bytes(&row)?);
+            }
+        }
         Ok(Self {
             bytes: [network, pipeline, time],
         })
@@ -128,3 +184,75 @@ impl ExecutionOutputTerminalCeilings {
 #[cfg(test)]
 #[path = "output_terminal_ceilings_tests.rs"]
 mod tests;
+
+fn coverage(row: ExecutionOutputV1, enabled: bool) -> ExecutionOutputV1 {
+    if !enabled {
+        return row;
+    }
+    use crate::block::execution_output::*;
+    let trigger_lifecycle = TriggerLifecycleEffectsV1::Complete {
+        effects: Vec::new(),
+    };
+    match row {
+        ExecutionOutputV1::Network(execution) => {
+            ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                execution,
+                trigger_lifecycle,
+            })
+        }
+        ExecutionOutputV1::Pipeline(execution) => {
+            ExecutionOutputV1::PipelineWithLifecycle(PipelineExecutionOutputV2 {
+                execution,
+                trigger_lifecycle,
+            })
+        }
+        ExecutionOutputV1::Time(execution) => {
+            ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                execution,
+                trigger_lifecycle,
+            })
+        }
+        row => row,
+    }
+}
+
+// Sizing only: the terminal rejection text is longer than the shortened genuine
+// rejection diagnostic, so this bounds complete native policy settlement.
+fn reserve_policy_shape(row: &mut ExecutionOutputV1, trigger: &TriggerUseV1) -> Result<(), String> {
+    use crate::block::execution_output::*;
+    let state = TriggerLifecycleStateV1 {
+        kind: TriggerLifecycleStateKindV1::Time,
+        registered_at_height: Some(u64::MAX - 1),
+        action_hash: Some(trigger.action_hash),
+        action: TriggerLifecycleActionFrameV1 {
+            codec: TriggerLifecycleActionCodecV1::NoritoCanonicalV1,
+            bytes: lifecycle_hash_frame(trigger.action_hash)
+                .map_err(|error| error.to_string())?
+                .to_vec(),
+        },
+        retry_state: Some(TriggerLifecycleRetryStateV1 {
+            attempt: u32::MAX,
+            next_time_ms: u64::MAX,
+        }),
+    };
+    let trace = TriggerLifecycleEffectsV1::Complete {
+        effects: vec![TriggerLifecycleEffectV1 {
+            ordinal: u32::MAX,
+            trigger_id: trigger.trigger_id.clone(),
+            origin: TriggerLifecycleOriginV1::InvocationPolicy {
+                callback_index: u32::MAX,
+                policy: TriggerLifecyclePolicyV1::AdvanceTimeRetry,
+            },
+            change: TriggerLifecycleChangeV1::Update {
+                before: state.clone(),
+                after: state,
+            },
+        }],
+    };
+    match row {
+        ExecutionOutputV1::TimeWithLifecycle(row) => row.trigger_lifecycle = trace,
+        ExecutionOutputV1::PipelineWithLifecycle(row) => row.trigger_lifecycle = trace,
+        _ => unreachable!("internal policy sizing"),
+    }
+    Ok(())
+}

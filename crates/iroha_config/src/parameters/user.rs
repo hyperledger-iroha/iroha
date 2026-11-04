@@ -976,6 +976,9 @@ impl Lifecycle {
         }
     }
 }
+#[cfg(test)]
+#[path = "user/lifecycle_trace_tests.rs"]
+mod lifecycle_trace_tests;
 /// User-level enumeration translating `ParseError` settings.
 #[derive(thiserror::Error, Debug, Copy, Clone)]
 pub enum ParseError {

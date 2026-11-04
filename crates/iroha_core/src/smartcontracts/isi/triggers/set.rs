@@ -8,6 +8,9 @@
 #[path = "invocation_identity.rs"]
 pub(crate) mod invocation_identity;
 
+#[path = "set_artifact.rs"]
+mod artifact;
+
 #[path = "set_acquisition.rs"]
 mod acquisition;
 #[path = "set_action_relation.rs"]
@@ -23,6 +26,8 @@ mod contract_capture;
 mod contract_relation;
 #[path = "set_detachment.rs"]
 mod detachment;
+#[path = "set_lifecycle_journal.rs"]
+pub(crate) mod lifecycle_journal;
 #[cfg(test)]
 #[path = "set_scheduled_progress.rs"]
 mod scheduled_progress_tests;
@@ -358,6 +363,7 @@ struct BorrowedWorldAction<'a> {
 impl<'a> BorrowedWorldAction<'a> {
     fn new<F: norito::core::SerializePayload>(action: &'a LoadedAction<F>) -> Self {
         let LoadedAction {
+            lifecycle_executable_digest: _,
             executable,
             repeats,
             authority,
@@ -394,7 +400,7 @@ impl<'a> From<&'a IvmBytecodeEntry> for BorrowedWorldContract<'a> {
             original_contract, ..
         } = entry;
         Self {
-            original_contract: WorldDeltaFieldRef(original_contract),
+            original_contract: WorldDeltaFieldRef(original_contract.bytecode()),
         }
     }
 }
@@ -1013,6 +1019,46 @@ pub struct Set {
     contracts: TriggerContractStore,
 }
 impl Set {
+    /// Validate original current and retained predecessor instruction bodies against the selected
+    /// payload grammar. This borrows coherent histories without cloning actions or consuming undo.
+    pub(crate) fn validate_privacy_payload_grammar(
+        &mut self,
+        selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+    ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+        fn actions<F: mv::Value>(
+            store: &mut Storage<TriggerId, LoadedAction<F>>,
+            selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+        ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
+            use crate::runtime::ironwood::admission;
+            let history = store.history();
+            for action in history.current().iter().map(|(_, action)| action).chain(
+                history
+                    .revert_map()
+                    .iter()
+                    .filter_map(|(_, action)| action.as_ref()),
+            ) {
+                match &action.executable {
+                    ExecutableRef::Instructions(values) => {
+                        admission::instructions(values, selection)?
+                    }
+                    ExecutableRef::Batch(values) => {
+                        for value in values.iter() {
+                            if let ExecutableBatchItem::Instruction(value) = value {
+                                admission::instruction(value, selection)?;
+                            }
+                        }
+                    }
+                    ExecutableRef::Ivm(_) | ExecutableRef::ContractCall(_) => {}
+                }
+            }
+            Ok(())
+        }
+        actions(&mut self.data_triggers, selection)?;
+        actions(&mut self.pipeline_triggers, selection)?;
+        actions(&mut self.time_triggers, selection)?;
+        actions(&mut self.by_call_triggers, selection)
+    }
+
     fn action_is_active<F>(action: &LoadedAction<F>) -> bool {
         !action.repeats.is_depleted() && trigger_is_enabled(&action.metadata)
     }
@@ -1194,6 +1240,7 @@ impl FastJsonWrite for Set {
 }
 /// Original trigger journals with one aggregate writer-release boundary.
 pub struct SetBlock<'set> {
+    lifecycle_work: std::cell::Cell<lifecycle_journal::LifecycleWorkBudget>,
     publication: AggregatePublication,
     fields: Option<SetBlockFields<'set>>,
 }
@@ -1552,6 +1599,12 @@ mod merge_write_set_tests {
 }
 /// Trigger set for transaction's aggregated changes
 pub struct SetTransaction<'block> {
+    lifecycle_block_work: &'block std::cell::Cell<lifecycle_journal::LifecycleWorkBudget>,
+    /// Enabled only by the committed lifecycle services selection (or test admission).
+    lifecycle_journal: Option<lifecycle_journal::LifecycleJournal>,
+    // None before transfer; false once sealed; true if a later mutation attempted capture.
+    lifecycle_sealed: Option<bool>,
+    lifecycle_requires_transfer: bool,
     /// Last transaction-local trigger lifecycle generation allocated.
     next_registration_generation: u64,
     /// Per-ID registration generation within this transaction overlay.
@@ -1617,7 +1670,7 @@ pub struct SetView<'set> {
 #[derive(Debug, Clone)]
 pub struct IvmBytecodeEntry {
     /// Original smart contract binary blob
-    original_contract: IvmBytecode,
+    original_contract: artifact::ImmutableArtifact,
     /// Canonical complete-deployable hash retained for prepared-contract lookup.
     code_hash: Hash,
     /// Number of times this contract is used
@@ -1664,7 +1717,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
             });
         }
         Ok(Self {
-            original_contract,
+            original_contract: original_contract.into(),
             code_hash,
             count,
         })
@@ -1714,7 +1767,7 @@ struct IvmBytecodeEntryDto {
 impl From<&IvmBytecodeEntry> for IvmBytecodeEntryDto {
     fn from(e: &IvmBytecodeEntry) -> Self {
         IvmBytecodeEntryDto {
-            original_contract: e.original_contract.clone(),
+            original_contract: e.original_contract.bytecode().clone(),
             code_hash: e.code_hash,
             count: e.count.get(),
         }
@@ -1730,7 +1783,7 @@ impl TryFrom<IvmBytecodeEntryDto> for IvmBytecodeEntry {
             );
         }
         Ok(IvmBytecodeEntry {
-            original_contract: dto.original_contract,
+            original_contract: dto.original_contract.into(),
             code_hash: dto.code_hash,
             count: nz,
         })
@@ -1764,8 +1817,10 @@ impl<F: Clone> From<&LoadedAction<F>> for LoadedActionDto<F> {
 impl<F> TryFrom<LoadedActionDto<F>> for LoadedAction<F> {
     type Error = String;
     fn try_from(dto: LoadedActionDto<F>) -> Result<Self, Self::Error> {
+        let executable = ExecutableRef::try_from(dto.executable)?;
         Ok(LoadedAction {
-            executable: ExecutableRef::try_from(dto.executable)?,
+            lifecycle_executable_digest: invocation_identity::inline_executable_digest(&executable),
+            executable,
             repeats: dto.repeats,
             authority: dto.authority,
             filter: dto.filter,
@@ -1833,7 +1888,7 @@ pub trait SetReadOnly {
     fn get_original_contract(&self, hash: &HashOf<IvmBytecode>) -> Option<&IvmBytecode> {
         self.contracts()
             .get(hash)
-            .map(|entry| &entry.original_contract)
+            .map(|entry| entry.original_contract.bytecode())
     }
     /// Borrow original trigger bytecode together with its validated deployable hash.
     #[inline]
@@ -1843,8 +1898,17 @@ pub trait SetReadOnly {
     ) -> Option<(&IvmBytecode, Hash)> {
         self.contracts()
             .get(hash)
-            .map(|entry| (&entry.original_contract, entry.code_hash))
+            .map(|entry| (entry.original_contract.bytecode(), entry.code_hash))
     }
+    /// Immutable artifact identity prepared when the private byte owner was constructed.
+    /// Returns None for a missing row or disagreement with the authoritative map/code identity.
+    fn verified_original_contract(&self, hash: &HashOf<IvmBytecode>) -> Option<(Hash, u64)> {
+        let entry = self.contracts().get(hash)?;
+        let source = &entry.original_contract;
+        (source.blob_hash() == *hash && source.code_hash() == entry.code_hash)
+            .then(|| (entry.code_hash, source.as_ref().len() as u64))
+    }
+
     /// Convert [`LoadedAction`] to original [`Action`] by retrieving original
     /// [`IvmBytecode`] if applicable.
     ///
@@ -1855,6 +1919,7 @@ pub trait SetReadOnly {
         F: Clone + EnsureTriggerAuthority + Into<EventFilterBox>,
     {
         let LoadedAction {
+            lifecycle_executable_digest: _,
             executable,
             repeats,
             authority,
@@ -2482,6 +2547,10 @@ impl SetBlock<'_> {
         let data_trigger_index = DataTriggerIndex::from_triggers(&self.data_triggers);
         let fields = self.fields.as_mut().expect("original trigger block fields");
         SetTransaction {
+            lifecycle_block_work: &self.lifecycle_work,
+            lifecycle_journal: None,
+            lifecycle_sealed: None,
+            lifecycle_requires_transfer: false,
             next_registration_generation: 0,
             registration_generations: BTreeMap::new(),
             data_trigger_eligibility_generations: BTreeMap::new(),
@@ -2634,6 +2703,9 @@ impl<'block> SetTransaction<'block> {
     }
     /// Apply transaction's changes
     pub fn apply(self) {
+        if !self.lifecycle_allows_apply() {
+            return;
+        }
         // NOTE: apply in reverse order
         self.contracts.apply();
         self.active_by_call_trigger_ids.apply();
@@ -2720,6 +2792,40 @@ impl<'block> SetTransaction<'block> {
             let Some(event_type) = self.ids.get(&trigger_id).copied() else {
                 continue;
             };
+            // Inspect the fields that the rekey actually mutates before funding
+            // any Action frame. Unrelated persistent entries are not witnesses.
+            let affected = self.lifecycle_enabled()
+                && match event_type {
+                    TriggeringEventType::Data => {
+                        self.data_triggers.get(&trigger_id).is_some_and(|action| {
+                            action.authority == *old
+                                || action.filter.references_account_id(old)
+                                || data_trigger_global_permission_grantee(action.metadata())
+                                    .expect("data-trigger authorization was preflighted")
+                                    .as_ref()
+                                    == Some(old)
+                        })
+                    }
+                    TriggeringEventType::Pipeline => self
+                        .pipeline_triggers
+                        .get(&trigger_id)
+                        .is_some_and(|action| action.authority == *old),
+                    TriggeringEventType::Time => self
+                        .time_triggers
+                        .get(&trigger_id)
+                        .is_some_and(|action| action.authority == *old),
+                    TriggeringEventType::ExecuteTrigger => self
+                        .by_call_triggers
+                        .get(&trigger_id)
+                        .is_some_and(|action| {
+                            action.authority == *old
+                                || action.filter.authority() == Some(old)
+                                || (action.filter.authority().is_none() && action.authority == *new)
+                        }),
+                };
+            let lifecycle_before = affected
+                .then(|| self.lifecycle_snapshot(&trigger_id))
+                .flatten();
             let mut replacement_filter = None;
             let mut replacement_filter_is_active = false;
             let updated = match event_type {
@@ -2765,6 +2871,9 @@ impl<'block> SetTransaction<'block> {
                     .get_mut(&trigger_id)
                     .map(|action| replace_by_call_authority(action, old, new)),
             };
+            if updated == Some(true) {
+                self.lifecycle_updated(&trigger_id, lifecycle_before);
+            }
             if updated.is_none() {
                 warn!(
                     trigger_id = %trigger_id,
@@ -2910,10 +3019,13 @@ impl<'block> SetTransaction<'block> {
                     );
                 } else {
                     let code_hash = ivm::contract_code_hash(bytes.as_ref());
+                    if let Some(journal) = &mut self.lifecycle_journal {
+                        journal.forget_ivm_in_block(&hash, self.lifecycle_block_work);
+                    }
                     self.contracts.insert(
                         hash,
                         IvmBytecodeEntry {
-                            original_contract: bytes,
+                            original_contract: bytes.into(),
                             code_hash,
                             count: NonZeroU64::MIN,
                         },
@@ -2929,6 +3041,9 @@ impl<'block> SetTransaction<'block> {
         map(self).insert(
             trigger_id.clone(),
             LoadedAction {
+                lifecycle_executable_digest: invocation_identity::inline_executable_digest(
+                    &loaded_executable,
+                ),
                 executable: loaded_executable,
                 repeats,
                 authority,
@@ -2943,6 +3058,7 @@ impl<'block> SetTransaction<'block> {
         let generation = self.advance_registration_generation();
         self.registration_generations
             .insert(trigger_id.clone(), generation);
+        self.lifecycle_inserted(&trigger_id);
         if event_type == TriggeringEventType::Data {
             self.data_trigger_eligibility_generations
                 .insert(trigger_id, if active { generation } else { u64::MAX });
@@ -2956,7 +3072,20 @@ impl<'block> SetTransaction<'block> {
     where
         F: Fn(&mut dyn LoadedActionTrait) -> R,
     {
+        self.try_inspect_by_id_mut(id, |action| Ok::<R, core::convert::Infallible>(f(action)))
+            .map(|result| match result {
+                Ok(value) => value,
+                Err(never) => match never {},
+            })
+    }
+    /// Mutate one action, recording successful touches and changes retained on error.
+    /// An error which leaves the persistent state unchanged creates no effect.
+    pub fn try_inspect_by_id_mut<F, R, E>(&mut self, id: &TriggerId, f: F) -> Option<Result<R, E>>
+    where
+        F: Fn(&mut dyn LoadedActionTrait) -> Result<R, E>,
+    {
         let event_type = self.ids.get(id).copied()?;
+        let lifecycle_before = self.lifecycle_snapshot(id);
         let mut prior_active = None;
         let mut active = None;
         let result = match event_type {
@@ -2997,6 +3126,11 @@ impl<'block> SetTransaction<'block> {
                 "trigger id missing from typed map while mutating trigger"
             );
         }
+        self.lifecycle_update_result(
+            id,
+            lifecycle_before,
+            result.as_ref().is_some_and(Result::is_ok),
+        );
         result
     }
     /// Remove a trigger from the [`Set`].
@@ -3004,6 +3138,7 @@ impl<'block> SetTransaction<'block> {
     /// Return `false` if [`Set`] doesn't contain the trigger with the given `id`.
     /// Logs and continues if the internal storage is inconsistent.
     pub fn remove(&mut self, id: &TriggerId) -> bool {
+        let lifecycle_before = self.lifecycle_snapshot(id);
         let Some(event_type) = self.ids.remove(id.clone()) else {
             return false;
         };
@@ -3013,17 +3148,39 @@ impl<'block> SetTransaction<'block> {
         let removed = match event_type {
             TriggeringEventType::Data => {
                 self.data_trigger_index.remove(id);
-                Self::remove_from(&mut self.contracts, &mut self.data_triggers, id.clone())
+                Self::remove_from(
+                    &mut self.contracts,
+                    &mut self.data_triggers,
+                    id.clone(),
+                    self.lifecycle_journal
+                        .as_mut()
+                        .map(|j| (j, self.lifecycle_block_work)),
+                )
             }
-            TriggeringEventType::Pipeline => {
-                Self::remove_from(&mut self.contracts, &mut self.pipeline_triggers, id.clone())
-            }
-            TriggeringEventType::Time => {
-                Self::remove_from(&mut self.contracts, &mut self.time_triggers, id.clone())
-            }
-            TriggeringEventType::ExecuteTrigger => {
-                Self::remove_from(&mut self.contracts, &mut self.by_call_triggers, id.clone())
-            }
+            TriggeringEventType::Pipeline => Self::remove_from(
+                &mut self.contracts,
+                &mut self.pipeline_triggers,
+                id.clone(),
+                self.lifecycle_journal
+                    .as_mut()
+                    .map(|j| (j, self.lifecycle_block_work)),
+            ),
+            TriggeringEventType::Time => Self::remove_from(
+                &mut self.contracts,
+                &mut self.time_triggers,
+                id.clone(),
+                self.lifecycle_journal
+                    .as_mut()
+                    .map(|j| (j, self.lifecycle_block_work)),
+            ),
+            TriggeringEventType::ExecuteTrigger => Self::remove_from(
+                &mut self.contracts,
+                &mut self.by_call_triggers,
+                id.clone(),
+                self.lifecycle_journal
+                    .as_mut()
+                    .map(|j| (j, self.lifecycle_block_work)),
+            ),
         };
         if !removed {
             warn!(
@@ -3032,6 +3189,7 @@ impl<'block> SetTransaction<'block> {
                 "`Set` ids referenced a missing trigger while removing"
             );
         }
+        self.lifecycle_removed(id, lifecycle_before);
         true
     }
     /// Modify repetitions of the hook identified by [`TriggerId`].
@@ -3046,13 +3204,32 @@ impl<'block> SetTransaction<'block> {
         id: &TriggerId,
         f: impl Fn(u32) -> Result<u32, RepeatsOverflowError>,
     ) -> Result<(), ModRepeatsError> {
-        self.inspect_by_id_mut(id, |action| match action.repeats() {
-            Repeats::Exactly(repeats) => {
-                let new_repeats = f(*repeats)?;
-                action.set_repeats(Repeats::Exactly(new_repeats));
-                Ok(())
-            }
-            _ => Err(ModRepeatsError::RepeatsOverflow(RepeatsOverflowError)),
+        if !self.lifecycle_enabled() {
+            // Preserve predecessor overlay touches, diagnostics and active-index
+            // maintenance even for an unchanged failed arithmetic operation.
+            return self
+                .try_inspect_by_id_mut(id, |action| match action.repeats() {
+                    Repeats::Exactly(repeats) => {
+                        let new_repeats = f(*repeats)?;
+                        action.set_repeats(Repeats::Exactly(new_repeats));
+                        Ok(())
+                    }
+                    _ => Err(ModRepeatsError::RepeatsOverflow(RepeatsOverflowError)),
+                })
+                .ok_or_else(|| ModRepeatsError::NotFound(id.clone()))
+                .and_then(std::convert::identity);
+        }
+        // Refused arithmetic and indefinite repetitions have no executed effect.
+        // Decide them before the mutation seam asks for a before-image.
+        let next = self
+            .inspect_by_id(id, |action| match action.repeats() {
+                Repeats::Exactly(repeats) => f(*repeats).map_err(ModRepeatsError::RepeatsOverflow),
+                _ => Err(ModRepeatsError::RepeatsOverflow(RepeatsOverflowError)),
+            })
+            .ok_or_else(|| ModRepeatsError::NotFound(id.clone()))??;
+        self.try_inspect_by_id_mut(id, |action| {
+            action.set_repeats(Repeats::Exactly(next));
+            Ok(())
         })
         .ok_or_else(|| ModRepeatsError::NotFound(id.clone()))
         // .flatten() -- unstable
@@ -3067,30 +3244,41 @@ impl<'block> SetTransaction<'block> {
         contracts: &mut TriggerContractStoreTransaction<'block>,
         triggers: &mut StorageTransaction<'block, TriggerId, LoadedAction<F>>,
         trigger_id: TriggerId,
+        journal: Option<(
+            &mut lifecycle_journal::LifecycleJournal,
+            &std::cell::Cell<lifecycle_journal::LifecycleWorkBudget>,
+        )>,
     ) -> bool {
         triggers
             .remove(trigger_id)
             .map(|loaded_action| {
-                if let Some(blob_hash) = loaded_action.extract_blob_hash() {
-                    Self::remove_original_trigger(contracts, blob_hash);
+                if let Some(blob_hash) = loaded_action.extract_blob_hash()
+                    && Self::remove_original_trigger(contracts, blob_hash)
+                    && let Some((journal, block_work)) = journal
+                {
+                    journal.forget_ivm_in_block(&blob_hash, block_work);
                 }
             })
             .is_some()
     }
     /// Decrease the counter of the original [`IvmBytecode`] by `blob_hash` or remove it if the
-    /// counter reaches zero. Logs and skips removal if the bytecode entry is missing.
+    /// counter reaches zero. Returns whether that entry lifetime ended, including
+    /// an already missing entry, so selected capture can invalidate its capability.
+    /// Logs and skips removal if the bytecode entry is missing.
     fn remove_original_trigger(
         contracts: &mut TriggerContractStoreTransaction,
         blob_hash: HashOf<IvmBytecode>,
-    ) {
+    ) -> bool {
         #[allow(clippy::option_if_let_else)] // More readable this way
         match contracts.get_mut(&blob_hash) {
             Some(entry) => {
                 let count = &mut entry.count;
                 if let Some(new_count) = NonZeroU64::new(count.get() - 1) {
                     *count = new_count;
+                    false
                 } else {
                     contracts.remove(blob_hash);
+                    true
                 }
             }
             None => {
@@ -3098,6 +3286,7 @@ impl<'block> SetTransaction<'block> {
                     ?blob_hash,
                     "`Set` contracts missing entry for trigger bytecode; skipping removal"
                 );
+                true
             }
         }
     }
@@ -3109,6 +3298,9 @@ impl<'block> SetTransaction<'block> {
         for id in triggers {
             // Ignoring error if trigger has not `Repeats::Exact(_)` but something else
             let _mod_repeats_res = self.mod_repeats(id, |n| Ok(n.saturating_sub(1)));
+        }
+        if self.lifecycle_enabled() {
+            return self.lifecycle_remove_depleted();
         }
         let mut removed = Vec::new();
         let Self {
@@ -3162,18 +3354,63 @@ impl<'block> SetTransaction<'block> {
         }
         removed
     }
+    /// Consume an available native Time attempt without emitting an unchanged touch.
+    pub(crate) fn consume_time_progress(&mut self, id: &TriggerId) -> bool {
+        if self
+            .time_triggers
+            .get(id)
+            .is_none_or(|action| super::progress::remaining(&action.metadata) == 0)
+        {
+            return false;
+        }
+        self.inspect_by_id_mut(id, |action| super::progress::consume(action.metadata_mut()))
+            .unwrap_or(false)
+    }
+
+    /// Commit retry advancement and the attempt debit as one native policy mutation.
+    pub(crate) fn advance_time_retry(
+        &mut self,
+        id: &TriggerId,
+        retry: TimeTriggerRetryState,
+    ) -> bool {
+        let before = self.lifecycle_snapshot(id);
+        let Some(action) = self.time_triggers.get_mut(id) else {
+            return false;
+        };
+        super::progress::consume(&mut action.metadata);
+        action.retry_state = Some(retry);
+        self.lifecycle_updated(id, before);
+        true
+    }
+
     /// Update internal retry runtime state for a time trigger.
     pub fn set_time_trigger_retry_state(
         &mut self,
         id: &TriggerId,
         retry_state: Option<TimeTriggerRetryState>,
     ) -> bool {
-        self.time_triggers
+        if self.lifecycle_enabled() {
+            let Some(action) = self.time_triggers.get(id) else {
+                return false;
+            };
+            // Native retry clearing is an idempotent policy operation, not a
+            // guest-visible metadata touch. Preserve predecessor overlay behavior.
+            if action.retry_state.is_none() && retry_state.is_none() {
+                return true;
+            }
+        }
+        let before = self.lifecycle_snapshot(id);
+        let updated = self
+            .time_triggers
             .get_mut(id)
             .map(|action| {
                 action.retry_state = retry_state;
             })
-            .is_some()
+            .is_some();
+        if updated {
+            self.lifecycle_updated(id, before);
+        }
+        updated
     }
     /// Remove actions with zero execution count from `triggers`
     fn remove_zeros<F: mv::Value + EventFilter>(
@@ -3191,7 +3428,7 @@ impl<'block> SetTransaction<'block> {
         for id in &to_remove {
             let removed_id = ids.remove(id.clone()).is_some();
             active_ids.remove(id.clone());
-            let removed_trigger = Self::remove_from(contracts, triggers, id.clone());
+            let removed_trigger = Self::remove_from(contracts, triggers, id.clone(), None);
             if !removed_id || !removed_trigger {
                 warn!(
                     trigger_id = %id,
@@ -4230,7 +4467,7 @@ impl TryFrom<SetDto> for Set {
         let mut duplicate_contracts = 0usize;
         for (hash, entry) in contracts {
             let entry = IvmBytecodeEntry::try_from(entry)?;
-            if HashOf::new(&entry.original_contract) != hash {
+            if HashOf::new(entry.original_contract.bytecode()) != hash {
                 return Err(
                     "trigger contract lookup hash does not match its original bytecode".to_owned(),
                 );
@@ -4825,6 +5062,7 @@ mod dto_tests {
         );
     }
     include!("set_snapshot_predecessor_tests.rs");
+    include!("set_privacy_payload_tests.rs");
 
     #[test]
     fn set_roundtrips_rebuild_active_trigger_ids() {

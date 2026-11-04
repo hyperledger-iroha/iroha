@@ -16,8 +16,8 @@ use iroha_data_model::{
     privacy::{
         PqMaspStarkStatementV1, PrivacyAuthorizationKeyDigestV1, PrivacyNoteEncryptionKeyDigestV1,
         PrivacyNullifierV1, PrivacyPoolIdV1, PrivacyPqAuthorizationProfileV1,
-        PrivacyPqNoteEncryptionProfileV1, PrivacyProtocolIdV1, PrivacyRecipientIdV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
+        PrivacyPqNoteEncryptionProfileV1, PrivacyRecipientIdV1, PrivacyRootV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
     },
 };
 use iroha_model_base::domain::DomainId;
@@ -84,7 +84,7 @@ fn context_from_compiled_profile_v1(
     }
 }
 fn context() -> Result<PrivacyStatementContextV1, PqMaspReleaseFixtureErrorV1> {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
+    let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1)
         .map_err(|_| PqMaspReleaseFixtureErrorV1)?;
     Ok(context_from_compiled_profile_v1(&profile))
 }
@@ -425,7 +425,7 @@ mod tests {
     use rand_chacha::ChaCha12Rng;
     #[test]
     fn release_context_binds_every_compiled_profile_digest() {
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
+        let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1)
             .expect("compiled PQ-MASP profile");
         let baseline =
             norito::encode_canonical(&context_from_compiled_profile_v1(&profile)).expect("context");

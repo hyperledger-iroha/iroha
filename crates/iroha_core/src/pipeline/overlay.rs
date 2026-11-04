@@ -1873,6 +1873,11 @@ impl TxOverlay {
             )
             .into());
         }
+        crate::runtime::ironwood::admission::durable_state_overlay(
+            &self.durable_state_overlay,
+            world.runtime_selection(),
+        )
+        .map_err(|error| error.map_rejection(ValidationFail::NotPermitted))?;
         for (path, authorization) in &self.durable_state_authorizations {
             crate::smartcontracts::ivm::host::validate_reserve_durable_state_path(path)?;
             if (self.source == TxOverlaySource::IvmProved
@@ -4007,6 +4012,47 @@ mod tests_overlay_manifest {
                 tx.world.smart_contract_state.get(&path),
                 replacement.as_ref()
             );
+        }
+    }
+
+    #[test]
+    fn ironwood_retained_overlay_refuses_all_proposal_carriers_before_writes() {
+        use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
+        let (authority, _) = gen_account_in("wonderland");
+        let mut world = crate::state::World::new();
+        let (id, account) = build_wonderland_account(&authority).into_key_value();
+        world.accounts.insert(id, account);
+        let state = test_support::state_after_genesis(world);
+        let mut block = execution_block(&state);
+        for protocol in [
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+        ] {
+            for (path, bytes) in crate::runtime::ironwood::admission::tests::proposal_rows(protocol)
+            {
+                let ordinary: StatePath = "ordinary_before_ironwood".parse().unwrap();
+                let mut tx = block.transaction();
+                let overlay = TxOverlay::from_ivm_execution(
+                    Vec::new(),
+                    0,
+                    BTreeMap::from([
+                        (ordinary.clone(), Some(vec![1])),
+                        (path.clone(), Some(bytes.clone())),
+                    ]),
+                );
+                let result = overlay.apply(&mut tx, &authority);
+                if protocol == PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 {
+                    assert!(
+                        matches!(result, Err(ValidationFail::NotPermitted(message)) if message.contains("inactive Ironwood"))
+                    );
+                    assert!(tx.world.smart_contract_state.get(&path).is_none());
+                    assert!(tx.world.smart_contract_state.get(&ordinary).is_none());
+                } else {
+                    result.unwrap();
+                    assert_eq!(tx.world.smart_contract_state.get(&path), Some(&bytes));
+                    assert_eq!(tx.world.smart_contract_state.get(&ordinary), Some(&vec![1]));
+                }
+            }
         }
     }
 

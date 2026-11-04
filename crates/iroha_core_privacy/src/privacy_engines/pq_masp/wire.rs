@@ -699,8 +699,8 @@ mod tests {
         privacy::{
             PrivacyEngineManifestDigestV1, PrivacyNoteEncryptionKeyDigestV1,
             PrivacyParameterDigestV1, PrivacyParameterIdV1, PrivacyPoolIdV1,
-            PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1, PrivacyProtocolIdV1,
-            PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+            PrivacyPqAuthorizationProfileV1, PrivacyPqNoteEncryptionProfileV1, PrivacyRootV1,
+            PrivacyRuntimeProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
             PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
         },
     };
@@ -778,7 +778,7 @@ mod tests {
     }
     #[test]
     fn protocol_domains_use_the_one_canonical_external_identifier() {
-        let label = PrivacyProtocolIdV1::PqMaspStarkV1.canonical_label();
+        let label = PrivacyRuntimeProtocolIdV1::PqMaspStarkV1.canonical_label();
         assert_eq!(AUTHORIZATION_CONTEXT_V1, label.as_bytes());
         assert_eq!(NOTE_KDF_NAMESPACE_V1, label);
         assert_ne!(AUTHORIZATION_CONTEXT_V1, b"iroha-pq-masp-stark-v1");

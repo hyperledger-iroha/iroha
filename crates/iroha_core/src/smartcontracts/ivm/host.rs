@@ -1681,6 +1681,8 @@ pub struct SubscriptionContext {
 }
 /// Helpers for accessing subscription data through a query-state reference.
 pub trait QueryStateRefOps {
+    /// Borrow the committed selection that fixes the grammar of opaque native payloads.
+    fn runtime_selection(&self) -> &iroha_data_model::runtime::definition::RootSelectionV1;
     /// Return the committed current privacy bounds for original attachment materialization.
     fn privacy_consensus_limits(&self) -> iroha_data_model::privacy::PrivacyConsensusLimitsV1;
     /// Committed complete source ceiling used before original-intent scratch allocation.
@@ -2395,6 +2397,14 @@ fn visit_storage_positions(
     Ok(std::ops::ControlFlow::Continue(()))
 }
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
+    fn runtime_selection(&self) -> &iroha_data_model::runtime::definition::RootSelectionV1 {
+        match *self {
+            Self::View(state) => state.world().runtime_selection(),
+            Self::QueryView(state) => state.world().runtime_selection(),
+            Self::Block(state) => state.world().runtime_selection(),
+            Self::Transaction(state) => state.world().runtime_selection(),
+        }
+    }
     fn transaction_source_byte_limit(&self) -> u64 {
         match *self {
             Self::View(state) => state
@@ -3215,6 +3225,11 @@ impl HostExecutionArtifacts {
             )
             .into());
         }
+        crate::runtime::ironwood::admission::durable_state_overlay(
+            durable_state_overlay,
+            world.runtime_selection(),
+        )
+        .map_err(|error| error.map_rejection(ValidationFail::NotPermitted))?;
         for (path, authorization) in durable_state_authorizations {
             validate_reserve_durable_state_path(path)?;
             if Self::durable_path_requires_authorization(path) && authorization.is_none() {
@@ -9110,10 +9125,19 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<'_, '_, QS> {
         )
         .map_err(|_| ivm::VMError::PermissionDenied)
     }
-    fn decode_opaque_instruction(vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
+    fn decode_opaque_instruction(&self, vm: &IVM) -> Result<InstructionBox, ivm::VMError> {
         let pointer = vm.register(10);
         let tlv = Self::decode_pointer_tlv(vm, pointer, PointerType::NoritoBytes)?;
-        decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)
+        let value =
+            decode_canonical_norito(tlv.payload).map_err(|_| ivm::VMError::NoritoInvalid)?;
+        if crate::runtime::ironwood::admission::instruction_requires_ironwood(&value) {
+            let query_state = self.query_state.get();
+            let state = query_state.as_ref().ok_or(ivm::VMError::PermissionDenied)?;
+            if !crate::runtime::ironwood::enabled(state.runtime_selection()) {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+        }
+        Ok(value)
     }
     /// Return the authority recorded on ledger effects emitted by the active frame.
     ///
@@ -10804,13 +10828,48 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                         }
                         Trigger::new(id, action)
                     };
-                    // A contract-registered trigger is an opaque deferred executable: it may
-                    // not carry the signed-only outbound SCCP record (specs/sccp.md §4.4).
-                    // Applying the queue re-checks every effect, including multisig approvals.
-                    if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
-                        trigger.action().executable(),
-                    ) {
-                        return Err(ivm::VMError::PermissionDenied);
+                    {
+                        let query_state = self.query_state.get();
+                        let catalog = crate::runtime::release_catalog()
+                            .map_err(|_| ivm::VMError::DecodeError)?;
+                        if query_state.is_none()
+                            && crate::runtime::ironwood::admission::executable_requires_ironwood(
+                                trigger.action().executable(),
+                            )
+                        {
+                            return Err(ivm::VMError::PermissionDenied);
+                        }
+                        // This is the native SCCP preflight parser boundary, not wire admission.
+                        // Without committed state, inspect every grammar this binary implements:
+                        // assuming the predecessor grammar could hide a forbidden SCCP record
+                        // inside an opaque proposal that only the Ironwood parser recognizes.
+                        // With state, retain its exact selected grammar for historical execution.
+                        let selection = match query_state.as_ref() {
+                            Some(state) => state.runtime_selection(),
+                            None => {
+                                &catalog
+                                    .ironwood
+                                    .as_ref()
+                                    .ok_or(ivm::VMError::DecodeError)?
+                                    .selection
+                            }
+                        };
+                        if !crate::runtime::ironwood::enabled(selection)
+                            && crate::runtime::ironwood::admission::executable_requires_ironwood(
+                                trigger.action().executable(),
+                            )
+                        {
+                            return Err(ivm::VMError::DecodeError);
+                        }
+                        // A contract-registered trigger is an opaque deferred executable: it may
+                        // not carry the signed-only outbound SCCP record (specs/sccp.md §4.4).
+                        // Applying the queue re-checks every effect, including multisig approvals.
+                        if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
+                            trigger.action().executable(),
+                            selection,
+                        ) {
+                            return Err(ivm::VMError::PermissionDenied);
+                        }
                     }
                     let instr = InstructionBox::from(Register::trigger(trigger));
                     Ok(self.queue_instruction(instr)?)
@@ -10967,7 +11026,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<'_, '_, QS> {
                     if operation_tag == ivm::syscalls::SMARTCONTRACT_INSTRUCTION_TAG_PRESENT_X509 {
                         return self.queue_x509_attachment(vm);
                     }
-                    let ib = Self::decode_opaque_instruction(vm)?;
+                    let ib = self.decode_opaque_instruction(vm)?;
                     self.ensure_instruction_queue_allowed(&ib)?;
                     let any_ref = ib.as_any();
                     match operation_tag {

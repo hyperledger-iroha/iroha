@@ -38,7 +38,7 @@ fn run_verange_stage_v1(
     let statement = VeRangeType1BatchStatementV1::new(profile, commitments.clone(), &binding)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let mut rng = EvidenceRng06::new(stage_seed_v1(
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
         case_kind,
     ));
     let proof = prove_batch(&statement, &values, &blindings, &mut rng)
@@ -124,7 +124,7 @@ fn verange_binding_v1(
 ) -> Result<TranscriptBindingV1<'static>, PrivacyReleaseEvidenceErrorClassV1> {
     let parameters = VeRangeParametersV1::for_profile(profile)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
-    let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+    let compiled = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     if compiled.parameter_digest.as_bytes() != &parameters.parameter_digest() {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
@@ -178,49 +178,52 @@ fn verange_statement_material_v1(
 /// cannot substitute a self-consistent free-form description.
 #[must_use]
 pub const fn privacy_release_protocol_descriptor_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 ) -> &'static str {
     match protocol_id {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
+        PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 => {
+            "ironwood-halo2-actions-v1; exact12-coordinate=excluded; qualification=unavailable; activation=unavailable-pending-governed-storage-transition"
+        }
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => {
             "zk-ace-pq-authorization-v1; prover-entrypoint=zk_ace::prove_zk_ace_privacy_v1_with_rng; verifier-entrypoint=zk_ace::verify_zk_ace_privacy_v1; digest=poseidon-x7-goldilocks-digest384-six-independent-lanes; transcript=typed-domain+length-framed-digest384; merkle=binary-digest384-index-and-level-bound-paths; challenge-field=goldilocks-fp4; blowup=8; fixed-primary=4096 execution-trace rows; fixed-secondary=136 unique verifier queries; fixed-depth=11 binary Fp4 FRI rounds; terminal=16 points degree-at-most-2; proof-cap=2131222 exact bytes; classical-rom-security=128 work-normalized bits; qrom-qualification=unavailable pending independent Fiat-Shamir reduction, six-lane collision and multi-target accounting, and implementation review; activation=unavailable"
         }
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => {
             "anonymous-pgc-k-out-of-n-v1; prover=anonymous_pgc::bootstrap::prove_bootstrap+anonymous_pgc::payment::prove_payment; verifier=anonymous_pgc::bootstrap::verify_bootstrap_encoded+anonymous_pgc::payment::verify_payment_encoded; positive-and-maximum-artifact-order=account-bootstrap,payment; payment-invariant=verified-bootstrap-payload-and-proof-digests; authoritative-root-effect=canonical-epoch1-to-epoch2-complete-account-table-successor-validation; max-primary=64 anonymity-set members; max-secondary=8 recipients; max-depth=32 range-proof bits; artifact-caps=MAX_PGC_BOOTSTRAP_PROOF_BYTES_V1,MAX_PGC_PAYMENT_PROOF_BYTES_V1"
         }
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 => {
             "verange-transparent-range-v1; prover=verange::prove_batch; verifier=verange::verify_batch_encoded; max-primary=8 commitments; max-secondary=64 range bits; max-depth=8 Figure-1 matrix rows; proof-cap=MAX_VERANGE_TYPE1_BATCH_PROOF_BYTES_V1"
         }
-        PrivacyProtocolIdV1::IrohaZkAmsV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1 => {
             "iroha-zk-ams-v1; prover=zk_ams::prove_zk_ams_batch_admission_v1+zk_ams::sign_zk_ams_provision_statement_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=zk_ams::verify_zk_ams_batch_admission_v1+zk_ams::verify_zk_ams_provision_statement_v1; batch-wire=independent-version+exact-count+fixed-eight-slots+canonical-zero-unused-tail; batch-relation=homogeneous-issuer-policy-registry-epoch-lineage+unique-credential-digests+unique-seed-public-keys+ordered-root-chain; all-case-artifact-order=batch8-admission,successor-root-provisioning; lineage=two-sequential-single-action-transactions+distinct-intent-digests+authoritative-prestate-record-digest-to-batch-successor-record-digest-to-full-admitted-ring; max-primary=64 admitted ring members; max-secondary=8 ordered admission anchors; max-depth=64 LSAG cyclic responses; artifact-caps=MAX_ZK_AMS_BATCH_ADMISSION_PROOF_BYTES_V1,MAX_ZK_AMS_LSAG_PROOF_BYTES_V1"
         }
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => {
             "vega-existing-credential-zk-v1; prover=vega::prove_mdl_figure9_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; verifier-state=privacy_verifier::validate_vega_authoritative_issuer_binding_v1+vega::verify_mdl_figure9_v1; canonical-profile=Microsoft-Vega_MC-Figure9@c0ee259053cd12eaf43ed71b5cde375452b3ee4d; wire=canonical-mc-2-plus-6-sha256-steps; signature-preflight=P1363-nonzero-scalars+low-S-required+reject-high-S-without-normalization+verify-prehash-before-inverse; fixed-primary=2359296 total application constraints; fixed-secondary=1048576 maximum circuit variables; fixed-public-inputs=14; fixed-depth=21 relaxed sumcheck rounds; proof-cap=524288 canonical bytes; issuer-state=current active self-digested append-only revision+permanent-global-p256-key-ownership+retired-p256-key-never-reactivated"
         }
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
             "iroha-zk-x509-stark-p256-v1; prover=zk_x509::engine::prove_zk_x509_credential_proof_v1_with_rng; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=zk_x509::engine::verify_zk_x509_credential_proof_v1; wire=X5S1-containing-exactly-one-X5M1-main-and-one-X5C1-compact-ca-no-legacy; trusted-state=active-trust-anchor+active-certificate-policy+current-complete-signed-crl+current-retained-ca-root+certificate-nullifier-replay; max-primary=3 certificate-chain members; max-secondary=4 disclosed subject attributes; max-depth=64 complete-CRL entries; fixed-main=49 logical registrations across six native groups joined under one base and one auxiliary root; projected-X5S1-maximum=9204362 bytes; outer-action-proof-cap=9437184 bytes; activation=unavailable-qualification; process-cap=300000ms+12884901888-byte-peak-rss+34359738368-byte-address-space"
         }
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
             "iroha-jindo-polynomial-commitment-v1; prover-state=jindo::prepare_jindo_privacy_action_with_rng_v1; verifier=privacy_verifier::verify_privacy_envelope_v1; native-verifier=jindo::verify_batched_evaluation_v1; exact-primary=4 polynomials; max-secondary=256 coefficients each; fixed-depth=1024 ring degree; phases=PiSplit+32x(PiAgg+PiQuad); challenge=32-independent-uniform-signed-monomials-per-phase-cardinality2048; extraction=all-distinct-signed-monomial-differences-machine-checked-units-in-four-compiled-RNS-factors; qrom-production-certificate=unavailable-pending-pinned-parallel-fiat-shamir-extractor-loss-theorem; split-challenge=uniform-nonzero-Fp-star; wire=IJP3-no-IJP1-no-IJP2; proof-cap=7159944-exact-bytes"
         }
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
             "iroha-bootle-lantern-anoncred-v1; native-lifecycle=bootle_lantern::issuer::BootleLanternIssuerKeyPairV1::generate_with_rng_v1+issuer_authorize_blind_issuance_with_rng_v1+holder_prepare_blind_issuance_with_rng_v1+issuer_blind_issue_once_encoded_with_rng_v1+holder_finalize_blind_issuance_v1+bootle_lantern::prove_bound_presentation_v1; issuance-wires=ILA1-320-byte-authorization+ILQ1-71576-byte-complete-request-with-ILB1-70344-byte-P1+ILR1-3176-byte-response; issuance-store=ILS1-strict-file-store+canonical-directory-process-lease+held-unix-exclusive-flock+bounded-worst-case-record-reservation+explicit-height-pruning+nonmutating-preflight-before-P1+atomic-Fresh-to-Processing-before-issuer-rng+durable-Completed-exact-ILR1-cache+terminal-Failed-no-reset+same-request-completed-retry-after-process-reopen-and-expiry-with-zero-rng; issuance-rng=one-health-checked-master64-per-holder-or-issuer-operation+closed-context-bound-purpose-substreams; presentation-wire=ILN1-70344-byte-P2; verifier-state=bootle_lantern::verify_bound_presentation_encoded_v1; exact-caps=ILQ1-request-bytes71576+keygen-candidates4096+keygen-parity-attempts128+authorization-id-attempts4+authorization-lifetime-blocks4096+holder-vector-attempts64+holder-coefficient-proposals256+scope-coefficient-attempts4096+issuer-preimage-attempts64+falcon-preimage-proposals-per-coefficient256+falcon-preimage-total-proposals-per-attempt262144; max-primary=8 disclosed attributes; max-secondary=32 governed allowed values per required attribute; max-depth=8 module rank; proof-cap=70344 exact ILN1 bytes; no-direct-or-trusted-issuance"
         }
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => {
             "orchard-halo2-actions-v1; prover=orchard::prepare_orchard_bundle_v1_with_rng+orchard::authorize_orchard_bundle_v1; verifier=orchard::verify_orchard_bundle_v1; authorization=consuming-two-phase+native-consensus-binding; max-primary=2 actions; max-secondary=2 spends; max-depth=32 note-tree levels; proof-cap=orchard::orchard_authorization_wire_size_v1(2)"
         }
-        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
+        PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1 => {
             "monero-fcmp-plus-plus-v1; prover=fcmp_plus_plus::prove_fcmp_plus_plus_v1; verifier=fcmp_plus_plus::verify_fcmp_transaction_v1; max-primary=2 inputs; max-secondary=4 strictly-positive outputs; max-depth=32 alternating Selene/Helios curve-tree layers; proof-cap=12520 exact max-shape IFC1 bytes; bounded-challenge-and-full-proof-retry=128"
         }
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
             "iroha-ivm-private-note-stark-v1; prover=ivm_private_note::prove_ivm_private_note_v1_with_rng; verifier=ivm_private_note::verify_ivm_private_note_v1; public-input=statement+mandatory-native-consensus-binding; max-primary=2 consumed notes; max-secondary=2 created notes; fixed-depth=32 SHA-256 note-tree levels; fixed-trace=16384 rows; fixed-queries=60; proof-cap=8388608 IPS1 bytes; wallet=X25519+XChaCha20Poly1305"
         }
-        PrivacyProtocolIdV1::PqMaspStarkV1 => {
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => {
             "pq-masp-stark-v1; prover=pq_masp::prove_pq_masp_v1_with_rng; verifier=pq_masp::verify_pq_masp_v1; public-input=statement+mandatory-native-consensus-binding; max-primary=2 consumed notes; max-secondary=2 created notes; fixed-depth=32 SHA-256 note-tree levels; fixed-trace=16384 rows; fixed-queries=60; proof-cap=9437184 complete PQA1 bytes; authorization=ML-DSA-65-over-statement+binding+inner-proof; wallet=ML-KEM-768+XChaCha20Poly1305"
         }
     }
 }
 fn stage_seed_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> [u8; 32] {
     let mut hash = Sha256::new();
@@ -230,7 +233,7 @@ fn stage_seed_v1(
     hash.finalize().into()
 }
 fn stage_purpose_seed_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     case_kind: PrivacyReleaseCaseKindV1,
     purpose: &[u8],
 ) -> Result<[u8; 32], PrivacyReleaseEvidenceErrorClassV1> {

@@ -40,7 +40,7 @@ use super::transparent_stark::{
 };
 use fastpq_isi::FASTPQ_QUERY_COUNT_V1;
 #[cfg(test)]
-use iroha_data_model::privacy::PrivacyProtocolIdV1;
+use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
 use rand::TryRng;
 use rayon::prelude::*;
 use row_streams::RowStreamsV1;
@@ -7008,7 +7008,7 @@ mod tests {
     };
     pub(super) const DOMAINS: AggregateStarkDomainsV1 = AggregateStarkDomainsV1 {
         digest_context: TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             b"aggregate-test-profile-v1",
         ),
         base_leaf: b"aggregate-test-base-leaf",
@@ -7091,7 +7091,7 @@ mod tests {
     #[test]
     fn explicit_commitment_556_column_geometry_bounds_cpu_preparation() {
         let context = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"atomic-private-settlement-stark-profile-v1",
         );
         let catalog =
@@ -7380,7 +7380,7 @@ mod tests {
         let initial_state = actual.state();
         let mut invalid = domains;
         invalid.digest_context = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"borrowed-domain-other-profile-v1",
         );
         invalid.query_seed = invalid.base_leaf;
@@ -7429,7 +7429,7 @@ mod tests {
         }
         let mut substituted = TransparentTranscriptV1::new(
             TransparentStarkDigestContextV1::new(
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 b"aggregate-test-profile-v1",
             ),
             b"aggregate-test-suite",

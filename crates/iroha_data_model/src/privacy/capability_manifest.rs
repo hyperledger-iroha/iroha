@@ -4,8 +4,8 @@ use super::{
     PrivacyCapabilityRowValidationErrorV1, PrivacyCapabilitySnapshotV1,
     PrivacyCapabilitySnapshotValidationErrorV1, PrivacyCompiledProfileResultV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyConsensusPolicyV1,
-    PrivacyExact12CapabilityManifestDigestV1, PrivacyPolicyValidationErrorV1, PrivacyProtocolIdV1,
-    PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
+    PrivacyExact12CapabilityManifestDigestV1, PrivacyPolicyValidationErrorV1,
+    PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
 };
 
 use crate::{DeriveJsonDeserialize, DeriveJsonSerialize};
@@ -233,7 +233,7 @@ pub enum PrivacyCapabilityUnavailableReasonV1 {
     #[norito(rename = "compiled-profile")]
     CompiledProfile(PrivacyCompiledProfileUnavailableReasonV1),
 }
-impl PrivacyProtocolIdV1 {
+impl PrivacyRuntimeProtocolIdV1 {
     /// Canonical public operation schema for this retained protocol.
     #[must_use]
     pub const fn expected_operation_schema(self) -> PrivacyOperationSchemaV1 {
@@ -252,7 +252,9 @@ impl PrivacyProtocolIdV1 {
             Self::IrohaBootleLanternAnoncredV1 => {
                 PrivacyOperationSchemaV1::BootleLanternCredentialPresentationV1
             }
-            Self::OrchardHalo2ActionsV1 => PrivacyOperationSchemaV1::OrchardNoteActionV1,
+            Self::OrchardHalo2ActionsV1 | Self::IronwoodHalo2ActionsV1 => {
+                PrivacyOperationSchemaV1::OrchardNoteActionV1
+            }
             Self::MoneroFcmpPlusPlusV1 => PrivacyOperationSchemaV1::FcmpMembershipPaymentV1,
             Self::IrohaIvmPrivateNoteStarkV1 => PrivacyOperationSchemaV1::IvmPrivateNoteActionV1,
             Self::PqMaspStarkV1 => PrivacyOperationSchemaV1::PqMaspNoteActionV1,
@@ -274,6 +276,7 @@ impl PrivacyProtocolIdV1 {
             | Self::IrohaZkX509StarkP256V1
             | Self::IrohaBootleLanternAnoncredV1 => PrivacyExecutionModeV1::PresentationAction,
             Self::OrchardHalo2ActionsV1
+            | Self::IronwoodHalo2ActionsV1
             | Self::IrohaIvmPrivateNoteStarkV1
             | Self::PqMaspStarkV1 => PrivacyExecutionModeV1::NoteAction,
         }
@@ -292,7 +295,9 @@ impl PrivacyProtocolIdV1 {
             | Self::IrohaZkX509StarkP256V1
             | Self::IrohaBootleLanternAnoncredV1
             | Self::MoneroFcmpPlusPlusV1 => PrivacyFeatureMaskV1::HIDE_SENDER,
-            Self::OrchardHalo2ActionsV1 | Self::IrohaIvmPrivateNoteStarkV1 => {
+            Self::OrchardHalo2ActionsV1
+            | Self::IronwoodHalo2ActionsV1
+            | Self::IrohaIvmPrivateNoteStarkV1 => {
                 PrivacyFeatureMaskV1::HIDE_AMOUNT
                     | PrivacyFeatureMaskV1::HIDE_SENDER
                     | PrivacyFeatureMaskV1::HIDE_RECEIVER
@@ -330,7 +335,7 @@ impl PrivacyProtocolIdV1 {
 )]
 pub struct PrivacyExact12CapabilityRowV1 {
     /// Closed protocol identity.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Canonical public operation schema.
     pub operation_schema: PrivacyOperationSchemaV1,
     /// Closed execution classification.
@@ -374,7 +379,7 @@ impl PrivacyExact12CapabilityRowV1 {
     }
     /// Effective ordinary limits for the selected available implementation.
     #[must_use]
-    pub const fn effective_protocol_limits_v1(&self) -> Option<PrivacyProtocolLimitsV1> {
+    pub const fn effective_protocol_limits_v1(&self) -> Option<PrivacyRuntimeProtocolLimitsV1> {
         PrivacyCapabilityRowV1 {
             protocol_id: self.protocol_id,
             compiled_profile: self.compiled_profile,
@@ -598,10 +603,10 @@ impl PrivacyExact12CapabilityManifestV1 {
         self.consensus_policy
             .validate_at_committed_height(self.committed_height)
             .map_err(PrivacyExact12CapabilityManifestValidationErrorV1::ConsensusPolicy)?;
-        if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
+        if self.protocols.len() != PrivacyRuntimeProtocolIdV1::EXACT12_COUNT {
             return Err(
                 PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolCount {
-                    expected: PrivacyProtocolIdV1::COUNT,
+                    expected: PrivacyRuntimeProtocolIdV1::EXACT12_COUNT,
                     actual: self.protocols.len(),
                 },
             );
@@ -609,7 +614,7 @@ impl PrivacyExact12CapabilityManifestV1 {
         for (index, (row, expected)) in self
             .protocols
             .iter()
-            .zip(PrivacyProtocolIdV1::ALL)
+            .zip(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
             .enumerate()
         {
             if row.protocol_id != expected {
@@ -687,15 +692,15 @@ pub enum PrivacyExact12CapabilityManifestValidationErrorV1 {
         /// Zero-based row index.
         index: usize,
         /// Required protocol.
-        expected: PrivacyProtocolIdV1,
+        expected: PrivacyRuntimeProtocolIdV1,
         /// Rejected protocol.
-        actual: PrivacyProtocolIdV1,
+        actual: PrivacyRuntimeProtocolIdV1,
     },
     /// One canonical row is invalid.
     #[error("privacy Exact12 capability row {protocol_id:?} is invalid: {source}")]
     ProtocolRow {
         /// Protocol selected by canonical order.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Exact row failure.
         source: PrivacyExact12CapabilityRowValidationErrorV1,
     },

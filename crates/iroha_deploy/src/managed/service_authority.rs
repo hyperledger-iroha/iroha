@@ -894,7 +894,7 @@ impl ServiceAuthority {
         let block = verifier
             .verified_tip()
             .map_err(|_| invalid("invalid certified reserve tip"))?;
-        let schema = iroha_core::state::State::native_world_schema_hash_v1()
+        let schema = iroha_core::state::State::native_world_schema_hashes_v1()
             .map_err(|_| invalid("native reserve schema unavailable"))?;
         // Keep the original manager clients intact for finality. Rebind only the account
         // signer of each independently selected original committee endpoint for this purpose.
@@ -915,7 +915,7 @@ impl ServiceAuthority {
                     provider,
                     owner,
                     policy,
-                    schema,
+                    schema.as_slice(),
                     &block,
                 )
                 .map_err(|_| invalid("native reserve provider candidate unavailable or invalid"))

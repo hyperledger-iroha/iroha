@@ -45,7 +45,7 @@ def _write_fixture(
         """fn retained_protocol(protocol: &str) {
     let protocol_id = protocol;
     match protocol_id {
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
             return Err(WorkerError::UnsupportedProtocol);
         }
     }
@@ -69,6 +69,10 @@ fn next_function() {}
     (python_root / "privacy_wallet_worker.py").write_text(
         f"""PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1 = {{
 {registry}{registry_suffix}
+}}
+PRIVACY_WORKER_OPERATION_SCHEMAS_V1 = {{
+    **PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1,
+    "ironwood-halo2-actions-v1": "ironwood_note_action_v1",
 }}
 
 class PrivacyWalletWorkerControllerV1:
@@ -231,3 +235,17 @@ def test_retired_activation_validator_cannot_replace_selected_profile_admission(
     path.write_text(source.replace("validate_materialized_against_profile_v1", "validate_materialized_against_activation_v1"))
     errors = checker.inspect_repository(tmp_path).structural_errors
     assert any("X509 custody guard missing" in error and "validate_materialized_against_profile_v1" in error for error in errors)
+
+
+@pytest.mark.parametrize("replacement", [
+    '"iroha-zk-x509-stark-p256-v1": "ironwood_note_action_v1"',
+    '"ironwood-halo2-actions-v1": "orchard_note_action_v1"',
+    '"ironwood-halo2-actions-v1": "ironwood_note_action_v1", "unknown-v1": "unknown"',
+])
+def test_additive_worker_registry_cannot_widen_or_reinterpret_originals(tmp_path: Path, replacement: str) -> None:
+    _write_fixture(tmp_path)
+    path = tmp_path / "python/iroha_python/src/iroha_python/privacy_wallet_worker.py"
+    original = '"ironwood-halo2-actions-v1": "ironwood_note_action_v1"'
+    assert original in path.read_text()
+    path.write_text(path.read_text().replace(original, replacement))
+    assert any("additive registry" in error for error in checker.inspect_repository(tmp_path).structural_errors)

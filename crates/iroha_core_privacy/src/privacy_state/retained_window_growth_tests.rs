@@ -190,8 +190,8 @@ fn orchard_retention_expansion_preserves_attained_window_across_restart_and_shri
 #[test]
 fn proof_managed_retention_expansion_preserves_attained_window_across_restart_and_shrink() {
     for protocol in [
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
     ] {
         let mut fixture = proof_managed_note_persisted_fixture(protocol);
         assert_retention_growth!(fixture, |fixture: &mut ProofManagedPersistedFixture,
@@ -210,7 +210,7 @@ fn proof_managed_retention_expansion_preserves_attained_window_across_restart_an
 }
 
 struct RetainedZkAmsFixture {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: PrivacyZkAmsRegistryBootstrapDigestV1,
     commitments: Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,

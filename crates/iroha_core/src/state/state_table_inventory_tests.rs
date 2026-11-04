@@ -3287,6 +3287,35 @@ const VALIDATION_FEE_MODEL: &str = "crates/iroha_data_model/src/validation_fee.r
 /// value digests State content names the listed commitment under `digests`.
 const WITNESS_FAMILIES: &[WitnessFamily] = &[
     WitnessFamily {
+        id: "native_lifecycle_runtime_selection",
+        tags: &["TriggerLifecycleSelection"],
+        key: "fixed key 0xDD followed by iroha:runtime:lifecycle-selection:v1; invalid as a UTF-8 StatePath",
+        value: "104 raw bytes: network identity, little-endian block height, frozen execution SelectionId and final SelectionId",
+        reads: false,
+        fields: &["world.runtime_selection"],
+        source: "selected successor only; frozen and final immutable runtime-selection record identities, not a new State table digest",
+        derivation: &[],
+        accessors: &[],
+        digests: &[],
+        value_types: &[],
+        hashes: &[],
+        opaque: &[],
+        evidence: &[
+            (
+                "crates/iroha_core/src/state/native_lifecycle_state.rs",
+                "pub(super) fn lifecycle_runtime_anchor(",
+            ),
+            (
+                "crates/iroha_core/src/state/fastpq_quantity_capture/commitment_journal/finalized_source/witness.rs",
+                "let lifecycle = self",
+            ),
+            (
+                "crates/iroha_data_model/src/sumeragi_finality/lifecycle_runtime.rs",
+                "pub fn lifecycle_runtime_anchor(",
+            ),
+        ],
+    },
+    WitnessFamily {
         id: "validation_fee_policy",
         tags: &["ValidationFeePolicy"],
         key: "fixed key of the tag",
@@ -4812,6 +4841,10 @@ const CARRIERS: &[Carrier] = &[
                 "one typed output per executed input or internal invocation: execution results, whose hashes are the leaves of output_merkle",
             ),
             (
+                "BlockResult.lifecycle_custody",
+                "local allocation charges for the original output graph; skipped by codecs, schema, equality and cloning, with no State content or digest",
+            ),
+            (
                 "BlockResult.committed_fragment_count",
                 "number of successful execution fragments: an execution result that validators compare with their own count",
             ),
@@ -4826,6 +4859,10 @@ const CARRIERS: &[Carrier] = &[
         ],
         exhaustive: &["SignedBlock", "BlockPayload", "BlockResult"],
         opaque: &[
+            (
+                "LifecycleOutputCustody",
+                "non-wire allocation ledgers for the original locally produced lifecycle graph; contains only allocation charges, no State content or digest",
+            ),
             (
                 "BlockHeader",
                 "the block header: walked under the block_header carrier",
@@ -9503,6 +9540,30 @@ fn privacy_request_inventory_pins_exact_domains_and_source_uses() {
     }
 }
 
+#[test]
+fn ironwood_inventory_classifies_only_the_explicit_protocol_and_cutover_domains() {
+    let owners = domain_owners();
+    for (literal, usage) in [
+        ("ironwood-halo2-actions-v1", Use::Name),
+        ("iroha.privacy.bootstrap_ironwood_pool.v1", Use::Record),
+        ("iroha:privacy:ironwood-pool-bootstrap:v1", Use::Record),
+        ("iroha.events.data.ironwood.v1", Use::Record),
+        ("iroha.ironwood.v1", Use::Record),
+        ("iroha.ironwood.identity-cutover.v1", Use::Record),
+        (r"iroha:runtime:ironwood:v1\0", Use::Record),
+    ] {
+        assert_eq!(owners.get(literal), Some(&DomainOwner::Other(usage)));
+        let changed = literal.replace("v1", "v2");
+        let probe = format!("const DOMAIN: &str = \"{changed}\";");
+        let scan = scan_sources([("ironwood-domain-negative.rs", probe.as_str())]);
+        assert_eq!(
+            scan.unlisted_domains,
+            BTreeSet::from([format!("{changed} in ironwood-domain-negative.rs")])
+        );
+        assert!(std::panic::catch_unwind(|| scan.require_complete()).is_err());
+    }
+}
+
 /// The immutable root projection remains owned by the confidential-note accumulator.
 #[test]
 fn ivm_zk_roots_inventory_tracks_current_owner_and_refuses_extra_constructions() {
@@ -10997,6 +11058,7 @@ fn witness_families_cover_every_witness_key_tag() {
         "AssetBalance",
         "FeeRecord",
         "RewardExposureArchive",
+        "TriggerLifecycleSelection",
     ] {
         assert!(tags.iter().any(|known| known == tag), "{tag}");
     }
@@ -11009,6 +11071,10 @@ fn witness_families_cover_every_witness_key_tag() {
         require_witnessed_commitment(row.field, row.commitment, families);
     }
     assert_eq!(witnessed["world.sumeragi_lanes"], ["sumeragi_lane_state"]);
+    assert_eq!(
+        witnessed["world.runtime_selection"],
+        ["native_lifecycle_runtime_selection"]
+    );
     assert_eq!(witnessed["world.sccp_parameters"], [SCCP_FAMILY]);
     // The table that the permission-table root digests is mapped to its family, and the
     // two families that named only a function now name their fields.

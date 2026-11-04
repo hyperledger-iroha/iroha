@@ -17,8 +17,8 @@ mod privacy_occurrence_executor {
         privacy::{
             OrchardHalo2ActionsStatementV1, PrivacyConsensusLimitsV1,
             PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1, PrivacyOrchardPoolBootstrapV1,
-            PrivacyPoolIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-            PrivacyProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1, PrivacyStatementV1,
+            PrivacyPoolIdV1, PrivacyProofBytesV1, PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1,
+            PrivacyRuntimeProtocolIdV1, PrivacyRootV1, PrivacyStatementContextV1, PrivacyRuntimeStatementV1,
             PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1,
             PrivacyValueBalanceV1,
         },
@@ -147,7 +147,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
         state: &State,
         open: &ContractInvocation,
         close: &ContractInvocation,
-        envelope: PrivacyProofEnvelopeV1,
+        envelope: PrivacyRuntimeProofEnvelopeV1,
     ) -> TransactionPayload {
         let mut builder = TransactionBuilder::new(
             state.network_id,
@@ -157,7 +157,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
         .with_executable(Executable::Batch(
             vec![
                 ExecutableBatchItem::ContractCall(open.clone()),
-                ExecutableBatchItem::Instruction(SubmitPrivacyProofV1::new(envelope).into()),
+                ExecutableBatchItem::Instruction(SubmitPrivacyProofV1::new((envelope).try_into().expect("frozen Exact12 test input")).into()),
                 ExecutableBatchItem::ContractCall(close.clone()),
             ]
             .into(),
@@ -172,7 +172,7 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
         open: &ContractInvocation,
         close: &ContractInvocation,
     ) -> (SignedTransaction, SignedTransaction, u64, usize) {
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+        let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
             .expect("compiled production Orchard profile");
         // Deterministic native witness/entropy belong only to this test; neither is exported.
         let spending_key = (1_u8..=u8::MAX)
@@ -236,9 +236,9 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
         };
         // Empty proof bytes are only the native builder's unsigned draft. They are replaced
         // before signing or execution and are never submitted to any accepting verifier.
-        let draft_envelope = PrivacyProofEnvelopeV1::bind_v1(
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone()),
-            PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
+        let draft_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement.clone()),
+            PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
         )
         .expect("bind draft statement");
         let intent = mixed_payload(state, open, close, draft_envelope)
@@ -260,14 +260,14 @@ seiyaku PrivacyOccurrenceGuard { permission CanInvokeContractEntrypoint;
         assert!(!proved.authorization.is_empty());
         assert_eq!(proved.public.anchor, *statement.anchor.as_bytes());
         assert_eq!(proved.public.actions.len(), statement.actions.len());
-        let envelope = PrivacyProofEnvelopeV1::bind_v1(
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement),
-            PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(proved.authorization)),
+        let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement),
+            PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(proved.authorization)),
         )
         .expect("bind final real proof");
         assert!(profile.matches_envelope_v1(&envelope));
         let action_count = match &envelope.statement {
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => statement.actions.len(),
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) => statement.actions.len(),
             _ => unreachable!("Orchard fixture"),
         };
         let encoded_bytes = u64::try_from(norito::canonical_frame_len(&envelope).unwrap()).unwrap();

@@ -71,7 +71,7 @@ pub(super) fn prepare_private_settlement_parameter(
     transaction: &crate::state::StateTransaction<'_, '_>,
 ) -> Result<Option<Parameter>, ExecutionAttemptError<InstructionExecutionError>> {
     use iroha_data_model::privacy::{
-        PrivacyProtocolIdV1, PrivacyProtocolPolicyKeyV1, PrivateSettlementPolicyV1,
+        PrivacyProtocolPolicyKeyV1, PrivacyRuntimeProtocolIdV1, PrivateSettlementPolicyV1,
     };
     let Parameter::Custom(custom) = parameter else {
         return Ok(None);
@@ -84,7 +84,7 @@ pub(super) fn prepare_private_settlement_parameter(
     };
     let convert = |error| crate::private_settlement::policy::attempt(error).map_rejection(invalid);
     let protocol_key =
-        PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
     let protocol = transaction
         .world
         .privacy_protocol_policies

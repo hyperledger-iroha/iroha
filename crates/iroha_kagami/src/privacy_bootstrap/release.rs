@@ -16,7 +16,8 @@ use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     isi::{InstructionBox, privacy::RegisterPrivacyBootleLanternIssuerPolicyV1},
     privacy::{
-        BootleLanternIssuerPolicyLifecycleV1, PrivacyProtocolIdV1, privacy_exact12_matrix_bytes_v1,
+        BootleLanternIssuerPolicyLifecycleV1, PrivacyRuntimeProtocolIdV1,
+        privacy_exact12_matrix_bytes_v1,
     },
 };
 use iroha_genesis::validate_genesis_manifest_json;
@@ -1028,7 +1029,7 @@ fn validate_staging_plan_v1(plan: &JsonValue) -> color_eyre::Result<()> {
     expect_string_v1(
         bootle,
         "protocol_label",
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1.canonical_label(),
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1.canonical_label(),
         "Bootle/Lantern plan",
     )?;
     if !bootle
@@ -1214,7 +1215,7 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
     expect_u64_v1(
         wire,
         "catalog_size",
-        PrivacyProtocolIdV1::COUNT as u64,
+        PrivacyRuntimeProtocolIdV1::COUNT as u64,
         "privacy rollout wire contract",
     )?;
     expect_string_v1(
@@ -1261,10 +1262,14 @@ fn validate_rollout_plan_v1(bytes: &[u8]) -> color_eyre::Result<()> {
         .get("protocols")
         .and_then(JsonValue::as_array)
         .ok_or_else(|| eyre!("privacy rollout plan `protocols` must be an array"))?;
-    if protocols.len() != PrivacyProtocolIdV1::COUNT {
+    if protocols.len() != PrivacyRuntimeProtocolIdV1::COUNT {
         bail!("privacy rollout plan must contain exactly twelve protocol rows");
     }
-    for (index, (value, protocol)) in protocols.iter().zip(PrivacyProtocolIdV1::ALL).enumerate() {
+    for (index, (value, protocol)) in protocols
+        .iter()
+        .zip(PrivacyRuntimeProtocolIdV1::ALL)
+        .enumerate()
+    {
         let row = object_v1(value, "privacy rollout protocol row")?;
         expect_exact_keys_v1(
             row,
@@ -1309,7 +1314,7 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
         "privacy catalog",
     )?;
     let mut registry_preimage = Vec::new();
-    for protocol in PrivacyProtocolIdV1::ALL {
+    for protocol in PrivacyRuntimeProtocolIdV1::ALL {
         registry_preimage.extend_from_slice(protocol.canonical_label().as_bytes());
         registry_preimage.push(b'\n');
     }
@@ -1323,10 +1328,14 @@ fn validate_catalog_inventory_v1(catalog: &JsonMap) -> color_eyre::Result<()> {
         .get("protocols")
         .and_then(JsonValue::as_array)
         .ok_or_else(|| eyre!("privacy catalog protocols must be an array"))?;
-    if protocols.len() != PrivacyProtocolIdV1::COUNT {
+    if protocols.len() != PrivacyRuntimeProtocolIdV1::COUNT {
         bail!("privacy catalog must contain exactly twelve protocols");
     }
-    for (index, (value, protocol)) in protocols.iter().zip(PrivacyProtocolIdV1::ALL).enumerate() {
+    for (index, (value, protocol)) in protocols
+        .iter()
+        .zip(PrivacyRuntimeProtocolIdV1::ALL)
+        .enumerate()
+    {
         let row = object_v1(value, "privacy catalog row")?;
         expect_exact_keys_v1(
             row,
@@ -2186,8 +2195,8 @@ mod tests {
             .get("protocols")
             .and_then(JsonValue::as_array)
             .expect("rollout protocol rows");
-        assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
-        for (row, protocol) in protocols.iter().zip(PrivacyProtocolIdV1::ALL) {
+        assert_eq!(protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
+        for (row, protocol) in protocols.iter().zip(PrivacyRuntimeProtocolIdV1::ALL) {
             assert_eq!(
                 row.get("label").and_then(JsonValue::as_str),
                 Some(protocol.canonical_label())

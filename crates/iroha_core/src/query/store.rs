@@ -901,10 +901,14 @@ impl LiveQueryStoreHandle {
     /// Decode an ordinary cursor's archived Start under explicit schema limits
     /// and verify canonicality with one bounded re-encode buffer.
     ///
+    /// The lookup neither advances the cursor nor refreshes its idle timer.
+    /// Torii uses it to route and authorize a continuation by the Start that
+    /// opened it.
+    ///
     /// # Errors
     /// Returns [`QueryExecutionFail::Expired`] for an absent, foreign,
     /// oversized, resource-amplifying, malformed, or non-canonical archive.
-    pub(crate) fn ordinary_revalidation_request_bounded(
+    pub fn ordinary_revalidation_request_bounded(
         &self,
         cursor: &ForwardCursor,
         authority: &AccountId,

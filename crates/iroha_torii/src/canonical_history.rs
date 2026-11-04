@@ -236,10 +236,7 @@ pub fn signed_calls(
 > {
     block.validate_output_merkle_cache().map_err(invalid)?;
     Ok(block.execution_outputs().iter().filter_map(|output| {
-        let iroha_data_model::block::execution_output::ExecutionOutputV1::Network(output) = output
-        else {
-            return None;
-        };
+        let output = output.network()?;
         let source = block.network_entrypoint_at(output.input_index as usize)?;
         let signed = match source {
             TransactionEntrypoint::External(signed) => signed,
@@ -389,9 +386,13 @@ mod tests {
     }
 
     fn with_outputs() -> SignedBlock {
+        outputs_fixture(false)
+    }
+
+    fn outputs_fixture(lifecycle: bool) -> SignedBlock {
         let mut block = proposal();
         let trigger_id: iroha_data_model::trigger::TriggerId = "clock".parse().unwrap();
-        let outputs = vec![
+        let mut outputs = vec![
             ExecutionOutputV1::Network(NetworkExecutionOutputV1 {
                 input_index: 0,
                 result: TransactionResult::new(Ok(vec![])),
@@ -424,13 +425,85 @@ mod tests {
                 }],
             }),
         ];
+        if lifecycle {
+            use iroha_data_model::block::execution_output::*;
+            let invoke = |id, kind, height, hash| TriggerLifecycleEffectsV1::Complete {
+                effects: vec![TriggerLifecycleEffectV1 {
+                    ordinal: 0,
+                    trigger_id: id,
+                    origin: TriggerLifecycleOriginV1::Derived {
+                        callback_index: Some(0),
+                    },
+                    change: TriggerLifecycleChangeV1::Invoke {
+                        state: TriggerLifecycleStateV1 {
+                            kind,
+                            registered_at_height: height,
+                            action_hash: if kind == TriggerLifecycleStateKindV1::Time {
+                                Some(hash)
+                            } else {
+                                None
+                            },
+                            action: TriggerLifecycleActionFrameV1 {
+                                codec: TriggerLifecycleActionCodecV1::NoritoCanonicalV1,
+                                bytes: lifecycle_hash_frame(hash).unwrap().to_vec(),
+                            },
+                            retry_state: None,
+                        },
+                        callback_index: 0,
+                    },
+                }],
+            };
+            outputs = outputs
+                .into_iter()
+                .map(|output| match output {
+                    ExecutionOutputV1::Network(mut execution) => {
+                        let id: iroha_data_model::trigger::TriggerId = "called".parse().unwrap();
+                        execution.result = TransactionResult::new(Ok(vec![DataTriggerStep {
+                            id: id.clone(),
+                            instructions: ExecutionStep(
+                                iroha_primitives::const_vec::ConstVec::new_empty(),
+                            ),
+                        }]));
+                        execution.completions.push(InvocationCompletionV1 {
+                            callback_index: 0,
+                            trigger_id: id.clone(),
+                            outcome: TriggerCompletedOutcome::Success,
+                        });
+                        ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                            execution,
+                            trigger_lifecycle: invoke(
+                                id,
+                                TriggerLifecycleStateKindV1::ByCall,
+                                Some(1),
+                                Hash::new(b"called action"),
+                            ),
+                        })
+                    }
+                    ExecutionOutputV1::Time(execution) => {
+                        let trigger = &execution.invocation.trigger;
+                        let trigger_lifecycle = invoke(
+                            trigger.trigger_id.clone(),
+                            TriggerLifecycleStateKindV1::Time,
+                            Some(trigger.registered_at_height),
+                            trigger.action_hash,
+                        );
+                        ExecutionOutputV1::TimeWithLifecycle(TimeExecutionOutputV2 {
+                            execution,
+                            trigger_lifecycle,
+                        })
+                    }
+                    _ => unreachable!(),
+                })
+                .collect();
+        }
         // This fixture also runs without app_api and its application test utilities.
-        // Both successful rows declare one structural fragment; no State execution
-        // or finality is inferred from attaching this collection.
+        // Each root declares one structural fragment; the lifecycle fixture also
+        // includes one callback fragment. Attaching these synthetic rows does not
+        // establish State execution or finality.
         block
             .set_execution_outputs(
                 outputs,
-                2,
+                if lifecycle { 3 } else { 2 },
                 std::collections::BTreeMap::default(),
                 vec![],
                 iroha_data_model::nexus::AxtPolicySnapshot::default(),
@@ -496,6 +569,40 @@ mod tests {
             .unwrap()
         );
         assert_eq!(visits, 1);
+    }
+
+    #[test]
+    fn lifecycle_history_keeps_signed_calls_completion_indices_and_fee_intents() {
+        let block = outputs_fixture(true);
+        let calls = signed_calls(&block).unwrap().collect::<Vec<_>>();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, block.network_entrypoint_at(0).unwrap().hash());
+        let mut records = Vec::new();
+        crate::visit_trigger_completion_records_for_block(&block, 2, |row| {
+            records.push(row);
+            true
+        })
+        .unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].entrypoint_index, Some(0));
+        assert_eq!(records[1].entrypoint_index, None);
+        assert_eq!(
+            records[0].completion.trigger_execution_hash,
+            calls[0].0.to_string()
+        );
+        #[cfg(feature = "app_api")]
+        {
+            assert_eq!(
+                crate::routing::output_fee_projection(&block, &block.execution_outputs()[0])
+                    .unwrap(),
+                Some(calls[0].1.fee_payment_intent().clone())
+            );
+            assert_eq!(
+                crate::routing::output_fee_projection(&block, &block.execution_outputs()[1])
+                    .unwrap(),
+                None
+            );
+        }
     }
 
     #[test]

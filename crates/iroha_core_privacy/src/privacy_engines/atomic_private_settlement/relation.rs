@@ -954,8 +954,9 @@ mod tests {
             PrivateSettlementAuditViewKeyAuthorizationV1, PrivateSettlementAuditViewKeySignatureV1,
         },
         privacy::{
-            PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1,
-            PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+            PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNullifierV1,
+            PrivacyPoolProgramNamespaceV1, PrivacyRootV1, PrivacyRuntimeNamespaceV1,
+            PrivacyRuntimeProtocolIdV1,
         },
     };
     use rand::SeedableRng as _;
@@ -1041,8 +1042,8 @@ mod tests {
         let mut manifest = fixture.sidecar.manifest;
         let mut statement = fixture.sidecar.payload.statement;
         let mut plaintext = fixture.plaintext;
-        let namespace = PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        let namespace = PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
                 pool_id: statement.pool_id,
                 program_id: atomic_private_settlement_program_id_v1().expect("program"),

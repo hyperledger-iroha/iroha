@@ -25,7 +25,8 @@ use iroha::{
         privacy::{
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyConsensusLimitsV1, PrivacyExact12CapabilityManifestV1,
-            PrivacyExact12CapabilityRowV1, PrivacyPoolIdV1, PrivacyProofV1, PrivacyProtocolIdV1,
+            PrivacyExact12CapabilityRowV1, PrivacyPoolIdV1, PrivacyRuntimeProofV1,
+            PrivacyRuntimeProtocolIdV1,
         },
         query::{block::prelude::FindBlocks, transaction::prelude::FindTransactions},
         transaction::{
@@ -50,8 +51,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
-const ORCHARD_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::OrchardHalo2ActionsV1;
-const PQ_MASP_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::PqMaspStarkV1;
+const ORCHARD_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1;
+const PQ_MASP_PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::PqMaspStarkV1;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(180);
 const PROVER_TIMEOUT: Duration = Duration::from_secs(900);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
@@ -64,7 +66,7 @@ const TORII_CONTENT_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 const NETWORK_FRAME_BUDGET_BYTES: i64 = 128 * 1024 * 1024;
 #[derive(Clone, Copy)]
 struct ProtocolExpectationV1 {
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
 }
 fn bounded_client(client: Client) -> Client {
@@ -106,7 +108,7 @@ fn is_exact_transaction_replay(error: &eyre::Report) -> bool {
 }
 fn protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
 ) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
@@ -364,11 +366,11 @@ fn independently_resign_corrupted_proof(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan canonical retained-native action before corruption")?
         .ok_or_else(|| eyre!("canonical action omitted its privacy submission"))?;
-    let mut envelope = submission.envelope.clone();
+    let submission_envelope = submission.runtime_envelope();
+    let mut envelope = submission_envelope.clone();
     let proof = match &mut envelope.proof {
-        PrivacyProofV1::OrchardHalo2ActionsV1(proof) | PrivacyProofV1::PqMaspStarkV1(proof) => {
-            proof
-        }
+        PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(proof)
+        | PrivacyRuntimeProofV1::PqMaspStarkV1(proof) => proof,
         _ => return Err(eyre!("canonical action carried a different proof variant")),
     };
     ensure!(
@@ -382,7 +384,9 @@ fn independently_resign_corrupted_proof(
         .wrap_err("proof corruption must preserve the generic envelope contract")?;
     let corrupted = TransactionBuilder::from_payload(valid.payload().clone())
         .wrap_err("re-open canonical retained-native payload")?
-        .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+        .with_instructions([SubmitPrivacyProofV1::new(
+            (envelope).try_into().expect("frozen Exact12 test input"),
+        )])
         .try_sign(client.client().key_pair().private_key())
         .wrap_err("independently sign corrupted retained-native proof")?;
     corrupted

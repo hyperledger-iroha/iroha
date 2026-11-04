@@ -44,15 +44,18 @@ futures = { workspace = true }
 blake3 = { workspace = true }
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 url = { workspace = true }
+tempfile = { workspace = true }
 
 [build-dependencies]
 pyo3-build-config = "0.30.1"
 
 [dev-dependencies]
+iroha_allocation = { workspace = true }
 kotodama_lang = { path = "../../../crates/kotodama_lang" }
 iroha_core = { path = "../../../crates/iroha_core", features = ["node", "iroha-core-tests"], default-features = false }
 iroha_data_model = { path = "../../../crates/iroha_data_model", features = ["privacy-exact12-conformance", "test-fixtures", "transparent_api"], default-features = false }
 tempfile = { workspace = true }
+once_cell = "1.21.3"
 ed25519-dalek = "3.0.0"
 http = { workspace = true }
 

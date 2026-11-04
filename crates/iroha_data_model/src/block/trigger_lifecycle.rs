@@ -4,11 +4,12 @@
 //! execution, original registration, action hashes or completeness. Core must
 //! produce the entire trace from its charged, rollback-aware mutation journal;
 //! consumers must authenticate its containing executed output before using it.
-//! TODO: integrate native journal production, output budgets and verification
-//! before activating the new explicit trace-bearing carriers. There is deliberately
-//! no Default, partial coverage or conversion from absent historical evidence.
+//! Core's selected successor services produce complete native journals and fit
+//! their output budgets before applying effects. Consumers still must authenticate
+//! activation and finality. There is deliberately no Default, partial coverage or
+//! conversion from absent historical evidence.
 
-// Detached preparation only: no validator trait implementation or activation.
+// Concrete bounded validation is available; activation remains runtime-owned.
 #[path = "trigger_action_scanner.rs"]
 pub mod action_frame_scanner;
 
@@ -57,13 +58,13 @@ pub enum TriggerLifecycleStateKindV1 {
     Time,
 }
 
-/// Closed codec for a complete persistent Action frame in the unreleased V2 carrier.
+/// Closed evidence codec in a lifecycle carrier.
 ///
-/// V1 means the exact uncompressed bytes emitted by `norito::encode_canonical`
-/// for `Action`, including its typed schema identity, padding and checksum. It
-/// never means a bare payload, ambient-layout encoding, JSON, hash or loaded IVM
-/// handle. A future Action schema/layout change requires an explicit protocol
-/// decision; an unknown schema must not be accepted by guessing another decoder.
+/// Full frames mean exact uncompressed `norito::encode_canonical` Action bytes;
+/// compact commitments mean the explicitly specified persistent hash protocol.
+/// A selected runtime fixes which representation it emits. Consumers must never
+/// guess a layout, infer activation from the codec, or treat unavailable evidence
+/// as a reconstructed Action.
 #[derive(
     Debug,
     Clone,
@@ -87,11 +88,12 @@ pub enum TriggerLifecycleStateKindV1 {
     deny_unknown_fields
 )]
 pub enum TriggerLifecycleActionCodecV1 {
-    /// Exact canonical Norito V1 Action frame, independently validated in full.
+    /// Canonical Norito V1 framing. The authenticated service fixes the closed
+    /// evidence schemas; the wire enum itself never selects runtime behavior.
     NoritoCanonicalV1,
 }
 
-/// Full original Action evidence; decoded model bytes are untrusted, not a proof.
+/// Explicit Action evidence or compact persistent identity; bytes alone are not a proof.
 ///
 /// Core must count and reserve the frame, journal and serializer scratch before
 /// copying, then retain the original physical allocation charges until disposal.
@@ -117,8 +119,69 @@ pub enum TriggerLifecycleActionCodecV1 {
 pub struct TriggerLifecycleActionFrameV1 {
     /// Closed protocol codec; not chosen from untrusted schema discovery.
     pub codec: TriggerLifecycleActionCodecV1,
-    /// Entire canonical Action frame, including every executable/filter/metadata byte.
+    /// Canonical Norito frame. The selected compact service admits exactly Hash
+    /// and u8 frames; full Action frames require their explicit semantic validator.
+    /// Header schema identity selects a closed layout, never a length heuristic.
     pub bytes: Vec<u8>,
+}
+
+/// Fixed size of a canonical persistent Hash frame (header plus 32 bytes).
+pub const LIFECYCLE_HASH_FRAME_BYTES: usize = norito::core::Header::SIZE + Hash::LENGTH;
+/// Fixed size of a canonical unavailable-source reason frame.
+pub const LIFECYCLE_UNAVAILABLE_FRAME_BYTES: usize = norito::core::Header::SIZE + 1;
+
+/// Frame the existing persistent digest without allocating a temporary buffer.
+///
+/// # Errors
+/// Returns a canonical codec failure; the fixed backing never grows.
+pub fn lifecycle_hash_frame(hash: Hash) -> Result<[u8; LIFECYCLE_HASH_FRAME_BYTES], norito::Error> {
+    let mut bytes = [0; LIFECYCLE_HASH_FRAME_BYTES];
+    let mut writer = std::io::Cursor::new(bytes.as_mut_slice());
+    norito::core::write_canonical_to_writer(&hash, &mut writer)?;
+    if writer.position() != LIFECYCLE_HASH_FRAME_BYTES as u64 {
+        return Err(norito::Error::LengthMismatch);
+    }
+    Ok(bytes)
+}
+
+/// Frame a closed unavailable-source reason without temporary allocation.
+/// Reasons: 1 invalid registration/retry, 2 absent typed entry, 3 invalid source,
+/// 4 registry mismatch, 5 bounded policy hashing work. This proves no Action.
+///
+/// # Errors
+/// Rejects an unknown reason or a canonical codec failure.
+pub fn lifecycle_unavailable_frame(
+    reason: u8,
+) -> Result<[u8; LIFECYCLE_UNAVAILABLE_FRAME_BYTES], norito::Error> {
+    if !(1..=5).contains(&reason) {
+        return Err(norito::Error::InvalidValue {
+            context: "lifecycle unavailable reason",
+        });
+    }
+    let mut bytes = [0; LIFECYCLE_UNAVAILABLE_FRAME_BYTES];
+    let mut writer = std::io::Cursor::new(bytes.as_mut_slice());
+    norito::core::write_canonical_to_writer(&reason, &mut writer)?;
+    if writer.position() != LIFECYCLE_UNAVAILABLE_FRAME_BYTES as u64 {
+        return Err(norito::Error::LengthMismatch);
+    }
+    Ok(bytes)
+}
+
+impl TriggerLifecycleActionFrameV1 {
+    /// Borrow a canonically framed persistent digest; this does not prove its preimage.
+    pub fn persistent_hash(&self) -> Option<Hash> {
+        let payload = norito::canonical_frame_payload::<Hash>(&self.bytes, 0).ok()?;
+        Hash::from_marked_bytes(payload.try_into().ok()?)
+    }
+
+    /// Read an explicitly framed unavailable reason; structural validation closes its range.
+    pub fn unavailable_reason(&self) -> Option<u8> {
+        let payload = norito::canonical_frame_payload::<u8>(&self.bytes, 0).ok()?;
+        match payload {
+            [reason] => Some(*reason),
+            _ => None,
+        }
+    }
 }
 
 /// Exact persisted retry values, with a closed schema and required JSON fields.
@@ -185,6 +248,16 @@ impl TriggerLifecycleActionFrameBudgetV1 {
         }
     }
 
+    /// Whether an earlier carrier, structural or Action validation refused this range.
+    /// A refused range must be discarded; even later empty coverage is refused.
+    pub fn is_refused(&self) -> bool {
+        self.refused
+    }
+
+    pub(super) fn refuse(&mut self) {
+        self.refused = true;
+    }
+
     fn charge(&mut self, frame: &TriggerLifecycleActionFrameV1) -> Result<(), String> {
         if self.refused {
             return Err("lifecycle Action frame validation range already refused".into());
@@ -228,7 +301,7 @@ pub struct TriggerLifecycleActionSemanticsV1 {
     pub has_retry_policy: bool,
 }
 
-/// Required integration boundary, with no production implementation or fallback.
+/// Complete canonical validation boundary; the bounded scanner implements it.
 ///
 /// A concrete verifier must traverse all six Action fields and every nested value
 /// with bounded byte/work/depth and physically owned scratch, prove exact canonical
@@ -238,8 +311,10 @@ pub struct TriggerLifecycleActionSemanticsV1 {
 /// only counter controls) fulfills this contract. The original frame and its
 /// borrowed envelope payload are supplied together without an owned graph.
 ///
-/// No activation or native admission is available until such an implementation is
-/// integrated and qualified. Test-only codec oracles are not that implementation.
+/// The concrete scanner uses physically prepaid typed subtrees for dynamic
+/// instructions and complex filters; it never constructs the root Action graph.
+/// Activation and native output admission remain separate runtime decisions.
+/// Test-only codec oracles do not satisfy this contract.
 pub trait TriggerLifecycleActionValidatorV1 {
     /// Validate every payload byte, including executable, authority, repeats,
     /// filter, retry policy and metadata. Refuse unsupported nested kinds.
@@ -273,20 +348,20 @@ pub trait TriggerLifecycleActionValidatorV1 {
 pub struct TriggerLifecycleStateV1 {
     /// Actual persistent store kind.
     pub kind: TriggerLifecycleStateKindV1,
-    /// Existing registration metadata, required for Time and Pipeline actions.
-    /// Absence on other kinds must not be replaced by an invented zero height.
+    /// Existing registration metadata, required for verifiable Time and Pipeline
+    /// states. Unavailable source states explicitly carry no inferred height.
     #[norito(required)]
     pub registered_at_height: Option<u64>,
     /// Canonical semantic action hash, including authority and retry state.
     /// Existing Time/Pipeline use-time action hash; required for those kinds.
-    /// Explicitly absent for Data/ByCall, whose complete native Action is retained.
-    /// This model does not invent a different hash recipe for those store kinds.
+    /// Absent for Data/ByCall and unavailable states. Compact Data/ByCall evidence
+    /// uses the same field recipe with distinct kind tags in `action.bytes`.
     #[norito(required)]
     pub action_hash: Option<Hash>,
-    /// Complete canonical persistent Action, including executable, authority,
-    /// filter, repetitions, retry policy and normalized metadata. Opaque roots
-    /// cannot be reconstructed from an independently readable Register input.
-    /// Frame envelope and all nested semantics require bounded validation.
+    /// Complete Action evidence or a fixed persistent digest binding every field.
+    /// Compact selected states require reconstruction from authenticated original
+    /// registration and policy transitions; unavailable states prove no Action.
+    /// Frame codec, length and any embedded Action require bounded validation.
     pub action: TriggerLifecycleActionFrameV1,
     /// Actual native retry tuple: failed-attempt count and next eligible time in
     /// milliseconds. This is runtime state separate from the action's policy.
@@ -330,6 +405,8 @@ pub enum TriggerLifecyclePolicyV1 {
     ExhaustTimeRetry,
     /// Quarantine a genuinely rejected Pipeline action.
     QuarantinePipeline,
+    /// Consume one bounded autonomous Time attempt, including a rejected attempt.
+    ConsumeTimeProgress,
 }
 
 /// Host-owned origin; no guest instruction or contract may supply this claim.
@@ -511,7 +588,7 @@ impl TriggerLifecycleEffectsV1 {
     /// Call structural validation as well. The activated block entry point does
     /// both and shares a budget across rows. Envelope checks are necessary but
     /// never sufficient: the required validator must inspect the complete payload.
-    /// This method never constructs an owned Action graph or substitutes an empty trace.
+    /// This method never constructs the root Action graph or substitutes an empty trace.
     ///
     /// # Errors
     /// Refuses exhausted limits, invalid envelopes, validator refusals and semantic
@@ -535,22 +612,25 @@ impl TriggerLifecycleEffectsV1 {
             for state in states.into_iter().flatten() {
                 budget.charge(&state.action)?;
                 let validated: Result<(), String> = (|| {
-                    let payload = match state.action.codec {
-                        TriggerLifecycleActionCodecV1::NoritoCanonicalV1 => {
-                            // A header-only check cannot establish canonical payload flags.
-                            // The full validator must prove the fixed canonical encoding;
-                            // this borrowed envelope check admits no compression/reserved bits.
-                            let header = norito::core::Header::read(std::io::Cursor::new(
-                                &state.action.bytes,
-                            ))
-                            .map_err(|error| error.to_string())?;
-                            norito::canonical_frame_payload::<Action>(
-                                &state.action.bytes,
-                                header.flags,
-                            )
-                            .map_err(|error| error.to_string())?
+                    // Explicit canonical schema identities distinguish these closed
+                    // frames. The caller still authenticates the selected service.
+                    if let Some(hash) = state.action.persistent_hash() {
+                        if state.action_hash.is_some_and(|expected| expected != hash) {
+                            return Err("invalid lifecycle persistent digest".into());
                         }
-                    };
+                        return Ok(());
+                    }
+                    if state.action.unavailable_reason().is_some() {
+                        return validate_unavailable(state);
+                    }
+                    let header =
+                        norito::core::Header::read(std::io::Cursor::new(&state.action.bytes))
+                            .map_err(|error| error.to_string())?;
+                    let payload = norito::canonical_frame_payload::<Action>(
+                        &state.action.bytes,
+                        header.flags,
+                    )
+                    .map_err(|error| error.to_string())?;
                     let semantic =
                         validator.validate_canonical_action(&state.action.bytes, payload)?;
                     if semantic.filter_kind != state.kind
@@ -577,8 +657,8 @@ impl TriggerLifecycleEffectsV1 {
     /// instruction position, semantic action hashes, or retry arithmetic. Native
     /// execution and an authenticated verifier must establish those facts. The
     /// caller must first enforce canonical decode/allocation/output-byte limits.
-    /// This checks outer state only; it does not interpret Action frame bytes.
-    /// `validate_action_frames` is additionally mandatory before lifecycle admission.
+    /// This checks outer state and compact schema markers, without decoding full
+    /// Action frames. `validate_action_frames` remains mandatory before admission.
     ///
     /// # Errors
     /// Rejects invalid order, contradictory transitions, missing callback joins,
@@ -608,6 +688,7 @@ impl TriggerLifecycleEffectsV1 {
         };
         let mut states: BTreeMap<&TriggerId, Option<&TriggerLifecycleStateV1>> = BTreeMap::new();
         let mut invokes = BTreeSet::new();
+        let mut removed_kinds = BTreeSet::new();
         for (position, effect) in self.effects().iter().enumerate() {
             if usize::try_from(effect.ordinal).ok() != Some(position) {
                 return Err("lifecycle effect positions are not contiguous".into());
@@ -626,9 +707,42 @@ impl TriggerLifecycleEffectsV1 {
             for state in before.into_iter().chain(after) {
                 validate_state(state, proposal_height)?;
             }
+            // A depleted sweep also repairs stray typed entries with no matching
+            // id registry row. The live row may still exist in another store:
+            // removing the stray does not alter that row's ordinary continuity.
+            let stray_marker =
+                before.is_some_and(|state| state.action.unavailable_reason() == Some(4));
+            let repairs_stray = matches!(&effect.change, TriggerLifecycleChangeV1::Remove { before }
+                if before.action.unavailable_reason() == Some(4)
+                    && !removed_kinds.contains(&(&effect.trigger_id, before.kind)))
+                && matches!(
+                    effect.origin,
+                    TriggerLifecycleOriginV1::InvocationPolicy {
+                        policy: TriggerLifecyclePolicyV1::RemoveDepleted,
+                        ..
+                    }
+                )
+                && states.get(&effect.trigger_id).is_none_or(|known| {
+                    known.is_none_or(|state| before.is_some_and(|stray| stray.kind != state.kind))
+                });
+            if stray_marker && !repairs_stray {
+                return Err("registry repair has a live, repeated or foreign source".into());
+            }
+            if !repairs_stray
+                && before
+                    .is_some_and(|state| removed_kinds.contains(&(&effect.trigger_id, state.kind)))
+            {
+                return Err("lifecycle transition reuses a removed store without insertion".into());
+            }
+            if matches!(effect.change, TriggerLifecycleChangeV1::Invoke { .. })
+                && before.is_some_and(|state| state.action.unavailable_reason().is_some())
+            {
+                return Err("unavailable lifecycle state cannot prove an invocation".into());
+            }
             if states
                 .get(&effect.trigger_id)
                 .is_some_and(|known| *known != before)
+                && !repairs_stray
             {
                 return Err("lifecycle transition contradicts its preceding state".into());
             }
@@ -693,6 +807,7 @@ impl TriggerLifecycleEffectsV1 {
                         }
                         let state = before.ok_or("rejection policy has no prior state")?;
                         if !states.contains_key(&effect.trigger_id)
+                            && state.action.unavailable_reason().is_none()
                             && (state.registered_at_height != Some(root.registered_at_height)
                                 || state.action_hash != Some(root.action_hash))
                         {
@@ -789,7 +904,18 @@ impl TriggerLifecycleEffectsV1 {
                     }
                 }
             }
-            states.insert(&effect.trigger_id, after);
+            match &effect.change {
+                TriggerLifecycleChangeV1::Insert { .. } => {
+                    removed_kinds.retain(|(id, _)| **id != effect.trigger_id)
+                }
+                TriggerLifecycleChangeV1::Remove { before } => {
+                    removed_kinds.insert((&effect.trigger_id, before.kind));
+                }
+                _ => {}
+            }
+            if !repairs_stray {
+                states.insert(&effect.trigger_id, after);
+            }
         }
         if !rejected && !matches!(owner, TriggerLifecycleOwnerV1::Network) && !invokes.contains(&0)
         {
@@ -807,7 +933,21 @@ impl TriggerLifecycleEffectsV1 {
     }
 }
 
+fn validate_unavailable(state: &TriggerLifecycleStateV1) -> Result<(), String> {
+    if !matches!(state.action.unavailable_reason(), Some(1..=5))
+        || state.registered_at_height.is_some()
+        || state.action_hash.is_some()
+        || state.retry_state.is_some()
+    {
+        return Err("invalid lifecycle unavailable-state marker".into());
+    }
+    Ok(())
+}
+
 fn validate_state(state: &TriggerLifecycleStateV1, proposal_height: u64) -> Result<(), String> {
+    if state.action.unavailable_reason().is_some() {
+        return validate_unavailable(state);
+    }
     if state.action.bytes.is_empty()
         || state.retry_state.is_some_and(|retry| retry.attempt == 0)
         || (state.retry_state.is_some() && state.kind != TriggerLifecycleStateKindV1::Time)
@@ -842,6 +982,12 @@ fn validate_policy(
         (Policy::ConsumeRepeat, Update { .. }) | (Policy::RemoveDepleted, Remove { .. }) => {
             !rejected
         }
+        (Policy::ConsumeTimeProgress, Update { before, after }) => {
+            matches!(owner, TriggerLifecycleOwnerV1::Time(_))
+                && before.kind == Kind::Time
+                && after.kind == Kind::Time
+                && before.retry_state == after.retry_state
+        }
         (Policy::ClearTimeRetry, Update { before, .. }) => {
             !rejected
                 && matches!(owner, TriggerLifecycleOwnerV1::Time(_))
@@ -864,4 +1010,309 @@ fn validate_policy(
         return Err("lifecycle policy kind, transition or owner disposition differs".into());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+
+    struct NoActionDecode;
+    impl TriggerLifecycleActionValidatorV1 for NoActionDecode {
+        fn validate_canonical_action(
+            &mut self,
+            _: &[u8],
+            _: &[u8],
+        ) -> Result<TriggerLifecycleActionSemanticsV1, String> {
+            panic!("compact commitments never decode an Action graph");
+        }
+    }
+
+    fn compact_trace(bytes: Vec<u8>) -> TriggerLifecycleEffectsV1 {
+        let mut state = TriggerLifecycleStateV1 {
+            kind: TriggerLifecycleStateKindV1::Time,
+            registered_at_height: Some(1),
+            action_hash: Some(Hash::prehashed([7; 32])),
+            action: TriggerLifecycleActionFrameV1 {
+                codec: TriggerLifecycleActionCodecV1::NoritoCanonicalV1,
+                bytes,
+            },
+            retry_state: None,
+        };
+        if state.action.unavailable_reason().is_some() {
+            state.registered_at_height = None;
+            state.action_hash = None;
+        }
+        TriggerLifecycleEffectsV1::Complete {
+            effects: vec![TriggerLifecycleEffectV1 {
+                ordinal: 0,
+                trigger_id: "compact".parse().unwrap(),
+                origin: TriggerLifecycleOriginV1::DirectNetworkInstruction { item_index: 1 },
+                change: TriggerLifecycleChangeV1::Insert { after: state },
+            }],
+        }
+    }
+    fn budget() -> TriggerLifecycleActionFrameBudgetV1 {
+        TriggerLifecycleActionFrameBudgetV1::new(TriggerLifecycleActionFrameLimitsV1 {
+            max_frame_bytes: LIFECYCLE_HASH_FRAME_BYTES as u64,
+            max_total_frame_bytes: LIFECYCLE_HASH_FRAME_BYTES as u64,
+            max_frames: 1,
+        })
+    }
+    fn hash_bytes() -> Vec<u8> {
+        lifecycle_hash_frame(Hash::prehashed([7; 32]))
+            .unwrap()
+            .to_vec()
+    }
+
+    #[test]
+    fn lifecycle_compact_frames_are_original_canonical_norito_and_roundtrip() {
+        let hash = Hash::prehashed([7; 32]);
+        assert_eq!(hash_bytes(), norito::encode_canonical(&hash).unwrap());
+        for reason in 1..=5 {
+            assert_eq!(
+                lifecycle_unavailable_frame(reason).unwrap().to_vec(),
+                norito::encode_canonical(&reason).unwrap()
+            );
+        }
+        for bytes in [
+            hash_bytes(),
+            lifecycle_unavailable_frame(1).unwrap().to_vec(),
+        ] {
+            let trace = compact_trace(bytes);
+            let decoded: TriggerLifecycleEffectsV1 =
+                norito::decode_from_bytes(&norito::encode_canonical(&trace).unwrap()).unwrap();
+            assert_eq!(trace, decoded);
+            trace
+                .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &[], false)
+                .unwrap();
+            let mut budget = budget();
+            trace
+                .validate_action_frames(&mut budget, &mut NoActionDecode)
+                .unwrap();
+            assert!(
+                trace
+                    .validate_action_frames(&mut budget, &mut NoActionDecode)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_compact_frames_refuse_wrong_schema_truncation_checksum_hash_and_suffix() {
+        let original = hash_bytes();
+        for bytes in [
+            original[..original.len() - 1].to_vec(),
+            vec![7; 32],
+            {
+                let mut b = original.clone();
+                b.push(0);
+                b
+            },
+            {
+                let mut b = original.clone();
+                b[40] ^= 1;
+                b
+            },
+            lifecycle_hash_frame(Hash::prehashed([9; 32]))
+                .unwrap()
+                .to_vec(),
+        ] {
+            assert!(
+                compact_trace(bytes)
+                    .validate_action_frames(&mut budget(), &mut NoActionDecode)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_unavailable_markers_have_closed_reasons_and_no_claimed_identity() {
+        for reason in 0..=6_u8 {
+            let trace = compact_trace(norito::encode_canonical(&reason).unwrap());
+            let valid = (1..=5).contains(&reason);
+            assert_eq!(
+                trace
+                    .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &[], false)
+                    .is_ok(),
+                valid
+            );
+            assert_eq!(
+                trace
+                    .validate_action_frames(&mut budget(), &mut NoActionDecode)
+                    .is_ok(),
+                valid
+            );
+        }
+        for field in 0..3 {
+            let mut trace = compact_trace(lifecycle_unavailable_frame(1).unwrap().to_vec());
+            let TriggerLifecycleEffectsV1::Complete { effects } = &mut trace;
+            let TriggerLifecycleChangeV1::Insert { after } = &mut effects[0].change else {
+                unreachable!()
+            };
+            match field {
+                0 => after.registered_at_height = Some(1),
+                1 => after.action_hash = Some(Hash::prehashed([7; 32])),
+                _ => {
+                    after.retry_state = Some(TriggerLifecycleRetryStateV1 {
+                        attempt: 1,
+                        next_time_ms: 2,
+                    })
+                }
+            }
+            assert!(
+                trace
+                    .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &[], false)
+                    .is_err()
+            );
+            assert!(
+                trace
+                    .validate_action_frames(&mut budget(), &mut NoActionDecode)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn lifecycle_stray_repair_preserves_other_live_kind_and_requires_unique_native_sweep() {
+        let TriggerLifecycleEffectsV1::Complete { mut effects } = compact_trace(hash_bytes());
+        let TriggerLifecycleChangeV1::Insert { after } = &effects[0].change else {
+            unreachable!()
+        };
+        let state = after.clone();
+        let mut invoked = state.clone();
+        invoked.kind = TriggerLifecycleStateKindV1::ByCall;
+        invoked.action_hash = None;
+        let callback: TriggerId = "sweeper".parse().unwrap();
+        effects.insert(
+            0,
+            TriggerLifecycleEffectV1 {
+                ordinal: 0,
+                trigger_id: callback.clone(),
+                origin: TriggerLifecycleOriginV1::Derived {
+                    callback_index: Some(0),
+                },
+                change: TriggerLifecycleChangeV1::Invoke {
+                    state: invoked,
+                    callback_index: 0,
+                },
+            },
+        );
+        effects[1].ordinal = 1;
+        let origin = TriggerLifecycleOriginV1::InvocationPolicy {
+            callback_index: 0,
+            policy: TriggerLifecyclePolicyV1::RemoveDepleted,
+        };
+        effects.push(TriggerLifecycleEffectV1 {
+            ordinal: 2,
+            trigger_id: effects[1].trigger_id.clone(),
+            origin,
+            change: TriggerLifecycleChangeV1::Remove {
+                before: state.clone(),
+            },
+        });
+        let mut stray = state.clone();
+        stray.kind = TriggerLifecycleStateKindV1::Data;
+        stray.action_hash = None;
+        stray.registered_at_height = None;
+        stray.action.bytes = lifecycle_unavailable_frame(4).unwrap().to_vec();
+        effects.push(TriggerLifecycleEffectV1 {
+            ordinal: 3,
+            trigger_id: effects[1].trigger_id.clone(),
+            origin,
+            change: TriggerLifecycleChangeV1::Remove { before: stray },
+        });
+        let completions = [InvocationCompletionV1 {
+            callback_index: 0,
+            trigger_id: callback,
+            outcome: TriggerCompletedOutcome::Success,
+        }];
+        let trace = TriggerLifecycleEffectsV1::Complete { effects };
+        trace
+            .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &completions, false)
+            .unwrap();
+        // A stray Data row may be swept before the live Time registration.
+        // The later ordinary update must retain continuity with the Time state.
+        let TriggerLifecycleEffectsV1::Complete { mut effects } = trace.clone();
+        effects.swap(2, 3);
+        effects[2].ordinal = 2;
+        effects[3].ordinal = 3;
+        effects[3].origin = TriggerLifecycleOriginV1::Derived {
+            callback_index: Some(0),
+        };
+        effects[3].change = TriggerLifecycleChangeV1::Update {
+            before: state.clone(),
+            after: state.clone(),
+        };
+        let live_trace = TriggerLifecycleEffectsV1::Complete { effects };
+        live_trace
+            .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &completions, false)
+            .unwrap();
+        for corruption in 0..4 {
+            let TriggerLifecycleEffectsV1::Complete { mut effects } = live_trace.clone();
+            match corruption {
+                0 => {
+                    effects[2].origin = TriggerLifecycleOriginV1::Derived {
+                        callback_index: None,
+                    };
+                }
+                1 => {
+                    let TriggerLifecycleChangeV1::Remove { before } = &mut effects[2].change else {
+                        unreachable!()
+                    };
+                    before.kind = state.kind;
+                }
+                2 => {
+                    let mut repeated = effects[2].clone();
+                    repeated.ordinal = 4;
+                    effects.push(repeated);
+                }
+                _ => {
+                    let TriggerLifecycleChangeV1::Update { before, .. } = &mut effects[3].change
+                    else {
+                        unreachable!()
+                    };
+                    before.action_hash = Some(Hash::prehashed([0x55; 32]));
+                }
+            }
+            assert!(
+                TriggerLifecycleEffectsV1::Complete { effects }
+                    .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &completions, false)
+                    .is_err()
+            );
+        }
+        // With no prior ordinary observation, the repair leaves another kind
+        // unknown, but it still proves its own typed row absent until insertion.
+        let TriggerLifecycleEffectsV1::Complete { mut effects } = live_trace;
+        effects.remove(1);
+        for (ordinal, effect) in effects.iter_mut().enumerate() {
+            effect.ordinal = ordinal as u32;
+        }
+        let unknown = TriggerLifecycleEffectsV1::Complete { effects };
+        unknown
+            .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &completions, false)
+            .unwrap();
+        let TriggerLifecycleEffectsV1::Complete { mut effects } = unknown;
+        let TriggerLifecycleChangeV1::Update { before, after } = &mut effects[2].change else {
+            unreachable!()
+        };
+        before.kind = TriggerLifecycleStateKindV1::Data;
+        before.action_hash = None;
+        *after = before.clone();
+        assert!(
+            TriggerLifecycleEffectsV1::Complete { effects }
+                .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &completions, false)
+                .is_err()
+        );
+        // A removed typed row cannot be repaired a second time either.
+        let TriggerLifecycleEffectsV1::Complete { mut effects } = trace;
+        let TriggerLifecycleChangeV1::Remove { before } = &mut effects[3].change else {
+            unreachable!()
+        };
+        before.kind = state.kind;
+        assert!(
+            TriggerLifecycleEffectsV1::Complete { effects }
+                .validate_structure(TriggerLifecycleOwnerV1::Network, 2, &completions, false)
+                .is_err()
+        );
+    }
 }

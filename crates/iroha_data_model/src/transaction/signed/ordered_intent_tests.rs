@@ -1,12 +1,13 @@
 //! Payload-level tests of the ordered intent and its attachment bindings.
 
 use super::*;
+use crate::isi::privacy::SubmitPrivacyProofV1;
 use crate::{
     Level,
     account::AccountId,
     isi::Log,
     privacy::{
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyStatementDigestV1, PrivacyTransactionIntentDigestV1,
         PrivacyVegaDeviceAuthenticationDigestV1,
     },
     proof::{ProofBox, VerifyingKeyId},
@@ -1226,7 +1227,7 @@ fn privacy_intent_vectors() -> Vec<norito::json::Value> {
     let bundle = crate::privacy::privacy_exact12_fixture_bundle_v1().expect("exact12 fixture");
     let mut rows = Vec::new();
     for (index, row) in bundle.rows.into_iter().enumerate() {
-        if row.protocol_id == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+        if row.protocol_id == crate::privacy::PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
             rows.extend(x509_privacy_intent_vectors(&row, index));
             continue;
         }
@@ -1245,16 +1246,16 @@ fn privacy_intent_vectors() -> Vec<norito::json::Value> {
             .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0xA1; 32]);
         generated.envelope.statement_digest = PrivacyStatementDigestV1::new([0xA2; 32]);
         match &mut generated.envelope.statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => {
+            crate::privacy::PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => {
                 statement.replay_nullifier =
                     crate::privacy::PrivacyZkAceReplayNullifierV1::new([17; 6])
                         .expect("canonical nullifier")
             }
-            PrivacyStatementV1::VegaExistingCredentialZkV1(statement) => {
+            crate::privacy::PrivacyStatementV1::VegaExistingCredentialZkV1(statement) => {
                 statement.device_authentication_digest =
                     PrivacyVegaDeviceAuthenticationDigestV1::new([0xA3; 32])
             }
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
+            crate::privacy::PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => {
                 statement.action_digest = crate::privacy::PrivacyActionDigestV1::new([0xA4; 32])
             }
             _ => {}

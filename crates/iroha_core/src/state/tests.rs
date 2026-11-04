@@ -245,7 +245,7 @@ fn blank_state() -> State {
 /// Apply original signed genesis after a trigger's World-only setup.
 /// Registration-height metadata stays at H1, so setup callbacks cannot run
 /// until the ordinary component invokes them at H2.
-fn authenticate_trigger_fixture(component: State) -> State {
+pub(super) fn authenticate_trigger_fixture(component: State) -> State {
     use crate::sumeragi::{
         startup,
         test_chain::{CertifiedTestChain, TestChainConfig},
@@ -842,11 +842,11 @@ fn world_with_privacy_updates(
 ) -> (
     World,
     iroha_data_model::privacy::PrivacyConsensusLimitsV1,
-    iroha_data_model::privacy::PrivacyProtocolLimitsV1,
+    iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1,
 ) {
     use iroha_data_model::privacy::{
-        PrivacyConsensusPolicyUpdateV1, PrivacyConsensusPolicyV1, PrivacyProtocolIdV1,
-        PrivacyProtocolLimitsUpdateV1,
+        PrivacyConsensusPolicyUpdateV1, PrivacyConsensusPolicyV1, PrivacyProtocolLimitsUpdateV1,
+        PrivacyRuntimeProtocolIdV1,
     };
     let mut world = World::default();
     let current_limits = iroha_data_model::privacy::PrivacyConsensusLimitsV1::taira_default();
@@ -862,14 +862,15 @@ fn world_with_privacy_updates(
         }),
     });
     let mut protocol_policy = iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
-        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-        current_limits: iroha_data_model::privacy::PrivacyProtocolLimitsV1::canonical_default_v1(
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-        ),
+        protocol_id: PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
+        current_limits:
+            iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(
+                PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
+            ),
         pending_update: None,
     };
     let mut next_protocol_limits = protocol_policy.current_limits;
-    let_row! { iroha_data_model::privacy::PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
+    let_row! { iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1( ref mut limits, ) = next_protocol_limits else { unreachable!("VeRange compiled profile") } };
     limits.max_aggregation_count -= 1;
     protocol_policy.pending_update = Some(PrivacyProtocolLimitsUpdateV1 {
         scheduled_at_height: protocol_scheduled_at_height,
@@ -878,7 +879,7 @@ fn world_with_privacy_updates(
     });
     world.privacy_protocol_policies.insert(
         iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
         ),
         protocol_policy,
     );
@@ -886,7 +887,7 @@ fn world_with_privacy_updates(
 }
 state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block_start
     use iroha_data_model::privacy::{
-        PrivacyProtocolLimitsV1, PrivacyProtocolIdV1, };
+        PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeProtocolIdV1, };
     let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
@@ -897,14 +898,14 @@ state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block
     assert_eq!(block.privacy_budget_in_block.limits(), &next_limits);
     assert_eq!(block.privacy_budget_in_block.actions(), 0);
     assert_eq!(block.privacy_budget_in_block.bytes(), 0);
-    let_row! { key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { protocol_policy = *block .world .privacy_protocol_policies .get(&key) .expect("protocol_policy with updated limits") };
     assert_eq!(protocol_policy.current_limits, next_protocol_limits);
     assert_eq!(protocol_policy.pending_update, None);
 
     assert!(matches!(
         protocol_policy.current_limits,
-        PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(_)
+        PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(_)
     ));
     {
         let mut transaction = block.transaction();
@@ -920,10 +921,10 @@ state_test! { sync privacy_policy_and_protocol_updates_apply_atomically_at_block
     );
 }
 state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     let (world, _, _) = world_with_privacy_updates(99, 399);
     let original_policy = *world.privacy_consensus_policy.view().get();
-    let_row! { protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyProtocolIdV1::VeRangeTransparentRangeV1, ) };
+    let_row! { protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new( PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1, ) };
     let_row! { original_protocol_policy = *world .privacy_protocol_policies .view() .get(&protocol_policy_key) .expect("scheduled protocol_policy") };
     let_row! { state = State::new( world, Kura::blank_kura_for_testing(), LiveQueryStore::start_test(), ) };
     let header = BlockHeader::new(nonzero!(400_u64), None, None, 0, 0);
@@ -952,12 +953,12 @@ state_test! { sync missed_protocol_schedule_rolls_back_a_due_policy_start_hook
     );
 }
 state_test! { sync failed_pristine_stage_skips_start_effects_and_releases_overlay
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
 
     let (world, next_limits, next_protocol_limits) = world_with_privacy_updates(100, 400);
     let original_policy = *world.privacy_consensus_policy.view().get();
     let protocol_policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
     );
     let original_protocol_policy = *world
         .privacy_protocol_policies
@@ -3248,8 +3249,9 @@ state_test! { sync asset_domain_index_rebuild_uses_only_definition_ownership
 }
 fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     use iroha_data_model::privacy::{
-        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-        PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRootRoleV1,
+        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1, PrivacyNamespaceScopeV1, PrivacyPoolIdV1,
+        PrivacyPoolNamespaceV1, PrivacyRootRoleV1, PrivacyRuntimeNamespaceV1,
+        PrivacyRuntimeProtocolIdV1,
     };
     let domain_id = DomainId::try_new("orchard_snapshot", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
@@ -3260,7 +3262,7 @@ fn snapshot_state_with_orchard_pool() -> (State, AccountId, AssetDefinitionId) {
     let_row! { definition = AssetDefinition::new( asset_definition_id.clone(), "coin".to_owned(), NumericSpec::integer(), iroha_data_model::asset::AssetBalancePolicy::Global, None, ) .build(&ALICE_ID) };
     let mut world = World::with_assets([domain], [owner, reserve], [definition], [], []);
     seed_snapshot_asset_incarnations(&mut world);
-    let_row! { namespace = PrivacyNamespaceV1::new( PrivacyProtocolIdV1::OrchardHalo2ActionsV1, PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id: PrivacyPoolIdV1::new([0xA1; 32]), }), ) };
+    let_row! { namespace = PrivacyRuntimeNamespaceV1::new( PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1, PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 { pool_id: PrivacyPoolIdV1::new([0xA1; 32]), }), ) };
     let_row! { bootstrap = iroha_data_model::privacy::PrivacyOrchardPoolBootstrapV1::new( PrivacyPoolIdV1::new([0xA1; 32]), asset_definition_id.clone(), iroha_data_model::asset::AssetBalanceScope::Global, reserve_account.clone(), ) .expect("canonical Orchard pool bootstrap") };
     let bootstrap_digest = bootstrap.digest().expect("Orchard bootstrap digest");
     let_row! { pool_state = crate::privacy_state::PrivacyOrchardPoolStateV1::bootstrap(bootstrap) .expect("canonical Orchard pool state") };
@@ -5782,7 +5784,7 @@ state_test! { sync account_scope_directory_tracks_manifest_driven_uaid_binding_c
         "manifest-driven UAID binding changes should refresh the account scope directory",
     );
 }
-fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
+pub(super) fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
     let mut tlv = Vec::with_capacity(7 + payload.len() + 32);
     tlv.extend_from_slice(&(ty as u16).to_be_bytes());
     tlv.push(1);

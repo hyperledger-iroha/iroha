@@ -1972,7 +1972,7 @@ mod stark_backend_tag_tests {
         pipa_r_open_verify_circuit_id_matches_backend, production_verify_backend_tag,
         stark_open_verify_circuit_id_matches_backend, verify_backend,
     };
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     use iroha_data_model::proof::{ProofBox, VerifyingKeyBox};
     use iroha_data_model::zk::BackendTag;
     #[test]
@@ -2553,7 +2553,7 @@ mod stark_backend_tag_tests {
                 );
             }
         }
-        for protocol in PrivacyProtocolIdV1::ALL {
+        for protocol in PrivacyRuntimeProtocolIdV1::ALL {
             assert_reserved(protocol.canonical_label());
         }
     }

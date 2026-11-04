@@ -22,11 +22,12 @@ use iroha_data_model::{
     isi::privacy::SubmitPrivacyProofV1,
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
-        PrivacyConsensusLimitsV1, PrivacyPolicyIdV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1, PrivacyStatementV1,
-        PrivacyTransactionIntentDigestV1, PrivacyZkAcePolicyLifecycleV1,
-        PrivacyZkAcePolicyRecordV1, PrivacyZkAcePolicyRecordValidationErrorV1,
-        PrivacyZkAceReplayNullifierV1, ZkAcePqAuthorizationStatementV1,
+        PrivacyConsensusLimitsV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeStatementV1, PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
+        PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
+        PrivacyZkAcePolicyRecordValidationErrorV1, PrivacyZkAceReplayNullifierV1,
+        ZkAcePqAuthorizationStatementV1,
     },
     transaction::{
         FeePaymentIntent, SignedTransaction, TransactionBuilder, TransactionPayload,
@@ -506,14 +507,18 @@ fn validate_signing_authority_v1(
 }
 fn transaction_payload_v1(
     context: &ZkAcePrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<TransactionPayload, ZkAcePrivacyActionBuildErrorV1> {
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_instructions([SubmitPrivacyProofV1::new(
+        envelope
+            .try_into()
+            .map_err(|_| ZkAcePrivacyActionBuildErrorV1::InvalidTransactionContext)?,
+    )])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
@@ -528,11 +533,11 @@ fn transaction_payload_v1(
 }
 /// Bind the proof-free envelope used only to derive the transaction intent.
 fn placeholder_envelope_v1(
-    statement: PrivacyStatementV1,
-) -> Result<PrivacyProofEnvelopeV1, ZkAcePrivacyActionBuildErrorV1> {
-    PrivacyProofEnvelopeV1::bind_v1(
+    statement: PrivacyRuntimeStatementV1,
+) -> Result<PrivacyRuntimeProofEnvelopeV1, ZkAcePrivacyActionBuildErrorV1> {
+    PrivacyRuntimeProofEnvelopeV1::bind_v1(
         statement,
-        PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(Vec::new())),
+        PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(Vec::new())),
     )
     .map_err(|_| ZkAcePrivacyActionBuildErrorV1::EnvelopeValidation)
 }
@@ -563,7 +568,7 @@ where
     if transfer.policy.lifecycle != PrivacyZkAcePolicyLifecycleV1::Active {
         return Err(ZkAcePrivacyActionBuildErrorV1::PolicyNotActive);
     }
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1)
+    let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1)
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     validate_identity_commitment_v1(&transfer, witness)?;
     let native_statement = ZkAcePqAuthorizationStatementV1 {
@@ -588,7 +593,8 @@ where
         authorization_epoch: transfer.policy.authorization_epoch,
         replay_nullifier: PrivacyZkAceReplayNullifierV1::default(),
     };
-    let draft_statement = PrivacyStatementV1::ZkAcePqAuthorizationV1(native_statement.clone());
+    let draft_statement =
+        PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(native_statement.clone());
     let draft_payload = transaction_payload_v1(context, placeholder_envelope_v1(draft_statement)?)?;
     let transaction_intent_digest = draft_payload
         .privacy_transaction_intent_digest_v1()
@@ -601,7 +607,8 @@ where
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::AuthorizationDigest)?;
     final_statement.replay_nullifier =
         witness.replay_nullifier_v1(&authorization_digest, &context.network_id);
-    let typed_statement = PrivacyStatementV1::ZkAcePqAuthorizationV1(final_statement.clone());
+    let typed_statement =
+        PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(final_statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| ZkAcePrivacyActionBuildErrorV1::StatementDigest)?;
@@ -619,9 +626,9 @@ where
     if proof_bytes != ZK_ACE_PRIVACY_MAX_PROOF_BYTES_V1 {
         return Err(ZkAcePrivacyActionBuildErrorV1::EnvelopeValidation);
     }
-    let final_envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let final_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(proof)),
+        PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(PrivacyProofBytesV1::new(proof)),
     )
     .map_err(|_| ZkAcePrivacyActionBuildErrorV1::EnvelopeValidation)?;
     if !profile.matches_envelope_v1(&final_envelope) {
@@ -1097,7 +1104,7 @@ mod tests {
             ),
             Err(ZkAcePrivacyActionBuildErrorV1::CompiledProfileUnavailable)
         ));
-        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
         assert!(matches!(
             compiled_privacy_profile_v1(protocol_id),
             Err(iroha_core_privacy::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {

@@ -35,17 +35,23 @@ mod encoder_tests;
 pub use encoder::Encoder;
 mod encode_frames;
 mod encode_work;
+#[path = "core/prepaid_validation.rs"]
+mod prepaid_validation;
+pub use prepaid_validation::{
+    prepaid_validation_active, prepaid_validation_error, try_box_for_decode,
+    verify_exact_payload_bounded, with_bounded_encode_work, with_prepaid_validation,
+};
 mod encode_writers;
 pub use encode_work::{
-    BoundedEncodeWorkError, EncodeWorkLimits, EncodeWorkRefusal, charge_encode_prewrite,
-    refuse_encode_source,
+    BoundedEncodeWorkError, EncodeWorkBudget, EncodeWorkLimits, EncodeWorkRefusal,
+    charge_encode_prewrite, refuse_encode_source, with_cumulative_encode_work,
 };
 mod fixed_frame;
 mod heap_payload;
 mod nominal_text;
 use encode_frames::write_frame_to_writer_with_flags;
 #[doc(hidden)]
-pub use encode_frames::write_frame_with_prefix;
+pub use encode_frames::{write_canonical_payload_with_identity, write_frame_with_prefix};
 pub(crate) use encode_writers::ExactSliceWriter;
 use encode_writers::{ExactLengthWriter, LengthCountingWriter};
 pub use fixed_frame::FixedFrameLayout;
@@ -587,6 +593,39 @@ impl DecodeBudgetContext {
             },
             depth,
         })
+    }
+
+    /// Borrow the same cumulative counters with a stricter enclosing-depth view.
+    /// No counter or physical owner is allocated, reset, or replaced. The prefix
+    /// represents enclosing fields already traversed by a caller's borrowed parser.
+    ///
+    /// # Errors
+    /// Refuses overflow or a prefix exceeding either original or caller depth limit.
+    #[doc(hidden)]
+    pub fn with_enclosing_depth(&self, prefix: usize, maximum: usize) -> Result<Self, Error> {
+        let limits = self.layer.budget.limits;
+        let maximum = maximum.min(limits.max_nesting_depth());
+        let depth = self
+            .depth
+            .checked_add(prefix)
+            .ok_or(Error::LengthMismatch)?;
+        if depth.saturating_sub(self.layer.base_depth) > maximum {
+            return Err(Error::NestingDepthExceeded {
+                depth,
+                limit: maximum,
+                context: "decode budget",
+            });
+        }
+        let mut view = self.clone();
+        view.depth = depth;
+        view.layer.budget.limits = DecodeLimits::new(
+            limits.max_sequence_elements(),
+            limits.max_field_bytes(),
+            limits.max_total_elements(),
+            limits.max_total_allocated_bytes(),
+            maximum,
+        );
+        Ok(view)
     }
 
     /// Cumulative native allocation charges retained across all scopes and clones.
@@ -2456,7 +2495,9 @@ impl<'a> DecodeFromSlice<'a> for char {
         let mut b = [0u8; 4];
         b.copy_from_slice(&bytes[..4]);
         let v = u32::from_le_bytes(b);
-        let c = char::from_u32(v).ok_or_else(|| Error::Message("invalid char".into()))?;
+        let c = char::from_u32(v).ok_or_else(|| {
+            prepaid_validation_error("invalid char", || Error::Message("invalid char".into()))
+        })?;
         Ok((c, 4))
     }
 }
@@ -3054,6 +3095,9 @@ where
         if consumed != payload.len() {
             return Err(Error::LengthMismatch);
         }
+        if prepaid_validation_active() {
+            return Ok((try_box_for_decode(value)?, used));
+        }
         reserve_decode_box_allocation::<T>()?;
         Ok((Box::new(value), used))
     }
@@ -3141,7 +3185,9 @@ where
 {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), Error> {
         let (payload, used) = prepared_option::option_payload_prefix(bytes, |_| {
-            Error::Message("invalid option tag".into())
+            prepaid_validation_error("invalid option tag", || {
+                Error::Message("invalid option tag".into())
+            })
         })?;
         let value = match payload {
             None => None,
@@ -3192,7 +3238,9 @@ impl<'a, T: DecodeFromSlice<'a>, E: DecodeFromSlice<'a>> DecodeFromSlice<'a> for
                 }
                 Ok((Err(err), end))
             }
-            _ => Err(Error::Message("invalid result tag".into())),
+            _ => Err(prepaid_validation_error("invalid result tag", || {
+                Error::Message("invalid result tag".into())
+            })),
         }
     }
 }
@@ -3549,9 +3597,11 @@ impl Error {
         required: usize,
         available: usize,
     ) -> Self {
-        Self::Message(format!(
-            "{context}: need {required} bytes at offset {offset}, but only {available} remain"
-        ))
+        prepaid_validation_error(context, || {
+            Self::Message(format!(
+                "{context}: need {required} bytes at offset {offset}, but only {available} remain"
+            ))
+        })
     }
     /// Construct an invalid tag error with contextual information.
     pub fn invalid_tag(context: &'static str, tag: u8) -> Self {
@@ -4425,8 +4475,11 @@ impl<'a> DeserializePayload<'a> for char {
     }
     fn try_deserialize(archived: &'a Archived<char>) -> Result<Self, Error> {
         let value = <u32 as DeserializePayload>::try_deserialize(archived.cast())?;
-        char::from_u32(value)
-            .ok_or_else(|| Error::Message(format!("invalid Unicode scalar value {value:#x}")))
+        char::from_u32(value).ok_or_else(|| {
+            prepaid_validation_error("invalid Unicode scalar value", || {
+                Error::Message(format!("invalid Unicode scalar value {value:#x}"))
+            })
+        })
     }
 }
 
@@ -4787,7 +4840,9 @@ impl<'a> DecodeFromSlice<'a> for &'a str {
         let (len, hdr) = read_len_dyn_slice(bytes)?;
         let end = hdr.checked_add(len).ok_or(Error::LengthMismatch)?;
         let data = bytes.get(hdr..end).ok_or(Error::LengthMismatch)?;
-        let s = std::str::from_utf8(data).map_err(|_| Error::Message("invalid utf8".into()))?;
+        let s = std::str::from_utf8(data).map_err(|_| {
+            prepaid_validation_error("invalid utf8", || Error::Message("invalid utf8".into()))
+        })?;
         record_slice_access(bytes, end);
         Ok((s, end))
     }

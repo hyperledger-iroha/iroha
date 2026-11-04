@@ -23,10 +23,10 @@ fn pgc_accounts(count: u8) -> Vec<PrivacyPgcAccountV1> {
         })
         .collect()
 }
-fn pgc_bootstrap() -> PrivacyPgcAccountBootstrapV1 {
-    let statement = statement_for(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
-    PrivacyPgcAccountBootstrapV1 {
-        namespace: PrivacyNamespaceV1::from_statement(&statement),
+fn pgc_bootstrap() -> PrivacyRuntimePgcAccountBootstrapV1 {
+    let statement = statement_for(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1);
+    PrivacyRuntimePgcAccountBootstrapV1 {
+        namespace: PrivacyRuntimeNamespaceV1::from_statement(&statement),
         initial_root: PrivacyRootV1::new(raw(201)),
         initial_epoch: 1,
         total_supply: 160,
@@ -40,7 +40,7 @@ enum RootCorruption {
     SkippedEpoch,
     EpochOverflow,
 }
-fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootCorruption) {
+fn corrupt_root_transition(statement: &mut PrivacyRuntimeStatementV1, corruption: RootCorruption) {
     macro_rules! corrupt {
         ($current:expr, $epoch:expr, $next:expr, $next_epoch:expr) => {
             match corruption {
@@ -57,13 +57,13 @@ fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootC
         };
     }
     match statement {
-        PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) => corrupt!(
+        PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) => corrupt!(
             statement.account_state_root,
             statement.account_state_root_epoch,
             statement.next_account_state_root,
             statement.next_account_state_root_epoch
         ),
-        PrivacyStatementV1::IrohaZkAmsV1(statement) => {
+        PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) => {
             let PrivacyZkAmsActionV1::BatchAdmission(batch) = &mut statement.action else {
                 panic!("ZK-AMS provisioning does not manage a root transition")
             };
@@ -74,19 +74,129 @@ fn corrupt_root_transition(statement: &mut PrivacyStatementV1, corruption: RootC
                 batch.next_account_registry_root_epoch
             )
         }
-        PrivacyStatementV1::OrchardHalo2ActionsV1(_) => {
+        PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(_) => {
             panic!("Orchard successor roots are derived from the authoritative node frontier")
         }
-        PrivacyStatementV1::MoneroFcmpPlusPlusV1(_)
-        | PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(_)
-        | PrivacyStatementV1::PqMaspStarkV1(_) => {
+        PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(_)
+        | PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(_)
+        | PrivacyRuntimeStatementV1::PqMaspStarkV1(_) => {
             panic!("FCMP++ and private-note successor roots are validator-derived")
         }
         _ => panic!("protocol does not manage a root transition"),
     }
 }
-fn protocol_limits(protocol: PrivacyProtocolIdV1) -> PrivacyProtocolLimitsV1 {
+fn protocol_limits(protocol: PrivacyRuntimeProtocolIdV1) -> PrivacyRuntimeProtocolLimitsV1 {
     super::exact12_fixture::sample_protocol_limits(protocol)
+}
+
+// Historical registry membership is intentionally independent of the current registry length.
+// A new protocol must not change the meanings or archives of the original twelve protocols.
+const ORCHARD_COMPATIBILITY_PROTOCOLS_V1: [PrivacyRuntimeProtocolIdV1; 12] = [
+    PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+    PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+    PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
+    PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+    PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
+    PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
+    PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+    PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
+    PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+    PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
+];
+
+#[test]
+fn orchard_compatibility_original_discriminants_and_envelopes_are_frozen() {
+    use norito::codec::DecodeAll as _;
+    for (index, protocol) in ORCHARD_COMPATIBILITY_PROTOCOLS_V1.into_iter().enumerate() {
+        let ordinal = u32::try_from(index).expect("twelve original protocols");
+        assert_eq!(protocol.encode(), ordinal.to_le_bytes());
+        assert_eq!(
+            PrivacyRuntimeProtocolIdV1::decode_all(&mut ordinal.to_le_bytes().as_slice())
+                .expect("decode historical protocol"),
+            protocol,
+        );
+        assert_eq!(
+            &statement_for(protocol).encode()[..4],
+            ordinal.to_le_bytes()
+        );
+        assert_eq!(&proof_for(protocol).encode()[..4], ordinal.to_le_bytes());
+        assert_eq!(
+            &protocol_limits(protocol).encode()[..4],
+            ordinal.to_le_bytes()
+        );
+    }
+
+    let row = privacy_exact12_typed_envelope_rows_v1().expect("historical complete envelopes")[8];
+    assert_eq!(
+        row.protocol_id,
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1
+    );
+    assert_eq!(
+        row.statement_digest,
+        hex!("e5d63512503fddde58e52b8371c93336aabd52f12d223f4ffd2405a778c68f4c"),
+    );
+    assert_eq!(
+        row.envelope_sha256,
+        hex!("6f9525d2f4edd9972843a0892edd64f8fc99e60cd61232a17d26fc7d283b687f"),
+    );
+}
+
+#[test]
+fn orchard_compatibility_v1_capability_roster_is_frozen() {
+    let mut snapshot = capability_snapshot();
+    snapshot.version = 1;
+    snapshot.protocols = ORCHARD_COMPATIBILITY_PROTOCOLS_V1
+        .into_iter()
+        .map(|protocol_id| PrivacyCapabilityRowV1 {
+            protocol_id,
+            compiled_profile: PrivacyCompiledProfileResultV1::Unavailable(
+                PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+            ),
+            policy: None,
+        })
+        .collect();
+    snapshot
+        .validate()
+        .expect("original twelve-row snapshot remains valid");
+    let bytes = norito::encode_canonical(&snapshot).expect("original capability snapshot");
+    let restored = norito::decode_canonical::<PrivacyCapabilitySnapshotV1>(&bytes)
+        .expect("restore original capability snapshot");
+    assert_eq!(restored, snapshot);
+    restored.validate().expect("validate restored v1 snapshot");
+    let manifest = restored
+        .exact12_capability_manifest_v1()
+        .expect("original Exact12 manifest");
+    assert_eq!(manifest.version, 1);
+    assert_eq!(manifest.protocols.len(), 12);
+    let mut extra = snapshot.clone();
+    extra.protocols.push(snapshot.protocols[8]);
+    assert!(matches!(
+        extra.validate(),
+        Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolCount {
+            expected: 12,
+            actual: 13
+        })
+    ));
+    let mut missing = snapshot;
+    missing.protocols.pop();
+    assert!(matches!(
+        missing.validate(),
+        Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolCount {
+            expected: 12,
+            actual: 11
+        })
+    ));
+    // These are the original v1 snapshot/manifest bytes, independent of later registry growth.
+    assert_eq!(
+        <[u8; 32]>::from(Sha256::digest(bytes)),
+        hex!("a32ded044cd1f8396e049b021117c8d3dbede2370b938f4f256331d028c7b17c"),
+    );
+    assert_eq!(
+        manifest.manifest_digest.as_bytes(),
+        &hex!("16976ea5b853753731c06f3c7b7f13114ca7a45313d4460ff8c5f0b526ab121e"),
+    );
 }
 fn assert_stable_schema_wire<T>(value: &T, schema_name: &str, expected_schema_hash: [u8; 16])
 where
@@ -145,15 +255,19 @@ where
 }
 #[test]
 fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
-    let statement = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
-    let PrivacyStatementV1::ZkAcePqAuthorizationV1(authorization_statement) = &statement else {
+    let statement = statement_for(PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1);
+    let PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(authorization_statement) = &statement
+    else {
         unreachable!("ZK-ACE fixture must use the typed authorization statement")
     };
     let authorization_statement = authorization_statement.clone();
     let public_inputs =
         crate::zk::ZkAcePrivacyPublicInputsV1::new(authorization_statement.clone(), raw(0xD1));
-    let proof = proof_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
+    let proof = proof_for(PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1);
     let proof_envelope = envelope(statement.clone());
+    let statement: PrivacyStatementV1 = statement.try_into().unwrap();
+    let proof: PrivacyProofV1 = proof.try_into().unwrap();
+    let proof_envelope: PrivacyProofEnvelopeV1 = proof_envelope.try_into().unwrap();
     let policy = zk_ace_policy(
         PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1,
         11,
@@ -209,7 +323,7 @@ fn first_release_privacy_schema_names_and_old_headers_are_frozen() {
         hex!("5b9d88f68fd595c78e84f1693bbb0dcb"),
     );
 }
-fn profile(envelope: &PrivacyProofEnvelopeV1) -> PrivacyCompiledProfileSnapshotV1 {
+fn profile(envelope: &PrivacyRuntimeProofEnvelopeV1) -> PrivacyCompiledProfileSnapshotV1 {
     super::exact12_fixture::sample_profile(envelope)
 }
 fn compiled_profile_snapshot(
@@ -229,7 +343,7 @@ fn compiled_profile_snapshot(
 }
 fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
     let pgc_activation = profile(&envelope(statement_for(
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
     )));
     let pgc_profile = compiled_profile_snapshot(&pgc_activation);
     PrivacyCapabilitySnapshotV1 {
@@ -237,10 +351,10 @@ fn capability_snapshot() -> PrivacyCapabilitySnapshotV1 {
         network_id: network_id(0x91),
         committed_height: 2,
         consensus_policy: PrivacyConsensusPolicyV1::taira_default(),
-        protocols: PrivacyProtocolIdV1::ALL
+        protocols: PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
             .into_iter()
             .map(|protocol_id| {
-                if protocol_id == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+                if protocol_id == PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 {
                     PrivacyCapabilityRowV1 {
                         protocol_id,
                         compiled_profile: PrivacyCompiledProfileResultV1::Available(pgc_profile),
@@ -275,16 +389,18 @@ fn redigest_exact12_capability_manifest(manifest: &mut PrivacyExact12CapabilityM
 }
 fn compiled_profile_catalog() -> PrivacyCompiledProfileCatalogV1 {
     let pgc_activation = profile(&envelope(statement_for(
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
     )));
     let pgc_profile = compiled_profile_snapshot(&pgc_activation);
     PrivacyCompiledProfileCatalogV1 {
         version: PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1,
-        protocols: PrivacyProtocolIdV1::ALL
+        protocols: PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
             .into_iter()
             .map(|protocol_id| PrivacyCompiledProfileCatalogRowV1 {
                 protocol_id,
-                compiled_profile: if protocol_id == PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+                compiled_profile: if protocol_id
+                    == PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1
+                {
                     PrivacyCompiledProfileResultV1::Available(pgc_profile)
                 } else {
                     PrivacyCompiledProfileResultV1::Unavailable(
@@ -297,20 +413,26 @@ fn compiled_profile_catalog() -> PrivacyCompiledProfileCatalogV1 {
 }
 #[test]
 fn protocol_ids_keep_closed_norito_discriminants() {
-    assert_eq!(PrivacyProtocolIdV1::ALL.len(), PrivacyProtocolIdV1::COUNT);
-    for (expected, protocol) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+    assert_eq!(
+        PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS.len(),
+        PrivacyRuntimeProtocolIdV1::SUPPORTED_COUNT
+    );
+    for (expected, protocol) in PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS
+        .into_iter()
+        .enumerate()
+    {
         let encoded = protocol.encode();
         assert_eq!(encoded, u32::try_from(expected).unwrap().to_le_bytes());
         assert_eq!(
-            PrivacyProtocolIdV1::decode(&mut encoded.as_slice()).expect("decode protocol"),
+            PrivacyRuntimeProtocolIdV1::decode(&mut encoded.as_slice()).expect("decode protocol"),
             protocol
         );
     }
-    let protocol_count =
-        u32::try_from(PrivacyProtocolIdV1::COUNT).expect("protocol count fits u32");
+    let protocol_count = u32::try_from(PrivacyRuntimeProtocolIdV1::SUPPORTED_COUNT)
+        .expect("protocol count fits u32");
     for unknown in [protocol_count, 99, u32::MAX] {
         assert!(
-            PrivacyProtocolIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err(),
+            PrivacyRuntimeProtocolIdV1::decode(&mut unknown.to_le_bytes().as_slice()).is_err(),
             "unknown protocol discriminant {unknown} must fail"
         );
     }
@@ -319,58 +441,68 @@ fn protocol_ids_keep_closed_norito_discriminants() {
 fn protocol_ids_have_unique_exact_external_labels() {
     let expected = [
         (
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+            PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
             "zk-ace-pq-authorization-v1",
         ),
         (
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             "anonymous-pgc-k-out-of-n-v1",
         ),
         (
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
             "verange-transparent-range-v1",
         ),
-        (PrivacyProtocolIdV1::IrohaZkAmsV1, "iroha-zk-ams-v1"),
+        (PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1, "iroha-zk-ams-v1"),
         (
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
             "vega-existing-credential-zk-v1",
         ),
         (
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             "iroha-zk-x509-stark-p256-v1",
         ),
         (
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             "iroha-jindo-polynomial-commitment-v1",
         ),
         (
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
             "iroha-bootle-lantern-anoncred-v1",
         ),
         (
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             "orchard-halo2-actions-v1",
         ),
         (
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
             "monero-fcmp-plus-plus-v1",
         ),
         (
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "iroha-ivm-private-note-stark-v1",
         ),
-        (PrivacyProtocolIdV1::PqMaspStarkV1, "pq-masp-stark-v1"),
+        (
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
+            "pq-masp-stark-v1",
+        ),
+        (
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            "ironwood-halo2-actions-v1",
+        ),
     ];
-    assert_eq!(expected.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(expected.len(), PrivacyRuntimeProtocolIdV1::SUPPORTED_COUNT);
     for (index, (protocol, label)) in expected.into_iter().enumerate() {
-        assert_eq!(PrivacyProtocolIdV1::ALL[index], protocol);
+        assert_eq!(
+            PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS[index],
+            protocol
+        );
         assert_eq!(protocol.canonical_label(), label);
         assert_eq!(
-            PrivacyProtocolIdV1::from_canonical_label(label),
+            PrivacyRuntimeProtocolIdV1::from_canonical_label(label),
             Some(protocol)
         );
         assert!(
-            PrivacyProtocolIdV1::ALL[..index]
+            PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS[..index]
                 .iter()
                 .all(|prior| prior.canonical_label() != label),
             "duplicate privacy protocol label {label}"
@@ -394,7 +526,10 @@ fn final_catalog_binds_ordinals_labels_and_weakest_security_models() {
         PrivacySecurityModelV1::PostQuantumQrom,
         PrivacySecurityModelV1::PostQuantumQrom,
     ];
-    for (protocol, expected) in PrivacyProtocolIdV1::ALL.into_iter().zip(expected_models) {
+    for (protocol, expected) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
+        .into_iter()
+        .zip(expected_models)
+    {
         assert_eq!(protocol.security_model(), expected);
     }
     assert_eq!(PRIVACY_EXACT12_CATALOG_PREIMAGE_V1.len(), 525);
@@ -410,7 +545,9 @@ fn final_catalog_binds_ordinals_labels_and_weakest_security_models() {
 
 #[test]
 fn proof_envelope_wire_rejects_pre_release_layout_magic_and_catalog() {
-    let envelope = envelope(statement_for(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1));
+    let envelope = envelope(statement_for(
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+    ));
     let encoded = envelope.encode();
     let magic_bytes = PrivacyProofWireMagicV1::canonical().encode();
     let catalog_bytes = *PrivacyExact12CatalogCommitmentV1::canonical().as_bytes();
@@ -430,21 +567,21 @@ fn proof_envelope_wire_rejects_pre_release_layout_magic_and_catalog() {
 
     let pre_release_layout = &encoded[catalog_offset + PrivacyExact12CatalogCommitmentV1::BYTES..];
     let mut pre_release_cursor = pre_release_layout;
-    assert!(PrivacyProofEnvelopeV1::decode(&mut pre_release_cursor).is_err());
+    assert!(PrivacyRuntimeProofEnvelopeV1::decode(&mut pre_release_cursor).is_err());
 
     let mut bad_magic = encoded.clone();
     bad_magic[1] ^= 1;
-    assert!(PrivacyProofEnvelopeV1::decode(&mut bad_magic.as_slice()).is_err());
+    assert!(PrivacyRuntimeProofEnvelopeV1::decode(&mut bad_magic.as_slice()).is_err());
 
     let mut bad_catalog = encoded;
     bad_catalog[catalog_offset] ^= 1;
-    assert!(PrivacyProofEnvelopeV1::decode(&mut bad_catalog.as_slice()).is_err());
+    assert!(PrivacyRuntimeProofEnvelopeV1::decode(&mut bad_catalog.as_slice()).is_err());
 }
 
 #[test]
 fn exact12_protocol_labels_form_one_closed_namespace() {
     let mut exact12 = std::collections::BTreeSet::new();
-    for protocol in PrivacyProtocolIdV1::ALL {
+    for protocol in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         let label = protocol.canonical_label();
         assert!(
             privacy_protocol_label_is_exact12_v1(label),
@@ -452,7 +589,7 @@ fn exact12_protocol_labels_form_one_closed_namespace() {
         );
         assert!(exact12.insert(label), "duplicate Exact12 label {label}");
     }
-    assert_eq!(exact12.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(exact12.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
     for label in exact12 {
         for near_miss in [
             format!("generic-{label}"),
@@ -494,13 +631,13 @@ fn protocol_id_parser_rejects_aliases_retired_ids_and_noncanonical_text() {
         "iroh\u{0430}-zk-ams-v1",
     ] {
         assert!(
-            PrivacyProtocolIdV1::from_canonical_label(label).is_none(),
+            PrivacyRuntimeProtocolIdV1::from_canonical_label(label).is_none(),
             "non-canonical protocol label {label:?} must fail"
         );
     }
 }
 fn assert_protocol_json_labels_roundtrip() {
-    for protocol in PrivacyProtocolIdV1::ALL {
+    for protocol in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         let expected = format!(
             "{{\"protocol\":\"{}\",\"value\":null}}",
             protocol.canonical_label()
@@ -510,7 +647,7 @@ fn assert_protocol_json_labels_roundtrip() {
             expected
         );
         assert_eq!(
-            norito::json::from_json::<PrivacyProtocolIdV1>(&expected)
+            norito::json::from_json::<PrivacyRuntimeProtocolIdV1>(&expected)
                 .expect("deserialize protocol id"),
             protocol
         );
@@ -524,7 +661,7 @@ fn assert_protocol_json_labels_roundtrip() {
             "unexpected activation-limit label: {limits_json}"
         );
         assert_eq!(
-            norito::json::from_json::<PrivacyProtocolLimitsV1>(&limits_json)
+            norito::json::from_json::<PrivacyRuntimeProtocolLimitsV1>(&limits_json)
                 .expect("deserialize protocol limits"),
             limits
         );
@@ -690,7 +827,7 @@ fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_f
     ] {
         let json = format!("{{\"protocol\":\"{hostile}\",\"value\":null}}");
         assert!(
-            norito::json::from_json::<PrivacyProtocolIdV1>(&json).is_err(),
+            norito::json::from_json::<PrivacyRuntimeProtocolIdV1>(&json).is_err(),
             "hostile protocol JSON {json} must fail"
         );
     }
@@ -708,7 +845,7 @@ fn privacy_public_json_rejects_aliases_case_whitespace_confusables_and_unknown_f
         "{\"assurance\":\"production\",\"value\":null}",
         "{\"assurance\":\"Experimental\",\"value\":null}",
     ] {
-        let rejected = norito::json::from_json::<PrivacyProtocolIdV1>(hostile).is_err()
+        let rejected = norito::json::from_json::<PrivacyRuntimeProtocolIdV1>(hostile).is_err()
             && norito::json::from_json::<PrivacyProofSystemIdV1>(hostile).is_err()
             && norito::json::from_json::<PrivacyEngineIdV1>(hostile).is_err()
             && norito::json::from_json::<PrivacyCompiledProfileUnavailableReasonV1>(hostile)
@@ -818,7 +955,7 @@ fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapability
         .policy
         .as_mut()
         .expect("PGC policy")
-        .protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        .protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
     assert!(matches!(
         policy_protocol_mismatch.validate(),
         Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolRow {
@@ -828,7 +965,7 @@ fn assert_capability_snapshot_structural_adversaries(snapshot: PrivacyCapability
     ));
     let mut unavailable_policy = snapshot;
     unavailable_policy.protocols[2].policy = Some(PrivacyProtocolPolicyV1::canonical_default_v1(
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
     ));
     unavailable_policy
         .validate()
@@ -845,13 +982,16 @@ fn capability_snapshot_roundtrips_and_rejects_structural_adversaries() {
 fn compiled_profile_catalog_roundtrips_and_has_no_governance_projection() {
     let catalog = compiled_profile_catalog();
     catalog.validate().expect("valid compiled-profile catalog");
-    assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(
+        catalog.protocols.len(),
+        PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
+    );
     assert!(
         catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
-            .eq(PrivacyProtocolIdV1::ALL)
+            .eq(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
     );
     let archive = norito::to_bytes(&catalog).expect("encode catalog");
     let decoded: PrivacyCompiledProfileCatalogV1 =
@@ -1113,7 +1253,7 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
         .policy
         .as_mut()
         .expect("PGC fixture policy")
-        .protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        .protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
     let policy_mutation =
         norito::encode_canonical(&policy_mutation).expect("canonical activation-mismatch bytes");
     assert_eq!(
@@ -1122,10 +1262,20 @@ fn canonical_capability_archive_validator_is_bounded_typed_and_fail_closed() {
     );
     let mut excessive_rows = manifest;
     excessive_rows.protocols.push(excessive_rows.protocols[0]);
+    assert!(matches!(
+        excessive_rows.validate(),
+        Err(
+            PrivacyExact12CapabilityManifestValidationErrorV1::ProtocolCount {
+                expected: 12,
+                actual: 13
+            }
+        )
+    ));
     let excessive_rows =
         norito::encode_canonical(&excessive_rows).expect("canonical excessive-row bytes");
     // A thirteenth row exceeds the protocol-owned twelve-row ceiling the early decode limit
     // enforces, so the archive is an invalid manifest, not a local resource refusal.
+    assert_eq!(PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1, 12);
     assert_eq!(
         validate_privacy_capability_archive_v1(&excessive_rows),
         Status::InvalidManifest
@@ -1136,20 +1286,21 @@ fn capability_catalog_cardinality_keeps_intrinsic_and_local_limits_distinct() {
     use PrivacyCapabilityArchiveValidationStatusV1 as Status;
 
     let mut manifest = exact12_capability_manifest();
-    assert_eq!(manifest.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(manifest.protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
     let archive = norito::encode_canonical(&manifest).unwrap();
     let local_limits =
         |rows| norito::DecodeLimits::new(rows, usize::MAX, usize::MAX, usize::MAX, usize::MAX);
     assert_eq!(
-        norito::with_decode_limits_scope(local_limits(PrivacyProtocolIdV1::COUNT), || {
+        norito::with_decode_limits_scope(local_limits(PrivacyRuntimeProtocolIdV1::COUNT), || {
             validate_privacy_capability_archive_v1(&archive)
         }),
         Status::Valid
     );
     assert_eq!(
-        norito::with_decode_limits_scope(local_limits(PrivacyProtocolIdV1::COUNT - 1), || {
-            validate_privacy_capability_archive_v1(&archive)
-        }),
+        norito::with_decode_limits_scope(
+            local_limits(PrivacyRuntimeProtocolIdV1::COUNT - 1),
+            || { validate_privacy_capability_archive_v1(&archive) }
+        ),
         Status::DecodeResourceLimit,
         "a valid twelve-row manifest can be refused by its original enclosing allowance"
     );
@@ -1166,8 +1317,11 @@ fn capability_catalog_cardinality_keeps_intrinsic_and_local_limits_distinct() {
 #[test]
 fn all_protocol_mappings_and_typed_variants_are_exact() {
     let statements = sample_statements();
-    assert_eq!(statements.len(), PrivacyProtocolIdV1::COUNT);
-    for (protocol, statement) in PrivacyProtocolIdV1::ALL.into_iter().zip(statements) {
+    assert_eq!(statements.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
+    for (protocol, statement) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
+        .into_iter()
+        .zip(statements)
+    {
         assert_eq!(statement.protocol_id(), protocol);
         let proof = proof_for(protocol);
         assert_eq!(proof.protocol_id(), protocol);
@@ -1186,26 +1340,26 @@ fn all_protocol_mappings_and_typed_variants_are_exact() {
         );
     }
     assert_eq!(
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1.expected_proof_system(),
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1.expected_proof_system(),
         PrivacyProofSystemIdV1::IrohaVeRangeP256
     );
     assert_eq!(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1.expected_proof_system(),
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1.expected_proof_system(),
         PrivacyProofSystemIdV1::JindoPolynomialCommitment
     );
     assert_eq!(
-        PrivacyProtocolIdV1::IrohaZkAmsV1.expected_proof_system(),
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1.expected_proof_system(),
         PrivacyProofSystemIdV1::ZkAmsMaskedRelaxedSpartanT256Ristretto255Sha3_512
     );
     assert_eq!(
-        PrivacyProtocolIdV1::IrohaZkAmsV1.expected_engine(),
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1.expected_engine(),
         PrivacyEngineIdV1::NativeZkAmsMaskedRelaxedSpartanT256Ristretto255
     );
     for protocol in [
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
     ] {
         assert_eq!(
             protocol.expected_proof_system(),
@@ -1226,69 +1380,85 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
     let archive =
         privacy_exact12_fixture_bundle_bytes_v1().expect("canonical exact12 fixture archive");
     assert_eq!(bundle.version, 1);
-    assert_eq!(bundle.rows.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(bundle.rows.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
     assert!(archive.len() <= PRIVACY_EXACT12_FIXTURE_BUNDLE_MAX_BYTES_V1);
     assert_eq!(
         validate_privacy_exact12_fixture_bundle_v1(&archive),
         Status::Valid
     );
-    for (row, expected_protocol) in bundle.rows.iter().zip(PrivacyProtocolIdV1::ALL) {
+    for (row, expected_protocol) in bundle
+        .rows
+        .iter()
+        .zip(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
+    {
         assert_eq!(row.protocol_id, expected_protocol);
-        let statement: PrivacyStatementV1 =
-            norito::decode_from_bytes(&row.statement_norito).expect("typed statement");
+        let statement: PrivacyRuntimeStatementV1 =
+            norito::decode_from_bytes::<PrivacyStatementV1>(&row.statement_norito)
+                .expect("frozen typed statement")
+                .into();
         assert_eq!(statement.protocol_id(), expected_protocol);
         assert_eq!(
-            norito::encode_canonical(&statement).expect("canonical statement"),
+            statement
+                .canonical_wire_bytes_v1()
+                .expect("canonical statement"),
             row.statement_norito
         );
-        let envelope: PrivacyProofEnvelopeV1 =
-            norito::decode_from_bytes(&row.envelope_norito).expect("typed envelope");
+        let envelope: PrivacyRuntimeProofEnvelopeV1 =
+            norito::decode_from_bytes::<PrivacyProofEnvelopeV1>(&row.envelope_norito)
+                .expect("frozen typed envelope")
+                .into();
         assert_eq!(envelope.protocol_id, expected_protocol);
         assert_eq!(envelope.statement, statement);
         envelope
             .validate_with_limits(&PrivacyConsensusLimitsV1::default())
             .expect("intrinsically valid sample envelope");
         assert_eq!(
-            norito::encode_canonical(&envelope).expect("canonical envelope"),
+            envelope
+                .canonical_wire_bytes_v1()
+                .expect("canonical envelope"),
             row.envelope_norito
         );
-        let attached_request = if expected_protocol == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
-            use crate::isi::privacy::SubmitPrivacyZkX509CertificateV1;
-            assert_eq!(
-                row.submit_proof_wire_id,
-                SubmitPrivacyZkX509CertificateV1::WIRE_ID
-            );
-            let request: SubmitPrivacyZkX509CertificateV1 =
-                norito::decode_canonical(&row.submit_proof_instruction_norito)
-                    .expect("proof-free X509 request");
-            assert_eq!(
-                norito::encode_canonical(&request).unwrap(),
-                row.submit_proof_instruction_norito
-            );
-            assert!(
-                request
-                    .statement
-                    .context
-                    .transaction_intent_digest
-                    .is_zero()
-            );
-            Some(request)
-        } else {
-            assert_eq!(
-                row.submit_proof_wire_id,
-                SubmitPrivacyProofV1::WIRE_ID,
-                "each protocol binds its sole first-release execution wire id"
-            );
-            let submission: SubmitPrivacyProofV1 =
-                norito::decode_from_bytes(&row.submit_proof_instruction_norito)
-                    .expect("typed SubmitPrivacyProofV1 instruction");
-            assert_eq!(submission.envelope, envelope);
-            assert_eq!(
-                norito::encode_canonical(&submission).unwrap(),
-                row.submit_proof_instruction_norito
-            );
-            None
-        };
+        let attached_request =
+            if expected_protocol == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
+                use crate::isi::privacy::SubmitPrivacyZkX509CertificateV1;
+                assert_eq!(
+                    row.submit_proof_wire_id,
+                    SubmitPrivacyZkX509CertificateV1::WIRE_ID
+                );
+                let request: SubmitPrivacyZkX509CertificateV1 =
+                    norito::decode_canonical(&row.submit_proof_instruction_norito)
+                        .expect("proof-free X509 request");
+                assert_eq!(
+                    norito::encode_canonical(&request).unwrap(),
+                    row.submit_proof_instruction_norito
+                );
+                assert!(
+                    request
+                        .statement
+                        .context
+                        .transaction_intent_digest
+                        .is_zero()
+                );
+                Some(request)
+            } else {
+                assert_eq!(
+                    row.submit_proof_wire_id,
+                    SubmitPrivacyProofV1::WIRE_ID,
+                    "each protocol binds its sole first-release execution wire id"
+                );
+                let submission: SubmitPrivacyProofV1 =
+                    norito::decode_from_bytes(&row.submit_proof_instruction_norito)
+                        .expect("typed SubmitPrivacyProofV1 instruction");
+                assert_eq!(
+                    PrivacyRuntimeProofEnvelopeV1::from(submission.envelope.clone()),
+                    envelope
+                );
+                assert_eq!(
+                    norito::encode_canonical(&submission).unwrap(),
+                    row.submit_proof_instruction_norito
+                );
+                None
+            };
         let unsigned_builder =
             TransactionBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
                 .expect("canonical unsigned transaction payload");
@@ -1312,7 +1482,7 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
                 &row.transaction_intent_digest
             );
             assert_eq!(
-                PrivacyStatementV1::IrohaZkX509StarkP256V1(
+                PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
                     request
                         .materialize_statement_v1(
                             action,
@@ -1399,7 +1569,7 @@ fn exact12_typed_fixture_bundle_is_byte_complete_bounded_and_mutation_closed() {
         Status::InvalidBundle
     );
     let mut cross_protocol = bundle.clone();
-    cross_protocol.rows[0].protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
+    cross_protocol.rows[0].protocol_id = PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1;
     let cross_protocol =
         norito::encode_canonical(&cross_protocol).expect("canonical cross-protocol mutation");
     assert_eq!(
@@ -1623,14 +1793,20 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         }
     }
     assert_eq!(matrix_version, Some("1"));
-    assert_eq!(protocols.len(), PrivacyProtocolIdV1::COUNT);
-    assert_eq!(typed_envelopes.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(protocols.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
+    assert_eq!(
+        typed_envelopes.len(),
+        PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
+    );
     let semantic_rows =
         privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics");
-    assert_eq!(semantic_rows.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(
+        semantic_rows.len(),
+        PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
+    );
     let mut registry_preimage = String::new();
     let mut unique_labels = std::collections::BTreeSet::new();
-    for (expected_index, (protocol, semantic)) in PrivacyProtocolIdV1::ALL
+    for (expected_index, (protocol, semantic)) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
         .into_iter()
         .zip(&semantic_rows)
         .enumerate()
@@ -1641,7 +1817,7 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
         assert_eq!(label, protocol.canonical_label());
         assert_eq!(semantic.protocol_id, protocol);
         assert_eq!(
-            PrivacyProtocolIdV1::from_canonical_label(label),
+            PrivacyRuntimeProtocolIdV1::from_canonical_label(label),
             Some(protocol)
         );
         assert!(unique_labels.insert(label), "duplicate protocol label");
@@ -1663,7 +1839,7 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
             expected_envelope_sha256,
         ) = row;
         assert_eq!(
-            PrivacyProtocolIdV1::from_canonical_label(label),
+            PrivacyRuntimeProtocolIdV1::from_canonical_label(label),
             Some(semantic.protocol_id)
         );
         assert_eq!(semantic.statement_variant, expected_statement_variant);
@@ -1694,10 +1870,10 @@ fn exact12_cross_sdk_matrix_binds_registry_routes_and_typed_envelopes() {
 #[test]
 fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
     let rows = privacy_exact12_typed_envelope_rows_v1().expect("compiled exact12 semantics");
-    assert_eq!(rows.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(rows.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
     assert_eq!(
         rows.iter().map(|row| row.protocol_id).collect::<Vec<_>>(),
-        PrivacyProtocolIdV1::ALL.to_vec()
+        PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS.to_vec()
     );
     assert!(rows.iter().all(|row| {
         row.statement_variant == row.protocol_id.canonical_typed_variant_label()
@@ -1710,17 +1886,17 @@ fn exact12_compiled_semantics_are_closed_unique_and_context_bound() {
             .map(|row| row.statement_digest)
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
-        PrivacyProtocolIdV1::COUNT
+        PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
     );
     assert_eq!(
         rows.iter()
             .map(|row| row.envelope_sha256)
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
-        PrivacyProtocolIdV1::COUNT
+        PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
     );
-    let mut mutated = statement_for(PrivacyProtocolIdV1::ZkAcePqAuthorizationV1);
-    let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) = &mut mutated else {
+    let mut mutated = statement_for(PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1);
+    let PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(statement) = &mut mutated else {
         unreachable!("closed first row is ZK-ACE")
     };
     statement.context.action_index = 1;
@@ -1770,6 +1946,7 @@ fn fixed_digest_types_are_exact_and_nonzero_checked() {
     check_type!(PrivacyStatementDigestV1, 6);
     check_type!(PrivacyTransactionIntentDigestV1, 17);
     check_type!(PrivacyOrchardPoolBootstrapDigestV1, 20);
+    check_type!(PrivacyIronwoodPoolBootstrapDigestV1, 30);
     check_type!(PrivacyProofManagedPoolBootstrapDigestV1, 21);
     check_type!(PrivacyFcmpOutputIdV1, 22);
     check_type!(PrivacyFcmpKeyImageV1, 23);
@@ -1793,7 +1970,7 @@ fn all_statements_and_envelopes_roundtrip_and_validate() {
     for statement in sample_statements() {
         statement.validate(&limits).expect("valid typed statement");
         let statement_bytes = norito::to_bytes(&statement).expect("frame statement");
-        let decoded_statement: PrivacyStatementV1 =
+        let decoded_statement: PrivacyRuntimeStatementV1 =
             norito::decode_from_bytes(&statement_bytes).expect("decode statement");
         assert_eq!(decoded_statement, statement);
         assert_eq!(
@@ -1810,7 +1987,7 @@ fn all_statements_and_envelopes_roundtrip_and_validate() {
             .validate_against_profile_v1(&compiled, &compiled.protocol_limits, &limits)
             .expect("valid active envelope");
         let bytes = norito::to_bytes(&envelope).expect("frame envelope");
-        let decoded: PrivacyProofEnvelopeV1 =
+        let decoded: PrivacyRuntimeProofEnvelopeV1 =
             norito::decode_from_bytes(&bytes).expect("decode envelope");
         assert_eq!(decoded, envelope);
     }
@@ -1915,13 +2092,13 @@ fn normalization_accessors_cover_every_statement_and_nested_proof_variant() {
         assert_eq!(statement.context().transaction_intent_digest, replacement);
     }
     let mut batch =
-        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
+        PrivacyRuntimeProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
             PrivacyProofBytesV1::new(vec![1, 2, 3]),
         ));
     batch.bytes_mut().bytes.clear();
     assert!(batch.bytes().as_bytes().is_empty());
     let mut provisioning =
-        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
+        PrivacyRuntimeProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
             PrivacyProofBytesV1::new(vec![4, 5, 6]),
         ));
     provisioning.bytes_mut().bytes.clear();
@@ -1938,12 +2115,12 @@ fn normalization_accessors_cover_every_statement_and_nested_proof_variant() {
 #[test]
 fn zk_ams_envelope_requires_the_proof_variant_for_its_exact_action() {
     let limits = PrivacyConsensusLimitsV1::taira_default();
-    let batch_statement = statement_for(PrivacyProtocolIdV1::IrohaZkAmsV1);
+    let batch_statement = statement_for(PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1);
     let mut batch_envelope = envelope(batch_statement);
     batch_envelope
         .validate_with_limits(&limits)
         .expect("batch masked Relaxed Spartan proof variant");
-    batch_envelope.proof = PrivacyProofV1::IrohaZkAmsV1(
+    batch_envelope.proof = PrivacyRuntimeProofV1::IrohaZkAmsV1(
         IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(vec![1])),
     );
     assert!(matches!(
@@ -1955,7 +2132,7 @@ fn zk_ams_envelope_requires_the_proof_variant_for_its_exact_action() {
     provision_envelope
         .validate_with_limits(&limits)
         .expect("provisioning LSAG proof variant");
-    provision_envelope.proof = PrivacyProofV1::IrohaZkAmsV1(
+    provision_envelope.proof = PrivacyRuntimeProofV1::IrohaZkAmsV1(
         IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(vec![1])),
     );
     assert!(matches!(
@@ -2247,17 +2424,17 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         .is_err()
     );
     let envelope = envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
     ));
     let envelope_json = norito::json::to_json(&envelope).expect("encode privacy envelope JSON");
-    let decoded: PrivacyProofEnvelopeV1 =
+    let decoded: PrivacyRuntimeProofEnvelopeV1 =
         norito::json::from_json(&envelope_json).expect("decode canonical envelope JSON");
     assert_eq!(decoded, envelope);
     let envelope_prefix = envelope_json
         .strip_suffix('}')
         .expect("privacy envelope JSON is an object");
     assert!(
-        norito::json::from_json::<PrivacyProofEnvelopeV1>(&format!(
+        norito::json::from_json::<PrivacyRuntimeProofEnvelopeV1>(&format!(
             "{envelope_prefix},\"legacy_envelope\":true}}"
         ))
         .is_err()
@@ -2268,7 +2445,7 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         .strip_suffix('}')
         .expect("typed statement JSON is an object");
     assert!(
-        norito::json::from_json::<PrivacyStatementV1>(&format!(
+        norito::json::from_json::<PrivacyRuntimeStatementV1>(&format!(
             "{statement_prefix},\"legacy_statement\":true}}"
         ))
         .is_err()
@@ -2278,7 +2455,7 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
         .strip_suffix('}')
         .expect("typed proof JSON is an object");
     assert!(
-        norito::json::from_json::<PrivacyProofV1>(&format!(
+        norito::json::from_json::<PrivacyRuntimeProofV1>(&format!(
             "{proof_prefix},\"legacy_proof\":true}}"
         ))
         .is_err()
@@ -2286,7 +2463,7 @@ fn privacy_context_statement_proof_and_envelope_json_are_closed() {
 }
 #[test]
 fn first_release_statements_reject_nested_unknown_json_fields() {
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         let statement = statement_for(protocol_id);
         let canonical =
             norito::json::to_json(&statement).expect("encode private-transfer statement JSON");
@@ -2295,26 +2472,32 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
             .expect("tagged statement ends with nested and outer objects");
         let hostile = format!("{nested_prefix},\"legacy_transfer\":true}}}}");
         assert!(
-            norito::json::from_json::<PrivacyStatementV1>(&hostile).is_err(),
+            norito::json::from_json::<PrivacyRuntimeStatementV1>(&hostile).is_err(),
             "nested unknown field must fail for {protocol_id:?}"
         );
     }
     for (protocol_id, removed_field) in [
-        (PrivacyProtocolIdV1::ZkAcePqAuthorizationV1, "fee"),
-        (PrivacyProtocolIdV1::OrchardHalo2ActionsV1, "fee"),
-        (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, "fee"),
-        (PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1, "fee"),
-        (PrivacyProtocolIdV1::PqMaspStarkV1, "fee"),
+        (PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1, "fee"),
+        (PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1, "fee"),
+        (PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1, "fee"),
         (
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            "fee",
+        ),
+        (PrivacyRuntimeProtocolIdV1::PqMaspStarkV1, "fee"),
+        (
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "next_state_root",
         ),
         (
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "next_state_root_epoch",
         ),
-        (PrivacyProtocolIdV1::PqMaspStarkV1, "next_anchor"),
-        (PrivacyProtocolIdV1::PqMaspStarkV1, "next_anchor_epoch"),
+        (PrivacyRuntimeProtocolIdV1::PqMaspStarkV1, "next_anchor"),
+        (
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
+            "next_anchor_epoch",
+        ),
     ] {
         let canonical = norito::json::to_json(&statement_for(protocol_id))
             .expect("encode validator-derived-successor statement");
@@ -2323,7 +2506,7 @@ fn first_release_statements_reject_nested_unknown_json_fields() {
             .expect("tagged statement ends with nested and outer objects");
         let hostile = format!("{nested_prefix},\"{removed_field}\":null}}}}");
         assert!(
-            norito::json::from_json::<PrivacyStatementV1>(&hostile).is_err(),
+            norito::json::from_json::<PrivacyRuntimeStatementV1>(&hostile).is_err(),
             "removed caller-selected field `{removed_field}` must not decode"
         );
     }
@@ -2695,10 +2878,10 @@ fn consensus_policy_schedule_enforces_future_height_and_snapshot_boundaries() {
 }
 #[test]
 fn protocol_limit_schedule_allows_both_directions_and_rejects_bad_timing_mismatch_and_noop() {
-    let current = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+    let current = PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
         max_aggregation_count: 8,
     });
-    let next = PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+    let next = PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
         max_aggregation_count: 7,
     });
     let valid = PrivacyProtocolLimitsUpdateV1 {
@@ -2729,7 +2912,7 @@ fn protocol_limit_schedule_allows_both_directions_and_rejects_bad_timing_mismatc
     ));
     assert!(matches!(
         PrivacyProtocolLimitsUpdateV1 {
-            next_limits: PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+            next_limits: PrivacyRuntimeProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
                 max_action_count: 1,
             }),
             ..valid
@@ -2878,10 +3061,10 @@ fn goldilocks_digest384_json_rejects_noncanonical_words() {
 #[test]
 fn privacy_stark_ids_require_the_single_sha3_outer_suite() {
     for protocol in [
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
     ] {
         assert_eq!(
             protocol.expected_proof_system(),
@@ -2921,7 +3104,7 @@ fn protocol_policy_schema_and_codecs_have_only_ordinary_limits() {
             .collect::<Vec<_>>(),
         ["protocol_id", "current_limits", "pending_update"]
     );
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         let policy = PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id);
         policy
             .validate()
@@ -2966,11 +3149,11 @@ fn protocol_policy_rejects_retired_activation_norito_layout() {
     #[derive(norito::codec::Encode, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolActivationRecordV1")]
     struct RetiredActivationShape {
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         proposed_at_height: u64,
     }
     let retired = RetiredActivationShape {
-        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
         proposed_at_height: 7,
     };
     let frame = norito::encode_canonical(&retired).unwrap();

@@ -154,7 +154,9 @@ impl ProvisioningOperations for NativeOperations {
             .get_dataspace_lease(
                 request.alias,
                 request.owner,
-                request.native_schema,
+                iroha_core::state::State::native_world_schemas_for_anchor_v1(request.native_schema)
+                    .map_err(|_| ProvisioningError::Invalid("native lease schema unavailable"))?
+                    .as_slice(),
                 request.block,
                 unix_ms()?,
             )

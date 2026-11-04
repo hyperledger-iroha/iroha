@@ -104,6 +104,10 @@ mod model {
         /// This sticky set authenticates transient same-block rotations that the
         /// final policy snapshot alone cannot reconstruct during Kura replay.
         pub axt_transitioned_dataspaces: BTreeSet<iroha_model_base::topology::DataSpaceId>,
+        /// Original local allocation custody; never encoded or part of identity.
+        #[norito(skip)]
+        #[codec(skip)]
+        pub(crate) lifecycle_custody: super::super::LifecycleOutputCustody,
     }
 }
 pub use self::model::{BlockPayload, BlockResult};
@@ -508,12 +512,8 @@ impl SignedBlock {
         let output = self
             .execution_outputs()
             .get(usize::try_from(input_index).ok()?)?;
-        match output {
-            ExecutionOutputV1::Network(row) if row.input_index == input_index => {
-                Some((input_index, row))
-            }
-            _ => None,
-        }
+        let row = output.network()?;
+        (row.input_index == input_index).then_some((input_index, row))
     }
     /// Canonical full typed-output hashes, independently of the network-input tree.
     pub fn output_hashes(

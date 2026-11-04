@@ -879,7 +879,8 @@ fn build_private_note_trace_v1(
         program_digest,
         Some(*statement.program_id.as_bytes()),
     )?;
-    let namespace = norito::to_bytes(&namespace_v1(statement))
+    let namespace = namespace_v1(statement)
+        .canonical_wire_bytes_v1()
         .map_err(|_| IvmPrivateNoteAirErrorV1::Topology)?;
     let mut nonzero_components = Vec::<Vec<ByteVariableV1>>::new();
     for (index, input) in input_variables.iter_mut().enumerate() {

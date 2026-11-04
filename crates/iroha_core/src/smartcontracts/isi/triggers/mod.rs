@@ -632,6 +632,15 @@ pub mod isi {
         preauthorized_manifest_contract_subject: Option<&AccountId>,
     ) -> Result<(), Error> {
         let mut new_trigger = trigger;
+        crate::runtime::ironwood::admission::executable(
+            new_trigger.action().executable(),
+            state_transaction.world.runtime_selection.get(),
+        )
+        .map_err(|error| {
+            state_transaction.attempt_error_to_instruction_error(error.map_rejection(|message| {
+                Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+            }))
+        })?;
         state_transaction.validate_execution_output_registration(&new_trigger)?;
         if new_trigger.action().repeats().is_depleted() {
             return Err(Error::InvalidParameter(
@@ -645,6 +654,7 @@ pub mod isi {
         // re-checks every derived group, including contract outputs and multisig approvals.
         if crate::deferred_authority::trigger_executable_derives_sccp_outbound_record(
             new_trigger.action().executable(),
+            state_transaction.world.runtime_selection.get(),
         ) {
             return Err(Error::InvalidParameter(
                 InvalidParameterError::SmartContract(
@@ -1100,7 +1110,7 @@ pub mod isi {
             let value = state_transaction
                 .world
                 .triggers
-                .inspect_by_id_mut(&trigger_id, |action| {
+                .try_inspect_by_id_mut(&trigger_id, |action| {
                     action
                         .metadata_mut()
                         .remove(self.key().as_ref())
@@ -1675,6 +1685,7 @@ mod tests {
     use iroha_test_samples::{ALICE_ID, BOB_ID};
     use mv::storage::StorageReadOnly;
     use std::{str::FromStr, time::Duration};
+    include!("ironwood_registration_tests.rs");
     fn checked_keypair() -> KeyPair {
         KeyPair::try_random().expect("trigger fixture key generation should succeed")
     }

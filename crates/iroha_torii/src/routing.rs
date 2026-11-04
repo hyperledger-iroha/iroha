@@ -33068,15 +33068,7 @@ fn contract_event_projections_for_height_range(
             let count = rows.len().checked_add(emissions.len()).ok_or_else(history_capacity_error)?;
             check_history_retention(count, maximum)?;
             let execution_hash = output.execution_call_hash(block.hash(), &*block).map_err(conversion_error)?;
-            let fee_payment = match output {
-                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(network) => {
-                    let entrypoint = block.network_entrypoint_at(network.input_index as usize)
-                        .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
-                    let transaction = BorrowedNetworkTransaction { entrypoint, entrypoint_hash: entrypoint.hash(), result: &network.result };
-                    tx_fee_projection(&transaction)
-                }
-                _ => None,
-            };
+            let fee_payment = output_fee_projection(&block, output)?;
             for (emission_index, emission) in emissions.iter().enumerate() {
                 rows.push(contract_event_projection(
 (height as u64, block.hash(), timestamp_ms),
@@ -33792,6 +33784,24 @@ fn contract_activity_projection_from_tx(
         fee_payment: tx_fee_projection(tx),
     })
 }
+/// Resolve the signed source's fee intent for either Network row representation.
+pub(crate) fn output_fee_projection(
+    block: &iroha_data_model::block::SignedBlock,
+    output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
+) -> Result<Option<iroha_data_model::transaction::FeePaymentIntent>, Error> {
+    let Some(network) = output.network() else {
+        return Ok(None);
+    };
+    let entrypoint = block
+        .network_entrypoint_at(network.input_index as usize)
+        .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
+    Ok(tx_fee_projection(&BorrowedNetworkTransaction {
+        entrypoint,
+        entrypoint_hash: entrypoint.hash(),
+        result: &network.result,
+    }))
+}
+
 fn tx_fee_projection(
     tx: &impl HistoryTransaction,
 ) -> Option<iroha_data_model::transaction::FeePaymentIntent> {

@@ -551,6 +551,17 @@ impl StateBlock<'_> {
                     &limits,
                 )
                 .map_err(|error| error.to_string())?;
+            if let Some(ledgers) = retained.lifecycle_custody {
+                // SAFETY: these ledgers followed the exact original rows through
+                // fitting. The setter moved them without cloning; BlockResult
+                // destroys those rows before refunding its non-wire custody.
+                #[allow(unsafe_code)]
+                unsafe {
+                    block.retain_lifecycle_output_custody(
+                        iroha_data_model::block::LifecycleOutputCustody::new(ledgers),
+                    );
+                }
+            }
             let (wire_bytes, wire_hash) = block
                 .executed_block_wire_identity()
                 .map_err(|error| error.to_string())?;

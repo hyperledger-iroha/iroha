@@ -28,11 +28,11 @@ use iroha_data_model::{
     privacy::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1,
         PrivacyP256PointV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyRootV1,
-        PrivacyStatementContextV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1,
-        PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsKeyImageV1,
-        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyRootV1, PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1,
+        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1, PrivacyStatementContextV1,
+        PrivacyTransactionIntentDigestV1, PrivacyZkAmsActionV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsIssuerPolicyRecordDigestV1,
+        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
         ZK_AMS_PHC_VERSION_V1,
     },
@@ -579,14 +579,18 @@ fn zk_ams_statement_context_v1(
 }
 fn zk_ams_transaction_payload_v1(
     context: &ZkAmsPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<TransactionPayload, ZkAmsPrivacyActionIntentErrorV1> {
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_instructions([SubmitPrivacyProofV1::new(
+        envelope
+            .try_into()
+            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::InvalidTransactionContext)?,
+    )])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
@@ -601,7 +605,7 @@ fn zk_ams_transaction_payload_v1(
 }
 fn zk_ams_intent_projection_envelope_v1(
     statement: IrohaZkAmsStatementV1,
-) -> Result<PrivacyProofEnvelopeV1, ZkAmsPrivacyActionIntentErrorV1> {
+) -> Result<PrivacyRuntimeProofEnvelopeV1, ZkAmsPrivacyActionIntentErrorV1> {
     let proof = match &statement.action {
         PrivacyZkAmsActionV1::BatchAdmission(_) => {
             IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(
@@ -614,9 +618,9 @@ fn zk_ams_intent_projection_envelope_v1(
             )
         }
     };
-    PrivacyProofEnvelopeV1::bind_v1(
-        PrivacyStatementV1::IrohaZkAmsV1(statement),
-        PrivacyProofV1::IrohaZkAmsV1(proof),
+    PrivacyRuntimeProofEnvelopeV1::bind_v1(
+        PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement),
+        PrivacyRuntimeProofV1::IrohaZkAmsV1(proof),
     )
     .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::StatementDigest)
 }
@@ -642,9 +646,10 @@ fn prepare_zk_ams_privacy_action_transaction_intent_v1(
     governance: ZkAmsPrivacyActionGovernanceV1,
     action: PrivacyZkAmsActionV1,
 ) -> Result<IrohaZkAmsStatementV1, ZkAmsPrivacyActionIntentErrorV1> {
-    let profile =
-        crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+    )
+    .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
         context, governance, action, profile,
     )
@@ -732,9 +737,10 @@ pub fn validate_zk_ams_privacy_action_transaction_intent_v1(
     context: &ZkAmsPrivacyActionTransactionContextV1,
     statement: &IrohaZkAmsStatementV1,
 ) -> Result<PrivacyTransactionIntentDigestV1, ZkAmsPrivacyActionIntentErrorV1> {
-    let profile =
-        crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+    )
+    .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(context, statement, profile)
 }
 fn validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(
@@ -751,7 +757,7 @@ fn validate_zk_ams_privacy_action_transaction_intent_with_profile_v1(
     if statement.context != expected_context {
         return Err(ZkAmsPrivacyActionIntentErrorV1::StatementValidation);
     }
-    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone());
     typed_statement
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::StatementValidation)?;
@@ -849,19 +855,20 @@ fn validate_zk_ams_payload_integrity_v1(
         .privacy_transaction_intent_binding_if_present_v1()
         .map_err(|_| ())?
         .ok_or(())?;
+    let submission_envelope = submission.runtime_envelope();
     if intent.as_bytes() != &expected.transaction_intent_digest {
         return Err(());
     }
-    let envelope = &submission.envelope;
+    let envelope = &submission_envelope;
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ())?;
-    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaZkAmsV1
+    if envelope.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1
         || envelope.statement_digest.as_bytes() != &expected.statement_digest
     {
         return Err(());
     }
-    let PrivacyStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
         return Err(());
     };
     if statement.context.action_index != ZK_AMS_PRIVACY_ACTION_INDEX_V1
@@ -874,23 +881,26 @@ fn validate_zk_ams_payload_integrity_v1(
     if statement_digest.as_bytes() != &expected.statement_digest {
         return Err(());
     }
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| ())?;
+    let statement_encoding = envelope
+        .statement
+        .canonical_wire_bytes_v1()
+        .map_err(|_| ())?;
     if u32::try_from(statement_encoding.len()).map_err(|_| ())? != expected.statement_bytes {
         return Err(());
     }
     let proof_bytes = match (&statement.action, &envelope.proof, expected.effect) {
         (
             PrivacyZkAmsActionV1::BatchAdmission(_),
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
-                proof,
-            )),
+            PrivacyRuntimeProofV1::IrohaZkAmsV1(
+                IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(proof),
+            ),
             ZkAmsPrivacyActionEffectV1::BatchAdmission,
         )
         | (
             PrivacyZkAmsActionV1::ProvisionAccount(_),
-            PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-                proof,
-            )),
+            PrivacyRuntimeProofV1::IrohaZkAmsV1(
+                IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(proof),
+            ),
             ZkAmsPrivacyActionEffectV1::ProvisionAccount,
         ) => proof.as_bytes(),
         _ => return Err(()),
@@ -909,7 +919,7 @@ fn validate_zk_ams_payload_integrity_v1(
                 .map_err(|_| ())?;
         }
     }
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| ())?;
+    let envelope_encoding = envelope.canonical_wire_bytes_v1().map_err(|_| ())?;
     if u32::try_from(envelope_encoding.len()).map_err(|_| ())?
         != expected.encoded_proof_envelope_bytes
         || *Hash::new(&envelope_encoding).as_ref() != expected.proof_envelope_hash
@@ -935,7 +945,7 @@ fn finalize_zk_ams_prepared_action_v1(
                 .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EncodedLengthOverflow)?
         }
     };
-    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement);
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement);
     typed_statement
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EnvelopeValidation)?;
@@ -947,21 +957,25 @@ fn finalize_zk_ams_prepared_action_v1(
         return Err(ZkAmsPrivacyActionBuildErrorV1::StatementDigest);
     }
     let statement_bytes = u32::try_from(
-        norito::to_bytes(&typed_statement)
+        typed_statement
+            .canonical_wire_bytes_v1()
             .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::StatementEncoding)?
             .len(),
     )
     .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
-    let final_envelope =
-        PrivacyProofEnvelopeV1::bind_v1(typed_statement, PrivacyProofV1::IrohaZkAmsV1(proof))
-            .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EnvelopeValidation)?;
+    let final_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
+        typed_statement,
+        PrivacyRuntimeProofV1::IrohaZkAmsV1(proof),
+    )
+    .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EnvelopeValidation)?;
     if !profile.matches_envelope_v1(&final_envelope) {
         return Err(ZkAmsPrivacyActionBuildErrorV1::EnvelopeValidation);
     }
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EnvelopeValidation)?;
-    let envelope_encoding = norito::to_bytes(&final_envelope)
+    let envelope_encoding = final_envelope
+        .canonical_wire_bytes_v1()
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EnvelopeEncoding)?;
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
@@ -1014,16 +1028,17 @@ where
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    let profile =
-        crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+    )
+    .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     let statement = prepare_zk_ams_privacy_action_transaction_intent_with_profile_v1(
         context,
         governance,
         PrivacyZkAmsActionV1::BatchAdmission(action),
         profile,
     )?;
-    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::StatementDigest)?;
@@ -1065,9 +1080,10 @@ where
     if context.network_id.as_bytes() != &canonical_genesis_hash {
         return Err(ZkAmsPrivacyActionBuildErrorV1::NetworkIdMismatch);
     }
-    let profile =
-        crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-            .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
+    let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+    )
+    .map_err(|_| ZkAmsPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     prepare_zk_ams_provision_privacy_action_with_rng_and_profile_v1(
         context,
         governance,
@@ -1101,7 +1117,7 @@ where
         PrivacyZkAmsActionV1::ProvisionAccount(action),
         profile,
     )?;
-    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| ZkAmsPrivacyActionBuildErrorV1::StatementDigest)?;
@@ -2333,7 +2349,7 @@ fn validate_statement_binding(
     {
         return Err(ZkAmsErrorV1::BindingMismatch);
     }
-    let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(statement.clone())
+    let statement_digest = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone())
         .digest()
         .map_err(|_| ZkAmsErrorV1::InvalidStatement)?;
     if binding.statement_digest != *statement_digest.as_bytes() {
@@ -2938,8 +2954,10 @@ mod tests {
         assert_ne!(zk_ams_generator_digest_v1(), [0; 32]);
         assert!(iroha_zkp_halo2::vega::zk_ams_compiled_profile_digest_v1().is_err());
         assert!(
-            crate::privacy_profiles::compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1)
-                .is_err()
+            crate::privacy_profiles::compiled_privacy_profile_v1(
+                PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1
+            )
+            .is_err()
         );
     }
     #[test]
@@ -3661,7 +3679,7 @@ mod tests {
         ));
     }
     fn binding_for_statement(statement: &IrohaZkAmsStatementV1) -> TranscriptBindingV1<'_> {
-        let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(statement.clone())
+        let statement_digest = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone())
             .digest()
             .expect("typed statement digest");
         TranscriptBindingV1 {

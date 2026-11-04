@@ -5,10 +5,10 @@
 //! observation or finality. Core execution and exact global executed-wire finality
 //! must establish those facts; a public model constructor grants no authority.
 //!
-//! TODO: the canonical producer must reserve bounded terminal-output capacity
-//! before executing a callback. The adjacent output budget checks exact row
-//! capacity, but Core must authenticate its plan and account for metadata and
-//! allocation before work. Callers must enforce encoded and allocation limits
+//! The canonical producer reserves bounded terminal-output capacity before
+//! executing callbacks. The adjacent output budget checks exact row capacity;
+//! Core authenticates the plan and owns the associated allocation custody.
+//! Callers must enforce encoded and allocation limits
 //! before decoding, then validate shape. A successful shape check is not acceptance.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,17 +29,19 @@ use crate::{
 
 #[path = "trigger_lifecycle.rs"]
 mod trigger_lifecycle;
+pub(crate) use trigger_lifecycle::action_frame_scanner::charge_typed_nested_frame;
 pub use trigger_lifecycle::action_frame_scanner::{
     ActionFrameCaptureFailureV1, ActionFrameProductionFailureV1, ActionFrameScanFailureV1,
     ActionScannerLimitsV1, BoundedActionFrameScannerV1, RetainedActionFrameBytesV1,
 };
 pub use trigger_lifecycle::{
-    TriggerLifecycleActionCodecV1, TriggerLifecycleActionFrameBudgetV1,
-    TriggerLifecycleActionFrameLimitsV1, TriggerLifecycleActionFrameV1,
-    TriggerLifecycleActionSemanticsV1, TriggerLifecycleActionValidatorV1, TriggerLifecycleChangeV1,
-    TriggerLifecycleEffectV1, TriggerLifecycleEffectsV1, TriggerLifecycleOriginV1,
-    TriggerLifecycleOwnerV1, TriggerLifecyclePolicyV1, TriggerLifecycleRetryStateV1,
-    TriggerLifecycleStateKindV1, TriggerLifecycleStateV1,
+    LIFECYCLE_HASH_FRAME_BYTES, LIFECYCLE_UNAVAILABLE_FRAME_BYTES, TriggerLifecycleActionCodecV1,
+    TriggerLifecycleActionFrameBudgetV1, TriggerLifecycleActionFrameLimitsV1,
+    TriggerLifecycleActionFrameV1, TriggerLifecycleActionSemanticsV1,
+    TriggerLifecycleActionValidatorV1, TriggerLifecycleChangeV1, TriggerLifecycleEffectV1,
+    TriggerLifecycleEffectsV1, TriggerLifecycleOriginV1, TriggerLifecycleOwnerV1,
+    TriggerLifecyclePolicyV1, TriggerLifecycleRetryStateV1, TriggerLifecycleStateKindV1,
+    TriggerLifecycleStateV1, lifecycle_hash_frame, lifecycle_unavailable_frame,
 };
 
 const PIPELINE_CALL_DOMAIN: &[u8] = b"iroha:pipeline-invocation:v1\0";
@@ -546,6 +548,15 @@ impl ExecutionInputs for super::SignedBlock {
 }
 
 impl ExecutionOutputV1 {
+    /// Borrow the Network execution in either carrier. This projection grants
+    /// no lifecycle coverage; hashes and inclusion proofs must bind the full row.
+    pub fn network(&self) -> Option<&NetworkExecutionOutputV1> {
+        match self.execution_ref() {
+            ExecutionOutputRef::Network(row) => Some(row),
+            ExecutionOutputRef::Pipeline(_) | ExecutionOutputRef::Time(_) => None,
+        }
+    }
+
     fn execution_ref(&self) -> ExecutionOutputRef<'_> {
         match self {
             Self::Network(row) => ExecutionOutputRef::Network(row),
@@ -673,9 +684,21 @@ impl ExecutionOutputV1 {
         ) || !self.result().batch_transfer_outcomes().is_empty()
             || self.result().nexus_fee_receipt().is_some()
             || !self.result().contract_events().is_empty()
-            || self
-                .trigger_lifecycle()
-                .is_some_and(|trace| !trace.effects().is_empty())
+            || self.trigger_lifecycle().is_some_and(|trace| {
+                let effects = trace.effects();
+                if effects.is_empty() { return false; }
+                let ExecutionOutputRef::Time(output) = self.execution_ref() else { return true; };
+                !matches!(effects, [effect]
+                    if effect.trigger_id == output.invocation.trigger.trigger_id
+                        && effect.origin == (TriggerLifecycleOriginV1::InvocationPolicy {
+                            callback_index: 0,
+                            policy: TriggerLifecyclePolicyV1::ConsumeTimeProgress,
+                        })
+                        && matches!(&effect.change, TriggerLifecycleChangeV1::Update { before, after }
+                            if before.kind == TriggerLifecycleStateKindV1::Time
+                                && after.kind == TriggerLifecycleStateKindV1::Time
+                                && before.retry_state == after.retry_state))
+            })
         {
             return false;
         }
@@ -1100,17 +1123,57 @@ pub fn validate_execution_outputs_with_lifecycle_v1<
     frame_limits: TriggerLifecycleActionFrameLimitsV1,
     action_validator: &mut V,
 ) -> Result<(), String> {
-    for output in outputs {
-        output.require_trigger_lifecycle()?;
+    validate_execution_outputs_with_lifecycle_budget_v1(
+        outputs,
+        proposal,
+        proposal_height,
+        network_inputs,
+        &mut TriggerLifecycleActionFrameBudgetV1::new(frame_limits),
+        action_validator,
+    )
+}
+
+/// Validate one block while retaining the caller's cumulative lifecycle range budget.
+///
+/// Use the same budget and Action validator for every block in one admitted proof
+/// range. Every failure, including missing carriers or invalid row shape, closes
+/// the range. No subsequent empty block or empty journal can clear that refusal.
+/// The caller still authenticates activation, block identities and a gapless
+/// history; this function does not grant those authorities from claimed rows.
+///
+/// # Errors
+/// Refuses an already failed range, absent or mixed coverage, malformed output
+/// ownership, and any Action frame or semantic validation failure.
+pub fn validate_execution_outputs_with_lifecycle_budget_v1<
+    S: ExecutionInputs + ?Sized,
+    V: TriggerLifecycleActionValidatorV1 + ?Sized,
+>(
+    outputs: &[ExecutionOutputV1],
+    proposal: HashOf<BlockHeader>,
+    proposal_height: u64,
+    network_inputs: &S,
+    budget: &mut TriggerLifecycleActionFrameBudgetV1,
+    action_validator: &mut V,
+) -> Result<(), String> {
+    if budget.is_refused() {
+        return Err("lifecycle Action frame validation range already refused".into());
     }
-    validate_execution_outputs_v1(outputs, proposal, proposal_height, network_inputs)?;
-    let mut budget = TriggerLifecycleActionFrameBudgetV1::new(frame_limits);
-    for output in outputs {
-        output
-            .require_trigger_lifecycle()?
-            .validate_action_frames(&mut budget, action_validator)?;
+    let result = (|| {
+        for output in outputs {
+            output.require_trigger_lifecycle()?;
+        }
+        validate_execution_outputs_v1(outputs, proposal, proposal_height, network_inputs)?;
+        for output in outputs {
+            output
+                .require_trigger_lifecycle()?
+                .validate_action_frames(budget, action_validator)?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        budget.refuse();
     }
-    Ok(())
+    result
 }
 
 fn validate_action(trigger: &TriggerUseV1) -> Result<(), String> {

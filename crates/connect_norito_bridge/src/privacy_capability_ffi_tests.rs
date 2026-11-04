@@ -12,7 +12,7 @@ fn unavailable_manifest() -> PrivacyExact12CapabilityManifestV1 {
         )),
         committed_height: 3,
         consensus_policy: PrivacyConsensusPolicyV1::default(),
-        protocols: PrivacyProtocolIdV1::ALL
+        protocols: PrivacyRuntimeProtocolIdV1::ALL
             .into_iter()
             .map(|protocol_id| PrivacyCapabilityRowV1 {
                 protocol_id,
@@ -31,7 +31,7 @@ fn unsigned_qualification() -> PrivacyExact12QualificationRecordV1 {
     let artifact = PrivacyReleaseArtifactDigestV1::new([0xA1; 32]);
     let audit_bundle_digest = PrivacyAuditBundleDigestV1::new([0xA2; 32]);
     let release_digest = PrivacyExact12ReleaseManifestDigestV1::new([0xA3; 32]);
-    let protocols = PrivacyProtocolIdV1::ALL
+    let protocols = PrivacyRuntimeProtocolIdV1::ALL
         .into_iter()
         .map(|protocol_id| {
             let security_claim = PrivacySecurityClaimV1 {

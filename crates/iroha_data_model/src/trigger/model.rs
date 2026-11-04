@@ -1081,6 +1081,20 @@ pub mod action {
                     <ActionCandidate as norito::core::DeserializePayload>::try_deserialize(
                         archived.cast(),
                     )?;
+                if crate::isi::lifecycle_instruction_validation_active() {
+                    // Persistent canonical evidence cannot normalize a missing
+                    // by-call authority by cloning a second controller graph.
+                    if matches!(&candidate.filter, EventFilterBox::ExecuteTrigger(filter)
+                        if filter.authority().is_none())
+                    {
+                        return Err(norito::core::Error::NonCanonicalEncoding);
+                    }
+                    return candidate
+                        .validate()
+                        .map_err(|_| norito::core::Error::InvalidValue {
+                            context: "trigger Action constructor invariant",
+                        });
+                }
                 candidate
                     .validate()
                     .map_err(|error| norito::core::Error::Message(error.to_string()))

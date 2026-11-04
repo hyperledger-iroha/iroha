@@ -1,4 +1,4 @@
-//! Original D7 witness allocation custody through native result and job ownership.
+//! Native witness allocation custody through native result and job ownership.
 //!
 //! Only the actual completed State source can construct this local owner. The
 //! canonical wire remains `ExecWitness`; borrowing it grants no source finality.
@@ -14,8 +14,8 @@ use std::mem::ManuallyDrop;
 
 /// One original captured canonical witness with inseparable new allocation custody.
 ///
-/// The retained ledger covers the exact new write-vector backing and D7 key/value
-/// allocations. Existing moved read/transcript/nested ordinary-write allocations
+/// The retained ledger covers the exact new write-vector backing, D7 key/value
+/// allocations, and the optional selected-service lifecycle anchor. Existing moved read/transcript/nested ordinary-write allocations
 /// retain their original ownership; this does not claim they were newly admitted.
 /// No raw extraction, Clone or mutable original-wire projection exists.
 pub struct CapturedExecWitness {
@@ -357,23 +357,45 @@ impl StateBlock<'_> {
                 "ordinary capture requires canonical writes without an existing D7 family owner",
             ));
         }
-        let write_capacity = witness.writes.len().checked_add(1).ok_or_else(overflow)?;
+        let lifecycle = self
+            .lifecycle_runtime_anchor()
+            .map_err(ExecutionAttemptError::Rejected)?;
+        let lifecycle_key =
+            iroha_data_model::execution_witness::TRIGGER_LIFECYCLE_SELECTION_WITNESS_KEY_V1;
+        if witness
+            .writes
+            .iter()
+            .any(|write| write.key == lifecycle_key)
+        {
+            return Err(owner(
+                "ordinary recorder supplied the native lifecycle witness family",
+            ));
+        }
+        let lifecycle_count = usize::from(lifecycle.is_some());
+        let charge_count = 3 + 2 * lifecycle_count;
+        let write_capacity = witness
+            .writes
+            .len()
+            .checked_add(1 + lifecycle_count)
+            .ok_or_else(overflow)?;
         let key_capacity = KEY.len();
         let value_capacity = source.manifest_bytes.as_slice().len();
         let demand = [
             Layout::array::<ExecKv>(write_capacity),
             Layout::array::<u8>(key_capacity),
             Layout::array::<u8>(value_capacity),
-            Layout::array::<AllocationCharge>(3),
+            Layout::array::<AllocationCharge>(charge_count),
         ]
         .into_iter()
         .try_fold(0usize, |sum, layout| sum.checked_add(layout.ok()?.size()))
+        .and_then(|bytes| bytes.checked_add(lifecycle_count * (lifecycle_key.len() + iroha_data_model::sumeragi_finality::lifecycle_runtime::LIFECYCLE_RUNTIME_ANCHOR_BYTES)))
         .ok_or_else(overflow)?;
         let pool = &source.pool;
         let mut reservation = pool
             .try_reserve_bytes(demand)
             .map_err(|refusal| ExecutionAttemptError::Deferred(refusal.into()))?;
-        let charges = ChargedBuffer::from_reservation(3, &mut reservation).map_err(buffer)?;
+        let charges =
+            ChargedBuffer::from_reservation(charge_count, &mut reservation).map_err(buffer)?;
         let mut assembly = Assembly {
             wire: ManuallyDrop::new(witness),
             charges: ManuallyDrop::new(charges),
@@ -384,6 +406,26 @@ impl StateBlock<'_> {
             ChargedBuffer::from_reservation(key_capacity, &mut reservation).map_err(buffer)?;
         let mut value =
             ChargedBuffer::from_reservation(value_capacity, &mut reservation).map_err(buffer)?;
+        let mut lifecycle_write = if let Some(bytes) = lifecycle {
+            let mut key = ChargedBuffer::from_reservation(lifecycle_key.len(), &mut reservation)
+                .map_err(buffer)?;
+            let mut value =
+                ChargedBuffer::from_reservation(bytes.len(), &mut reservation).map_err(buffer)?;
+            for byte in lifecycle_key {
+                key.push_reserved(*byte);
+            }
+            for byte in bytes {
+                value.push_reserved(byte);
+            }
+            // SAFETY: both exact original allocations enter this same inseparable ledger.
+            let (key, key_charge) = unsafe { key.into_allocation_parts() };
+            let (value, value_charge) = unsafe { value.into_allocation_parts() };
+            assembly.charges.push_reserved(key_charge);
+            assembly.charges.push_reserved(value_charge);
+            Some(ExecKv { key, value })
+        } else {
+            None
+        };
         if reservation.remaining_bytes() != 0 {
             return Err(owner("D7 witness left unaccounted prepaid backing"));
         }
@@ -408,6 +450,12 @@ impl StateBlock<'_> {
         }
         if let Some(write) = original_d7 {
             writes.push_reserved(write);
+        }
+        if let Some(write) = lifecycle_write.take() {
+            writes.push_reserved(write);
+            writes
+                .as_mut_slice()
+                .sort_unstable_by(|left, right| left.key.cmp(&right.key));
         }
         // SAFETY: replacement writes has one exact admitted allocation. Its
         // original nested values moved unchanged; no replacement/growth follows.

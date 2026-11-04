@@ -689,12 +689,17 @@ impl ManagedInitialReservePolicy {
         let block = verifier
             .verified_tip()
             .map_err(|_| invalid("invalid certified reserve tip"))?;
-        let schema = iroha_core::state::State::native_world_schema_hash_v1()
+        let schema = iroha_core::state::State::native_world_schema_hashes_v1()
             .map_err(|_| invalid("native reserve schema unavailable"))?;
         read_selected_peers(&self.authority.peers, deadline, |client, deadline| {
             client
                 .with_request_deadline(deadline)
-                .get_reserve_policy_state(&self.authority.config.account, policy, schema, &block)
+                .get_reserve_policy_state(
+                    &self.authority.config.account,
+                    policy,
+                    schema.as_slice(),
+                    &block,
+                )
                 .map_err(|_| invalid("native reserve candidate unavailable or invalid"))
         })
     }

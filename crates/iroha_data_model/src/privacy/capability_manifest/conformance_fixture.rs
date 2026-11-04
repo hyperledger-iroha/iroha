@@ -12,8 +12,8 @@ use crate::privacy::{
     PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
     PrivacyCompiledProfileUnavailableReasonV1, PrivacyCompiledStatementSchemaErrorV1,
     PrivacyConsensusLimitsV1, PrivacyConsensusPolicyUpdateV1, PrivacyConsensusPolicyV1,
-    PrivacyExact12FixtureErrorV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsUpdateV1,
-    PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1, exact12_fixture::network_id,
+    PrivacyExact12FixtureErrorV1, PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1,
+    PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1, exact12_fixture::network_id,
     privacy_action_role_samples_v1,
 };
 use thiserror::Error;
@@ -37,7 +37,7 @@ pub enum PrivacyExact12CapabilityManifestFixtureErrorV1 {
     Sample(#[from] PrivacyExact12FixtureErrorV1),
     /// A sample lost its protocol, so the manifest would miss a canonical row.
     #[error("capability manifest fixture has no sample profile for {0:?}")]
-    MissingSample(PrivacyProtocolIdV1),
+    MissingSample(PrivacyRuntimeProtocolIdV1),
     /// Core refused the snapshot or could not encode the manifest.
     #[error("capability manifest fixture failed: {0}")]
     Manifest(#[from] PrivacyExact12CapabilityManifestBuildErrorV1),
@@ -72,7 +72,7 @@ pub fn privacy_exact12_capability_manifest_fixture_v1()
     next_limits.retained_root_count /= 2;
 
     let samples = privacy_action_role_samples_v1()?;
-    let protocols = PrivacyProtocolIdV1::ALL
+    let protocols = PrivacyRuntimeProtocolIdV1::ALL
         .into_iter()
         .map(|protocol_id| {
             let sample = samples
@@ -124,15 +124,19 @@ pub fn privacy_exact12_capability_manifest_fixture_v1()
 
 /// One row per unavailable reason, so every reason's projection is Core's own.
 fn compiled_profile(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     available: PrivacyCompiledProfileSnapshotV1,
 ) -> PrivacyCompiledProfileResultV1 {
     use PrivacyCompiledProfileUnavailableReasonV1 as Reason;
     let reason = match protocol_id {
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => Reason::JointSecurityReductionIncomplete,
-        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => Reason::EngineUnavailable,
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => Reason::ProfileInitializationFailed,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => Reason::StatementSchemaInvalid(
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
+            Reason::JointSecurityReductionIncomplete
+        }
+        PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1 => Reason::EngineUnavailable,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+            Reason::ProfileInitializationFailed
+        }
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => Reason::StatementSchemaInvalid(
             PrivacyCompiledStatementSchemaErrorV1::MissingTypeReference,
         ),
         _ => return PrivacyCompiledProfileResultV1::Available(available),
@@ -141,22 +145,22 @@ fn compiled_profile(
 }
 
 fn protocol_policy(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     scheduled_at_height: u64,
     effective_at_height: u64,
 ) -> Option<PrivacyProtocolPolicyV1> {
     let next_limits = match protocol_id {
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
             return Some(PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id));
         }
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 32,
                 max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
             })
         }
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
-            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+            PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
                 max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1 - 1,
                 max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             })
@@ -165,7 +169,7 @@ fn protocol_policy(
     };
     Some(PrivacyProtocolPolicyV1 {
         protocol_id,
-        current_limits: PrivacyProtocolLimitsV1::canonical_default_v1(protocol_id),
+        current_limits: PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol_id),
         pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height,
             effective_at_height,

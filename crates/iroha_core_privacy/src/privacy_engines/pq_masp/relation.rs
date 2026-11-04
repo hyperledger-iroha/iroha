@@ -7,8 +7,8 @@
 use iroha_data_model::privacy::{
     PQ_MASP_MAX_INPUTS_V1, PQ_MASP_MAX_OUTPUTS_V1, PqMaspStarkStatementV1,
     PrivacyAuthorizationKeyDigestV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
-    PrivacyNamespaceV1, PrivacyNoteEncryptionKeyDigestV1, PrivacyNullifierV1,
-    PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRecipientIdV1, PrivacyRootV1,
+    PrivacyNoteEncryptionKeyDigestV1, PrivacyNullifierV1, PrivacyPoolNamespaceV1,
+    PrivacyRecipientIdV1, PrivacyRootV1, PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
 };
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeSet, fmt};
@@ -466,9 +466,9 @@ fn note_commitment_invocation_v1(
         ],
     )
 }
-pub(super) fn namespace_v1(statement: &PqMaspStarkStatementV1) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+pub(super) fn namespace_v1(statement: &PqMaspStarkStatementV1) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
             pool_id: statement.pool_id,
         }),
@@ -578,8 +578,9 @@ pub(super) fn accumulator_leaf_invocation_v1(
     input: u8,
     commitment: PrivacyCommitmentV1,
 ) -> Result<PqMaspSha256InvocationV1, PqMaspRelationErrorV1> {
-    let namespace =
-        norito::to_bytes(&namespace_v1(statement)).map_err(|_| PqMaspRelationErrorV1::Encoding)?;
+    let namespace = namespace_v1(statement)
+        .canonical_wire_bytes_v1()
+        .map_err(|_| PqMaspRelationErrorV1::Encoding)?;
     let mut preimage = Vec::new();
     preimage
         .try_reserve_exact(ACCUMULATOR_LEAF_DOMAIN_V1.len() + 8 + namespace.len() + 32)

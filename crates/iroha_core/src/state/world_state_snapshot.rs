@@ -9,6 +9,11 @@
 
 #[path = "world_state_snapshot/amx_approval.rs"]
 mod amx_approval;
+#[path = "world_state_snapshot/ironwood.rs"]
+mod ironwood;
+#[cfg(feature = "iroha-core-tests")]
+#[path = "world_state_snapshot/lifecycle_fixture.rs"]
+mod lifecycle_fixture;
 #[path = "world_state_snapshot/private_settlement.rs"]
 mod private_settlement;
 #[path = "world_state_snapshot/reserve_account.rs"]
@@ -680,6 +685,50 @@ impl State {
     pub fn native_world_schema_hash_v1() -> Result<Hash, String> {
         let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
         selection_schema(&catalog.baseline)
+    }
+
+    /// Qualified complete-World schemas with the native typed field meanings of this release.
+    /// Readers select from this set using each proof's candidate schema, then authenticate the
+    /// unchanged complete proof against the independently selected block at its own height.
+    /// This supports both sides of activation without trusting a current/latest schema for history.
+    /// # Errors
+    /// A compiled selection or its commitment profile is invalid.
+    pub fn native_world_schema_hashes_v1() -> Result<Vec<Hash>, String> {
+        let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+        let mut schemas = vec![selection_schema(&catalog.baseline)?];
+        if let Some(ironwood) = &catalog.ironwood {
+            schemas.push(selection_schema(&ironwood.selection)?);
+        }
+        schemas.sort_unstable();
+        schemas.dedup();
+        Ok(schemas)
+    }
+
+    /// Expand a qualified installation anchor only within this release's known native schema
+    /// family. An explicitly qualified foreign registry remains a singleton; it never acquires
+    /// authority to interpret any other schema. Installation metadata itself is unchanged.
+    /// # Errors
+    /// The compiled native schema family cannot be constructed.
+    pub fn native_world_schemas_for_anchor_v1(anchor: Hash) -> Result<Vec<Hash>, String> {
+        let schemas = Self::native_world_schema_hashes_v1()?;
+        Ok(if schemas.contains(&anchor) {
+            schemas
+        } else {
+            vec![anchor]
+        })
+    }
+
+    /// Select a compiled native schema candidate for a typed proof verifier. This does not
+    /// authenticate the candidate: the verifier must still bind its complete snapshot to the
+    /// independently selected certified block and verify every requested typed preimage.
+    /// # Errors
+    /// The candidate schema is not implemented by this release.
+    pub fn select_native_world_schema_v1(candidate: Hash) -> Result<Hash, String> {
+        use iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1 as _;
+        Self::native_world_schema_hashes_v1()?
+            .as_slice()
+            .select_schema(candidate)
+            .map_err(|error| error.to_string())
     }
 
     /// Publish complete current-state evidence and exact provider authority originals.

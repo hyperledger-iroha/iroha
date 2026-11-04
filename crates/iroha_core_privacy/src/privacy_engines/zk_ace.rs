@@ -23,7 +23,7 @@ use iroha_data_model::zk::ZK_ACE_PQ_AUTHORIZATION_V1_CIRCUIT_ID;
 use iroha_data_model::{
     NetworkId,
     privacy::{
-        GoldilocksDigest384V1, PrivacyConsensusLimitsV1, PrivacyStatementV1,
+        GoldilocksDigest384V1, PrivacyConsensusLimitsV1, PrivacyRuntimeStatementV1,
         PrivacyZkAceIdentityCommitmentV1, PrivacyZkAceReplayNullifierV1,
     },
     zk::{
@@ -354,7 +354,7 @@ fn validate_privacy_public_inputs(
     if public_inputs.genesis_hash == [0; 32] {
         return Err(ZkAceNativeErrorV1::ZeroGenesisHash);
     }
-    PrivacyStatementV1::ZkAcePqAuthorizationV1(public_inputs.statement.clone())
+    PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(public_inputs.statement.clone())
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ZkAceNativeErrorV1::InvalidStatement)
 }

@@ -2585,13 +2585,20 @@ impl BlockSummary {
         let time_trigger_count = block
             .execution_outputs()
             .iter()
-            .filter(|output| matches!(output, ExecutionOutputV1::Time(_)))
+            .filter(|output| {
+                matches!(
+                    output,
+                    ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+                )
+            })
             .count();
         let rejected_transaction_count = block
             .execution_outputs()
             .iter()
             .filter(|output| {
-                matches!(output, ExecutionOutputV1::Network(row) if row.result.as_ref().is_err())
+                output
+                    .network()
+                    .is_some_and(|row| row.result.as_ref().is_err())
             })
             .count();
         let signature_count = block.signatures().len();

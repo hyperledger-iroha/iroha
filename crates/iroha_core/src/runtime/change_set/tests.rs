@@ -585,6 +585,148 @@ fn block_start_lapses_attested_but_unimplemented_storage_effects() {
 }
 
 #[test]
+fn merged_lifecycle_capacity_support_stops_at_activation_for_both_owner_profiles() {
+    use iroha_data_model::{
+        block::output_budget::{ExecutionOutputPhase as Phase, ExecutionOutputTerminalCeilings},
+        parameter::{ExecutionOutputPolicyV1, Parameter, system::BlockParameter},
+    };
+    let catalog = release_catalog().unwrap();
+    let old = ExecutionOutputTerminalCeilings::derive().unwrap();
+    let mut policy = ExecutionOutputPolicyV1::bootstrap();
+    policy.max_pipeline_triggers = 0;
+    policy.max_time_triggers = 1;
+    policy.max_time_invocations = 1;
+    policy.max_outputs = 2;
+    policy.max_output_bytes = old
+        .for_phase(Phase::Network)
+        .max(old.for_phase(Phase::Time));
+    policy.validate().unwrap();
+    for ironwood_first in [false, true] {
+        let mut published: BTreeMap<_, _> = catalog
+            .baseline_definitions
+            .iter()
+            .map(|id| (*id, catalog.definitions[id].clone()))
+            .collect();
+        let previous = if ironwood_first {
+            let change =
+                crate::runtime::ironwood::activation_change_set(network(), 100, [0x91; 32])
+                    .unwrap();
+            let applied = change.apply(&catalog.baseline, &published).unwrap();
+            published.extend(applied.published);
+            applied.selection
+        } else {
+            catalog.baseline.clone()
+        };
+        let change = crate::runtime::lifecycle_activation::from_selection(
+            catalog.clone(),
+            &previous,
+            &published,
+            network(),
+            150,
+            [0x92; 32],
+        )
+        .unwrap();
+        let state = scheduled_state(&change, &validators(), 4);
+        {
+            let mut definitions = state.world.runtime_definitions.block();
+            for (id, definition) in published {
+                definitions.insert(id, definition);
+            }
+            definitions.commit();
+            let mut selection = state.world.runtime_selection.block();
+            *selection.get_mut() = previous.clone();
+            selection.commit();
+            let mut parameters =
+                crate::state::parameter_cell_block_for_testing(&state.world).unwrap();
+            crate::state::set_parameter_cell_for_testing(
+                &mut parameters,
+                Parameter::Block(BlockParameter::ExecutionOutput(policy)),
+                state.world.sccp_committee_generations.allocation_budget(),
+            )
+            .unwrap();
+            parameters.commit();
+        }
+        // Existing output semantics must remain executable before the effective height.
+        drop(
+            state
+                .try_block(header_at(149))
+                .expect("predecessor capacity is sufficient"),
+        );
+        let error = state
+            .try_block(header_at(150))
+            .err()
+            .expect("V2 terminal capacity is unsupported");
+        assert!(
+            matches!(error,
+            crate::state::StateBlockStartError::Storage(
+                crate::state::StateStorageAdmissionError::UnsupportedRuntime { height: 150, ref reason }
+            ) if reason == "execution output envelope has invalid terminal ceilings"),
+            "{error:?}"
+        );
+        assert_eq!(*state.world.runtime_selection.view().get(), previous);
+        assert_eq!(
+            state
+                .world
+                .runtime_change_sets
+                .view()
+                .get(&change.id().unwrap())
+                .unwrap()
+                .status,
+            ChangeSetStatusV1::Scheduled,
+            "a support stop must neither lapse nor commit the activation"
+        );
+    }
+}
+
+#[test]
+fn ironwood_cutover_activates_only_with_all_four_validator_attestations() {
+    let change =
+        crate::runtime::ironwood::activation_change_set(network(), 150, [0x51; 32]).unwrap();
+    let storage = published();
+    admit(
+        &change,
+        &network(),
+        50,
+        notice(),
+        &baseline(),
+        &BTreeMap::new(),
+        &PublishedDefinitions(&storage.view()),
+    )
+    .unwrap();
+    for attesting in [3, 4] {
+        let state = scheduled_state(&change, &validators(), attesting);
+        let before = state.try_block(header_at(149)).unwrap();
+        assert!(!crate::runtime::ironwood::enabled(
+            before.world.runtime_selection.get()
+        ));
+        drop(before);
+        let block = state.try_block(header_at(150)).unwrap();
+        let active = attesting == 4;
+        assert_eq!(
+            crate::runtime::ironwood::enabled(block.world.runtime_selection.get()),
+            active
+        );
+        assert_eq!(
+            block
+                .world
+                .runtime_change_sets
+                .get(&change.id().unwrap())
+                .unwrap()
+                .status,
+            if active {
+                ChangeSetStatusV1::Activated(150)
+            } else {
+                ChangeSetStatusV1::Lapsed(150)
+            }
+        );
+        assert_eq!(
+            block.world.runtime_selection.get_before_block(),
+            &baseline()
+        );
+    }
+}
+
+#[test]
 fn block_start_stops_a_release_that_cannot_execute_the_successor() {
     let change = add_instruction(150);
     let state = scheduled_state(&change, &validators(), 4);
@@ -752,4 +894,135 @@ fn block_start_lapses_a_change_set_that_would_strand_a_live_amx_transaction() {
     let (activated, selection) = status(&decided);
     assert_eq!(activated, Some(ChangeSetStatusV1::Activated(150)));
     assert_eq!(selection.id().unwrap(), change.successor);
+}
+
+#[test]
+fn ironwood_future_codec_without_a_cutover_refuses_admission_and_lapses() {
+    use iroha_data_model::runtime::definition::SchemaV1;
+    let catalog = release_catalog().unwrap();
+    let extension = catalog.ironwood.as_ref().unwrap();
+    let previous = &extension.selection;
+    let old_storage = extension.world_storage["world.smart_contract_state"];
+    let DefinitionDescriptorV1::Storage(mut storage) = catalog.definitions[&old_storage].clone()
+    else {
+        unreachable!()
+    };
+    let SchemaV1::Codec(codec) = &mut storage.value else {
+        unreachable!()
+    };
+    codec.push_str("-future-qualified-codec");
+    let storage = DefinitionDescriptorV1::Storage(storage);
+    let new_storage = storage.id().unwrap();
+    let old_bundle = previous.bindings[0].implementation;
+    let DefinitionDescriptorV1::Implementation(mut bundle) =
+        catalog.definitions[&old_bundle].clone()
+    else {
+        unreachable!()
+    };
+    for accesses in [&mut bundle.reads, &mut bundle.writes, &mut bundle.scans] {
+        for owner in accesses.iter_mut() {
+            if *owner == old_storage {
+                *owner = new_storage;
+            }
+        }
+        accesses.sort_unstable();
+    }
+    let bundle = DefinitionDescriptorV1::Implementation(bundle);
+    let new_bundle = bundle.id().unwrap();
+    let mut next = previous.clone();
+    next.installed_storage.retain(|id| *id != old_storage);
+    next.installed_storage.push(new_storage);
+    next.installed_storage.sort_unstable();
+    next.active.retain(|id| *id != old_bundle);
+    next.active.push(new_bundle);
+    next.active.sort_unstable();
+    next.restrictions
+        .retain(|entry| entry.definition != old_bundle);
+    for binding in &mut next.bindings {
+        binding.implementation = new_bundle;
+    }
+    let mut transitions = vec![
+        SelectionTransitionV1::Restrict {
+            definition: old_bundle,
+            restriction: RestrictionKindV1::Disabled,
+        },
+        SelectionTransitionV1::Deactivate(old_bundle),
+        SelectionTransitionV1::RetireStorage(old_storage),
+        SelectionTransitionV1::InstallStorage(new_storage),
+        SelectionTransitionV1::Activate(new_bundle),
+    ];
+    transitions.extend(
+        next.bindings
+            .iter()
+            .cloned()
+            .map(SelectionTransitionV1::Bind),
+    );
+    let mut publish = vec![storage, bundle];
+    publish.sort_by_key(|descriptor| descriptor.id().unwrap());
+    let change = ChangeSetV1 {
+        network: network(),
+        root: RootScopeV1::Universal,
+        predecessor: previous.id().unwrap(),
+        successor: next.id().unwrap(),
+        effective_height: 150,
+        publish,
+        transitions,
+        qualification: [0x68; 32],
+    };
+    let applied = change.apply(previous, &catalog.definitions).unwrap();
+    assert_eq!(applied.selection, next);
+    assert!(catalog.unsupported(&next).is_some());
+    let mut definitions = catalog.definitions.clone();
+    definitions.extend(applied.published);
+    assert!(crate::runtime::ironwood::validate_cutover(previous, &next, &definitions).is_err());
+    let published: Storage<_, _> = catalog
+        .definitions
+        .iter()
+        .map(|(id, descriptor)| (*id, descriptor.clone()))
+        .collect();
+    let error = admit(
+        &change,
+        &network(),
+        50,
+        notice(),
+        previous,
+        &BTreeMap::new(),
+        &PublishedDefinitions(&published.view()),
+    )
+    .expect_err("an unknown codec has no implemented storage migration cutover");
+    assert!(
+        error
+            .to_string()
+            .contains("unimplemented storage migration cutover"),
+        "{error}"
+    );
+    // Injected unit fixtures independently exercise block-start support checks.
+    // They are not admitted proposals or governance qualification evidence.
+    for attesting in [3, 4] {
+        let mut state = scheduled_state(&change, &validators(), attesting);
+        crate::runtime::ironwood::install_for_test(&mut state.world);
+        // An unknown definition cannot legalize a forbidden storage transition.
+        // Valid additive unknown successors separately exercise the release stop.
+        let block = state
+            .try_block(header_at(150))
+            .expect("the invalid cutover lapses without halting the original selection");
+        assert_eq!(block.world.runtime_selection.get(), previous);
+        assert_eq!(
+            block
+                .world
+                .runtime_change_sets
+                .get(&change.id().unwrap())
+                .unwrap()
+                .status,
+            ChangeSetStatusV1::Lapsed(150),
+            "even unanimous attestations cannot admit an unimplemented cutover"
+        );
+        assert!(change.publish.iter().all(|descriptor| {
+            block
+                .world
+                .runtime_definitions
+                .get(&descriptor.id().unwrap())
+                .is_none()
+        }));
+    }
 }

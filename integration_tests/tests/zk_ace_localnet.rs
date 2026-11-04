@@ -9,9 +9,10 @@ use iroha::{
         asset::AssetBalanceScope,
         prelude::{AssetDefinitionId, QueryBuilderExt},
         privacy::{
-            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCompiledProfileResultV1,
+            PRIVACY_ZK_ACE_POLICY_INITIAL_EPOCH_V1, PrivacyCapabilityReadinessV1,
+            PrivacyCapabilityUnavailableReasonV1, PrivacyCompiledProfileResultV1,
             PrivacyCompiledProfileUnavailableReasonV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1,
-            PrivacyProtocolIdV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
+            PrivacyRuntimeProtocolIdV1, PrivacyZkAcePolicyLifecycleV1, PrivacyZkAcePolicyRecordV1,
         },
         query::block::prelude::FindBlocks,
         transaction::FeePaymentIntent,
@@ -35,7 +36,7 @@ use zk_ace_prover::{
 };
 
 const TEST_NAME: &str = "zk_ace_privacy_transfer_fails_closed_taira_localnet";
-const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+const PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
 
 fn no_fee() -> FeePaymentIntent {
     FeePaymentIntent::authority(Vec::new(), None)
@@ -151,10 +152,21 @@ fn zk_ace_privacy_transfer_fails_closed_taira_localnet() -> Result<()> {
         "network exposed an unexpected ZK-ACE compiled profile: {:?}",
         row.compiled_profile
     );
+    // Capabilities expose actual implementation readiness, not a separate activation
+    // record. An unavailable engine must remain unusable under ordinary resource policy.
     ensure!(
-        row.policy.is_none(),
-        "unavailable ZK-ACE unexpectedly has a committed policy: {:?}",
-        row.policy
+        row.readiness
+            == PrivacyCapabilityReadinessV1::Unavailable(
+                PrivacyCapabilityUnavailableReasonV1::CompiledProfile(
+                    PrivacyCompiledProfileUnavailableReasonV1::EngineUnavailable,
+                ),
+            ),
+        "unavailable ZK-ACE has unexpected network readiness: {:?}",
+        row.readiness
+    );
+    ensure!(
+        !row.is_network_available() && row.effective_protocol_limits_v1().is_none(),
+        "unavailable ZK-ACE unexpectedly admits network use or effective limits"
     );
 
     let witness = witness(0x11);

@@ -373,18 +373,29 @@ fn exact_slot_bytes<T>(len: usize) -> Result<u64, Error> {
 ///
 /// The per-row ceiling is enforced again immediately before every decode, so
 /// neither one row nor the retained set as a whole can exceed the admitted
-/// `selected * S` envelope.
+/// envelope: `selected * S`, or a page or cursor envelope that varying rows
+/// share.
 struct RetainedDecodeBudget {
     per_item_graph_bytes: u64,
     remaining_graph_bytes: u64,
 }
 impl RetainedDecodeBudget {
     fn new<T>(rows: usize, per_item_bytes: u64) -> Result<(Self, u64), Error> {
-        let rows_u64 = u64::try_from(rows).map_err(|_| Error::CapacityLimit)?;
-        let slot_bytes = exact_slot_bytes::<T>(rows)?;
-        let aggregate_bytes = rows_u64
+        let aggregate_bytes = u64::try_from(rows)
+            .map_err(|_| Error::CapacityLimit)?
             .checked_mul(per_item_bytes)
             .ok_or(Error::CapacityLimit)?;
+        Self::shared::<T>(rows, aggregate_bytes, per_item_bytes)
+    }
+
+    /// Share one admitted aggregate between `rows` exact slots whose graphs vary
+    /// in size. Each row still stays within `per_item_bytes`.
+    fn shared<T>(
+        rows: usize,
+        aggregate_bytes: u64,
+        per_item_bytes: u64,
+    ) -> Result<(Self, u64), Error> {
+        let slot_bytes = exact_slot_bytes::<T>(rows)?;
         let remaining_graph_bytes = aggregate_bytes
             .checked_sub(slot_bytes)
             .ok_or(Error::CapacityLimit)?;
@@ -748,6 +759,30 @@ fn trigger_source_limits(
         .checked_mul(3)
         .ok_or(Error::CapacityLimit)?;
     Ok((rows, bytes, work))
+}
+/// Source items charged to at most one composite row: an exact FI receipt or
+/// FI context, or one UID policy view.
+///
+/// Each such row composes several native records (eligibility, attestation,
+/// owner link, UID binding and policy, controller, holdings and usage), so it
+/// exceeds one name-backed source item. With 1 KiB source items, a
+/// controller-bearing receipt charges about 2.6 KB and a populated context about
+/// 3.8 KB, or 5.6 KB with the largest UID policy that one source row admits. A
+/// UID policy view charges 1.3 KB with one member and 3.3 KB with that largest
+/// policy.
+const COMPOSITE_ROW_SOURCE_ITEMS: u64 = 8;
+/// Byte ceiling of one composite row, shared by its inline slot, its retained
+/// graph and its key scratch, and bounding its canonical frame.
+///
+/// Every admitted policy reserves `max_page_items * max_source_item_bytes` for
+/// owned page values, and one row never charges more than that page admits.
+/// The exact FI lookups return at most one row. The UID roster also shares its
+/// page and cursor envelopes between its rows.
+fn composite_row_bytes(limits: OrdinaryQueryExecutionLimits) -> Result<u64, Error> {
+    COMPOSITE_ROW_SOURCE_ITEMS
+        .min(limits.max_page_items())
+        .checked_mul(limits.max_source_item_bytes())
+        .ok_or(Error::CapacityLimit)
 }
 /// Decode only after frame and exact row slots are admitted. Nested allocations
 /// consume both the per-row and aggregate retained graph allowance.
@@ -1374,7 +1409,25 @@ mod tests {
     }
 
     pub(super) fn fi_context_test_limits(source_bytes: u64) -> OrdinaryQueryExecutionLimits {
-        let items = 2;
+        page_geometry_test_limits(2, source_bytes)
+    }
+    /// Torii's ordinary-query geometry: fixed 1 KiB name-ID source rows and
+    /// its default 500-item page.
+    fn torii_geometry_test_limits() -> OrdinaryQueryExecutionLimits {
+        page_geometry_test_limits(
+            u64::from(iroha_config::parameters::defaults::torii::APP_API_MAX_FETCH_SIZE),
+            super::super::ORDINARY_NAME_ID_SOURCE_BYTES,
+        )
+    }
+    fn page_geometry_test_limits(items: u64, source_bytes: u64) -> OrdinaryQueryExecutionLimits {
+        cursor_geometry_test_limits(items, items, source_bytes)
+    }
+    /// A stored cursor retains `retained` source items, as Torii sizes it.
+    fn cursor_geometry_test_limits(
+        items: u64,
+        retained: u64,
+        source_bytes: u64,
+    ) -> OrdinaryQueryExecutionLimits {
         let response = 16 * 1024;
         let archive = 1024;
         let decode = norito::DecodeLimits::new(64, 4096, 256, 16 * 1024, 16);
@@ -1387,10 +1440,11 @@ mod tests {
             decode,
         )
         .unwrap();
+        let cursor_values = retained * source_bytes;
         let cursor = OrdinaryQueryExecutionLimits::required_cursor_retained_bytes(
-            items,
+            retained,
             source_bytes,
-            source_bytes,
+            cursor_values,
             archive,
         )
         .unwrap();
@@ -1401,8 +1455,8 @@ mod tests {
             execution,
             source_bytes,
             response,
-            items,
-            source_bytes,
+            retained,
+            cursor_values,
             cursor,
             4096,
             archive,
@@ -1460,7 +1514,7 @@ mod tests {
             fetch_size: FetchSize::new(std::num::NonZeroU64::new(1)),
             ..QueryParams::default()
         };
-        let limits = fi_context_test_limits(16_384);
+        let limits = torii_geometry_test_limits();
         let get = |tx: &crate::state::StateTransaction<'_, '_>, query: &FindAssetFiContextV1| {
             let (mut rows, execution_stats) = asset_fi_context::collect(
                 query,
@@ -1504,6 +1558,87 @@ mod tests {
                 .unwrap(),
             "selector revisions are descriptive, not substituted for observed revisions"
         );
+        let source_bytes = super::super::ORDINARY_NAME_ID_SOURCE_BYTES;
+        let policy = |members: u8| iroha_data_model::asset::uid::AssetUidPolicyV1 {
+            asset_definition_id: f.definition.clone(),
+            uid: [7; 32],
+            revision: 1,
+            accounts: std::iter::once(f.wallet.clone())
+                .chain((1..members).map(|seed| {
+                    AccountId::new(
+                        iroha_crypto::KeyPair::from_seed(
+                            vec![seed; 32],
+                            iroha_crypto::Algorithm::Ed25519,
+                        )
+                        .public_key()
+                        .clone(),
+                    )
+                }))
+                .collect(),
+            holding_limit: Some(10_u32.into()),
+            daily_window: iroha_data_model::asset::uid::AssetUidDailyWindowV1::UtcDay,
+            daily_spend_limit: Some(5_u32.into()),
+            daily_outgoing_limit: Some(7_u32.into()),
+        };
+        let policy_key = asset_uid::policy_key(&f.definition, &[7; 32]);
+        asset_fi::FiLinkReaderFixture::put(
+            &mut tx,
+            asset_uid::binding_key(&f.definition, &f.wallet),
+            &iroha_data_model::asset::uid::AssetUidBindingV1 {
+                asset_definition_id: f.definition.clone(),
+                account_id: f.wallet.clone(),
+                uid: [7; 32],
+            },
+        );
+        // Ten members are the most that one 1 KiB source row admits.
+        for members in [1, 10] {
+            asset_fi::FiLinkReaderFixture::put(&mut tx, policy_key.clone(), &policy(members));
+            let member = get(&tx, &query);
+            assert!(member.binding.is_some() && member.policy.is_some());
+            assert_eq!(
+                member,
+                native::current_snapshot(&tx, &query.target, &incarnation, &query.expected_uid)
+                    .unwrap()
+            );
+            assert!(
+                norito::encode_canonical(&member).unwrap().len() > source_bytes as usize,
+                "a populated context exceeds one name-ID source item"
+            );
+        }
+        asset_fi::FiLinkReaderFixture::put(&mut tx, policy_key.clone(), &policy(11));
+        assert!(
+            matches!(
+                asset_fi_context::collect(
+                    &query,
+                    &params,
+                    OrdinaryCursorMode::Ephemeral,
+                    limits,
+                    &tx
+                ),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    Error::CapacityLimit
+                ))
+            ),
+            "each selected native row stays within one source item"
+        );
+        asset_fi::FiLinkReaderFixture::put(&mut tx, policy_key.clone(), &policy(1));
+        assert!(
+            matches!(
+                asset_fi_context::collect(
+                    &query,
+                    &params,
+                    OrdinaryCursorMode::Ephemeral,
+                    page_geometry_test_limits(1, source_bytes),
+                    &tx
+                ),
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+            ),
+            "the FI row never exceeds the page that the policy reserves"
+        );
+        tx.world.smart_contract_state.remove(policy_key);
+        tx.world
+            .smart_contract_state
+            .remove(asset_uid::binding_key(&f.definition, &f.wallet));
         let mut disabled = f.fi();
         disabled.enabled = false;
         disabled.revision += 1;
@@ -1678,7 +1813,7 @@ mod tests {
             fetch_size: FetchSize::new(NonZeroU64::new(1)),
             ..QueryParams::default()
         };
-        let limits = fi_context_test_limits(16_384);
+        let limits = torii_geometry_test_limits();
         let (mut rows, execution_stats) = asset_fi_receipt::collect(
             &query,
             &params,
@@ -1761,6 +1896,30 @@ mod tests {
         .unwrap();
         assert_eq!(rows.next(), Some(original.clone()));
         assert!(rows.next().is_none(), "exact lookup has no continuation");
+        let source_bytes = super::super::ORDINARY_NAME_ID_SOURCE_BYTES;
+        assert!(
+            norito::encode_canonical(&original).unwrap().len() > source_bytes as usize,
+            "a receipt frame exceeds one name-ID source item"
+        );
+        assert_eq!(
+            composite_row_bytes(limits).unwrap(),
+            COMPOSITE_ROW_SOURCE_ITEMS * source_bytes
+        );
+        let one_item_page = page_geometry_test_limits(1, source_bytes);
+        assert_eq!(composite_row_bytes(one_item_page).unwrap(), source_bytes);
+        assert!(
+            matches!(
+                asset_fi_receipt::collect(
+                    &query,
+                    &params,
+                    OrdinaryCursorMode::Ephemeral,
+                    one_item_page,
+                    &state.view()
+                ),
+                Err(crate::execution_attempt::ExecutionAttemptError::Deferred(_))
+            ),
+            "the FI row never exceeds the page that the policy reserves"
+        );
         assert!(
             crate::state::asset_fi::link(state.view().world(), &definition, &wallet)
                 .unwrap()
@@ -1942,17 +2101,38 @@ mod tests {
             )
             .is_err()
         );
-        write(vec![0; 16_385]);
+        let row = usize::try_from(composite_row_bytes(limits).unwrap()).unwrap();
+        write(vec![0; row + 1]);
         assert!(
-            asset_fi_receipt::collect(
-                &query,
-                &params,
-                OrdinaryCursorMode::Ephemeral,
-                limits,
-                &state.view()
-            )
-            .is_err(),
+            matches!(
+                asset_fi_receipt::collect(
+                    &query,
+                    &params,
+                    OrdinaryCursorMode::Ephemeral,
+                    limits,
+                    &state.view()
+                ),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    Error::CapacityLimit
+                ))
+            ),
             "oversized source never decodes or becomes absent"
+        );
+        write(vec![0; row]);
+        assert!(
+            matches!(
+                asset_fi_receipt::collect(
+                    &query,
+                    &params,
+                    OrdinaryCursorMode::Ephemeral,
+                    limits,
+                    &state.view()
+                ),
+                Err(crate::execution_attempt::ExecutionAttemptError::Rejected(
+                    Error::Conversion(_)
+                ))
+            ),
+            "a frame within the FI row envelope decodes and is refused as malformed"
         );
         write(norito::encode_canonical(&original).unwrap());
         let refused = norito::core::with_decode_limits_scope(
@@ -2249,7 +2429,7 @@ mod tests {
             uid: None,
             wallet_account_id: None,
         };
-        let limits = trigger_test_limits(4_096);
+        let limits = torii_geometry_test_limits();
         let params = QueryParams {
             fetch_size: FetchSize::new(NonZeroU64::new(1)),
             ..QueryParams::default()
@@ -2361,6 +2541,208 @@ mod tests {
                 .count(),
             0
         );
+    }
+    #[test]
+    fn bounded_uid_rows_share_the_page_and_cursor_envelopes() {
+        use crate::{
+            kura::Kura,
+            query::store::LiveQueryStore,
+            state::{State, World, asset_uid::policy_key},
+        };
+        use iroha_crypto::{Algorithm, KeyPair};
+        use iroha_data_model::{
+            asset::{
+                AssetBalancePolicy,
+                uid::{AssetUidDailyWindowV1, AssetUidPolicyV1, AssetUidPolicyViewV1},
+            },
+            prelude::*,
+            query::{asset_uid::FindAssetUidPoliciesV1, parameters::FetchSize},
+        };
+        use std::num::NonZeroU64;
+        let source_bytes = super::super::ORDINARY_NAME_ID_SOURCE_BYTES;
+        let owner = iroha_test_samples::ALICE_ID.clone();
+        let definition = |byte: u8| {
+            let mut bytes = [byte; 16];
+            bytes[6] = 0x48;
+            AssetDefinitionId::from_uuid_bytes(bytes).unwrap()
+        };
+        let roster = definition(0xa8);
+        let largest_home = definition(0xb8);
+        let world = World::with(
+            [],
+            [Account::new(owner.clone()).build(&owner)],
+            [&roster, &largest_home].map(|definition| {
+                AssetDefinition::numeric(definition.clone(), "DS", AssetBalancePolicy::Global, None)
+                    .build(&owner)
+            }),
+        );
+        let policy = |definition: &AssetDefinitionId, uid: u8, members: u8| AssetUidPolicyV1 {
+            asset_definition_id: definition.clone(),
+            uid: [uid; 32],
+            revision: 1,
+            accounts: (0..members)
+                .map(|index| {
+                    AccountId::new(
+                        KeyPair::from_seed(vec![uid * 16 + index; 32], Algorithm::Ed25519)
+                            .public_key()
+                            .clone(),
+                    )
+                })
+                .collect(),
+            holding_limit: Some(100_u32.into()),
+            daily_window: AssetUidDailyWindowV1::UtcDay,
+            daily_spend_limit: Some(50_u32.into()),
+            daily_outgoing_limit: Some(50_u32.into()),
+        };
+        let frame = |value: &AssetUidPolicyV1| norito::encode_canonical(value).unwrap();
+        // The largest policy that one 1 KiB source row admits.
+        let largest = (1..16)
+            .take_while(|&members| {
+                frame(&policy(&largest_home, 4, members)).len() <= source_bytes as usize
+            })
+            .last()
+            .unwrap();
+        let policies = [
+            policy(&roster, 1, 1),
+            policy(&roster, 2, 2),
+            policy(&roster, 3, 4),
+        ];
+        {
+            let mut records = world.smart_contract_state.block();
+            for value in policies.iter().chain([&policy(&largest_home, 4, largest)]) {
+                records.insert(
+                    policy_key(&value.asset_definition_id, &value.uid),
+                    frame(value),
+                );
+            }
+            records.commit();
+        }
+        let (decoded, usage) = norito::core::with_decode_limits_measured(
+            norito::DecodeLimits::new(8192, 1024, 8192, 1 << 20, 64),
+            || norito::decode_from_bytes::<AssetUidPolicyV1>(&frame(&policies[0])),
+        );
+        assert_eq!(decoded.unwrap(), policies[0]);
+        assert!(
+            core::mem::size_of::<AssetUidPolicyViewV1>() + usage.total_allocated_bytes()
+                > source_bytes as usize,
+            "even a one-member view exceeds one name-ID source item"
+        );
+        let state = State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        );
+        let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, 1_000, 0);
+        state
+            .block(header)
+            .commit_empty_block_for_testing()
+            .unwrap();
+        state.update_latest_block_header_cache_for_tests(header);
+        let read = |definition: &AssetDefinitionId,
+                    fetch: u64,
+                    mode: OrdinaryCursorMode,
+                    limits: OrdinaryQueryExecutionLimits| {
+            let query = FindAssetUidPoliciesV1 {
+                asset_definition_id: definition.clone(),
+                uid: None,
+                wallet_account_id: None,
+            };
+            let params = QueryParams {
+                fetch_size: FetchSize::new(NonZeroU64::new(fetch)),
+                ..QueryParams::default()
+            };
+            collect_asset_uid_policies(&query, &params, mode, limits, &state.view())
+                .map(|(rows, _)| rows.map(|row| row.policy).collect::<Vec<_>>())
+        };
+        // Torii's geometry reads a populated roster whole, in one ephemeral page.
+        let torii = torii_geometry_test_limits();
+        for mode in [OrdinaryCursorMode::Ephemeral, OrdinaryCursorMode::Stored] {
+            assert_eq!(read(&roster, 32, mode, torii).unwrap(), policies);
+            assert_eq!(
+                read(&largest_home, 32, mode, torii).unwrap(),
+                [policy(&largest_home, 4, largest)]
+            );
+        }
+        // Page rows and an ephemeral probe share the page envelope.
+        assert!(matches!(
+            read(
+                &roster,
+                1,
+                OrdinaryCursorMode::Ephemeral,
+                page_geometry_test_limits(2, source_bytes)
+            ),
+            Err(Error::CapacityLimit)
+        ));
+        assert_eq!(
+            read(
+                &roster,
+                1,
+                OrdinaryCursorMode::Ephemeral,
+                page_geometry_test_limits(4, source_bytes)
+            )
+            .unwrap(),
+            policies[..2]
+        );
+        // Rows past a stored page share only the cursor envelope.
+        assert!(matches!(
+            read(
+                &roster,
+                1,
+                OrdinaryCursorMode::Stored,
+                cursor_geometry_test_limits(8, 2, source_bytes)
+            ),
+            Err(Error::CapacityLimit)
+        ));
+        assert_eq!(
+            read(
+                &roster,
+                1,
+                OrdinaryCursorMode::Stored,
+                cursor_geometry_test_limits(8, 4, source_bytes)
+            )
+            .unwrap(),
+            policies
+        );
+        // BOI reads its whole bounded roster (at most 256 UIDs) in one ephemeral
+        // Start at fetch 257.
+        let boi_roster = definition(0x98);
+        let mut block = state.world.block();
+        for index in 0_u16..256 {
+            let mut seed = [0xc8; 32];
+            seed[..2].copy_from_slice(&index.to_le_bytes());
+            let value = AssetUidPolicyV1 {
+                asset_definition_id: boi_roster.clone(),
+                uid: seed,
+                accounts: [AccountId::new(
+                    KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519)
+                        .public_key()
+                        .clone(),
+                )]
+                .into(),
+                ..policy(&boi_roster, 1, 1)
+            };
+            block
+                .smart_contract_state
+                .insert(policy_key(&boi_roster, &value.uid), frame(&value));
+        }
+        block.commit();
+        assert_eq!(
+            read(&boi_roster, 257, OrdinaryCursorMode::Ephemeral, torii)
+                .unwrap()
+                .len(),
+            256
+        );
+        // Each stored policy still stays within one source item.
+        let oversized = policy(&largest_home, 4, largest + 1);
+        let mut block = state.world.block();
+        block
+            .smart_contract_state
+            .insert(policy_key(&largest_home, &oversized.uid), frame(&oversized));
+        block.commit();
+        assert!(matches!(
+            read(&largest_home, 32, OrdinaryCursorMode::Ephemeral, torii),
+            Err(Error::CapacityLimit)
+        ));
     }
     #[test]
     fn bounded_trigger_rows_preserve_typed_order_and_frozen_cursor_prefix() {

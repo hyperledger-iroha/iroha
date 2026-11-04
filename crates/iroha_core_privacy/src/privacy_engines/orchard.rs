@@ -1,7 +1,7 @@
-//! First-release Orchard V3 action-bundle prover and verifier.
+//! Fixed Orchard V3 and Ironwood V3 action-bundle provers and verifiers.
 //!
 //! The integration deliberately exposes no caller-selected Orchard protocol or circuit version.
-//! Every bundle is reconstructed as `orchard_v3`, every proof is verified with the `PostNu6_3` key,
+//! Each entry point fixes its bundle version and flags; both profiles use the `PostNu6_3` key,
 //! and the historical insecure and compatibility circuits are therefore unrepresentable. Production
 //! proving is a two-phase protocol: prepare fixes randomized actions and the Halo2 proof, then a
 //! consuming authorization step signs those exact bytes together with the complete native consensus
@@ -14,7 +14,7 @@ use chacha20poly1305::{
 use incrementalmerkletree::{Position, frontier::Frontier};
 use iroha_data_model::privacy::{PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1};
 use orchard::{
-    Action, Address, Anchor, Bundle, Proof,
+    Action, Anchor, Bundle, Proof,
     builder::{Builder, BundleType, InProgress, Unauthorized},
     bundle::{Authorization, Authorized, BundleVersion, Flags},
     circuit::{OrchardCircuitVersion, ProvingKey, VerifyingKey},
@@ -27,7 +27,8 @@ use orchard::{
     value::{NoteValue, ValueCommitment},
 };
 pub use orchard::{
-    keys::{Scope, SpendingKey},
+    Address,
+    keys::{OutgoingViewingKey, Scope, SpendingKey},
     note::Note,
     tree::MerklePath,
 };
@@ -36,6 +37,8 @@ use sha2::{Digest as _, Sha256};
 use std::sync::OnceLock;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
+/// V3 wallet parsing, address export and recipient decryption.
+pub mod ironwood_wallet;
 /// Maximum Orchard actions admitted by the first-release Taira profile.
 pub const ORCHARD_MAX_ACTIONS_V1: usize = 2;
 /// Exact pinned upstream Orchard crate version.
@@ -51,6 +54,44 @@ pub const ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1: [u8; 4] = *b"ORC1";
 pub(crate) const ORCHARD_PROVER_RANDOMNESS_POLICY_V1: &[u8] = b"bridge=chacha20poly1305-aead:source-key=entropy[0..32]:source-nonce=entropy[32..44]:source-plaintext=entropy[44..64]+IROHA-ORC-V1:seed-aad=iroha.privacy.orchard-v3.prover-rng.seed-bridge.v1:retained-key=ciphertext32:nonce-prefix=tag[0..4]:stream-aad=iroha.privacy.orchard-v3.prover-rng.stream-block.v1:stream-nonce=prefix4+u64be-counter:stream-plaintext=stream-aad+zeros-to64:counter-start=0:counter-u64max-exclusive:consumed-bytes-zeroized:state-zeroized+poisoned-on-error-unwind-drop:single-state-no-replay:v1";
 /// Complete native-engine profile descriptor.
 pub(crate) const ORCHARD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=orchard-v3|pool=orchard|circuit=PostNu6_3|upstream=orchard-0.16.0@8190e4d9b7e9c0140964e88b71f95276d2b50470|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.4.1:halo2-gadgets-0.6.0:incrementalmerkletree-0.9.0:pasta-curves-0.6.1:reddsa-0.6.1|producer=native-builder:two-phase-prepare-then-consuming-authorize:nonempty-spend-or-wallet-change:PostNu6_3:self-verified|prover_rng=shared-rand0.10-TryCryptoRng-fixed64-health-policy-v1+orchard-retained-bridge-policy-v1|flags=spends-enabled:outputs-enabled:cross-address-disabled|actions=1..2|halo2_proof_bytes=2720+2272*actions|authorization_wire=ORC1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=sha256-framed-native-consensus-binding-digest-and-public-bundle-v1|legacy=unrepresentable";
+/// Maximum actions in the independently identified Ironwood profile.
+pub const IRONWOOD_MAX_ACTIONS_V1: usize = 2;
+/// Ironwood authorization framing, distinct from existing Orchard authorizations.
+pub const IRONWOOD_AUTHORIZATION_WIRE_MAGIC_V1: [u8; 4] = *b"IRW1";
+/// Fixed Ironwood profile; its shared key material does not make profiles interchangeable.
+pub(crate) const IRONWOOD_COMPILED_PROFILE_DESCRIPTOR_V1: &[u8] = b"version=1|protocol=ironwood-v3|pool=ironwood|circuit=PostNu6_3|upstream=orchard-0.16.0@8190e4d9b7e9c0140964e88b71f95276d2b50470|circuit_description_sha256=8d325ee6753c8effb7d5184bdd729255d2697dd1730c0278084cd91192020e90|critical_deps=halo2-proofs-0.4.1:halo2-gadgets-0.6.0:incrementalmerkletree-0.9.0:pasta-curves-0.6.1:reddsa-0.6.1|producer=native-builder:two-phase-prepare-then-consuming-authorize:nonempty-spend-or-recipient-output:PostNu6_3:self-verified|prover_rng=shared-rand0.10-TryCryptoRng-fixed64-health-policy-v1+orchard-retained-bridge-policy-v1|flags=spends-enabled:outputs-enabled:cross-address-enabled|note=V3|actions=1..2|max-count=max(spends,outputs,padding)|halo2_proof_bytes=2720+2272*actions|authorization_wire=IRW1:u8-action-count:halo2-proof:ordered-64-byte-spend-signatures:64-byte-binding-signature|sighash=iroha.privacy.ironwood-v3.bundle-sighash.v1:sha256-framed-native-consensus-binding-digest-and-public-bundle-v1";
+const IRONWOOD_SIGHASH_DOMAIN_V1: &[u8] = b"iroha.privacy.ironwood-v3.bundle-sighash.v1";
+#[derive(Clone, Copy)]
+enum BundleProfileV1 {
+    Orchard,
+    Ironwood,
+}
+impl BundleProfileV1 {
+    fn version(self) -> BundleVersion {
+        match self {
+            Self::Orchard => BundleVersion::orchard_v3(),
+            Self::Ironwood => BundleVersion::ironwood_v3(),
+        }
+    }
+    fn flags(self) -> Flags {
+        match self {
+            Self::Orchard => Flags::CROSS_ADDRESS_DISABLED,
+            Self::Ironwood => Flags::ENABLED,
+        }
+    }
+    fn magic(self) -> [u8; 4] {
+        match self {
+            Self::Orchard => ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1,
+            Self::Ironwood => IRONWOOD_AUTHORIZATION_WIRE_MAGIC_V1,
+        }
+    }
+    fn sighash_domain(self) -> &'static [u8] {
+        match self {
+            Self::Orchard => SIGHASH_DOMAIN_V1,
+            Self::Ironwood => IRONWOOD_SIGHASH_DOMAIN_V1,
+        }
+    }
+}
 const SIGHASH_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.bundle-sighash.v1";
 const PROVER_RNG_SEED_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.seed-bridge.v1";
 const PROVER_RNG_STREAM_DOMAIN_V1: &[u8] = b"iroha.privacy.orchard-v3.prover-rng.stream-block.v1";
@@ -346,7 +387,174 @@ impl OrchardPreparedBundleV1 {
         &self.draft
     }
 }
-/// Canonical compact representation of one Orchard note-commitment frontier.
+/// A recipient output for Ironwood, requiring no recipient spending key.
+pub struct IronwoodOutputProverInputV1 {
+    outgoing_viewing_key: Option<OutgoingViewingKey>,
+    recipient: Address,
+    value: u64,
+    memo: [u8; 512],
+}
+impl core::fmt::Debug for IronwoodOutputProverInputV1 {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter
+            .debug_struct("IronwoodOutputProverInputV1")
+            .field("recipient", &"<redacted>")
+            .field("value", &self.value)
+            .finish_non_exhaustive()
+    }
+}
+impl IronwoodOutputProverInputV1 {
+    /// Construct a payment or payer-change output at a canonical recipient address.
+    #[must_use]
+    pub fn new(
+        outgoing_viewing_key: Option<OutgoingViewingKey>,
+        recipient: Address,
+        value: u64,
+        memo: &[u8; 512],
+    ) -> Self {
+        Self {
+            outgoing_viewing_key,
+            recipient,
+            value,
+            memo: *memo,
+        }
+    }
+}
+/// Move-only Ironwood preparation, consumable only by the Ironwood authorizer.
+#[derive(Debug)]
+pub struct IronwoodPreparedBundleV1(OrchardPreparedBundleV1, Vec<usize>);
+impl IronwoodPreparedBundleV1 {
+    /// Original requested output index to randomized action index, excluding dummy outputs.
+    #[must_use]
+    pub fn output_action_indices(&self) -> &[usize] {
+        &self.1
+    }
+    /// Exact randomized actions to bind into the transaction intent before authorization.
+    #[must_use]
+    pub const fn public_draft(&self) -> &OrchardBundleDraftV1 {
+        self.0.public_draft()
+    }
+}
+/// Prepare a fixed Ironwood V3 bundle, including nonempty zero-spend public deposits.
+///
+/// Real spends and outputs may share actions. The maximum of spend count, output count,
+/// and padding must be at most two. Payer change is an ordinary output to a payer address.
+/// # Errors
+/// Rejects invalid counts, anchors, note ownership/membership, entropy, or proving failures.
+pub fn prepare_ironwood_bundle_v1_with_rng<R: rand::TryCryptoRng + ?Sized>(
+    anchor: [u8; 32],
+    spends: Vec<OrchardSpendProverInputV1>,
+    outputs: Vec<IronwoodOutputProverInputV1>,
+    minimum_action_count: u8,
+    randomness: &mut R,
+) -> Result<IronwoodPreparedBundleV1, OrchardProverErrorV1> {
+    let anchor = Option::<Anchor>::from(Anchor::from_bytes(anchor))
+        .ok_or(OrchardProverErrorV1::AnchorEncoding)?;
+    let requested_actions = spends.len().max(outputs.len());
+    if requested_actions == 0 {
+        return Err(OrchardProverErrorV1::EmptyOperation);
+    }
+    if requested_actions > IRONWOOD_MAX_ACTIONS_V1 {
+        return Err(OrchardProverErrorV1::ActionCount {
+            actual: requested_actions,
+            max: IRONWOOD_MAX_ACTIONS_V1,
+        });
+    }
+    if minimum_action_count == 0 || usize::from(minimum_action_count) > IRONWOOD_MAX_ACTIONS_V1 {
+        return Err(OrchardProverErrorV1::MinimumActionCount {
+            actual: minimum_action_count,
+            max: IRONWOOD_MAX_ACTIONS_V1,
+        });
+    }
+    let expected_actions = requested_actions.max(usize::from(minimum_action_count));
+    let mut builder = Builder::new(
+        BundleType::Transactional {
+            bundle_required: true,
+            pad_to_minimum: Some(minimum_action_count),
+        },
+        BundleVersion::ironwood_v3(),
+        Flags::ENABLED,
+        anchor,
+    )
+    .map_err(|_| OrchardProverErrorV1::BundleConstruction)?;
+    let mut signing_keys = Vec::with_capacity(spends.len());
+    for (index, spend) in spends.into_iter().enumerate() {
+        let viewing_key = FullViewingKey::from(&spend.spending_key);
+        signing_keys.push(SpendAuthorizingKey::from(&spend.spending_key));
+        builder
+            .add_spend(viewing_key, spend.note, spend.merkle_path)
+            .map_err(|_| OrchardProverErrorV1::SpendInput { index })?;
+    }
+    let output_count = outputs.len();
+    for output in outputs {
+        builder
+            .add_output(
+                output.outgoing_viewing_key,
+                output.recipient,
+                NoteValue::from_raw(output.value),
+                output.memo,
+            )
+            .map_err(|_| OrchardProverErrorV1::BundleConstruction)?;
+    }
+    let mut upstream_rng = seeded_upstream_rng_v1(randomness)?;
+    let (unsigned, metadata) = builder
+        .build::<i64>(UnwrapErr(&mut upstream_rng))
+        .map_err(|_| OrchardProverErrorV1::BundleConstruction)?
+        .ok_or(OrchardProverErrorV1::BundleConstruction)?;
+    if unsigned.actions().len() != expected_actions
+        || unsigned.actions().len() > IRONWOOD_MAX_ACTIONS_V1
+    {
+        return Err(OrchardProverErrorV1::OutputShape);
+    }
+    let proven = unsigned
+        .create_proof(orchard_v3_proving_key(), UnwrapErr(&mut upstream_rng))
+        .map_err(|_| OrchardProverErrorV1::Halo2Proof)?;
+    let draft = public_draft_from_bundle_v1(&proven);
+    let output_action_indices = (0..output_count)
+        .map(|index| {
+            metadata
+                .output_action_index(index)
+                .ok_or(OrchardProverErrorV1::OutputShape)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(IronwoodPreparedBundleV1(
+        OrchardPreparedBundleV1 {
+            proven,
+            signing_keys,
+            upstream_rng,
+            draft,
+        },
+        output_action_indices,
+    ))
+}
+/// Prepare Ironwood with operating-system entropy.
+/// # Errors
+/// Returns the same bounded input, randomness, and proving errors as the injected-entropy API.
+pub fn prepare_ironwood_bundle_v1(
+    anchor: [u8; 32],
+    spends: Vec<OrchardSpendProverInputV1>,
+    outputs: Vec<IronwoodOutputProverInputV1>,
+    minimum_action_count: u8,
+) -> Result<IronwoodPreparedBundleV1, OrchardProverErrorV1> {
+    prepare_ironwood_bundle_v1_with_rng(
+        anchor,
+        spends,
+        outputs,
+        minimum_action_count,
+        &mut rand::rngs::SysRng,
+    )
+}
+/// Consume the Ironwood preparation and authorize the final transaction intent exactly once.
+/// # Errors
+/// Rejects malformed consensus bindings, signing failures, or failed independent verification.
+pub fn authorize_ironwood_bundle_v1(
+    prepared: IronwoodPreparedBundleV1,
+    binding: &PrivacyNativeConsensusBindingV1,
+    limits: &PrivacyConsensusLimitsV1,
+) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    authorize_bundle_for_profile_v1(prepared.0, binding, limits, BundleProfileV1::Ironwood)
+}
+/// Canonical compact representation shared by the two depth-32 frontier profiles.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct OrchardFrontierPartsV1 {
@@ -662,9 +870,10 @@ pub fn orchard_authorization_wire_size_v1(action_count: usize) -> Option<usize> 
         .checked_add(action_count.checked_mul(ORCHARD_REDPALLAS_SIGNATURE_BYTES_V1)?)?
         .checked_add(ORCHARD_REDPALLAS_SIGNATURE_BYTES_V1)
 }
-fn decode_authorization_wire_v1(
+fn decode_authorization_for_profile_v1(
     proof_bytes: &[u8],
     action_count: usize,
+    profile: BundleProfileV1,
 ) -> Result<ParsedOrchardAuthorizationV1<'_>, OrchardNativeErrorV1> {
     let expected = orchard_authorization_wire_size_v1(action_count).ok_or(
         OrchardNativeErrorV1::ProofLength {
@@ -678,9 +887,7 @@ fn decode_authorization_wire_v1(
             expected,
         });
     }
-    if proof_bytes[..ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1.len()]
-        != ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1
-    {
+    if proof_bytes[..ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1.len()] != profile.magic() {
         return Err(OrchardNativeErrorV1::AuthorizationWireMagic);
     }
     let encoded_action_count = usize::from(proof_bytes[ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1.len()]);
@@ -732,6 +939,22 @@ pub fn derive_orchard_bundle_sighash_v1(
     bundle: &OrchardBundlePublicV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
 ) -> Result<[u8; 32], OrchardNativeErrorV1> {
+    derive_bundle_sighash_for_profile_v1(bundle, consensus_limits, BundleProfileV1::Orchard)
+}
+/// Derive Ironwood's profile-separated message over the exact native consensus binding.
+/// # Errors
+/// Rejects a malformed binding or its failed canonical encoding.
+pub fn derive_ironwood_bundle_sighash_v1(
+    bundle: &OrchardBundlePublicV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+) -> Result<[u8; 32], OrchardNativeErrorV1> {
+    derive_bundle_sighash_for_profile_v1(bundle, consensus_limits, BundleProfileV1::Ironwood)
+}
+fn derive_bundle_sighash_for_profile_v1(
+    bundle: &OrchardBundlePublicV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    profile: BundleProfileV1,
+) -> Result<[u8; 32], OrchardNativeErrorV1> {
     bundle
         .consensus_binding
         .validate(consensus_limits)
@@ -741,7 +964,7 @@ pub fn derive_orchard_bundle_sighash_v1(
         .digest()
         .map_err(|_| OrchardNativeErrorV1::ConsensusBindingEncoding)?;
     let mut hasher = Sha256::new();
-    append_field(&mut hasher, SIGHASH_DOMAIN_V1);
+    append_field(&mut hasher, profile.sighash_domain());
     append_field(&mut hasher, binding_digest.as_bytes());
     append_field(&mut hasher, &bundle.anchor);
     append_field(&mut hasher, &bundle.value_balance.to_be_bytes());
@@ -975,10 +1198,21 @@ fn public_draft_from_bundle_v1<T: Authorization>(bundle: &Bundle<T, i64>) -> Orc
         actions,
     }
 }
+#[cfg(test)]
 fn encode_authorized_bundle_v1(
     bundle: &Bundle<Authorized, i64>,
     consensus_binding: &PrivacyNativeConsensusBindingV1,
 ) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    encode_authorized_bundle_for_profile_v1(bundle, consensus_binding, BundleProfileV1::Orchard)
+}
+fn encode_authorized_bundle_for_profile_v1(
+    bundle: &Bundle<Authorized, i64>,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
+    profile: BundleProfileV1,
+) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    if bundle.bundle_version() != profile.version() || *bundle.flags() != profile.flags() {
+        return Err(OrchardProverErrorV1::OutputShape);
+    }
     let draft = public_draft_from_bundle_v1(bundle);
     let public = OrchardBundlePublicV1 {
         consensus_binding: *consensus_binding,
@@ -989,7 +1223,7 @@ fn encode_authorized_bundle_v1(
     let expected = orchard_authorization_wire_size_v1(public.actions.len())
         .ok_or(OrchardProverErrorV1::OutputShape)?;
     let mut authorization = Vec::with_capacity(expected);
-    authorization.extend_from_slice(&ORCHARD_AUTHORIZATION_WIRE_MAGIC_V1);
+    authorization.extend_from_slice(&profile.magic());
     authorization
         .push(u8::try_from(public.actions.len()).map_err(|_| OrchardProverErrorV1::OutputShape)?);
     authorization.extend_from_slice(bundle.authorization().proof().as_ref());
@@ -1214,6 +1448,19 @@ pub fn authorize_orchard_bundle_v1(
     consensus_binding: &PrivacyNativeConsensusBindingV1,
     consensus_limits: &PrivacyConsensusLimitsV1,
 ) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
+    authorize_bundle_for_profile_v1(
+        prepared,
+        consensus_binding,
+        consensus_limits,
+        BundleProfileV1::Orchard,
+    )
+}
+fn authorize_bundle_for_profile_v1(
+    prepared: OrchardPreparedBundleV1,
+    consensus_binding: &PrivacyNativeConsensusBindingV1,
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    profile: BundleProfileV1,
+) -> Result<OrchardProvedBundleV1, OrchardProverErrorV1> {
     consensus_binding
         .validate(consensus_limits)
         .map_err(|_| OrchardProverErrorV1::ConsensusBinding)?;
@@ -1223,16 +1470,14 @@ pub fn authorize_orchard_bundle_v1(
         value_balance: prepared.draft.value_balance,
         actions: prepared.draft.actions.clone(),
     };
-    let sighash =
-        derive_orchard_bundle_sighash_v1(&public, consensus_limits).map_err(
-            |error| match error {
-                OrchardNativeErrorV1::ConsensusBinding => OrchardProverErrorV1::ConsensusBinding,
-                OrchardNativeErrorV1::ConsensusBindingEncoding => {
-                    OrchardProverErrorV1::ConsensusBindingEncoding
-                }
-                _ => OrchardProverErrorV1::OutputShape,
-            },
-        )?;
+    let sighash = derive_bundle_sighash_for_profile_v1(&public, consensus_limits, profile)
+        .map_err(|error| match error {
+            OrchardNativeErrorV1::ConsensusBinding => OrchardProverErrorV1::ConsensusBinding,
+            OrchardNativeErrorV1::ConsensusBindingEncoding => {
+                OrchardProverErrorV1::ConsensusBindingEncoding
+            }
+            _ => OrchardProverErrorV1::OutputShape,
+        })?;
     let mut upstream_rng = prepared.upstream_rng;
     let authorized = prepared
         .proven
@@ -1242,14 +1487,16 @@ pub fn authorize_orchard_bundle_v1(
             &prepared.signing_keys,
         )
         .map_err(|_| OrchardProverErrorV1::Authorization)?;
-    let encoded_bundle = encode_authorized_bundle_v1(&authorized, consensus_binding)?;
+    let encoded_bundle =
+        encode_authorized_bundle_for_profile_v1(&authorized, consensus_binding, profile)?;
     if encoded_bundle.public != public {
         return Err(OrchardProverErrorV1::OutputShape);
     }
-    verify_orchard_bundle_v1(
+    verify_bundle_for_profile_v1(
         &encoded_bundle.public,
         &encoded_bundle.authorization,
         consensus_limits,
+        profile,
     )
     .map_err(|_| OrchardProverErrorV1::SelfCheck)?;
     Ok(encoded_bundle)
@@ -1265,6 +1512,34 @@ pub fn verify_orchard_bundle_v1(
     proof_bytes: &[u8],
     consensus_limits: &PrivacyConsensusLimitsV1,
 ) -> Result<(), OrchardNativeErrorV1> {
+    verify_bundle_for_profile_v1(
+        public,
+        proof_bytes,
+        consensus_limits,
+        BundleProfileV1::Orchard,
+    )
+}
+/// Verify only the fixed Ironwood V3 profile with cross-address transfers enabled.
+/// # Errors
+/// Rejects cross-profile framing, malformed inputs, signatures, and proofs.
+pub fn verify_ironwood_bundle_v1(
+    public: &OrchardBundlePublicV1,
+    proof_bytes: &[u8],
+    consensus_limits: &PrivacyConsensusLimitsV1,
+) -> Result<(), OrchardNativeErrorV1> {
+    verify_bundle_for_profile_v1(
+        public,
+        proof_bytes,
+        consensus_limits,
+        BundleProfileV1::Ironwood,
+    )
+}
+fn verify_bundle_for_profile_v1(
+    public: &OrchardBundlePublicV1,
+    proof_bytes: &[u8],
+    consensus_limits: &PrivacyConsensusLimitsV1,
+    profile: BundleProfileV1,
+) -> Result<(), OrchardNativeErrorV1> {
     public
         .consensus_binding
         .validate(consensus_limits)
@@ -1275,7 +1550,8 @@ pub fn verify_orchard_bundle_v1(
             max: ORCHARD_MAX_ACTIONS_V1,
         });
     }
-    let authorization = decode_authorization_wire_v1(proof_bytes, public.actions.len())?;
+    let authorization =
+        decode_authorization_for_profile_v1(proof_bytes, public.actions.len(), profile)?;
     let anchor = Option::<Anchor>::from(Anchor::from_bytes(public.anchor))
         .ok_or(OrchardNativeErrorV1::AnchorEncoding)?;
     let mut actions = public
@@ -1301,14 +1577,14 @@ pub fn verify_orchard_bundle_v1(
     );
     let bundle = Bundle::try_from_parts(
         actions,
-        Flags::CROSS_ADDRESS_DISABLED,
+        profile.flags(),
         public.value_balance,
         anchor,
         authorization,
-        BundleVersion::orchard_v3(),
+        profile.version(),
     )
     .map_err(|_| OrchardNativeErrorV1::BundleEncoding)?;
-    let sighash = derive_orchard_bundle_sighash_v1(public, consensus_limits)?;
+    let sighash = derive_bundle_sighash_for_profile_v1(public, consensus_limits, profile)?;
     for (index, action) in bundle.actions().iter().enumerate() {
         action
             .rk()
@@ -1369,6 +1645,8 @@ pub(crate) mod tests {
             "Orchard profile must identify the resolved Halo2 implementation"
         );
     }
+
+    include!("orchard_ironwood_tests.rs");
 
     fn consensus_limits() -> PrivacyConsensusLimitsV1 {
         PrivacyConsensusLimitsV1::taira_default()

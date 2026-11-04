@@ -15,7 +15,6 @@ pub(super) enum ScanError {
     UnsupportedExecutable,
     UnsupportedAuthority,
     UnsupportedFilter,
-    UnsupportedMetadata,
 }
 
 impl ScanError {
@@ -29,7 +28,6 @@ impl ScanError {
             Self::UnsupportedExecutable => "unsupported Action executable",
             Self::UnsupportedAuthority => "unsupported Action authority",
             Self::UnsupportedFilter => "unsupported Action filter",
-            Self::UnsupportedMetadata => "unsupported Action metadata",
         }
     }
 }
@@ -53,7 +51,7 @@ pub struct ActionScannerLimitsV1 {
     pub max_depth: u32,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(super) struct Budget {
     pub(super) limits: ActionScannerLimitsV1,
     frames: u64,
@@ -125,6 +123,58 @@ impl Budget {
     }
 }
 
+thread_local! {
+    // Scalar counters only: no borrowed cursor, owner or allocator escapes.
+    static TYPED_FRAME_BUDGET: std::cell::Cell<Option<Budget>> = const { std::cell::Cell::new(None) };
+}
+
+pub(super) fn with_typed_frame_budget(
+    budget: &mut Budget,
+    validate: impl FnOnce() -> Result<(), norito::Error>,
+) -> Result<(), norito::Error> {
+    if TYPED_FRAME_BUDGET.get().is_some() {
+        return Err(norito::Error::InvalidValue {
+            context: "nested typed frame budget",
+        });
+    }
+    struct Guard;
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            TYPED_FRAME_BUDGET.set(None);
+        }
+    }
+    TYPED_FRAME_BUDGET.set(Some(*budget));
+    let _guard = Guard;
+    let result = validate();
+    *budget = TYPED_FRAME_BUDGET
+        .get()
+        .expect("active typed frame counters");
+    result
+}
+
+pub(super) fn charge_typed_nested_frame(
+    len: usize,
+    instruction: bool,
+) -> Result<(), norito::Error> {
+    let Some(mut budget) = TYPED_FRAME_BUDGET.get() else {
+        return Ok(());
+    };
+    let result = budget.begin_frame(len).and_then(|()| {
+        if instruction {
+            budget.work(65_536)
+        } else {
+            Ok(())
+        }
+    });
+    if result.is_err() {
+        budget.refuse();
+    }
+    TYPED_FRAME_BUDGET.set(Some(budget));
+    result.map_err(|_| norito::Error::InvalidValue {
+        context: "nested Action frame budget exceeded",
+    })
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Cursor<'a> {
     bytes: &'a [u8],
@@ -133,6 +183,10 @@ pub(super) struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
+    pub(super) fn enclosing_depth(self) -> usize {
+        self.depth.saturating_sub(1) as usize
+    }
+
     pub(super) fn root(bytes: &'a [u8], budget: &mut Budget) -> Result<Self, ScanError> {
         budget.child(1)?;
         Ok(Self {

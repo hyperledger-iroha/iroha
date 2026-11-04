@@ -1088,9 +1088,9 @@ pub struct PrivacyZkAmsRegistryBootstrapV1 {
 impl PrivacyZkAmsRegistryBootstrapV1 {
     /// Derive the sole protocol-scoped namespace governed by this bootstrap.
     #[must_use]
-    pub const fn namespace(self) -> PrivacyNamespaceV1 {
-        PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaZkAmsV1,
+    pub const fn namespace(self) -> PrivacyRuntimeNamespaceV1 {
+        PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
             PrivacyNamespaceScopeV1::IssuerRegistryPolicy(PrivacyIssuerRegistryPolicyNamespaceV1 {
                 issuer_id: self.issuer_id,
                 registry_id: self.registry_id,

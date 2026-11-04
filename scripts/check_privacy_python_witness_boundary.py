@@ -89,6 +89,9 @@ RETIRED_RAW_RESULT_TYPES: Final[tuple[str, ...]] = (
     "PrivacyZkAmsProvisionAccountActionBuildResultV1",
 )
 WORKER_TOP_LEVEL_EXPORTS: Final[tuple[str, ...]] = (
+    "IronwoodRecipientV1",
+    "PRIVACY_WORKER_OPERATION_SCHEMAS_V1",
+    "ironwood_deposit_public_action_v1",
     "ATOMIC_PRIVATE_SETTLEMENT_PROTOCOL_LABEL_V1",
     "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1",
     "PRIVACY_WALLET_WORKER_MAX_EXECUTION_PLAN_BYTES_V1",
@@ -317,6 +320,29 @@ def _literal_registry(tree: ast.Module, errors: list[str]) -> tuple[str, ...]:
     return ()
 
 
+def _check_additive_worker_registry(tree: ast.Module, errors: list[str]) -> None:
+    """The extended registry is the closed generic eleven plus one explicit Ironwood operation."""
+    values = []
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if any(isinstance(target, ast.Name) and target.id == "PRIVACY_WORKER_OPERATION_SCHEMAS_V1" for target in targets):
+            values.append(node.value)
+    valid = len(values) == 1 and isinstance(values[0], ast.Dict)
+    if valid:
+        registry = values[0]
+        valid = (len(registry.keys) == 2 and registry.keys[0] is None
+                 and isinstance(registry.values[0], ast.Name)
+                 and registry.values[0].id == "PRIVACY_GENERIC11_WORKER_OPERATION_SCHEMAS_V1"
+                 and isinstance(registry.keys[1], ast.Constant)
+                 and registry.keys[1].value == "ironwood-halo2-actions-v1"
+                 and isinstance(registry.values[1], ast.Constant)
+                 and registry.values[1].value == "ironwood_note_action_v1")
+    if not valid:
+        errors.append("Python worker additive registry must contain only the frozen generic 11 plus the dedicated Ironwood operation")
+
+
 def inspect_repository(root: Path) -> BoundaryReport:
     errors: list[str] = []
     rust_binding = _read(
@@ -440,6 +466,7 @@ def inspect_repository(root: Path) -> BoundaryReport:
         errors.append("Python worker registry is not the exact ordered generic 11")
     if ZK_X509_PROTOCOL in registry:
         errors.append("ZK-X509 is incorrectly routed through the generic worker")
+    _check_additive_worker_registry(worker_tree, errors)
     worker_exports = _literal_string_sequence(worker_tree, "__all__", errors)
     if worker_exports != WORKER_TOP_LEVEL_EXPORTS:
         errors.append("Python worker __all__ is not the exact public controller contract")
@@ -453,7 +480,7 @@ def inspect_repository(root: Path) -> BoundaryReport:
         else ""
     )
     if (
-        "PrivacyProtocolIdV1::IrohaZkX509StarkP256V1" not in retained_source
+        "PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1" not in retained_source
         or "return Err(WorkerError::UnsupportedProtocol)" not in retained_source
     ):
         errors.append("Rust generic worker does not explicitly reject ZK-X509")

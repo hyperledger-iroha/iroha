@@ -79,6 +79,14 @@ Before returning another page, Torii decodes that request and runs it through
 the current executor authorization policy and current world state. Permission
 revocation therefore takes effect on the next page request.
 
+Torii routes and authorizes a continuation exactly as it would route and
+authorize the cursor's retained `Start` now. An asset owner's continuation of
+a read routed to the asset definition's home therefore needs read access to
+that home only. Torii looks up the retained `Start` for the signed authority
+without advancing the cursor or refreshing its idle timer. A continuation
+whose cursor this instance does not hold for that authority stays
+authority-routed, which requires read access to every dataspace route.
+
 A foreign-authority attempt, failed current authorization, malformed retained
 request, or revalidation failure does not advance the iterator or refresh the
 idle timer. Foreign, absent, unbound, and malformed cursor state remains

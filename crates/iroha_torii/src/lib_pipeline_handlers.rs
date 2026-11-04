@@ -815,12 +815,7 @@ where
         let call_hash = output
             .execution_call_hash(block.hash(), block)
             .map_err(pipeline_status_projection_error)?;
-        let entrypoint_index = match output {
-            iroha_data_model::block::execution_output::ExecutionOutputV1::Network(row) => {
-                Some(u64::from(row.input_index))
-            }
-            _ => None,
-        };
+        let entrypoint_index = output.network().map(|row| u64::from(row.input_index));
         for completion in output.completions() {
             let (outcome, message) = trigger_completion_outcome(&completion.outcome);
             if !visit(TriggerCompletionRecord {

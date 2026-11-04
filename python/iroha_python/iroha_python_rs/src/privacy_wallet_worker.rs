@@ -12,8 +12,11 @@ use crate::{
     privacy_native_actions::{
         OrchardOrderedContractCallsV1, PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1,
         PrivacyActionTransactionContextV1, PrivacyNativeActionRequestV1, SignedPrivacyActionV1,
+        build_signed_ironwood_note_action_v1,
         build_signed_orchard_note_action_with_contract_calls_v1,
-        build_signed_privacy_native_action_v1, inspect_signed_privacy_native_action_v1,
+        build_signed_privacy_native_action_v1,
+        inspect_signed_privacy_ironwood_note_action_with_contract_calls_v1,
+        inspect_signed_privacy_native_action_v1,
         inspect_signed_privacy_orchard_note_action_with_contract_calls_v1,
         network_id_from_genesis_hash_bytes, privacy_native_action_capability_for_protocol_v1,
         validate_orchard_ordered_context,
@@ -36,7 +39,7 @@ use iroha_data_model::{
         PrivateSettlementProofProfileV1, PrivateSettlementProofStatementV1,
     },
     prelude::AccountId,
-    privacy::PrivacyProtocolIdV1,
+    privacy::PrivacyRuntimeProtocolIdV1,
     transaction::FeePaymentIntent,
 };
 use iroha_model_base::metadata::Metadata;
@@ -222,6 +225,8 @@ pub struct WitnessLease {
     pub expires_at_millis: u64,
     pub manifest: PrivacyWalletExecutionBundleManifestV1,
     pub public_action_digest: [u8; DIGEST_BYTES],
+    /// Explicit I105 presentation scope of a native deposit import; older imports stay unchanged.
+    pub chain_discriminant: Option<u16>,
 }
 struct StoredWitness {
     binding: WitnessBinding,
@@ -229,6 +234,7 @@ struct StoredWitness {
     expires_at_millis: u64,
     inspection: InspectedPrivacyWalletExecutionBundleV1,
     material: Zeroizing<Vec<u8>>,
+    chain_discriminant: Option<u16>,
 }
 pub struct WitnessVault {
     entries: HashMap<WitnessHandle, StoredWitness>,
@@ -267,6 +273,8 @@ impl WitnessVault {
         request: ImportRequest,
         now_millis: u64,
     ) -> Result<WitnessLease, WorkerError> {
+        // Preserve command 1's pre-read gates and error precedence. The shared material
+        // importer independently enforces them for callers that construct native bundles.
         request.binding.validate()?;
         validate_clock_and_ttl(now_millis, request.ttl_millis)?;
         self.purge_expired_at(now_millis);
@@ -274,26 +282,51 @@ impl WitnessVault {
             return Err(WorkerError::CapacityExceeded);
         }
         let material = read_credential_file(&request.credential_path)?;
+        self.import_material(
+            request.binding,
+            request.ttl_millis,
+            material,
+            now_millis,
+            None,
+        )
+    }
+    fn import_material(
+        &mut self,
+        binding: WitnessBinding,
+        ttl_millis: u64,
+        material: Zeroizing<Vec<u8>>,
+        now_millis: u64,
+        chain_discriminant: Option<u16>,
+    ) -> Result<WitnessLease, WorkerError> {
+        let _scope = chain_discriminant
+            .map(iroha_data_model::account::address::ChainDiscriminantGuard::enter);
+        binding.validate()?;
+        validate_clock_and_ttl(now_millis, ttl_millis)?;
+        self.purge_expired_at(now_millis);
+        if self.entries.len() >= self.maximum_handles {
+            return Err(WorkerError::CapacityExceeded);
+        }
         let inspection = inspect_privacy_wallet_execution_bundle_v1(&material)
             .map_err(|_| WorkerError::InvalidExecutionBundle)?;
-        if request.binding.signer != inspection.manifest.wallet_id
-            || request.binding.protocol != inspection.manifest.protocol_id.canonical_label()
+        if binding.signer != inspection.manifest.wallet_id
+            || binding.protocol != inspection.manifest.protocol_id.canonical_label()
         {
             return Err(WorkerError::WrongBinding);
         }
         let expires_at_millis = now_millis
-            .checked_add(request.ttl_millis)
+            .checked_add(ttl_millis)
             .ok_or(WorkerError::InvalidTtl)?;
         let handle = self.unique_handle()?;
-        let binding_digest = request.binding.digest();
+        let binding_digest = binding.digest();
         self.entries.insert(
             handle,
             StoredWitness {
-                binding: request.binding,
+                binding,
                 binding_digest,
                 expires_at_millis,
                 inspection: inspection.clone(),
                 material,
+                chain_discriminant,
             },
         );
         Ok(WitnessLease {
@@ -301,6 +334,7 @@ impl WitnessVault {
             expires_at_millis,
             manifest: inspection.manifest,
             public_action_digest: inspection.public_action_digest,
+            chain_discriminant,
         })
     }
     pub fn inspect(
@@ -328,6 +362,7 @@ impl WitnessVault {
             expires_at_millis: stored.expires_at_millis,
             manifest: stored.inspection.manifest.clone(),
             public_action_digest: stored.inspection.public_action_digest,
+            chain_discriminant: stored.chain_discriminant,
         })
     }
     pub fn cancel(
@@ -392,6 +427,9 @@ impl WitnessVault {
             .entries
             .remove(&handle)
             .ok_or(ConsumeError::Custody(WorkerError::UnknownHandle))?;
+        let _scope = stored
+            .chain_discriminant
+            .map(iroha_data_model::account::address::ChainDiscriminantGuard::enter);
         let result = operation(stored.material.as_mut_slice()).map_err(ConsumeError::Operation);
         stored.material.zeroize();
         result
@@ -623,6 +661,12 @@ pub enum CommandKind {
     InspectPrivateSettlement = 7,
     CancelPrivateSettlement = 8,
     ProvePrivateSettlement = 9,
+    DeriveIronwoodAddress = 10,
+    ScanIronwoodReceipts = 11,
+    ExportIronwoodViewingKey = 12,
+    ScanIronwoodReceiptsWithViewingKey = 13,
+    ImportIronwoodDeposit = 14,
+    ImportIronwoodDepositSeed = 15,
 }
 impl TryFrom<u8> for CommandKind {
     type Error = WorkerError;
@@ -637,6 +681,12 @@ impl TryFrom<u8> for CommandKind {
             7 => Ok(Self::InspectPrivateSettlement),
             8 => Ok(Self::CancelPrivateSettlement),
             9 => Ok(Self::ProvePrivateSettlement),
+            10 => Ok(Self::DeriveIronwoodAddress),
+            11 => Ok(Self::ScanIronwoodReceipts),
+            12 => Ok(Self::ExportIronwoodViewingKey),
+            13 => Ok(Self::ScanIronwoodReceiptsWithViewingKey),
+            14 => Ok(Self::ImportIronwoodDeposit),
+            15 => Ok(Self::ImportIronwoodDepositSeed),
             _ => Err(WorkerError::UnknownCommand),
         }
     }
@@ -646,6 +696,13 @@ pub struct AuthenticatedFrame {
     pub sequence: u64,
     pub payload: Vec<u8>,
 }
+impl Drop for AuthenticatedFrame {
+    fn drop(&mut self) {
+        // Command 15 carries a payer seed through the private pipe. Wipe authenticated
+        // payload custody on every response, rejection and session failure.
+        self.payload.zeroize();
+    }
+}
 pub fn encode_frame(
     frame: &AuthenticatedFrame,
     auth_key: &[u8; DIGEST_BYTES],
@@ -654,7 +711,9 @@ pub fn encode_frame(
         return Err(WorkerError::InvalidFrame);
     }
     let payload_len = u32::try_from(frame.payload.len()).map_err(|_| WorkerError::FrameTooLarge)?;
-    let mut authenticated = Vec::with_capacity(18 + frame.payload.len());
+    let mut authenticated = Zeroizing::new(Vec::with_capacity(
+        18 + frame.payload.len() + AUTH_TAG_BYTES,
+    ));
     authenticated.extend_from_slice(MAGIC);
     authenticated.push(PROTOCOL_VERSION);
     authenticated.push(frame.kind as u8);
@@ -744,7 +803,7 @@ pub fn read_frame(
     if length < 18 + AUTH_TAG_BYTES {
         return Err(WorkerError::InvalidFrame);
     }
-    let mut encoded = vec![0_u8; length + 4];
+    let mut encoded = Zeroizing::new(vec![0_u8; length + 4]);
     encoded[0..4].copy_from_slice(&(length as u32).to_be_bytes());
     reader
         .read_exact(&mut encoded[4..])
@@ -756,7 +815,7 @@ pub fn write_frame(
     frame: &AuthenticatedFrame,
     auth_key: &[u8; DIGEST_BYTES],
 ) -> Result<(), WorkerError> {
-    let encoded = encode_frame(frame, auth_key)?;
+    let encoded = Zeroizing::new(encode_frame(frame, auth_key)?);
     writer
         .write_all(&encoded)
         .map_err(|error| WorkerError::Io(error.kind()))?;
@@ -812,9 +871,11 @@ enum CommandResponse {
     SignedAction(Box<SignedActionResponseV1>),
     PrivateSettlementLease(PrivateSettlementWitnessLeaseV1),
     PrivateSettlementProof(Box<PrivateSettlementProofResponseV1>),
+    IronwoodPublic(Vec<u8>),
     Error(WorkerError),
 }
 struct SignedActionResponseV1 {
+    ironwood_output_mapping: Option<crate::privacy_native_actions::IronwoodOutputActionMappingV1>,
     protocol_id: String,
     operation_schema: String,
     network_id: [u8; DIGEST_BYTES],
@@ -874,6 +935,7 @@ struct ValidatedExecutionPlanV1 {
 }
 // Public plan decoding and exact response checks share no witness-bearing values.
 include!("privacy_wallet_worker_orchard_ordered.rs");
+include!("privacy_wallet_worker_ironwood.rs");
 fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> CommandResponse {
     let result = match kind {
         CommandKind::Ping => {
@@ -898,6 +960,24 @@ fn dispatch(vault: &mut WitnessVault, kind: CommandKind, payload: &[u8]) -> Comm
                 .map(Box::new)
                 .map(CommandResponse::SignedAction)
         }),
+        CommandKind::ImportIronwoodDeposit => {
+            ironwood_import_deposit(vault, payload).map(CommandResponse::Lease)
+        }
+        CommandKind::ImportIronwoodDepositSeed => {
+            ironwood_import_deposit_seed(vault, payload).map(CommandResponse::Lease)
+        }
+        CommandKind::DeriveIronwoodAddress => {
+            ironwood_address(payload).map(CommandResponse::IronwoodPublic)
+        }
+        CommandKind::ScanIronwoodReceipts => {
+            ironwood_scan(payload).map(CommandResponse::IronwoodPublic)
+        }
+        CommandKind::ExportIronwoodViewingKey => {
+            ironwood_export_viewing_key(payload).map(CommandResponse::IronwoodPublic)
+        }
+        CommandKind::ScanIronwoodReceiptsWithViewingKey => {
+            ironwood_scan_with_viewing_key(payload).map(CommandResponse::IronwoodPublic)
+        }
         CommandKind::ImportPrivateSettlement
         | CommandKind::InspectPrivateSettlement
         | CommandKind::CancelPrivateSettlement
@@ -939,7 +1019,13 @@ fn dispatch_private_settlement(
         | CommandKind::Import
         | CommandKind::Inspect
         | CommandKind::Cancel
-        | CommandKind::Execute => Err(WorkerError::UnknownCommand),
+        | CommandKind::Execute
+        | CommandKind::DeriveIronwoodAddress
+        | CommandKind::ScanIronwoodReceipts
+        | CommandKind::ExportIronwoodViewingKey
+        | CommandKind::ScanIronwoodReceiptsWithViewingKey
+        | CommandKind::ImportIronwoodDeposit
+        | CommandKind::ImportIronwoodDepositSeed => Err(WorkerError::UnknownCommand),
     };
     result.unwrap_or_else(CommandResponse::Error)
 }
@@ -1279,6 +1365,9 @@ fn execute_native_action_v1(
     let public_intent =
         validate_canonical_public_intent(&request.canonical_public_intent, &request.binding)?;
     let lease = vault.inspect(request.handle, &request.binding)?;
+    let _scope = lease
+        .chain_discriminant
+        .map(iroha_data_model::account::address::ChainDiscriminantGuard::enter);
     if lease.manifest.wallet_id != request.binding.signer
         || lease.manifest.protocol_id.canonical_label() != request.binding.protocol
         || lease.manifest.operation_schema != public_intent.operation_schema
@@ -1298,6 +1387,10 @@ fn execute_native_action_v1(
         &lease.manifest,
         &public_intent,
     )?;
+    if lease.manifest.protocol_id == PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 {
+        crate::privacy_wallet_bundle::validate_ironwood_output_shape_v1(&plan.public_action)
+            .map_err(|_| WorkerError::InvalidExecutionBundle)?;
+    }
     let manifest = lease.manifest;
     let expected_public_action = plan.public_action;
     let network_id = request.binding.network_id;
@@ -1320,6 +1413,15 @@ fn execute_native_action_v1(
                         expected_context.clone(),
                         orchard,
                         calls.clone(),
+                        network_id,
+                        &decoded.signer_private_key,
+                    )
+                }
+                (PrivacyNativeActionRequestV1::Ironwood(ironwood), Some(calls)) => {
+                    build_signed_ironwood_note_action_v1(
+                        expected_context.clone(),
+                        ironwood,
+                        Some(calls.clone()),
                         network_id,
                         &decoded.signer_private_key,
                     )
@@ -1368,6 +1470,35 @@ fn signed_action_response_v1(
     {
         return Err(WorkerError::NativeSelfInspectionFailed);
     }
+    match (manifest.protocol_id, signed.ironwood_output_mapping()) {
+        (PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1, Some(mapping)) => {
+            let iroha_data_model::privacy::PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(
+                statement,
+            ) = inspected.statement()
+            else {
+                return Err(WorkerError::NativeSelfInspectionFailed);
+            };
+            let unique = mapping
+                .output_action_indices
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>();
+            if mapping.direct_instruction_index
+                != ironwood_direct_index(signed.signed_transaction())?
+                || mapping.output_action_indices.len() > 2
+                || unique.len() != mapping.output_action_indices.len()
+                || mapping
+                    .output_action_indices
+                    .iter()
+                    .any(|i| *i >= statement.actions.len())
+            {
+                return Err(WorkerError::NativeSelfInspectionFailed);
+            }
+        }
+        (PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1, None) | (_, Some(_)) => {
+            return Err(WorkerError::NativeSelfInspectionFailed);
+        }
+        (_, None) => {}
+    }
     let adaptive_signed_transaction = norito::codec::encode_adaptive(signed.signed_transaction());
     let versioned_signed_transaction = signed
         .encode_versioned()
@@ -1393,6 +1524,7 @@ fn signed_action_response_v1(
         return Err(WorkerError::NativeSelfInspectionFailed);
     }
     Ok(SignedActionResponseV1 {
+        ironwood_output_mapping: signed.ironwood_output_mapping().cloned(),
         protocol_id: manifest.protocol_id.canonical_label().to_owned(),
         operation_schema: manifest.operation_schema.to_owned(),
         network_id,
@@ -1439,7 +1571,14 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
     let mut output = Vec::with_capacity(128);
     match response {
         CommandResponse::Pong => output.push(0),
+        CommandResponse::IronwoodPublic(bytes) => {
+            output.push(6);
+            put_bytes_u32(&mut output, &bytes).expect("bounded Ironwood public response");
+        }
         CommandResponse::Lease(lease) => {
+            let _scope = lease
+                .chain_discriminant
+                .map(iroha_data_model::account::address::ChainDiscriminantGuard::enter);
             output.push(1);
             output.extend_from_slice(lease.handle.as_bytes());
             output.extend_from_slice(&lease.expires_at_millis.to_be_bytes());
@@ -1452,7 +1591,11 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
         }
         CommandResponse::Cancelled => output.push(2),
         CommandResponse::SignedAction(signed) => {
-            output.push(3);
+            output.push(if signed.ironwood_output_mapping.is_some() {
+                7
+            } else {
+                3
+            });
             put_text(&mut output, &signed.protocol_id);
             put_text(&mut output, &signed.operation_schema);
             output.extend_from_slice(&signed.network_id);
@@ -1473,6 +1616,20 @@ fn encode_response(response: CommandResponse) -> Vec<u8> {
             output.extend_from_slice(&signed.encoded_proof_envelope_bytes.to_be_bytes());
             output.extend_from_slice(&signed.adaptive_signed_transaction_bytes.to_be_bytes());
             output.extend_from_slice(&signed.submitted_versioned_transaction_bytes.to_be_bytes());
+            if let Some(mapping) = &signed.ironwood_output_mapping {
+                output.extend_from_slice(
+                    &u32::try_from(mapping.direct_instruction_index)
+                        .expect("bounded direct instruction index")
+                        .to_be_bytes(),
+                );
+                output.push(
+                    u8::try_from(mapping.output_action_indices.len())
+                        .expect("bounded Ironwood outputs"),
+                );
+                for index in &mapping.output_action_indices {
+                    output.push(u8::try_from(*index).expect("bounded Ironwood actions"));
+                }
+            }
         }
         CommandResponse::PrivateSettlementLease(lease) => {
             output.push(4);
@@ -1564,7 +1721,7 @@ impl<'a> Cursor<'a> {
         }
         self.take(length)
     }
-    fn finish(self) -> Result<(), WorkerError> {
+    fn finish(&self) -> Result<(), WorkerError> {
         if self.offset == self.source.len() {
             Ok(())
         } else {
@@ -1738,22 +1895,23 @@ fn validate_worker_protocol(protocol: &str) -> Result<(), WorkerError> {
     }
     retained_protocol(protocol).map(|_| ())
 }
-fn retained_protocol(protocol: &str) -> Result<PrivacyProtocolIdV1, WorkerError> {
-    let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol)
+fn retained_protocol(protocol: &str) -> Result<PrivacyRuntimeProtocolIdV1, WorkerError> {
+    let protocol_id = PrivacyRuntimeProtocolIdV1::from_canonical_label(protocol)
         .ok_or(WorkerError::UnsupportedProtocol)?;
     match protocol_id {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
-        | PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-        | PrivacyProtocolIdV1::VeRangeTransparentRangeV1
-        | PrivacyProtocolIdV1::IrohaZkAmsV1
-        | PrivacyProtocolIdV1::VegaExistingCredentialZkV1
-        | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
-        | PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1
-        | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
-        | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
-        | PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
-        | PrivacyProtocolIdV1::PqMaspStarkV1 => {}
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1
+        | PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1
+        | PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
+        | PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1
+        | PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
+        | PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+        | PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1
+        | PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1
+        | PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1
+        | PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1
+        | PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+        | PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => {}
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
             return Err(WorkerError::UnsupportedProtocol);
         }
     }
@@ -2225,6 +2383,7 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     include!("privacy_wallet_worker_orchard_ordered_tests.rs");
+    include!("privacy_wallet_worker_ironwood_tests.rs");
     use super::*;
     use iroha_crypto::{Hash, PrivateKey, PublicKey};
     use iroha_data_model::transaction::SignedTransaction;
@@ -2633,6 +2792,34 @@ mod tests {
         );
     }
     #[test]
+    fn native_import_preserves_pre_read_admission_order() {
+        let directory = TempDir::new().unwrap();
+        let first = execution_bundle_file(&directory, "first", JINDO_WITNESS);
+        let missing = directory.path().join("must-not-read");
+        let mut vault = WitnessVault::new(1);
+        let lease = import(&mut vault, &first);
+        let request = |binding, ttl_millis| ImportRequest {
+            credential_path: missing.clone(),
+            binding,
+            ttl_millis,
+        };
+        let mut invalid = binding();
+        invalid.nonce = [0; 32];
+        assert!(matches!(
+            vault.import_credential_at(request(invalid, 0), NOW + 1),
+            Err(WorkerError::InvalidBinding(_))
+        ));
+        assert!(matches!(
+            vault.import_credential_at(request(binding(), 0), NOW + 1),
+            Err(WorkerError::InvalidTtl)
+        ));
+        assert!(matches!(
+            vault.import_credential_at(request(binding(), MIN_TTL_MILLIS), NOW + 1),
+            Err(WorkerError::CapacityExceeded)
+        ));
+        assert!(vault.inspect_at(lease.handle, &binding(), NOW + 1).is_ok());
+    }
+    #[test]
     fn ttl_and_binding_validation_fail_closed() {
         let directory = TempDir::new().expect("temp dir");
         let path = credential_file(&directory, "credential", b"secret");
@@ -2896,7 +3083,7 @@ mod tests {
                 .expect("independently inspect signed transaction");
             assert_eq!(
                 inspected.protocol_id(),
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             );
             assert_eq!(inspected.transaction_hash(), signed.transaction_hash);
             assert_eq!(

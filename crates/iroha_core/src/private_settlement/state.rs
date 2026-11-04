@@ -40,8 +40,9 @@ use iroha_data_model::{
     },
     privacy::{
         PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1, PrivacyCommitmentV1,
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolIdV1,
-        PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+        PrivacyNamespaceScopeV1, PrivacyNullifierV1, PrivacyPoolIdV1,
+        PrivacyPoolProgramNamespaceV1, PrivacyRootV1, PrivacyRuntimeNamespaceV1,
+        PrivacyRuntimeProtocolIdV1,
     },
 };
 use norito::codec::{Decode, Encode};
@@ -80,11 +81,11 @@ pub(super) fn private_settlement_approvals_digest_v1(
 
 fn settlement_namespace_v1(
     pool_id: PrivacyPoolIdV1,
-) -> Result<PrivacyNamespaceV1, PrivateSettlementStateErrorV1> {
+) -> Result<PrivacyRuntimeNamespaceV1, PrivateSettlementStateErrorV1> {
     let program_id = atomic_private_settlement_program_id_v1()
         .map_err(|_| PrivateSettlementStateErrorV1::PoolInvariant)?;
-    Ok(PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    Ok(PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id,
             program_id,

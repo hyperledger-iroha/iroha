@@ -21,7 +21,7 @@ impl Client {
         &self,
         expected_approval: &iroha_data_model::sumeragi_amx::AmxDebitApprovalV1,
         expected_relay: &iroha_data_model::account::AccountId,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
     ) -> Result<iroha_data_model::sumeragi_amx::VerifiedAmxDebitApprovalV1> {
         use iroha_data_model::sumeragi_amx::{
@@ -134,7 +134,12 @@ impl Client {
                     source,
                 }))
             })?;
-            let verified = proof.verify(expected_approval, expected_relay, native_schema, block)?;
+            let verified = proof.verify(
+                expected_approval,
+                expected_relay,
+                native_schema.select_schema(proof.world.schema_hash)?,
+                block,
+            )?;
             self.ensure_activation_evidence_deadline()?;
             Ok(verified)
         }

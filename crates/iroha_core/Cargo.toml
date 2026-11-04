@@ -17,6 +17,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [[bin]]
+name = "trigger_lifecycle_preflight"
+path = "src/bin/trigger_lifecycle_preflight.rs"
+required-features = ["json"]
+
+[[bin]]
 name = "fastpq_fixture_capture"
 path = "src/bin/fastpq_fixture_capture.rs"
 required-features = ["dev-tools"]
@@ -30,6 +35,11 @@ required-features = ["dev-tools"]
 name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
+
+[[bin]]
+name = "ironwood_activation_preflight"
+path = "src/bin/ironwood_activation_preflight.rs"
+required-features = ["node"]
 
 [[bin]]
 name = "kagemusha_enrollment_journal_init"

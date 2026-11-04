@@ -214,15 +214,17 @@ impl X509GovernanceRecords {
             let budget_before = transaction.privacy_budget_for_testing();
             let roots_before = transaction.world.privacy_roots.iter().count();
             let heads_before = transaction.world.privacy_root_heads.iter().count();
-            let publication = PrivacyRootPublicationV1 {
+            let publication = PrivacyRuntimeRootPublicationV1 {
                 namespace: x509_namespace(),
                 role: PrivacyRootRoleV1::CertificateAuthorityMembership,
                 epoch: 2,
                 root: PrivacyRootV1::new([0xA2; 32]),
             };
-            let error = PublishPrivacyRootV1::new(publication)
-                .execute(&ALICE_ID, &mut transaction)
-                .expect_err("generic and cross-scope X.509 roots must fail closed");
+            let error = PublishPrivacyRootV1::new(
+                (publication).try_into().expect("frozen Exact12 test input"),
+            )
+            .execute(&ALICE_ID, &mut transaction)
+            .expect_err("generic and cross-scope X.509 roots must fail closed");
             assert!(
                 smart_contract_parameter_message(&error).contains("derived atomically")
                     || smart_contract_parameter_message(&error).contains("incompatible"),

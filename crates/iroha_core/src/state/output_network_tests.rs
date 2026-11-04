@@ -36,7 +36,15 @@ fn fixture_with_policy(
     fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
     configure: impl FnOnce(&mut crate::pipeline_validity_policy::PipelineValidityPolicyV1),
 ) -> State {
-    let mut state = state(row_bytes);
+    fixture_with_state(state(row_bytes), callback_bytes, fee_asset, configure)
+}
+
+fn fixture_with_state(
+    mut state: State,
+    callback_bytes: Option<usize>,
+    fee_asset: Option<iroha_data_model::asset::AssetDefinitionId>,
+    configure: impl FnOnce(&mut crate::pipeline_validity_policy::PipelineValidityPolicyV1),
+) -> State {
     let mut expected_policy = *state.world.parameters.view().get().pipeline_policy();
     configure(&mut expected_policy);
     expected_policy
@@ -1024,3 +1032,6 @@ mod nexus_receipts;
 
 #[path = "output_contract_event_tests.rs"]
 mod contract_events;
+
+#[path = "output_lifecycle_tests.rs"]
+mod lifecycle;

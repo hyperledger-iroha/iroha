@@ -27,10 +27,10 @@ use iroha_data_model::{
     NetworkId,
     isi::privacy::BootstrapPrivacyPgcAccountsV1,
     privacy::{
-        PrivacyCompiledProfileSnapshotV1, PrivacyPgcAccountBootstrapV1,
-        PrivacyPgcAccountBootstrapValidationError, PrivacyPgcBootstrapProofBytesV1,
-        PrivacyPgcBootstrapProofDigestV1, PrivacyPgcBootstrapProofValidationError,
-        PrivacyProtocolIdV1,
+        PrivacyCompiledProfileSnapshotV1, PrivacyPgcAccountBootstrapValidationError,
+        PrivacyPgcBootstrapProofBytesV1, PrivacyPgcBootstrapProofDigestV1,
+        PrivacyPgcBootstrapProofValidationError, PrivacyRuntimePgcAccountBootstrapV1,
+        PrivacyRuntimeProtocolIdV1,
     },
     transaction::signed_attachments::{
         ActionOperationV1, ActionPublicInputsDigestV1, ActionRoleV1, AttachmentKindV1,
@@ -100,7 +100,7 @@ pub enum BootstrapError {
 /// # Errors
 /// Returns the original table-validation or canonical-encoding failure.
 pub fn public_inputs_digest(
-    bootstrap: &PrivacyPgcAccountBootstrapV1,
+    bootstrap: &PrivacyRuntimePgcAccountBootstrapV1,
 ) -> Result<ActionPublicInputsDigestV1, BootstrapError> {
     bootstrap.validate()?;
     let digest = norito::core::classify_decode_attempt(|| bootstrap.digest())?;
@@ -132,7 +132,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
             index: instruction.proof_ref.action_index,
             operation: &operation,
             role: ActionRoleV1::Administrative,
-            public_inputs_digest: public_inputs_digest(&instruction.bootstrap)?,
+            public_inputs_digest: public_inputs_digest(&instruction.bootstrap.clone().into())?,
         };
         let action = self.action(request)?;
         if instruction.proof_ref.slot_index != 0 || action.attachments.len() != 1 {
@@ -158,7 +158,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
     pub(crate) fn consume_pgc_bootstrap(
         &mut self,
         action_index: u32,
-        bootstrap: &PrivacyPgcAccountBootstrapV1,
+        bootstrap: &PrivacyRuntimePgcAccountBootstrapV1,
         handle: AttachmentHandle<'_, '_>,
         context: BootstrapContext<'_>,
     ) -> Result<PrivacyPgcBootstrapProofDigestV1, BootstrapError> {
@@ -178,7 +178,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
     fn check_pgc_bootstrap(
         &mut self,
         action_index: u32,
-        bootstrap: &PrivacyPgcAccountBootstrapV1,
+        bootstrap: &PrivacyRuntimePgcAccountBootstrapV1,
         handle: AttachmentHandle<'_, '_>,
         context: BootstrapContext<'_>,
     ) -> Result<PrivacyPgcBootstrapProofDigestV1, BootstrapError> {
@@ -210,7 +210,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
         {
             return Err(BootstrapError::NetworkMismatch);
         }
-        if context.profile.protocol_id != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+        if context.profile.protocol_id != PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 {
             return Err(BootstrapError::WrongProtocol);
         }
         validate_compiled_privacy_profile_v1(context.profile)?;
@@ -226,7 +226,7 @@ impl<'owner, 'tx> Invocation<'owner, 'tx> {
         // Public input conversion is bounded by the existing closed 16/32/64
         // account validation. No proof Vec or guest-memory copy is constructed.
         let namespace = norito::core::classify_decode_attempt(|| {
-            norito::encode_canonical(&bootstrap.namespace)
+            bootstrap.namespace.canonical_wire_bytes_v1()
         })?;
         let public_keys = bootstrap
             .accounts

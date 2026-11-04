@@ -786,6 +786,59 @@ impl ExecutionOutputReservation<'_> {
         Ok(projected)
     }
 
+    /// Whether the actual row fits without consuming any later terminal reservation.
+    /// # Errors
+    /// The source differs from this reservation or its canonical size cannot be measured.
+    pub fn fits(&self, actual: &ExecutionOutputV1) -> Result<bool, String> {
+        let terminal = self
+            .terminal
+            .as_ref()
+            .ok_or("terminal ownership disappeared")?;
+        if !same_origin(terminal, actual) {
+            return Err("execution output differs from its reserved invocation".into());
+        }
+        let bytes = output_bytes(actual)?;
+        let total = self
+            .owner
+            .committed_bytes
+            .checked_add(bytes)
+            .and_then(|sum| sum.checked_add(self.owner.remaining_terminal_bytes));
+        Ok(bytes <= self.owner.limits.max_output_bytes
+            && total.is_some_and(|sum| sum <= self.owner.limits.max_total_output_bytes))
+    }
+
+    /// Retain a Time output-limit terminal with its independently captured native
+    /// progress debit after the complete business overlay has rolled back.
+    /// # Errors
+    /// A substituted source, nonterminal, or complete policy exceeding the original
+    /// pre-admitted rejection ceiling is refused before State may apply.
+    pub fn finish_output_limit_policy(
+        mut self,
+        actual: ExecutionOutputV1,
+    ) -> Result<ExecutionOutputV1, String> {
+        if !actual.is_output_limit_rejection() || !self.fits(&actual)? {
+            return Err("output-limit progress policy has no funded terminal".into());
+        }
+        let bytes = output_bytes(&actual)?;
+        if bytes > self.terminal_ceiling_bytes {
+            return Err("output-limit progress policy exceeds its reserved ceiling".into());
+        }
+        self.commit_retained_output(bytes)?;
+        Ok(actual)
+    }
+
+    /// Consume the pre-reserved healthy terminal after rolling back all work.
+    /// # Errors
+    /// Returns accounting/ownership failures; never discards committed effects.
+    pub fn rollback_to_terminal(mut self) -> Result<ReservedExecutionOutput, String> {
+        let terminal = self
+            .terminal
+            .take()
+            .ok_or("terminal ownership disappeared")?;
+        self.commit_retained_output(self.terminal_bytes)?;
+        Ok(ReservedExecutionOutput::OutputLimit(terminal))
+    }
+
     /// Resolve an attempted invocation before its effects become applied.
     ///
     /// An oversized actual row is replaced by the already-owned terminal. The

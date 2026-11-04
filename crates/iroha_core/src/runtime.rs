@@ -11,6 +11,10 @@ pub mod catalog;
 pub(crate) mod change_set;
 pub(crate) mod containment;
 pub(crate) mod envelope;
+pub mod ironwood;
+pub mod lifecycle_activation;
+pub mod lifecycle_preflight;
+pub(crate) mod lifecycle_support;
 pub(crate) mod obligations;
 
 use iroha_data_model::runtime::{
@@ -202,7 +206,221 @@ pub(crate) fn resolve(
             }
         }
     }
+    if ironwood::admission::direct(instruction) {
+        ensure_privacy_protocol_storage_v1(
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            selection,
+            wire_id,
+        )?;
+    }
     Ok(Some(binding.implementation))
+}
+
+/// Require the successor storage contract for an Ironwood write, including private native calls.
+pub(crate) fn ensure_privacy_protocol_storage_v1(
+    protocol: iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1,
+    selection: &RootSelectionV1,
+    operation: &str,
+) -> Result<(), iroha_data_model::isi::error::InstructionExecutionError> {
+    if protocol == iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1
+        && !ironwood::enabled(selection)
+    {
+        return Err(
+            iroha_data_model::isi::error::InstructionExecutionError::InvalidParameter(
+                iroha_data_model::isi::error::InvalidParameterError::SmartContract(format!(
+                    "Ironwood protocol storage is inactive for {operation}; the committed selection does not admit {}",
+                    protocol.canonical_label(),
+                )),
+            ),
+        );
+    }
+    Ok(())
+}
+
+/// Keep current and retained predecessor privacy records inside the installed storage grammar.
+///
+/// CorePrivacy can validate Ironwood candidate state in isolation. A restored or initially supplied
+/// World cannot contain it until committed state selects the governed storage-schema successor.
+pub(crate) fn validate_privacy_world_storage_v1(
+    world: &mut crate::state::World,
+) -> Result<(), String> {
+    use crate::privacy_state::{
+        PrivacyCommitmentKeyV1, PrivacyNullifierKeyV1, PrivacyRootProvenanceV1,
+        PrivacyStateItemRecordV1,
+    };
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
+    use mv::storage::StorageReadOnly as _;
+
+    if ironwood::enabled(world.runtime_selection.view().get()) {
+        // The accumulator cache keys immutable selected identities. Cold restoration must
+        // establish that the supplied registry has their exact compiled descriptor preimages;
+        // ordinary governed publication cannot replace an existing content-addressed record.
+        let catalog = release_catalog().map_err(|error| error.to_string())?;
+        let definitions = world.runtime_definitions.view();
+        for id in &world.runtime_selection.view().get().installed_storage {
+            if definitions.get(id) != catalog.definitions.get(id) {
+                return Err(format!(
+                    "Ironwood restored storage definition {id} differs from its immutable compiled identity"
+                ));
+            }
+        }
+        return Ok(());
+    }
+
+    const IRONWOOD: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1;
+
+    fn check<K: mv::Key, V: mv::Value>(
+        storage: &mut Storage<K, V>,
+        table: &str,
+        key_has_ironwood: impl Fn(&K) -> bool,
+        value_has_ironwood: impl Fn(&V) -> bool,
+    ) -> Result<(), String> {
+        // Exclusive history acquisition reads the original current/undo pair without allocating
+        // a replacement map or consuming undo. Even an absent undo value retains its typed key.
+        // Inspect raw fields: role-owned accessors can hide a mismatched namespace in an undo row.
+        let history = storage.history();
+        for (key, value) in history
+            .current()
+            .iter()
+            .map(|(key, value)| (key, Some(value)))
+            .chain(
+                history
+                    .revert_map()
+                    .iter()
+                    .map(|(key, value)| (key, value.as_ref())),
+            )
+        {
+            if key_has_ironwood(key) || value.is_some_and(&value_has_ironwood) {
+                return Err(format!(
+                    "{table} contains Ironwood before its governed storage-schema transition"
+                ));
+            }
+        }
+        Ok(())
+    }
+    fn item_has_ironwood(item: &PrivacyStateItemRecordV1) -> bool {
+        match item {
+            PrivacyStateItemRecordV1::PublicReserveCustody { owner, .. } => {
+                owner.namespace().protocol_id() == IRONWOOD
+            }
+            // These records contain no protocol tags or namespaces, including their nested
+            // protocol-specific bootstrap, policy, revision and accumulator structures.
+            PrivacyStateItemRecordV1::ZkAcePolicyGovernance { .. }
+            | PrivacyStateItemRecordV1::BootleLanternIssuerPolicyGovernance { .. }
+            | PrivacyStateItemRecordV1::VegaIssuerGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509TrustAnchorGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509CertificatePolicyGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509CrlGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkX509VerifiedCertificateNullifier { .. }
+            | PrivacyStateItemRecordV1::OrchardPoolState { .. }
+            | PrivacyStateItemRecordV1::OrchardVerifiedNullifier { .. }
+            | PrivacyStateItemRecordV1::ProofManagedPoolBootstrap { .. }
+            | PrivacyStateItemRecordV1::ProofManagedPoolBootstrapCommitment { .. }
+            | PrivacyStateItemRecordV1::FcmpBootstrapOutput { .. }
+            | PrivacyStateItemRecordV1::ProofManagedPoolVerifiedNullifier { .. }
+            | PrivacyStateItemRecordV1::ProofManagedPoolVerifiedCommitment { .. }
+            | PrivacyStateItemRecordV1::FcmpVerifiedOutput { .. }
+            | PrivacyStateItemRecordV1::ZkAceVerifiedAuthorization { .. }
+            | PrivacyStateItemRecordV1::ZkAmsGovernance { .. }
+            | PrivacyStateItemRecordV1::ZkAmsVerifiedProof { .. } => false,
+        }
+    }
+    fn root_has_ironwood(provenance: &PrivacyRootProvenanceV1) -> bool {
+        match provenance {
+            PrivacyRootProvenanceV1::ZkX509CaGovernance { namespace, .. } => {
+                namespace.protocol_id() == IRONWOOD
+            }
+            PrivacyRootProvenanceV1::ProofManagedPoolBootstrap { protocol_id, .. }
+            | PrivacyRootProvenanceV1::ProofManagedPoolSuccessor { protocol_id, .. } => {
+                *protocol_id == IRONWOOD
+            }
+            PrivacyRootProvenanceV1::Governance { .. }
+            | PrivacyRootProvenanceV1::ZkAmsRegistryBootstrap { .. }
+            | PrivacyRootProvenanceV1::ZkAmsRegistrySuccessor { .. }
+            | PrivacyRootProvenanceV1::OrchardPoolBootstrap { .. }
+            | PrivacyRootProvenanceV1::OrchardPoolSuccessor { .. }
+            | PrivacyRootProvenanceV1::VerifiedBootstrap { .. }
+            | PrivacyRootProvenanceV1::VerifiedProof { .. }
+            | PrivacyRootProvenanceV1::VerifiedPgcSuccessor { .. } => false,
+        }
+    }
+    check(
+        &mut world.privacy_protocol_policies,
+        "world.privacy_protocol_policies",
+        |key| key.protocol_id() == IRONWOOD,
+        |policy| {
+            policy.protocol_id == IRONWOOD
+                || policy.current_limits.protocol_id() == IRONWOOD
+                || policy
+                    .pending_update
+                    .as_ref()
+                    .is_some_and(|pending| pending.next_limits.protocol_id() == IRONWOOD)
+        },
+    )?;
+    check(
+        &mut world.privacy_pgc_accounts,
+        "world.privacy_pgc_accounts",
+        |key| key.namespace().protocol_id() == IRONWOOD,
+        |_| false,
+    )?;
+    check(
+        &mut world.privacy_pgc_pool_invariants,
+        "world.privacy_pgc_pool_invariants",
+        |key| key.namespace().protocol_id() == IRONWOOD,
+        |_| false,
+    )?;
+    check(
+        &mut world.privacy_nullifiers,
+        "world.privacy_nullifiers",
+        |key| match key {
+            PrivacyNullifierKeyV1::ZkAceReplay { .. } => false,
+            PrivacyNullifierKeyV1::ZkAmsKeyImage { namespace, .. }
+            | PrivacyNullifierKeyV1::ZkX509CertificateNullifier { namespace, .. }
+            | PrivacyNullifierKeyV1::OrchardNullifier { namespace, .. }
+            | PrivacyNullifierKeyV1::FcmpKeyImage { namespace, .. }
+            | PrivacyNullifierKeyV1::ProofManagedNullifier { namespace, .. } => {
+                namespace.protocol_id() == IRONWOOD
+            }
+        },
+        item_has_ironwood,
+    )?;
+    check(
+        &mut world.privacy_commitments,
+        "world.privacy_commitments",
+        |key| match key {
+            PrivacyCommitmentKeyV1::OrchardPoolState { namespace }
+            | PrivacyCommitmentKeyV1::ProofManagedPoolConfig { namespace }
+            | PrivacyCommitmentKeyV1::ProofManagedPoolCommitment { namespace, .. }
+            | PrivacyCommitmentKeyV1::FcmpOutput { namespace, .. }
+            | PrivacyCommitmentKeyV1::ZkAmsIssuerPolicyRecord { namespace, .. }
+            | PrivacyCommitmentKeyV1::ZkAmsPhc { namespace, .. }
+            | PrivacyCommitmentKeyV1::ZkAmsSeedKey { namespace, .. } => {
+                namespace.protocol_id() == IRONWOOD
+            }
+            PrivacyCommitmentKeyV1::PublicReserveCustody { protocol_id, .. } => {
+                *protocol_id == IRONWOOD
+            }
+            PrivacyCommitmentKeyV1::ZkAcePolicy { .. }
+            | PrivacyCommitmentKeyV1::BootleLanternIssuerPolicy { .. }
+            | PrivacyCommitmentKeyV1::VegaIssuerRevision { .. }
+            | PrivacyCommitmentKeyV1::ZkX509TrustAnchorRevision { .. }
+            | PrivacyCommitmentKeyV1::ZkX509CertificatePolicyRevision { .. }
+            | PrivacyCommitmentKeyV1::ZkX509CrlCurrent { .. } => false,
+        },
+        item_has_ironwood,
+    )?;
+    check(
+        &mut world.privacy_roots,
+        "world.privacy_roots",
+        |key| key.namespace().protocol_id() == IRONWOOD,
+        root_has_ironwood,
+    )?;
+    check(
+        &mut world.privacy_root_heads,
+        "world.privacy_root_heads",
+        |key| key.namespace().protocol_id() == IRONWOOD,
+        |head| root_has_ironwood(head.provenance()),
+    )
 }
 
 /// The restriction of `definition` that stops new work at `height`, if any (§7.1).
@@ -228,4 +446,18 @@ fn blocking_restriction(
 }
 
 #[cfg(test)]
+mod merged_tests;
+#[cfg(test)]
 mod tests;
+
+/// Output semantics are selected by committed immutable services, never by row shape.
+/// # Errors
+/// The selected profile is absent or its lifecycle closure is unsupported by this release.
+pub fn trigger_lifecycle_enabled(selection: &RootSelectionV1) -> Result<bool, CatalogError> {
+    release_catalog()?.service_enabled(
+        selection.services_profile,
+        "trigger_lifecycle",
+        iroha_crypto::Hash::new(iroha_data_model::runtime::TRIGGER_LIFECYCLE_SERVICE_CLOSURE)
+            .into(),
+    )
+}

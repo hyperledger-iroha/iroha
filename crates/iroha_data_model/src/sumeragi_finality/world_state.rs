@@ -30,6 +30,47 @@ const PATH: &[u8] = b"iroha:world-state:path:v1\0";
 const ROOT: &[u8] = b"iroha:world-state:root:v1\0";
 const VALUE: &[u8] = b"iroha:world-net-delta:value:bare-v1\0";
 
+/// Independently qualified schemas whose typed field interpretations a reader implements.
+///
+/// This is a local read policy, never a wire value or a source of finality. Selecting a known
+/// candidate must be followed by the ordinary complete-snapshot and typed-preimage verification
+/// against the independently selected block. Its certified root binds the schema at that exact
+/// height; a server cannot choose a different qualified schema for that root.
+pub trait WorldStateSchemaPolicyV1 {
+    /// Whether this reader has independently qualified the candidate's field interpretation.
+    fn accepts_schema(&self, candidate: Hash) -> bool;
+
+    /// Select a qualified candidate for an existing typed proof verifier.
+    ///
+    /// # Errors
+    /// The candidate is not qualified. Success alone does not authenticate the candidate.
+    fn select_schema(&self, candidate: Hash) -> Result<Hash, FinalityError> {
+        if self.accepts_schema(candidate) {
+            Ok(candidate)
+        } else {
+            Err(fail("World snapshot schema is not independently qualified"))
+        }
+    }
+}
+
+impl WorldStateSchemaPolicyV1 for Hash {
+    fn accepts_schema(&self, candidate: Hash) -> bool {
+        *self == candidate
+    }
+}
+
+impl WorldStateSchemaPolicyV1 for [Hash] {
+    fn accepts_schema(&self, candidate: Hash) -> bool {
+        self.contains(&candidate)
+    }
+}
+
+impl<T: WorldStateSchemaPolicyV1 + ?Sized> WorldStateSchemaPolicyV1 for &T {
+    fn accepts_schema(&self, candidate: Hash) -> bool {
+        (**self).accepts_schema(candidate)
+    }
+}
+
 /// Stable canonical World field kinds used by the native authority registry.
 #[derive(
     Debug,
@@ -487,7 +528,7 @@ impl VerifiedWorldStateSnapshotV1 {
     /// The complete certified World contains the key, the field is not a table, or encoding fails.
     pub fn verify_privacy_protocol_policy_absent(
         &self,
-        protocol: crate::privacy::PrivacyProtocolIdV1,
+        protocol: crate::privacy::PrivacyRuntimeProtocolIdV1,
     ) -> Result<(), FinalityError> {
         self.verify_native_table_key_absent(
             "world.privacy_protocol_policies",
@@ -878,3 +919,33 @@ impl VerifiedWorldStateSnapshotV1 {
 
 #[cfg(test)]
 mod tests;
+
+/// Release-qualified native typed World schemas. The baseline and Ironwood successor retain
+/// the same canonical field meanings; Core tests derive both from immutable selections and
+/// assert this portable inventory. Every proof still authenticates its actual schema at its
+/// own certified height. This is not a wildcard for future or foreign schemas.
+#[must_use]
+pub fn native_world_schema_family_v1() -> Vec<Hash> {
+    vec![
+        Hash::prehashed([
+            0x65, 0x4a, 0x65, 0xff, 0x2c, 0x6f, 0x9f, 0x58, 0x72, 0x3e, 0x81, 0xbd, 0xeb, 0x72,
+            0x63, 0x70, 0x03, 0x16, 0x3d, 0xc9, 0x3f, 0x81, 0x4b, 0x58, 0x3c, 0x82, 0xc5, 0x77,
+            0x69, 0xd8, 0xdc, 0x4b,
+        ]),
+        Hash::prehashed([
+            0xbe, 0xfa, 0xab, 0x6e, 0xca, 0x40, 0x24, 0x8a, 0x35, 0x33, 0xbe, 0x72, 0x14, 0x7c,
+            0xff, 0x9c, 0xa9, 0x89, 0x3b, 0x72, 0x19, 0x98, 0x61, 0x0a, 0x20, 0xbb, 0xe7, 0x78,
+            0x60, 0xc2, 0x36, 0x7d,
+        ]),
+    ]
+}
+/// Expand only a known native installation anchor; explicit foreign schemas remain exact.
+#[must_use]
+pub fn native_world_schemas_for_anchor_v1(anchor: Hash) -> Vec<Hash> {
+    let family = native_world_schema_family_v1();
+    if family.contains(&anchor) {
+        family
+    } else {
+        vec![anchor]
+    }
+}

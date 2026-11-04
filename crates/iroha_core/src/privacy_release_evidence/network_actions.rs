@@ -11,8 +11,8 @@ use iroha_data_model::{
         OrchardHalo2ActionsStatementV1, PqMaspStarkStatementV1, PrivacyConsensusLimitsV1,
         PrivacyJindoFieldElementV1, PrivacyNativeConsensusBindingV1, PrivacyOrchardActionV1,
         PrivacyOrchardPoolBootstrapV1, PrivacyPoolIdV1, PrivacyPqMaspPoolBootstrapV1,
-        PrivacyProofBytesV1, PrivacyProofEnvelopeV1, PrivacyProofManagedPoolBootstrapV1,
-        PrivacyProofV1, PrivacyStatementContextV1, PrivacyStatementV1,
+        PrivacyProofBytesV1, PrivacyProofManagedPoolBootstrapV1, PrivacyRuntimeProofEnvelopeV1,
+        PrivacyRuntimeProofV1, PrivacyRuntimeStatementV1, PrivacyStatementContextV1,
         PrivacyTransactionIntentDigestV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
         PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
     },
@@ -152,7 +152,7 @@ fn statement_context_v1(
 }
 fn transaction_payload_v1(
     context: &PrivacyReleaseTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<TransactionPayload, PrivacyReleaseEvidenceErrorClassV1> {
     if context.network_id.as_bytes() != &context.genesis_hash {
         return Err(PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed);
@@ -163,7 +163,9 @@ fn transaction_payload_v1(
         context.fee_payment.clone(),
     )
     .with_instructions([iroha_data_model::isi::privacy::SubmitPrivacyProofV1::new(
-        envelope,
+        envelope
+            .try_into()
+            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?,
     )])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
@@ -342,7 +344,8 @@ pub fn build_privacy_release_vega_network_action_v1(
     fixture_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseVegaNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = iroha_data_model::privacy::PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+    let protocol_id =
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
     compiled_privacy_profile_v1(protocol_id).map_err(|error| match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::EngineUnavailable {
             protocol_id: unavailable,
@@ -411,7 +414,7 @@ pub fn build_privacy_release_orchard_network_action_v1(
     private_key: &PrivateKey,
 ) -> Result<PrivacyReleaseOrchardNetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
     let profile = compiled_privacy_profile_v1(
-        iroha_data_model::privacy::PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     let wallet_seed = fixture_seed[0].max(1);
@@ -439,9 +442,9 @@ pub fn build_privacy_release_orchard_network_action_v1(
         pool_id,
         expiry_height,
     );
-    let draft_envelope = PrivacyProofEnvelopeV1::bind_v1(
-        PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone()),
-        PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
+    let draft_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
+        PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement.clone()),
+        PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(Vec::new())),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     if !profile.matches_envelope_v1(&draft_envelope) {
@@ -470,10 +473,12 @@ pub fn build_privacy_release_orchard_network_action_v1(
     {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let typed_statement = PrivacyStatementV1::OrchardHalo2ActionsV1(statement.clone());
-    let envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let typed_statement = PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement.clone());
+    let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(proved.authorization)),
+        PrivacyRuntimeProofV1::OrchardHalo2ActionsV1(PrivacyProofBytesV1::new(
+            proved.authorization,
+        )),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     if !profile.matches_envelope_v1(&envelope) {
@@ -509,13 +514,14 @@ fn build_pq_masp_transaction_v1(
     proof_seed: [u8; 32],
     private_key: &PrivateKey,
 ) -> Result<(SignedTransaction, PqMaspStarkStatementV1), PrivacyReleaseEvidenceErrorClassV1> {
-    let profile =
-        compiled_privacy_profile_v1(iroha_data_model::privacy::PrivacyProtocolIdV1::PqMaspStarkV1)
-            .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
+    let profile = compiled_privacy_profile_v1(
+        iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
+    )
+    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::FixtureConstructionFailed)?;
     statement.context = statement_context_v1(transaction_context, profile);
-    let draft_envelope = PrivacyProofEnvelopeV1::bind_v1(
-        PrivacyStatementV1::PqMaspStarkV1(statement.clone()),
-        PrivacyProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(Vec::new())),
+    let draft_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
+        PrivacyRuntimeStatementV1::PqMaspStarkV1(statement.clone()),
+        PrivacyRuntimeProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(Vec::new())),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     if !profile.matches_envelope_v1(&draft_envelope) {
@@ -545,10 +551,10 @@ fn build_pq_masp_transaction_v1(
         &mut proof_rng,
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::NativeProverRejected)?;
-    let typed_statement = PrivacyStatementV1::PqMaspStarkV1(statement.clone());
-    let envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let typed_statement = PrivacyRuntimeStatementV1::PqMaspStarkV1(statement.clone());
+    let envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(proof)),
+        PrivacyRuntimeProofV1::PqMaspStarkV1(PrivacyProofBytesV1::new(proof)),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     if !profile.matches_envelope_v1(&envelope) {

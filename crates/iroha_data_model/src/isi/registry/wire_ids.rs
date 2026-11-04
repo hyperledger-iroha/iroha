@@ -24,7 +24,11 @@ pub(super) struct BuiltInWireId {
     /// baseline instruction.
     #[cfg(test)]
     pub(super) layout: fn() -> String,
+    #[cfg(test)]
+    pub(super) static_frame_identity: fn() -> Option<&'static str>,
     register: Registrar,
+    validate: fn(&[u8], norito::core::EncodeWorkLimits) -> Result<(), norito::Error>,
+    decode: fn(&[u8]) -> Result<InstructionBox, norito::Error>,
 }
 macro_rules! built_in_wire_id_with_scope {
     ($ty:ty => $wire_id:literal, governance_only = $governance_only:literal, tolerant = $tolerant:literal, register = $register:expr) => {
@@ -40,7 +44,11 @@ macro_rules! built_in_wire_id_with_scope {
             tolerant: $tolerant,
             #[cfg(test)]
             layout: super::payload_layout::<$ty>,
+            #[cfg(test)]
+            static_frame_identity: <$ty as norito::NoritoSchema>::static_frame_name,
             register: $register,
+            validate: crate::isi::validate_instruction_frame_for_lifecycle::<$ty>,
+            decode: crate::isi::decode_instruction_frame_for_lifecycle::<$ty>,
         }
     };
 }
@@ -446,6 +454,9 @@ pub(super) const ALL: &[BuiltInWireId] = &[
     built_in_wire_id!(privacy::SchedulePrivacyProtocolLimitsUpdateV1 => "iroha.privacy.schedule_protocol_limits_update.v1"),
     built_in_wire_id!(privacy::PublishPrivacyRootV1 => "iroha.privacy.publish_root.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyOrchardPoolV1 => "iroha.privacy.bootstrap_orchard_pool.v1"),
+    built_in_wire_id!(privacy::BootstrapPrivacyIronwoodPoolV1 => "iroha.privacy.bootstrap_ironwood_pool.v1", tolerant),
+    built_in_wire_id!(privacy::SubmitPrivacyIronwoodProofV1 => "iroha.privacy.submit_ironwood_proof.v1", tolerant),
+    built_in_wire_id!(privacy::SchedulePrivacyIronwoodLimitsUpdateV1 => "iroha.privacy.schedule_ironwood_limits_update.v1", tolerant),
     built_in_wire_id!(privacy::BootstrapPrivacyProofManagedPoolV1 => "iroha.privacy.bootstrap_proof_managed_pool.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyPgcAccountsV1 => "iroha.privacy.bootstrap_pgc_accounts.v1"),
     built_in_wire_id!(privacy::BootstrapPrivacyZkAmsRegistryV1 => "iroha.privacy.bootstrap_zk_ams_registry.v1"),
@@ -615,4 +626,32 @@ mod tests {
                 .all(|(schema, entry)| schema.tolerant == entry.tolerant)
         );
     }
+}
+
+/// Static dispatch for transient lifecycle validation; no lazy HashMap allocation.
+pub(super) fn validate_lifecycle_frame(
+    wire_id: &str,
+    frame: &[u8],
+    limits: norito::core::EncodeWorkLimits,
+) -> Result<(), norito::Error> {
+    let entry =
+        ALL.iter()
+            .find(|entry| entry.wire_id == wire_id)
+            .ok_or(norito::Error::InvalidValue {
+                context: "instruction wire identifier",
+            })?;
+    (entry.validate)(frame, limits)
+}
+
+pub(super) fn decode_lifecycle_frame(
+    wire_id: &str,
+    frame: &[u8],
+) -> Result<InstructionBox, norito::Error> {
+    let entry =
+        ALL.iter()
+            .find(|entry| entry.wire_id == wire_id)
+            .ok_or(norito::Error::InvalidValue {
+                context: "instruction wire identifier",
+            })?;
+    (entry.decode)(frame)
 }

@@ -344,41 +344,41 @@ pub enum PrivacyNamespaceComponentV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyNamespaceV1")]
-pub struct PrivacyNamespaceV1 {
-    protocol_id: PrivacyProtocolIdV1,
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyRuntimeNamespaceV1")]
+pub struct PrivacyRuntimeNamespaceV1 {
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     scope: PrivacyNamespaceScopeV1,
 }
-impl PrivacyNamespaceV1 {
+impl PrivacyRuntimeNamespaceV1 {
     /// Construct a namespace from a closed protocol and scope.
     #[must_use]
-    pub const fn new(protocol_id: PrivacyProtocolIdV1, scope: PrivacyNamespaceScopeV1) -> Self {
+    pub const fn new(protocol_id: PrivacyRuntimeProtocolIdV1, scope: PrivacyNamespaceScopeV1) -> Self {
         Self { protocol_id, scope }
     }
     /// Derive the only canonical namespace for a typed public statement.
     #[must_use]
-    pub const fn from_statement(statement: &PrivacyStatementV1) -> Self {
+    pub const fn from_statement(statement: &PrivacyRuntimeStatementV1) -> Self {
         match statement {
-            PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) => Self::new(
-                PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+            PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
                 PrivacyNamespaceScopeV1::Policy(PrivacyPolicyNamespaceV1 {
                     policy_id: statement.policy_id,
                 }),
             ),
-            PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) => Self::new(
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: statement.pool_id,
                 }),
             ),
-            PrivacyStatementV1::VeRangeTransparentRangeV1(statement) => Self::new(
-                PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
                 PrivacyNamespaceScopeV1::Policy(PrivacyPolicyNamespaceV1 {
                     policy_id: statement.policy_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaZkAmsV1(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaZkAmsV1,
+            PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(
                     PrivacyIssuerRegistryPolicyNamespaceV1 {
                         issuer_id: statement.issuer_id,
@@ -387,53 +387,59 @@ impl PrivacyNamespaceV1 {
                     },
                 ),
             ),
-            PrivacyStatementV1::VegaExistingCredentialZkV1(statement) => Self::new(
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
                 PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
                     parameter_id: statement.context.parameter_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
                 PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
                     trust_anchor_id: statement.trust_anchor_id,
                     policy_id: statement.certificate_policy_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
                     parameter_id: statement.context.parameter_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
                 PrivacyNamespaceScopeV1::IssuerPolicy(PrivacyIssuerPolicyNamespaceV1 {
                     issuer_id: statement.issuer_id,
                     policy_id: statement.policy_id,
                 }),
             ),
-            PrivacyStatementV1::OrchardHalo2ActionsV1(statement) => Self::new(
-                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: statement.pool_id,
                 }),
             ),
-            PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) => Self::new(
-                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyRuntimeStatementV1::IronwoodHalo2ActionsV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: statement.pool_id,
                 }),
             ),
-            PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => Self::new(
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+                PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                    pool_id: statement.pool_id,
+                }),
+            ),
+            PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
                     pool_id: statement.pool_id,
                     program_id: statement.program_id,
                 }),
             ),
-            PrivacyStatementV1::PqMaspStarkV1(statement) => Self::new(
-                PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) => Self::new(
+                PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: statement.pool_id,
                 }),
@@ -442,7 +448,7 @@ impl PrivacyNamespaceV1 {
     }
     /// Return the protocol owning this namespace.
     #[must_use]
-    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(self) -> PrivacyRuntimeProtocolIdV1 {
         self.protocol_id
     }
     /// Return the protocol-specific scope.
@@ -460,31 +466,32 @@ impl PrivacyNamespaceV1 {
         let compatible = matches!(
             (self.protocol_id, self.scope),
             (
-                PrivacyProtocolIdV1::ZkAcePqAuthorizationV1
-                    | PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+                PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1
+                    | PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
                 PrivacyNamespaceScopeV1::Policy(_)
             ) | (
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
-                    | PrivacyProtocolIdV1::OrchardHalo2ActionsV1
-                    | PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1
-                    | PrivacyProtocolIdV1::PqMaspStarkV1,
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1
+                    | PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1
+                    | PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1
+                    | PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1
+                    | PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                 PrivacyNamespaceScopeV1::Pool(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaZkAmsV1,
+                PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
                 PrivacyNamespaceScopeV1::IssuerRegistryPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+                PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
                 PrivacyNamespaceScopeV1::TrustAnchor(_)
                     | PrivacyNamespaceScopeV1::TrustAnchorPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::VegaExistingCredentialZkV1
-                    | PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+                PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
+                    | PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
                 PrivacyNamespaceScopeV1::Parameter(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+                PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
                 PrivacyNamespaceScopeV1::IssuerPolicy(_)
             ) | (
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 PrivacyNamespaceScopeV1::PoolProgram(_)
             )
         );
@@ -573,7 +580,7 @@ pub enum PrivacyNamespaceValidationError {
     #[error("privacy namespace scope is incompatible with protocol {protocol_id:?}")]
     IncompatibleScope {
         /// Protocol carrying the incompatible scope.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
     },
     /// A required scope component is zero.
     #[error("privacy namespace component {component:?} must be non-zero")]
@@ -659,28 +666,30 @@ impl PrivacyRootRoleV1 {
     }
     /// Return whether this role is meaningful for `protocol_id`.
     #[must_use]
-    pub const fn is_compatible_with(self, protocol_id: PrivacyProtocolIdV1) -> bool {
+    pub const fn is_compatible_with(self, protocol_id: PrivacyRuntimeProtocolIdV1) -> bool {
         matches!(
             (protocol_id, self),
             (
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
                 Self::PgcAccountState
-            ) | (PrivacyProtocolIdV1::IrohaZkAmsV1, Self::AccountRegistry)
+            ) | (PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1, Self::AccountRegistry)
                 | (
-                    PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+                    PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
                     Self::Revocation
                 )
                 | (
-                    PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+                    PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
                     Self::CertificateAuthorityMembership
                 )
                 | (
-                    PrivacyProtocolIdV1::OrchardHalo2ActionsV1 | PrivacyProtocolIdV1::PqMaspStarkV1,
+                    PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1
+                        | PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1
+                        | PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                     Self::NoteCommitmentAnchor
                 )
-                | (PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1, Self::OutputSet)
+                | (PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1, Self::OutputSet)
                 | (
-                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                     Self::ProgramState
                 )
         )
@@ -690,7 +699,7 @@ impl PrivacyRootRoleV1 {
     /// X.509 has one trust-anchor-wide CA-membership root. Its signed CRL is a
     /// governed record, not a second root-bearing state machine.
     #[must_use]
-    pub const fn is_compatible_with_namespace(self, namespace: PrivacyNamespaceV1) -> bool {
+    pub const fn is_compatible_with_namespace(self, namespace: PrivacyRuntimeNamespaceV1) -> bool {
         if !self.is_compatible_with(namespace.protocol_id()) {
             return false;
         }
@@ -724,10 +733,10 @@ impl PrivacyRootRoleV1 {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyRootPublicationV1")]
-pub struct PrivacyRootPublicationV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyRuntimeRootPublicationV1")]
+pub struct PrivacyRuntimeRootPublicationV1 {
     /// Exact protocol-scoped root namespace.
-    pub namespace: PrivacyNamespaceV1,
+    pub namespace: PrivacyRuntimeNamespaceV1,
     /// Semantic root role inside the namespace.
     pub role: PrivacyRootRoleV1,
     /// Monotonically advancing root epoch.
@@ -735,7 +744,7 @@ pub struct PrivacyRootPublicationV1 {
     /// Published canonical root.
     pub root: PrivacyRootV1,
 }
-impl PrivacyRootPublicationV1 {
+impl PrivacyRuntimeRootPublicationV1 {
     /// Construct and validate a root publication.
     ///
     /// # Errors
@@ -743,7 +752,7 @@ impl PrivacyRootPublicationV1 {
     /// Returns [`PrivacyRootPublicationValidationError`] for a malformed
     /// namespace, incompatible role, zero epoch, or zero root.
     pub fn new(
-        namespace: PrivacyNamespaceV1,
+        namespace: PrivacyRuntimeNamespaceV1,
         role: PrivacyRootRoleV1,
         epoch: u64,
         root: PrivacyRootV1,
@@ -795,18 +804,9 @@ impl PrivacyRootPublicationV1 {
     ///
     /// Returns a Norito encoding error if canonical encoding fails.
     pub fn digest(&self) -> Result<PrivacyRootPublicationDigestV1, norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(PRIVACY_ROOT_PUBLICATION_DIGEST_DOMAIN_V1);
-        hasher.update(
-            &u64::try_from(encoded.len())
-                .expect("Norito output length always fits u64 on supported targets")
-                .to_le_bytes(),
-        );
-        hasher.update(&encoded);
-        Ok(PrivacyRootPublicationDigestV1::new(
-            *hasher.finalize().as_bytes(),
-        ))
+        PrivacyRootPublicationV1::try_from(self.clone())
+            .map_err(|_| norito::Error::Message("runtime payload has no frozen publication grammar".into()))?
+            .digest()
     }
 }
 /// Validation failure for [`PrivacyRootPublicationV1`].
@@ -819,7 +819,7 @@ pub enum PrivacyRootPublicationValidationError {
     #[error("privacy root role {role:?} is incompatible with protocol {protocol_id:?}")]
     IncompatibleRole {
         /// Namespace protocol.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Incompatible role.
         role: PrivacyRootRoleV1,
     },
@@ -892,9 +892,9 @@ impl PrivacyOrchardPoolBootstrapV1 {
     }
     /// Return the sole protocol-scoped namespace for this pool.
     #[must_use]
-    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
-        PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+    pub const fn namespace(&self) -> PrivacyRuntimeNamespaceV1 {
+        PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: self.pool_id,
             }),
@@ -950,6 +950,120 @@ pub enum PrivacyOrchardPoolBootstrapValidationErrorV1 {
     UniversalPublicBalanceScope,
     /// The derived closed namespace is malformed.
     #[error("Orchard pool bootstrap namespace is invalid: {0}")]
+    Namespace(PrivacyNamespaceValidationError),
+}
+/// Governance payload establishing one Ironwood pool's immutable public bridge.
+///
+/// The payload deliberately contains neither an initial root nor an initial epoch. Core derives the
+/// pinned Ironwood V3 empty-tree root and installs it at [`PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1`],
+/// so governance cannot choose an alternate accumulator origin.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Decode,
+    Encode,
+    IntoSchema,
+    DeriveJsonSerialize,
+    DeriveJsonDeserialize,
+)]
+#[norito(deny_unknown_fields)]
+#[derive(norito::NoritoSchema)]
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyIronwoodPoolBootstrapV1")]
+pub struct PrivacyIronwoodPoolBootstrapV1 {
+    /// Stable Ironwood pool identifier.
+    pub pool_id: PrivacyPoolIdV1,
+    /// Exact public asset represented by this private pool.
+    pub asset_definition_id: AssetDefinitionId,
+    /// Immutable transparent balance partition backing this pool.
+    pub public_balance_scope: AssetBalanceScope,
+    /// Governed public reserve account used for deposits and withdrawals.
+    pub reserve_account: AccountId,
+}
+impl PrivacyIronwoodPoolBootstrapV1 {
+    /// Construct and validate one canonical Ironwood pool bootstrap.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero pool identifier.
+    pub fn new(
+        pool_id: PrivacyPoolIdV1,
+        asset_definition_id: AssetDefinitionId,
+        public_balance_scope: AssetBalanceScope,
+        reserve_account: AccountId,
+    ) -> Result<Self, PrivacyIronwoodPoolBootstrapValidationErrorV1> {
+        let bootstrap = Self {
+            pool_id,
+            asset_definition_id,
+            public_balance_scope,
+            reserve_account,
+        };
+        bootstrap.validate()?;
+        Ok(bootstrap)
+    }
+    /// Return the sole protocol-scoped namespace for this pool.
+    #[must_use]
+    pub const fn namespace(&self) -> PrivacyRuntimeNamespaceV1 {
+        PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
+                pool_id: self.pool_id,
+            }),
+        )
+    }
+    /// Validate the closed Ironwood namespace fields.
+    ///
+    /// # Errors
+    ///
+    /// Rejects the all-zero pool identifier.
+    pub fn validate(&self) -> Result<(), PrivacyIronwoodPoolBootstrapValidationErrorV1> {
+        if self.pool_id.is_zero() {
+            return Err(PrivacyIronwoodPoolBootstrapValidationErrorV1::ZeroPoolId);
+        }
+        if matches!(
+            self.public_balance_scope,
+            AssetBalanceScope::Dataspace(iroha_model_base::topology::DataSpaceId::UNIVERSAL)
+        ) {
+            return Err(PrivacyIronwoodPoolBootstrapValidationErrorV1::UniversalPublicBalanceScope);
+        }
+        self.namespace()
+            .validate()
+            .map_err(PrivacyIronwoodPoolBootstrapValidationErrorV1::Namespace)
+    }
+    /// Hash the exact canonical bootstrap in its own provenance domain.
+    ///
+    /// # Errors
+    ///
+    /// Returns a Norito encoding error if canonical encoding fails.
+    pub fn digest(&self) -> Result<PrivacyIronwoodPoolBootstrapDigestV1, norito::Error> {
+        let encoded = norito::encode_canonical(self)?;
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(PRIVACY_IRONWOOD_POOL_BOOTSTRAP_DIGEST_DOMAIN_V1);
+        hasher.update(
+            &u64::try_from(encoded.len())
+                .expect("Norito output length always fits u64 on supported targets")
+                .to_le_bytes(),
+        );
+        hasher.update(&encoded);
+        Ok(PrivacyIronwoodPoolBootstrapDigestV1::new(
+            *hasher.finalize().as_bytes(),
+        ))
+    }
+}
+/// Structural failure for [`PrivacyIronwoodPoolBootstrapV1`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum PrivacyIronwoodPoolBootstrapValidationErrorV1 {
+    /// The stable pool identifier is all zero.
+    #[error("Ironwood pool bootstrap pool id must be non-zero")]
+    ZeroPoolId,
+    /// The universal coordinator was supplied as a concrete balance partition.
+    #[error("Ironwood pool public balance scope cannot be the universal dataspace")]
+    UniversalPublicBalanceScope,
+    /// The derived closed namespace is malformed.
+    #[error("Ironwood pool bootstrap namespace is invalid: {0}")]
     Namespace(PrivacyNamespaceValidationError),
 }
 /// Exact unframed byte width of one FCMP++ `(O,I,C)` tuple.
@@ -1394,11 +1508,11 @@ pub enum PrivacyProofManagedPoolBootstrapV1 {
 impl PrivacyProofManagedPoolBootstrapV1 {
     /// Return the exact protocol initialized by this payload.
     #[must_use]
-    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(&self) -> PrivacyRuntimeProtocolIdV1 {
         match self {
-            Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            Self::PqMaspStarkV1(_) => PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Return the exact proof-managed root role initialized by this payload.
@@ -1412,23 +1526,23 @@ impl PrivacyProofManagedPoolBootstrapV1 {
     }
     /// Return the sole protocol-scoped namespace initialized by this payload.
     #[must_use]
-    pub const fn namespace(&self) -> PrivacyNamespaceV1 {
+    pub const fn namespace(&self) -> PrivacyRuntimeNamespaceV1 {
         match self {
-            Self::MoneroFcmpPlusPlusV1(bootstrap) => PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::MoneroFcmpPlusPlusV1(bootstrap) => PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: bootstrap.pool_id,
                 }),
             ),
-            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            Self::IrohaIvmPrivateNoteStarkV1(bootstrap) => PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
                     pool_id: bootstrap.pool_id,
                     program_id: bootstrap.program_id,
                 }),
             ),
-            Self::PqMaspStarkV1(bootstrap) => PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::PqMaspStarkV1,
+            Self::PqMaspStarkV1(bootstrap) => PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: bootstrap.pool_id,
                 }),
@@ -1865,10 +1979,10 @@ pub enum PrivacyPgcBootstrapProofValidationError {
 )]
 #[norito(deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyPgcAccountBootstrapV1")]
-pub struct PrivacyPgcAccountBootstrapV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyRuntimePgcAccountBootstrapV1")]
+pub struct PrivacyRuntimePgcAccountBootstrapV1 {
     /// Exact Anonymous PGC pool namespace.
-    pub namespace: PrivacyNamespaceV1,
+    pub namespace: PrivacyRuntimeNamespaceV1,
     /// Declared root, which core must recompute from `accounts`.
     pub initial_root: PrivacyRootV1,
     /// Canonical initial account-state epoch (exactly [`PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1`]).
@@ -1878,7 +1992,7 @@ pub struct PrivacyPgcAccountBootstrapV1 {
     /// Complete account table in strict public-key order.
     pub accounts: Vec<PrivacyPgcAccountV1>,
 }
-impl PrivacyPgcAccountBootstrapV1 {
+impl PrivacyRuntimePgcAccountBootstrapV1 {
     /// Validate the closed namespace, size, ordering, and nonzero wire values.
     ///
     /// Core must additionally recompute `initial_root` from the canonical entries under
@@ -1891,7 +2005,7 @@ impl PrivacyPgcAccountBootstrapV1 {
         self.namespace
             .validate()
             .map_err(PrivacyPgcAccountBootstrapValidationError::Namespace)?;
-        if self.namespace.protocol_id() != PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 {
+        if self.namespace.protocol_id() != PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 {
             return Err(PrivacyPgcAccountBootstrapValidationError::WrongProtocol {
                 protocol_id: self.namespace.protocol_id(),
             });
@@ -1951,18 +2065,9 @@ impl PrivacyPgcAccountBootstrapV1 {
     ///
     /// Returns a Norito encoding error if canonical encoding fails.
     pub fn digest(&self) -> Result<PrivacyPgcAccountBootstrapDigestV1, norito::Error> {
-        let encoded = norito::encode_canonical(self)?;
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(PRIVACY_PGC_ACCOUNT_BOOTSTRAP_DIGEST_DOMAIN_V1);
-        hasher.update(
-            &u64::try_from(encoded.len())
-                .expect("Norito output length always fits u64 on supported targets")
-                .to_le_bytes(),
-        );
-        hasher.update(&encoded);
-        Ok(PrivacyPgcAccountBootstrapDigestV1::new(
-            *hasher.finalize().as_bytes(),
-        ))
+        PrivacyPgcAccountBootstrapV1::try_from(self.clone())
+            .map_err(|_| norito::Error::Message("runtime payload has no frozen publication grammar".into()))?
+            .digest()
     }
 }
 /// Validation failure for [`PrivacyPgcAccountBootstrapV1`].
@@ -1975,7 +2080,7 @@ pub enum PrivacyPgcAccountBootstrapValidationError {
     #[error("PGC bootstrap namespace uses protocol {protocol_id:?}")]
     WrongProtocol {
         /// Unexpected namespace protocol.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
     },
     /// Declared initial root is zero.
     #[error("PGC bootstrap initial root must be non-zero")]
@@ -2252,7 +2357,7 @@ pub struct PrivacySecurityClaimV1 {
     /// Commitment to the final ordered Exact12 catalog.
     pub catalog_commitment: PrivacyExact12CatalogCommitmentV1,
     /// Exact protocol covered by the reduction and review.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Weakest security model in the complete protocol composition.
     pub security_model: PrivacySecurityModelV1,
     /// Required security target; exactly 128 for the first release.
@@ -2296,7 +2401,7 @@ impl PrivacySecurityClaimV1 {
     /// or independent-audit drift.
     pub fn validate_against(
         &self,
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         parameter_digest: PrivacyParameterDigestV1,
         verifier_digest: PrivacyVerifierDigestV1,
     ) -> Result<(), PrivacySecurityClaimValidationErrorV1> {
@@ -2356,9 +2461,9 @@ pub enum PrivacySecurityClaimValidationErrorV1 {
     #[error("privacy security claim protocol {actual:?} differs from {expected:?}")]
     Protocol {
         /// Required protocol.
-        expected: PrivacyProtocolIdV1,
+        expected: PrivacyRuntimeProtocolIdV1,
         /// Rejected protocol.
-        actual: PrivacyProtocolIdV1,
+        actual: PrivacyRuntimeProtocolIdV1,
     },
     /// Claim uses a stronger or otherwise different model than the composition permits.
     #[error("privacy security model {actual:?} differs from weakest model {expected:?}")]
@@ -2601,8 +2706,8 @@ pub struct PqMaspLimitsV1 {
 )]
 #[norito(tag = "protocol", content = "limits", deny_unknown_fields)]
 #[derive(norito::NoritoSchema)]
-#[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolLimitsV1")]
-pub enum PrivacyProtocolLimitsV1 {
+#[norito_schema(name = "iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1")]
+pub enum PrivacyRuntimeProtocolLimitsV1 {
     /// ZK-ACE has no additional first-release count limits.
     #[norito(rename = "zk-ace-pq-authorization-v1")]
     ZkAcePqAuthorizationV1,
@@ -2639,53 +2744,61 @@ pub enum PrivacyProtocolLimitsV1 {
     /// PQ-MASP input/output policy.
     #[norito(rename = "pq-masp-stark-v1")]
     PqMaspStarkV1(PqMaspLimitsV1),
+    /// Ironwood cross-address action policy.
+    #[norito(rename = "ironwood-halo2-actions-v1")]
+    IronwoodHalo2ActionsV1(OrchardLimitsV1),
 }
-impl PrivacyProtocolLimitsV1 {
+impl PrivacyRuntimeProtocolLimitsV1 {
     /// Canonical default limits and immutable safety ceilings for the selected protocol.
     /// These defaults do not imply that a native implementation is available.
     #[must_use]
-    pub const fn canonical_default_v1(protocol_id: PrivacyProtocolIdV1) -> Self {
+    pub const fn canonical_default_v1(protocol_id: PrivacyRuntimeProtocolIdV1) -> Self {
         match protocol_id {
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => Self::ZkAcePqAuthorizationV1,
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+            PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => Self::ZkAcePqAuthorizationV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => {
                 Self::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                     max_anonymity_set_size: ANONYMOUS_PGC_MAX_ANONYMITY_SET_SIZE_V1,
                     max_recipient_count: ANONYMOUS_PGC_MAX_RECIPIENTS_V1,
                 })
             }
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 => {
                 Self::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
                     max_aggregation_count: VERANGE_TAIRA_MAX_AGGREGATION_COUNT_V1,
                 })
             }
-            PrivacyProtocolIdV1::IrohaZkAmsV1 => Self::IrohaZkAmsV1(ZkAmsLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1 => Self::IrohaZkAmsV1(ZkAmsLimitsV1 {
                 max_batch_size: ZK_AMS_MAX_BATCH_SIZE_V1,
                 max_ring_size: ZK_AMS_MAX_RING_SIZE_V1,
             }),
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => Self::VegaExistingCredentialZkV1,
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => Self::IrohaZkX509StarkP256V1,
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => Self::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => Self::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
                 Self::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                     max_polynomial_count: IROHA_JINDO_MAX_POLYNOMIALS_V1,
                 })
             }
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => Self::IrohaBootleLanternAnoncredV1,
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1 => Self::IrohaBootleLanternAnoncredV1,
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => {
                 Self::OrchardHalo2ActionsV1(OrchardLimitsV1 {
                     max_action_count: ORCHARD_MAX_ACTIONS_V1,
                 })
             }
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => Self::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 => {
+                Self::IronwoodHalo2ActionsV1(OrchardLimitsV1 {
+                    max_action_count: ORCHARD_MAX_ACTIONS_V1,
+                })
+            }
+            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1 => Self::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
                 max_input_count: FCMP_MAX_INPUTS_V1,
                 max_output_count: FCMP_MAX_OUTPUTS_V1,
             }),
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
                 Self::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
                     max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
                     max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
                 })
             }
-            PrivacyProtocolIdV1::PqMaspStarkV1 => Self::PqMaspStarkV1(PqMaspLimitsV1 {
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => Self::PqMaspStarkV1(PqMaspLimitsV1 {
                 max_input_count: PQ_MASP_MAX_INPUTS_V1,
                 max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
             }),
@@ -2694,22 +2807,23 @@ impl PrivacyProtocolLimitsV1 {
 
     /// Exact protocol to which these protocol-specific limits apply.
     #[must_use]
-    pub const fn protocol_id(&self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(&self) -> PrivacyRuntimeProtocolIdV1 {
         match self {
-            Self::ZkAcePqAuthorizationV1 => PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
-            Self::AnonymousPgcKOutOfNV1(_) => PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            Self::VeRangeTransparentRangeV1(_) => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            Self::IrohaZkAmsV1(_) => PrivacyProtocolIdV1::IrohaZkAmsV1,
-            Self::VegaExistingCredentialZkV1 => PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
-            Self::IrohaZkX509StarkP256V1 => PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            Self::ZkAcePqAuthorizationV1 => PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
+            Self::AnonymousPgcKOutOfNV1(_) => PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+            Self::VeRangeTransparentRangeV1(_) => PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
+            Self::IrohaZkAmsV1(_) => PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
+            Self::VegaExistingCredentialZkV1 => PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
+            Self::IrohaZkX509StarkP256V1 => PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             Self::IrohaJindoPolynomialCommitmentV1(_) => {
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
             }
-            Self::IrohaBootleLanternAnoncredV1 => PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-            Self::OrchardHalo2ActionsV1(_) => PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-            Self::MoneroFcmpPlusPlusV1(_) => PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            Self::PqMaspStarkV1(_) => PrivacyProtocolIdV1::PqMaspStarkV1,
+            Self::IrohaBootleLanternAnoncredV1 => PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            Self::OrchardHalo2ActionsV1(_) => PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+            Self::IronwoodHalo2ActionsV1(_) => PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+            Self::MoneroFcmpPlusPlusV1(_) => PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+            Self::IrohaIvmPrivateNoteStarkV1(_) => PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            Self::PqMaspStarkV1(_) => PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         }
     }
     /// Validate protocol-specific values against first-release hard ceilings.
@@ -2767,11 +2881,13 @@ impl PrivacyProtocolLimitsV1 {
                 limits.max_polynomial_count,
                 IROHA_JINDO_MAX_POLYNOMIALS_V1,
             ),
-            Self::OrchardHalo2ActionsV1(limits) => validate_profile_limit(
-                PrivacyProtocolLimitFieldV1::OrchardActionCount,
-                limits.max_action_count,
-                ORCHARD_MAX_ACTIONS_V1,
-            ),
+            Self::OrchardHalo2ActionsV1(limits) | Self::IronwoodHalo2ActionsV1(limits) => {
+                validate_profile_limit(
+                    PrivacyProtocolLimitFieldV1::OrchardActionCount,
+                    limits.max_action_count,
+                    ORCHARD_MAX_ACTIONS_V1,
+                )
+            }
             Self::MoneroFcmpPlusPlusV1(limits) => {
                 validate_profile_limit(
                     PrivacyProtocolLimitFieldV1::FcmpInputCount,
@@ -2872,7 +2988,8 @@ impl PrivacyProtocolLimitsV1 {
                 value.max_polynomial_count,
                 max.max_polynomial_count,
             ),
-            (Self::OrchardHalo2ActionsV1(value), Self::OrchardHalo2ActionsV1(max)) => {
+            (Self::OrchardHalo2ActionsV1(value), Self::OrchardHalo2ActionsV1(max))
+            | (Self::IronwoodHalo2ActionsV1(value), Self::IronwoodHalo2ActionsV1(max)) => {
                 validate_profile_limit_ceiling(
                     PrivacyProtocolLimitFieldV1::OrchardActionCount,
                     value.max_action_count,
@@ -3008,9 +3125,9 @@ pub enum PrivacyProtocolLimitsValidationError {
     #[error("privacy protocol limit protocol {actual:?} differs from ceiling protocol {ceiling:?}")]
     ProtocolMismatch {
         /// Governed protocol variant.
-        actual: PrivacyProtocolIdV1,
+        actual: PrivacyRuntimeProtocolIdV1,
         /// Compiled-ceiling protocol variant.
-        ceiling: PrivacyProtocolIdV1,
+        ceiling: PrivacyRuntimeProtocolIdV1,
     },
     /// One protocol-specific limit exceeds a valid configured ceiling.
     #[error("privacy protocol limit {field:?} value {value} exceeds configured ceiling {ceiling}")]
@@ -3059,7 +3176,7 @@ pub struct PrivacyProtocolLimitsUpdateV1 {
     /// Exact incoming block at whose start the successor becomes effective.
     pub effective_at_height: u64,
     /// Complete protocol-tagged successor limit set.
-    pub next_limits: PrivacyProtocolLimitsV1,
+    pub next_limits: PrivacyRuntimeProtocolLimitsV1,
 }
 /// Validation failure for a scheduled protocol-specific update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -3097,9 +3214,9 @@ pub enum PrivacyProtocolLimitsUpdateValidationErrorV1 {
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyProtocolPolicyV1")]
 pub struct PrivacyProtocolPolicyV1 {
     /// Protocol whose resource limits are governed by this record.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Limits effective for the current committed state.
-    pub current_limits: PrivacyProtocolLimitsV1,
+    pub current_limits: PrivacyRuntimeProtocolLimitsV1,
     /// At most one authorized change effective at a future block boundary.
     pub pending_update: Option<PrivacyProtocolLimitsUpdateV1>,
 }
@@ -3110,9 +3227,9 @@ pub enum PrivacyProtocolPolicyValidationErrorV1 {
     #[error("privacy policy protocol {protocol_id:?} differs from limits {limits_protocol:?}")]
     ProtocolMismatch {
         /// Policy identity.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Limit identity.
-        limits_protocol: PrivacyProtocolIdV1,
+        limits_protocol: PrivacyRuntimeProtocolIdV1,
     },
     /// Current limits violate canonical protocol safety bounds.
     #[error("privacy protocol policy limits are invalid: {0}")]
@@ -3152,7 +3269,7 @@ pub const PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1: u32 = 1;
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileSnapshotV1")]
 pub struct PrivacyCompiledProfileSnapshotV1 {
     /// Closed protocol identity.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Closed proof-system identity.
     pub proof_system_id: PrivacyProofSystemIdV1,
     /// Closed native-engine identity.
@@ -3168,7 +3285,7 @@ pub struct PrivacyCompiledProfileSnapshotV1 {
     /// Digest of the complete compiled engine manifest.
     pub engine_manifest_digest: PrivacyEngineManifestDigestV1,
     /// Exact protocol-specific limits compiled into the verifier.
-    pub protocol_limits: PrivacyProtocolLimitsV1,
+    pub protocol_limits: PrivacyRuntimeProtocolLimitsV1,
 }
 impl PrivacyCompiledProfileSnapshotV1 {
     /// Validate the closed protocol mappings and every fixed binding.
@@ -3236,7 +3353,7 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
     )]
     ProofSystemMismatch {
         /// Protocol in the compiled profile.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Required proof system.
         expected: PrivacyProofSystemIdV1,
         /// Rejected proof system.
@@ -3248,7 +3365,7 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
     )]
     EngineMismatch {
         /// Protocol in the compiled profile.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Required engine.
         expected: PrivacyEngineIdV1,
         /// Rejected engine.
@@ -3275,9 +3392,9 @@ pub enum PrivacyCompiledProfileSnapshotValidationErrorV1 {
     )]
     ProtocolLimitsMismatch {
         /// Compiled protocol.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Protocol encoded by the compiled limit variant.
-        limits_protocol: PrivacyProtocolIdV1,
+        limits_protocol: PrivacyRuntimeProtocolIdV1,
     },
     /// Compiled protocol-specific limits are malformed.
     #[error("compiled privacy protocol limits are invalid: {0}")]
@@ -3391,7 +3508,7 @@ pub enum PrivacyCompiledProfileResultV1 {
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCompiledProfileCatalogRowV1")]
 pub struct PrivacyCompiledProfileCatalogRowV1 {
     /// Closed protocol identity for this row.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact local compiled-profile result.
     pub compiled_profile: PrivacyCompiledProfileResultV1,
 }
@@ -3431,14 +3548,14 @@ pub enum PrivacyCompiledProfileCatalogRowValidationErrorV1 {
     )]
     CompiledProfileProtocolMismatch {
         /// Row identity.
-        row_protocol: PrivacyProtocolIdV1,
+        row_protocol: PrivacyRuntimeProtocolIdV1,
         /// Embedded profile identity.
-        profile_protocol: PrivacyProtocolIdV1,
+        profile_protocol: PrivacyRuntimeProtocolIdV1,
     },
 }
 /// Canonical local compiled-profile catalog for the closed first-release registry.
 ///
-/// `protocols` contains exactly [`PrivacyProtocolIdV1::ALL`] in Norito
+/// `protocols` contains exactly [`PrivacyProtocolIdV1::EXACT12_PROTOCOLS`] in Norito
 /// discriminant order. This catalog is local build metadata, not committed
 /// governance state and not evidence that a protocol is live on any network.
 #[derive(
@@ -3478,10 +3595,10 @@ impl PrivacyCompiledProfileCatalogV1 {
                 actual: self.version,
             });
         }
-        if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
+        if self.protocols.len() != PrivacyRuntimeProtocolIdV1::EXACT12_COUNT {
             return Err(
                 PrivacyCompiledProfileCatalogValidationErrorV1::ProtocolCount {
-                    expected: PrivacyProtocolIdV1::COUNT,
+                    expected: PrivacyRuntimeProtocolIdV1::EXACT12_COUNT,
                     actual: self.protocols.len(),
                 },
             );
@@ -3489,7 +3606,7 @@ impl PrivacyCompiledProfileCatalogV1 {
         for (index, (row, expected)) in self
             .protocols
             .iter()
-            .zip(PrivacyProtocolIdV1::ALL)
+            .zip(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
             .enumerate()
         {
             if row.protocol_id != expected {
@@ -3538,15 +3655,15 @@ pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
         /// Zero-based row index.
         index: usize,
         /// Required protocol at this index.
-        expected: PrivacyProtocolIdV1,
+        expected: PrivacyRuntimeProtocolIdV1,
         /// Rejected protocol at this index.
-        actual: PrivacyProtocolIdV1,
+        actual: PrivacyRuntimeProtocolIdV1,
     },
     /// One canonical row is invalid.
     #[error("compiled privacy catalog row {protocol_id:?} is invalid: {source}")]
     ProtocolRow {
         /// Protocol selected by row order.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Exact row validation failure.
         source: PrivacyCompiledProfileCatalogRowValidationErrorV1,
     },
@@ -3571,7 +3688,7 @@ pub enum PrivacyCompiledProfileCatalogValidationErrorV1 {
 #[norito_schema(name = "iroha_data_model::privacy::PrivacyCapabilityRowV1")]
 pub struct PrivacyCapabilityRowV1 {
     /// Closed protocol identity for this row.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact local compiled-profile result.
     pub compiled_profile: PrivacyCompiledProfileResultV1,
     /// Optional ordinary limits committed by the network.
@@ -3618,7 +3735,7 @@ impl PrivacyCapabilityRowV1 {
     }
     /// Effective limits for an available implementation, without an activation prerequisite.
     #[must_use]
-    pub const fn effective_protocol_limits_v1(&self) -> Option<PrivacyProtocolLimitsV1> {
+    pub const fn effective_protocol_limits_v1(&self) -> Option<PrivacyRuntimeProtocolLimitsV1> {
         match self.compiled_profile {
             PrivacyCompiledProfileResultV1::Unavailable(_) => None,
             PrivacyCompiledProfileResultV1::Available(profile) => Some(match self.policy {
@@ -3640,9 +3757,9 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
     )]
     CompiledProfileProtocolMismatch {
         /// Row identity.
-        row_protocol: PrivacyProtocolIdV1,
+        row_protocol: PrivacyRuntimeProtocolIdV1,
         /// Profile identity.
-        profile_protocol: PrivacyProtocolIdV1,
+        profile_protocol: PrivacyRuntimeProtocolIdV1,
     },
     /// The committed policy is malformed.
     #[error("privacy capability policy is invalid: {0}")]
@@ -3653,14 +3770,14 @@ pub enum PrivacyCapabilityRowValidationErrorV1 {
     )]
     PolicyProtocolMismatch {
         /// Row identity.
-        row_protocol: PrivacyProtocolIdV1,
+        row_protocol: PrivacyRuntimeProtocolIdV1,
         /// Policy identity.
-        policy_protocol: PrivacyProtocolIdV1,
+        policy_protocol: PrivacyRuntimeProtocolIdV1,
     },
 }
 /// Authoritative committed privacy capability snapshot.
 ///
-/// `protocols` must contain exactly [`PrivacyProtocolIdV1::ALL`] in Norito
+/// `protocols` must contain exactly [`PrivacyProtocolIdV1::EXACT12_PROTOCOLS`] in Norito
 /// discriminant order. The ordering rule makes missing, duplicate, and
 /// reordered rows fail closed without accepting aliases.
 #[derive(
@@ -3706,16 +3823,16 @@ impl PrivacyCapabilitySnapshotV1 {
         self.consensus_policy
             .validate_at_committed_height(self.committed_height)
             .map_err(PrivacyCapabilitySnapshotValidationErrorV1::ConsensusPolicy)?;
-        if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
+        if self.protocols.len() != PrivacyRuntimeProtocolIdV1::EXACT12_COUNT {
             return Err(PrivacyCapabilitySnapshotValidationErrorV1::ProtocolCount {
-                expected: PrivacyProtocolIdV1::COUNT,
+                expected: PrivacyRuntimeProtocolIdV1::EXACT12_COUNT,
                 actual: self.protocols.len(),
             });
         }
         for (index, (row, expected)) in self
             .protocols
             .iter()
-            .zip(PrivacyProtocolIdV1::ALL)
+            .zip(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
             .enumerate()
         {
             if row.protocol_id != expected {
@@ -3742,10 +3859,10 @@ pub const PRIVACY_BRIDGE_ABI_VERSION_V1: u32 = 33;
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 /// Maximum elements accepted in one catalog sequence.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize =
-    PrivacyProtocolIdV1::COUNT;
+    PrivacyRuntimeProtocolIdV1::EXACT12_COUNT;
 /// Maximum cumulative elements accepted while decoding one catalog.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize =
-    PrivacyProtocolIdV1::COUNT;
+    PrivacyRuntimeProtocolIdV1::EXACT12_COUNT;
 /// Maximum bytes accepted in one length-delimited catalog field.
 pub const PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_FIELD_BYTES_V1: usize = 128 * 1024;
 /// Maximum cumulative allocation permitted while decoding one catalog.
@@ -3795,7 +3912,7 @@ impl PrivacyCompiledProfileCatalogArchiveValidationStatusV1 {
 /// Validate one untrusted canonical typed local compiled-profile catalog.
 ///
 /// This validator enforces fixed byte, sequence, cumulative-element, allocation, field, and nesting
-/// ceilings before validating the exact twelve rows in [`PrivacyProtocolIdV1::ALL`] order. It
+/// ceilings before validating the exact twelve rows in [`PrivacyProtocolIdV1::EXACT12_PROTOCOLS`] order. It
 /// establishes only that the bytes are a well-formed catalog; callers comparing against the current
 /// binary must additionally require exact equality with that binary's catalog.
 #[must_use]
@@ -3840,7 +3957,8 @@ pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1: usize = 256 * 1024;
 ///
 /// The sole dynamic sequence is the closed twelve-row protocol catalog.
 /// Documentary evidence has its own schema and never expands runtime decode bounds.
-pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize = PrivacyProtocolIdV1::COUNT;
+pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_SEQUENCE_ELEMENTS_V1: usize =
+    PrivacyRuntimeProtocolIdV1::EXACT12_COUNT;
 /// Maximum cumulative elements accepted while decoding a capability archive.
 pub const PRIVACY_CAPABILITY_ARCHIVE_MAX_TOTAL_ELEMENTS_V1: usize =
     PRIVACY_CAPABILITY_ARCHIVE_MAX_BYTES_V1;
@@ -3900,7 +4018,7 @@ impl PrivacyCapabilityArchiveValidationStatusV1 {
 /// cumulative-element, allocation, and nesting budgets. The canonical decoder enforces the exact
 /// [`PrivacyExact12CapabilityManifestV1`] schema and byte-for-byte canonical re-encoding. Finally
 /// [`PrivacyExact12CapabilityManifestV1::validate`] enforces the exact twelve rows in
-/// [`PrivacyProtocolIdV1::ALL`] order and all operation, profile, readiness, policy,
+/// [`PrivacyProtocolIdV1::EXACT12_PROTOCOLS`] order and all operation, profile, readiness, policy,
 /// network and self-digest bindings. Every other schema is rejected. Local compiled-profile
 /// equality and selected-protocol admission are checked separately by the caller.
 #[must_use]
@@ -3983,15 +4101,15 @@ pub enum PrivacyCapabilitySnapshotValidationErrorV1 {
         /// Zero-based row index.
         index: usize,
         /// Required protocol at this index.
-        expected: PrivacyProtocolIdV1,
+        expected: PrivacyRuntimeProtocolIdV1,
         /// Rejected protocol at this index.
-        actual: PrivacyProtocolIdV1,
+        actual: PrivacyRuntimeProtocolIdV1,
     },
     /// One canonical row is invalid.
     #[error("privacy capability row {protocol_id:?} is invalid: {source}")]
     ProtocolRow {
         /// Protocol selected by row order.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Exact row validation failure.
         source: PrivacyCapabilityRowValidationErrorV1,
     },

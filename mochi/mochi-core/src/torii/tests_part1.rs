@@ -1,4 +1,6 @@
 use super::*;
+#[path = "tests/lifecycle_block_summary.rs"]
+mod lifecycle_block_summary;
 use iroha::stream::StreamFrame;
 #[path = "tests/stream_transport.rs"]
 mod stream_test_transport;

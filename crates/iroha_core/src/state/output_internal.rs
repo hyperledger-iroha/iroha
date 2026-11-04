@@ -89,11 +89,31 @@ impl InternalInvocation {
         }
     }
 
-    fn authenticate(&self, state: &StateBlock<'_>, height: u64) -> Result<(), String> {
+    fn authenticate(
+        &self,
+        state: &mut StateBlock<'_>,
+        height: u64,
+    ) -> Result<(), ExecutionAttemptError<String>> {
         let id = &self.trigger().trigger_id;
-        let actual = match self {
-            Self::Pipeline(_) => pipeline_trigger_use_v1(&state.world.triggers, id, height)?,
-            Self::Time(_) => time_trigger_use_v1(&state.world.triggers, id, height)?,
+        let actual = if state.lifecycle_output_enabled()? {
+            let kind = match self {
+                Self::Pipeline(_) => {
+                    iroha_data_model::block::execution_output::TriggerLifecycleStateKindV1::Pipeline
+                }
+                Self::Time(_) => {
+                    iroha_data_model::block::execution_output::TriggerLifecycleStateKindV1::Time
+                }
+            };
+            let source = lifecycle::internal_source(state, id, height, kind)?;
+            if !source.available() {
+                return Err("internal policy source is unavailable".into());
+            }
+            source.identity().clone()
+        } else {
+            match self {
+                Self::Pipeline(_) => pipeline_trigger_use_v1(&state.world.triggers, id, height)?,
+                Self::Time(_) => time_trigger_use_v1(&state.world.triggers, id, height)?,
+            }
         };
         if &actual != self.trigger() {
             return Err("internal action changed its invocation owner".into());
@@ -108,22 +128,21 @@ impl InternalInvocation {
         state: &mut StateBlock<'_>,
         height: u64,
         now: u64,
-    ) -> Result<(), String> {
+    ) -> Result<(), ExecutionAttemptError<String>> {
         if let Some(policy) = self.prepare_failure_policy(state, height, now)? {
             policy.apply()?;
         }
         Ok(())
     }
 
-    // Output-limit rollback is also an attempted native invocation. Retain only
-    // its autonomous allowance debit, without introducing retry semantics.
-    fn consume_progress_attempt(
+    // Output-limit rollback retains only the independently owned native attempt debit.
+    fn prepare_progress_policy<'block, 'state>(
         &self,
-        state: &mut StateBlock<'_>,
+        state: &'block mut StateBlock<'state>,
         height: u64,
-    ) -> Result<(), String> {
+    ) -> Result<Option<OutputTransaction<'block, 'state>>, ExecutionAttemptError<String>> {
         if !matches!(self, Self::Time(_)) {
-            return Ok(());
+            return Ok(None);
         }
         self.authenticate(state, height)?;
         let id = &self.trigger().trigger_id;
@@ -134,32 +153,81 @@ impl InternalInvocation {
             .get(id)
             .is_none_or(|action| progress::remaining(action.metadata()) == 0)
         {
-            return Ok(());
+            return Ok(None);
         }
+        let enabled = state.lifecycle_output_enabled()?;
+        let maximum = state.callback_output_byte_limit();
         let mut policy = OutputTransaction::new(state)?;
         let tx = policy
             .transaction
             .as_mut()
             .ok_or("missing progress attempt transaction")?;
-        tx.world
-            .triggers
-            .inspect_by_id_mut(id, |action| progress::consume(action.metadata_mut()))
-            .ok_or("progress action disappeared")?;
-        policy.apply()
+        lifecycle::arm(tx, enabled, maximum)?;
+        tx.with_trigger_lifecycle_policy(Some(0),
+            iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeTimeProgress,
+            |tx| { tx.world.triggers.consume_time_progress(id); });
+        Ok(Some(policy))
+    }
+
+    fn consume_progress_attempt(
+        &self,
+        state: &mut StateBlock<'_>,
+        height: u64,
+    ) -> Result<(), ExecutionAttemptError<String>> {
+        if let Some(policy) = self.prepare_progress_policy(state, height)? {
+            policy.apply()?;
+        }
+        Ok(())
     }
 
     // Prepare only after the failed business overlay has been dropped. Persistent
     // action identity authenticates this separate quarantine/retry transaction.
     // Drop rolls the policy and witness back; preparation never commits them.
-    // TODO: capture and fund the complete policy trace and applying-State ceilings
-    // before connecting this disposable seam to a lifecycle output owner.
+    // The successor producer drains and fits this policy's complete trace before
+    // apply; predecessor replay retains its original V1 settlement ordering.
     fn prepare_failure_policy<'block, 'state>(
         &self,
         state: &'block mut StateBlock<'state>,
         height: u64,
         now: u64,
-    ) -> Result<Option<OutputTransaction<'block, 'state>>, String> {
-        self.authenticate(state, height)?;
+    ) -> Result<Option<OutputTransaction<'block, 'state>>, ExecutionAttemptError<String>> {
+        self.prepare_failure_policy_with(state, height, now, |_| {})
+    }
+
+    // The committed services selection arms production policy capture before
+    // its first mutation. This additional private hook only supplies component
+    // test admission; ordinary callers supply the no-op closure above.
+    fn prepare_failure_policy_with<'block, 'state>(
+        &self,
+        state: &'block mut StateBlock<'state>,
+        height: u64,
+        now: u64,
+        prepare: impl FnOnce(&mut StateTransaction<'_, '_>),
+    ) -> Result<Option<OutputTransaction<'block, 'state>>, ExecutionAttemptError<String>> {
+        self.prepare_failure_policy_from_source(state, height, now, None, prepare)
+    }
+
+    // A production source was captured immediately before this invocation under
+    // the same exclusive producer. Business failure has dropped the complete
+    // overlay, so its prior identity remains authoritative without rehashing
+    // immutable executables. Standalone callers must authenticate afresh above.
+    fn prepare_failure_policy_from_source<'block, 'state>(
+        &self,
+        state: &'block mut StateBlock<'state>,
+        height: u64,
+        now: u64,
+        source: Option<&lifecycle::InternalSource>,
+        prepare: impl FnOnce(&mut StateTransaction<'_, '_>),
+    ) -> Result<Option<OutputTransaction<'block, 'state>>, ExecutionAttemptError<String>> {
+        if let Some(source) = source {
+            if !source.available() || source.identity() != self.trigger() {
+                return Err("failure policy changed its original bounded invocation source".into());
+            }
+        } else {
+            self.authenticate(state, height)?;
+        }
+        let enabled_capture = state.lifecycle_output_enabled()?;
+        let maximum = state.callback_output_byte_limit();
         let id = &self.trigger().trigger_id;
         match self {
             Self::Pipeline(_) => {
@@ -171,6 +239,12 @@ impl InternalInvocation {
                     .transaction
                     .as_mut()
                     .ok_or("missing quarantine transaction")?;
+                lifecycle::arm(tx, enabled_capture, maximum)?;
+                prepare(tx);
+                tx.world.triggers.set_lifecycle_origin(iroha_data_model::block::execution_output::TriggerLifecycleOriginV1::InvocationPolicy {
+                    callback_index: 0,
+                    policy: iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::QuarantinePipeline,
+                });
                 if tx
                     .world
                     .triggers
@@ -205,24 +279,31 @@ impl InternalInvocation {
                     .transaction
                     .as_mut()
                     .ok_or("missing retry transaction")?;
-                tx.world
-                    .triggers
-                    .inspect_by_id_mut(id, |action| progress::consume(action.metadata_mut()))
-                    .ok_or("progress action disappeared")?;
+                lifecycle::arm(tx, enabled_capture, maximum)?;
+                prepare(tx);
                 let Some(retry_policy) = retry_policy else {
+                    tx.with_trigger_lifecycle_policy(Some(0),
+                        iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeTimeProgress,
+                        |tx| { tx.world.triggers.consume_time_progress(id); });
                     return Ok(Some(policy));
                 };
+                tx.world.triggers.set_lifecycle_origin(iroha_data_model::block::execution_output::TriggerLifecycleOriginV1::InvocationPolicy {
+                    callback_index: 0,
+                    policy: if used > retry_policy.max_retries.get() {
+                        iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ExhaustTimeRetry
+                    } else { iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::AdvanceTimeRetry },
+                });
                 if used > retry_policy.max_retries.get() {
                     if !tx.world.triggers.remove(id) {
                         return Err("retry action disappeared".into());
                     }
                     crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(tx, id);
-                } else if !tx.world.triggers.set_time_trigger_retry_state(
+                } else if !tx.world.triggers.advance_time_retry(
                     id,
-                    Some(TimeTriggerRetryState {
+                    TimeTriggerRetryState {
                         retries_used: used,
                         next_retry_at_ms: now.saturating_add(retry_policy.retry_after_ms.get()),
-                    }),
+                    },
                 ) {
                     return Err("retry action disappeared".into());
                 }
@@ -242,11 +323,26 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         invocation: InternalInvocation,
         event: EventBox,
         action: &impl LoadedActionTrait,
+        mut source: Option<lifecycle::InternalSource>,
     ) -> Result<InternalOutputDisposition, ExecutionAttemptError<String>> {
         let height = self.source.header().height().get();
         let now = u64::try_from(self.source.header().creation_time().as_millis())
             .map_err(|_| "internal timestamp exceeds u64")?;
-        invocation.authenticate(self.state, height)?;
+        if self.lifecycle {
+            if source
+                .as_ref()
+                .is_none_or(|source| source.identity() != invocation.trigger())
+            {
+                return Err(
+                    "selected internal invocation lacks its original bounded source".into(),
+                );
+            }
+        } else {
+            if source.is_some() {
+                return Err("predecessor internal invocation carries a selected source".into());
+            }
+            invocation.authenticate(self.state, height)?;
+        }
         let call = invocation.call(self.source.hash())?;
         let id = &invocation.trigger().trigger_id;
         if self.rows.len() >= self.rows.capacity() {
@@ -257,19 +353,35 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .budget
             .as_mut()
             .ok_or("output budget already consumed")?
-            .begin(invocation.terminal())?;
+            .begin(lifecycle::empty(invocation.terminal(), self.lifecycle))?;
         self.state.retain_fastpq_source_invocation(call)?;
         let mut attempt = OutputTransaction::new(self.state)?;
         let tx = attempt
             .transaction
             .as_mut()
             .ok_or("missing internal transaction")?;
+        if let Some(source) = source.as_mut() {
+            source.install(tx)?;
+        }
         tx.tx_call_hash = Some(call);
         tx.current_tx_hash = None;
         tx.current_entrypoint_index = None;
         let root_dataspace = capture_internal_root_dataspace(tx)?;
         let original_source = OwnedExecutionSource::new(call, None, root_dataspace);
         tx.bind_original_fastpq_invocation_source(original_source)?;
+        if source.as_ref().is_some_and(|source| !source.available()) {
+            let actual = lifecycle::empty(invocation.terminal(), true);
+            actual.validate_structure(height, &self.source)?;
+            let row = match reservation.finish(actual)? {
+                ReservedExecutionOutput::Accepted(row)
+                | ReservedExecutionOutput::OutputLimit(row) => row,
+            };
+            drop(attempt);
+            append_completions(&mut self.state.world.external_event_buf, call, &row)?;
+            self.retain_completed_internal_source(original_source)?;
+            self.rows.push(row);
+            return Ok(InternalOutputDisposition::OutputLimit);
+        }
         // Event routing is authenticated event data, not authority to route the
         // callback's writes. The immutable root owns this invocation's namespace.
         let generation = tx.world.triggers.registration_generation(id);
@@ -289,7 +401,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 if matches!(invocation, InternalInvocation::Pipeline(_))
                     && tx.world.triggers.registration_generation(id) == generation
                 {
-                    tx.decrease_trigger_repeats_and_cleanup(id);
+                    tx.decrease_trigger_repeats_and_cleanup(id, Some(0));
                 }
                 tx.execute_data_triggers_dfs_from(action.authority(), 1)
                     .map(|_| ())
@@ -344,6 +456,8 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         }
         tx.require_original_fastpq_invocation_source(original_source)?;
         let work = CompletedOutputWork::capture(tx);
+        // Resource refusal is local even if the business body also failed.
+        let _ = lifecycle::output_limit(tx)?;
         if let Err((reason, root)) = execution {
             // Refused/incomplete journal custody is a local carrier failure, even
             // when execute_trigger reports an InternalError. Never quarantine it.
@@ -351,23 +465,85 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             tx.contract_event_journal.discard_rejected(call)?;
             let actual = rejected_row(&invocation, action.executable(), root, reason, maximum)?;
             actual.validate_structure(height, &self.source)?;
-            let row = reservation.finish_internal_rejection(actual)?;
             drop(attempt);
             work.account(self.state);
-            invocation.apply_failure_policy(self.state, height, now)?;
+            let (row, disposition) = if self.lifecycle {
+                // Business has rolled back. Prepare the independently owned policy
+                // and its full trace before retaining any applying output.
+                let mut policy = invocation.prepare_failure_policy_from_source(
+                    self.state,
+                    height,
+                    now,
+                    source.as_ref(),
+                    |_| {},
+                )?;
+                if let Some(policy) = policy.as_mut()
+                    && lifecycle::output_limit(
+                        policy
+                            .transaction
+                            .as_ref()
+                            .ok_or("policy State owner absent")?,
+                    )?
+                {
+                    return Err("native policy exceeded its fixed reserved capture envelope".into());
+                }
+                let mut custody;
+                let actual = if let Some(policy) = policy.as_mut() {
+                    let (row, ledger) = lifecycle::take(
+                        policy
+                            .transaction
+                            .as_mut()
+                            .ok_or("policy State owner absent")?,
+                        actual,
+                    )?;
+                    custody = ledger;
+                    row
+                } else {
+                    custody = None;
+                    lifecycle::empty(actual, true)
+                };
+                actual.validate_structure(height, &self.source)?;
+                // Its phase reservation already covers one complete compact
+                // policy Update. Shorten diagnostics only; never lose policy.
+                let row = reservation.finish_internal_rejection(actual)?;
+                if custody.is_some() {
+                    let destination = self
+                        .lifecycle_custody
+                        .as_mut()
+                        .ok_or("policy custody owner absent")?;
+                    if destination.as_slice().len() == destination.capacity() {
+                        return Err("policy custody row capacity exhausted".into());
+                    }
+                    destination.push_reserved(custody.take().expect("checked custody presence"));
+                }
+                if let Some(policy) = policy {
+                    policy.apply()?;
+                }
+                (row, InternalOutputDisposition::Rejected)
+            } else {
+                let row = reservation.finish_internal_rejection(actual)?;
+                invocation.apply_failure_policy(self.state, height, now)?;
+                (row, InternalOutputDisposition::Rejected)
+            };
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;
             self.retain_completed_internal_source(original_source)?;
             self.rows.push(row);
-            return Ok(InternalOutputDisposition::Rejected);
+            return Ok(disposition);
         }
         if matches!(invocation, InternalInvocation::Time(_))
             && tx.world.triggers.registration_generation(id) == generation
         {
-            tx.world
-                .triggers
-                .inspect_by_id_mut(id, |action| progress::consume(action.metadata_mut()));
-            let _ = tx.world.triggers.set_time_trigger_retry_state(id, None);
-            tx.decrease_trigger_repeats_and_cleanup(id);
+            tx.with_trigger_lifecycle_policy(Some(0),
+                iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeTimeProgress,
+                |tx| { tx.world.triggers.consume_time_progress(id); });
+            tx.with_trigger_lifecycle_policy(
+                Some(0),
+                iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ClearTimeRetry,
+                |tx| {
+                    let _ = tx.world.triggers.set_time_trigger_retry_state(id, None);
+                },
+            );
+            tx.decrease_trigger_repeats_and_cleanup(id, Some(0));
         }
         if tx
             .world
@@ -404,7 +580,63 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             }
             _ => (invocation.terminal(), true),
         };
+        let overflow = overflow || lifecycle::output_limit(tx)?;
+        let unwrapped = actual;
+        let mut custody;
+        let actual;
+        (actual, custody) = if overflow {
+            (
+                lifecycle::empty(invocation.terminal(), self.lifecycle),
+                None,
+            )
+        } else {
+            lifecycle::take(tx, unwrapped)?
+        };
         actual.validate_structure(height, &self.source)?;
+        if self.lifecycle
+            && matches!(invocation, InternalInvocation::Time(_))
+            && (overflow || !reservation.fits(&actual)?)
+        {
+            drop(attempt);
+            drop(custody);
+            let mut policy = invocation.prepare_progress_policy(self.state, height)?;
+            let terminal = invocation.terminal();
+            let (terminal, mut policy_custody) = if let Some(policy) = policy.as_mut() {
+                let tx = policy
+                    .transaction
+                    .as_mut()
+                    .ok_or("progress policy owner absent")?;
+                if lifecycle::output_limit(tx)? {
+                    return Err(
+                        "native progress policy exceeded its reserved capture envelope".into(),
+                    );
+                }
+                lifecycle::take(tx, terminal)?
+            } else {
+                (lifecycle::empty(terminal, true), None)
+            };
+            terminal.validate_structure(height, &self.source)?;
+            let row = reservation.finish_output_limit_policy(terminal)?;
+            if policy_custody.is_some() {
+                let destination = self
+                    .lifecycle_custody
+                    .as_mut()
+                    .ok_or("progress custody owner absent")?;
+                if destination.as_slice().len() == destination.capacity() {
+                    return Err("progress custody row capacity exhausted".into());
+                }
+                destination.push_reserved(policy_custody.take().expect("checked custody presence"));
+            }
+            if let Some(owned_policy) = policy.take() {
+                owned_policy.apply()?;
+            }
+            drop(policy);
+            append_completions(&mut self.state.world.external_event_buf, call, &row)?;
+            work.account(self.state);
+            self.retain_completed_internal_source(original_source)?;
+            self.rows.push(row);
+            return Ok(InternalOutputDisposition::OutputLimit);
+        }
         let (row, apply) = match reservation.finish(actual)? {
             ReservedExecutionOutput::Accepted(row) => (row, !overflow),
             ReservedExecutionOutput::OutputLimit(row) => (row, false),
@@ -415,9 +647,20 @@ impl ExecutionOutputProducer<'_, '_, '_> {
                 .as_mut()
                 .ok_or("missing internal transaction")?;
             append_completions(&mut tx.world.external_event_buf, call, &row)?;
+            if custody.is_some() {
+                let destination = self
+                    .lifecycle_custody
+                    .as_mut()
+                    .ok_or("internal custody owner absent")?;
+                if destination.as_slice().len() == destination.capacity() {
+                    return Err("internal custody row capacity exhausted".into());
+                }
+                destination.push_reserved(custody.take().expect("checked custody presence"));
+            }
             attempt.apply()?;
         } else {
             drop(attempt);
+            drop(custody);
             invocation.consume_progress_attempt(self.state, height)?;
             append_completions(&mut self.state.world.external_event_buf, call, &row)?;
         }

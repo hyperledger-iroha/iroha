@@ -545,6 +545,32 @@ mod tests {
     }
 
     #[test]
+    fn ironwood_wire_and_ivm_identity_coverage() {
+        use iroha_data_model::privacy::{
+            PrivacyIronwoodPoolBootstrapV1, PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1,
+            PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1,
+        };
+        // InstructionBox is opaque in these roots: extending instruction payloads is
+        // not certified by the wire hash. The profile/catalog fixtures cover those bytes.
+        for root in covered_wire_roots() {
+            assert!(root.get::<PrivacyRuntimeProtocolIdV1>().is_none());
+            assert!(root.get::<PrivacyRuntimeStatementV1>().is_none());
+            assert!(root.get::<PrivacyRuntimeProofV1>().is_none());
+            assert!(root.get::<PrivacyRuntimeProtocolLimitsV1>().is_none());
+            assert!(root.get::<PrivacyIronwoodPoolBootstrapV1>().is_none());
+        }
+        let abi = hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
+        assert_eq!(
+            abi,
+            "7531b45dd9d79aabc3a0f64ab30a053af847dfe248078cff839ab2e14e3261a7"
+        );
+        println!(
+            "Ironwood wire_schema_hash={} ivm_abi={abi}",
+            hex::encode(wire_schema_hash())
+        );
+    }
+
+    #[test]
     fn wire_schema_hash_binds_compiled_wire_and_ivm_abi_v1() {
         let abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let [block, consensus, execution] = covered_wire_roots();

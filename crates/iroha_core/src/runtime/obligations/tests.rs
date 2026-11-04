@@ -295,7 +295,8 @@ fn completion_dependencies_cannot_be_disabled_or_removed_while_custody_is_live()
     let catalog = release_catalog().expect("catalog");
     let baseline = &catalog.baseline;
     let live = LiveObligations::with_escrows(1);
-    for (id, descriptor) in &catalog.definitions {
+    for id in &catalog.baseline_definitions {
+        let descriptor = &catalog.definitions[id];
         if !matches!(
             descriptor,
             DefinitionDescriptorV1::Event(_)

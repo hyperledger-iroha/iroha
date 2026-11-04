@@ -133,25 +133,25 @@ fn validate_persisted_commitments(
         &root_heads.view(),
     )
 }
-fn pgc_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+fn pgc_namespace(pool_byte: u8) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
             pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
         }),
     )
 }
-fn vega_namespace() -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+fn vega_namespace() -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
         PrivacyNamespaceScopeV1::Parameter(PrivacyParameterNamespaceV1 {
             parameter_id: PrivacyParameterIdV1::new(nonzero(40)),
         }),
     )
 }
-fn zk_ams_namespace(registry_byte: u8) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaZkAmsV1,
+fn zk_ams_namespace(registry_byte: u8) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
         PrivacyNamespaceScopeV1::IssuerRegistryPolicy(PrivacyIssuerRegistryPolicyNamespaceV1 {
             issuer_id: PrivacyIssuerIdV1::new(nonzero(0x91)),
             registry_id: PrivacyZkAmsRegistryIdV1::new(nonzero(registry_byte)),
@@ -159,17 +159,17 @@ fn zk_ams_namespace(registry_byte: u8) -> PrivacyNamespaceV1 {
         }),
     )
 }
-fn orchard_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+fn orchard_namespace(pool_byte: u8) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
             pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
         }),
     )
 }
-fn fcmp_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+fn fcmp_namespace(pool_byte: u8) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
             pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
         }),
@@ -197,9 +197,9 @@ fn sorted_fcmp_output_tuples(seeds: &[u64]) -> Vec<PrivacyFcmpOutputTupleV1> {
     outputs.sort_unstable_by_key(|output| output.output_id());
     outputs
 }
-fn ivm_private_note_namespace(pool_byte: u8, program_byte: u8) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+fn ivm_private_note_namespace(pool_byte: u8, program_byte: u8) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(
             iroha_data_model::privacy::PrivacyPoolProgramNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
@@ -210,26 +210,26 @@ fn ivm_private_note_namespace(pool_byte: u8, program_byte: u8) -> PrivacyNamespa
         ),
     )
 }
-fn pq_masp_namespace(pool_byte: u8) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+fn pq_masp_namespace(pool_byte: u8) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
             pool_id: PrivacyPoolIdV1::new(nonzero(pool_byte)),
         }),
     )
 }
-fn x509_namespace() -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+fn x509_namespace() -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyNamespaceScopeV1::TrustAnchorPolicy(PrivacyTrustAnchorPolicyNamespaceV1 {
             trust_anchor_id: PrivacyIssuerIdV1::new(nonzero(41)),
             policy_id: PrivacyPolicyIdV1::new(nonzero(42)),
         }),
     )
 }
-fn x509_ca_namespace() -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+fn x509_ca_namespace() -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         PrivacyNamespaceScopeV1::TrustAnchor(PrivacyTrustAnchorNamespaceV1 {
             trust_anchor_id: PrivacyIssuerIdV1::new(nonzero(41)),
         }),
@@ -377,7 +377,7 @@ fn x509_root_provenance(
     trust_anchor: PrivacyZkX509TrustAnchorRecordV1,
     admitted_at_height: u64,
 ) -> PrivacyRootProvenanceV1 {
-    let publication = PrivacyRootPublicationV1 {
+    let publication = PrivacyRuntimeRootPublicationV1 {
         namespace: key.namespace(),
         role: key.role(),
         epoch: key.epoch(),
@@ -441,7 +441,7 @@ struct PgcPersistedFixture {
     commitments: Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     invariant_key: PrivacyPgcPoolInvariantKeyV1,
     account_keys: Vec<PrivacyPgcAccountKeyV1>,
     root_key: PrivacyRootKeyV1,
@@ -606,7 +606,7 @@ impl PgcPersistedFixture {
             .clone();
         let plans = plan_privacy_root_retention_reduction_v1(
             &self.roots.view(),
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             retained_root_count,
         )
         .expect("retention reduction plan");
@@ -668,10 +668,10 @@ fn pgc_persisted_fixture() -> PgcPersistedFixture {
         PrivacyRootProvenanceV1::verified_bootstrap(bootstrap_digest, bootstrap_proof_digest, 9)
             .expect("bootstrap root provenance");
     let policy =
-        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1);
+        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1);
     let mut protocol_policies = Storage::new();
     protocol_policies.insert(
-        PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1),
+        PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1),
         policy,
     );
     let mut pgc_accounts = Storage::new();
@@ -747,7 +747,7 @@ struct OrchardPersistedFixture {
     commitments: Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,
     root_heads: Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: PrivacyOrchardPoolBootstrapDigestV1,
     state_key: PrivacyCommitmentKeyV1,
     head_key: PrivacyRootHeadKeyV1,
@@ -905,10 +905,103 @@ fn orchard_persisted_fixture() -> OrchardPersistedFixture {
     let state_key =
         PrivacyCommitmentKeyV1::orchard_pool_state(namespace).expect("Orchard state key");
     let policy =
-        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1);
+        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1);
     let mut protocol_policies = Storage::new();
     protocol_policies.insert(
-        PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::OrchardHalo2ActionsV1),
+        PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1),
+        policy,
+    );
+    let mut commitments = Storage::new();
+    let reserve_asset = AssetId::with_scope(
+        state.asset_definition_id().clone(),
+        state.reserve_account().clone(),
+        state.public_balance_scope(),
+    );
+    let reserve_owner = PrivacyPublicReserveOwnerV1::Orchard {
+        namespace,
+        bootstrap_digest,
+    };
+    commitments.insert(
+        PrivacyCommitmentKeyV1::public_reserve_custody(reserve_owner.protocol_id(), &reserve_asset)
+            .expect("Orchard reserve key"),
+        PrivacyStateItemRecordV1::public_reserve_custody(reserve_asset, reserve_owner)
+            .expect("Orchard reserve custody"),
+    );
+    commitments.insert(
+        state_key,
+        PrivacyStateItemRecordV1::orchard_pool_state(state).expect("Orchard state record"),
+    );
+    let mut roots = Storage::new();
+    roots.insert(root_key, provenance.clone());
+    let mut root_heads = Storage::new();
+    root_heads.insert(
+        head_key,
+        PrivacyRootHeadRecordV1::new(
+            PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+            root,
+            provenance,
+            None,
+            1,
+        )
+        .expect("Orchard bootstrap head"),
+    );
+    OrchardPersistedFixture {
+        protocol_policies,
+        pgc_accounts: Storage::new(),
+        pgc_pool_invariants: Storage::new(),
+        nullifiers: Storage::new(),
+        commitments,
+        roots,
+        root_heads,
+        namespace,
+        bootstrap_digest,
+        state_key,
+        head_key,
+    }
+}
+fn ironwood_persisted_fixture() -> OrchardPersistedFixture {
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+        orchard_namespace(0xA7).scope(),
+    );
+    let asset_definition_id = AssetDefinitionId::derive_from_components(
+        DomainId::try_new("privacy", "universal").expect("domain"),
+        Name::from_str("orchard_asset").expect("asset name"),
+    );
+    let reserve_account = account(0xA9);
+    let PrivacyNamespaceScopeV1::Pool(pool) = namespace.scope() else {
+        unreachable!("Orchard fixture uses a pool namespace")
+    };
+    let bootstrap = iroha_data_model::privacy::PrivacyIronwoodPoolBootstrapV1::new(
+        pool.pool_id,
+        asset_definition_id,
+        AssetBalanceScope::Global,
+        reserve_account,
+    )
+    .expect("canonical Orchard bootstrap");
+    let bootstrap_digest =
+        PrivacyOrchardPoolBootstrapDigestV1::new(*bootstrap.digest().unwrap().as_bytes());
+    let state = PrivacyOrchardPoolStateV1::bootstrap_ironwood(bootstrap)
+        .expect("canonical Orchard empty state");
+    let root = state.root();
+    let provenance = PrivacyRootProvenanceV1::orchard_pool_bootstrap(bootstrap_digest, 9)
+        .expect("Orchard bootstrap provenance");
+    let root_key = PrivacyRootKeyV1::new(
+        namespace,
+        PrivacyRootRoleV1::NoteCommitmentAnchor,
+        PRIVACY_ORCHARD_POOL_INITIAL_EPOCH_V1,
+        root,
+    )
+    .expect("Orchard bootstrap root key");
+    let head_key = PrivacyRootHeadKeyV1::new(namespace, PrivacyRootRoleV1::NoteCommitmentAnchor)
+        .expect("Orchard head key");
+    let state_key =
+        PrivacyCommitmentKeyV1::orchard_pool_state(namespace).expect("Orchard state key");
+    let policy =
+        PrivacyProtocolPolicyV1::canonical_default_v1(PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1);
+    let mut protocol_policies = Storage::new();
+    protocol_policies.insert(
+        PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1),
         policy,
     );
     let mut commitments = Storage::new();
@@ -979,7 +1072,7 @@ struct ProofManagedPersistedFixture {
     root_heads: Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
     bootstrap: PrivacyProofManagedPoolBootstrapV1,
     bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     config_key: PrivacyCommitmentKeyV1,
     head_key: PrivacyRootHeadKeyV1,
     initial_root: PrivacyRootV1,
@@ -1128,7 +1221,7 @@ impl ProofManagedPersistedFixture {
     }
 }
 fn proof_managed_note_persisted_fixture(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 ) -> ProofManagedPersistedFixture {
     let asset_definition_id = AssetDefinitionId::derive_from_components(
         DomainId::try_new("privacy", "universal").expect("domain"),
@@ -1139,7 +1232,7 @@ fn proof_managed_note_persisted_fixture(
         PrivacyCommitmentV1::new(nonzero(0xB5)),
     ];
     let bootstrap = match protocol_id {
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
             PrivacyProofManagedPoolBootstrapV1::IrohaIvmPrivateNoteStarkV1(
                 iroha_data_model::privacy::PrivacyIvmPrivateNotePoolBootstrapV1 {
                     pool_id: PrivacyPoolIdV1::new(nonzero(0xB1)),
@@ -1151,7 +1244,7 @@ fn proof_managed_note_persisted_fixture(
                 },
             )
         }
-        PrivacyProtocolIdV1::PqMaspStarkV1 => PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => PrivacyProofManagedPoolBootstrapV1::PqMaspStarkV1(
             iroha_data_model::privacy::PrivacyPqMaspPoolBootstrapV1 {
                 pool_id: PrivacyPoolIdV1::new(nonzero(0xB1)),
                 asset_definition_id,
@@ -1244,10 +1337,10 @@ fn proof_managed_note_persisted_fixture(
     }
 }
 fn proof_managed_persisted_fixture() -> ProofManagedPersistedFixture {
-    proof_managed_note_persisted_fixture(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+    proof_managed_note_persisted_fixture(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
 }
 fn pq_masp_persisted_fixture() -> ProofManagedPersistedFixture {
-    proof_managed_note_persisted_fixture(PrivacyProtocolIdV1::PqMaspStarkV1)
+    proof_managed_note_persisted_fixture(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1)
 }
 struct FcmpPersistedFixture {
     commitments: Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
@@ -1255,7 +1348,7 @@ struct FcmpPersistedFixture {
     root_heads: Storage<PrivacyRootHeadKeyV1, PrivacyRootHeadRecordV1>,
     bootstrap: PrivacyProofManagedPoolBootstrapV1,
     bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     config_key: PrivacyCommitmentKeyV1,
     head_key: PrivacyRootHeadKeyV1,
     initial_root: PrivacyRootV1,
@@ -1487,7 +1580,7 @@ fn fcmp_persisted_fixture() -> FcmpPersistedFixture {
     }
 }
 fn validate_proof_managed_fixture_maps(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     nullifiers: &Storage<PrivacyNullifierKeyV1, PrivacyStateItemRecordV1>,
     commitments: &Storage<PrivacyCommitmentKeyV1, PrivacyStateItemRecordV1>,
     roots: &Storage<PrivacyRootKeyV1, PrivacyRootProvenanceV1>,

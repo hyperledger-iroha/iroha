@@ -36,8 +36,8 @@ use iroha_data_model::nexus::{
 };
 #[cfg(any(test, feature = "test-utils"))]
 use iroha_data_model::privacy::{
-    PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-    PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+    PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyPoolProgramNamespaceV1, PrivacyRootV1,
+    PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
 };
 use iroha_data_model::privacy::{PrivacyEncryptedOutputV1, PrivacyNullifierV1};
 use rand_core::TryCryptoRng;
@@ -701,8 +701,8 @@ pub fn plan_atomic_private_settlement_bootstrap_v1(
     if pool_id.is_zero() {
         return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
     }
-    let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id,
             program_id: atomic_private_settlement_program_id_v1()
@@ -754,8 +754,8 @@ pub fn plan_atomic_private_settlement_initial_inputs_v1(
     if pool_id.is_zero() {
         return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
     }
-    let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id,
             program_id: atomic_private_settlement_program_id_v1()

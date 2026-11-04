@@ -162,7 +162,7 @@ pub struct PrivacyReleaseZkX509ResourceCertificateV1 {
     /// Certificate schema version.
     pub schema_version: u16,
     /// Closed protocol identity.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Digest of the exact compiled X.509 profile.
     pub compiled_profile_digest: [u8; 32],
     /// Exact native environment identity.
@@ -357,7 +357,7 @@ pub fn build_privacy_release_zk_x509_resource_certificate_v1(
         .digest();
     let mut certificate = PrivacyReleaseZkX509ResourceCertificateV1 {
         schema_version: ZK_X509_RESOURCE_CERTIFICATE_SCHEMA_VERSION_V1,
-        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         compiled_profile_digest,
         environment,
         expectations_norito_sha256,
@@ -386,7 +386,7 @@ pub fn privacy_release_zk_x509_resource_environment_v1() -> PrivacyReleaseZkX509
 pub fn validate_privacy_release_zk_x509_resource_capture_v1(
     certificate: &PrivacyReleaseZkX509ResourceCertificateV1,
 ) -> bool {
-    if certificate.protocol_id != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+    if certificate.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
         return false;
     }
     let Ok(compiled_profile) = construct_zk_x509_compiled_profile_v1() else {
@@ -431,10 +431,10 @@ pub const fn privacy_release_expectation_fixture_matches_v1(
 /// returned profile is exact rather than merely an upper bound: every case for that protocol must
 /// carry the same wall-time, peak-RSS, and address-space values.
 pub const fn privacy_release_process_profile_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 ) -> Option<PrivacyReleaseProcessProfileV1> {
     match protocol_id {
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 => {
             let elapsed_ceiling_millis = match ZK_X509_PROVER_TARGET_SECONDS_V1.checked_mul(1_000) {
                 Some(value) => value,
                 None => panic!("zk-X509 release target milliseconds overflow u64"),
@@ -857,7 +857,7 @@ fn prepare_zk_x509_network_action_v1(
     crl_lineage: &ZkX509NetworkCrlLineageV1<'_>,
     build_started: &Instant,
 ) -> Result<PreparedZkX509NetworkActionV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
     let profile = compiled_privacy_profile_v1(protocol_id)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable)?;
     if transaction_context.network_id.as_bytes() != &transaction_context.genesis_hash
@@ -972,7 +972,7 @@ struct PreparedZkX509StageV1 {
 fn prepare_zk_x509_stage_v1(
     case_kind: PrivacyReleaseCaseKindV1,
 ) -> Result<PreparedZkX509StageV1, PrivacyReleaseEvidenceErrorClassV1> {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
     let profile = compiled_privacy_profile_v1(protocol_id).map_err(|error| {
         match error {
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete {
@@ -1056,7 +1056,7 @@ pub(super) fn run_zk_x509_stage_v1(
         trusted_block_timestamp_ms,
         proof,
     } = prepare_zk_x509_stage_v1(case_kind)?;
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
     let resources = PrivacyReleaseResourceFactsV1 {
         primary_units: u64::try_from(fixture.witness.certificate_chain_len_v1())
             .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
@@ -1074,7 +1074,8 @@ pub(super) fn run_zk_x509_stage_v1(
     if Some(resources) != privacy_release_resource_facts_v1(protocol_id, case_kind) {
         return Err(PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant);
     }
-    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(fixture.statement.clone());
+    let typed_statement =
+        PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(fixture.statement.clone());
     let original_material = norito::encode_canonical(&typed_statement)
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
     let authoritative_network_id =
@@ -1154,9 +1155,10 @@ pub(super) fn run_zk_x509_stage_v1(
                     );
                 }
             }
-            let envelope_mutations: [fn(&mut PrivacyProofEnvelopeV1); 9] = [
+            let envelope_mutations: [fn(&mut PrivacyRuntimeProofEnvelopeV1); 9] = [
                 |envelope| {
-                    envelope.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+                    envelope.protocol_id =
+                        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
                 },
                 |envelope| {
                     envelope.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
@@ -1194,7 +1196,8 @@ pub(super) fn run_zk_x509_stage_v1(
             }
             let profile_mutations: [fn(&mut PrivacyCompiledProfileSnapshotV1); 9] = [
                 |bindings| {
-                    bindings.protocol_id = PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
+                    bindings.protocol_id =
+                        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1;
                 },
                 |bindings| {
                     bindings.proof_system_id = PrivacyProofSystemIdV1::JindoPolynomialCommitment;
@@ -1208,7 +1211,8 @@ pub(super) fn run_zk_x509_stage_v1(
                 |bindings| bindings.statement_schema_digest.0[0] ^= 0x80,
                 |bindings| bindings.engine_manifest_digest.0[0] ^= 0x80,
                 |bindings| {
-                    bindings.protocol_limits = PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1;
+                    bindings.protocol_limits =
+                        PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1;
                 },
             ];
             for mutate_profile in profile_mutations {
@@ -1322,8 +1326,10 @@ pub(super) fn run_zk_x509_stage_v1(
                 return Err(PrivacyReleaseEvidenceErrorClassV1::PublicStatementMutationAccepted);
             }
             (
-                norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(wrong_intent))
-                    .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
+                norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
+                    wrong_intent,
+                ))
+                .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?,
                 PrivacyReleaseFailureClassV1::PublicStatementBindingRejected,
             )
         }
@@ -1489,7 +1495,7 @@ fn verify_zk_x509_release_production_envelope_v1(
 #[allow(clippy::too_many_arguments)]
 fn verify_zk_x509_release_production_envelope_with_mutations_v1<
     A: FnOnce(&mut PrivacyCompiledProfileSnapshotV1),
-    E: FnOnce(&mut PrivacyProofEnvelopeV1),
+    E: FnOnce(&mut PrivacyRuntimeProofEnvelopeV1),
 >(
     profile: &CompiledPrivacyProfileV1,
     statement: &IrohaZkX509StarkP256StatementV1,
@@ -1505,13 +1511,13 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
 ) -> Result<(), PrivacyReleaseEvidenceErrorClassV1> {
     let mut bindings: PrivacyCompiledProfileSnapshotV1 = (*profile).into();
     mutate_profile(&mut bindings);
-    let typed_statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::EvidenceInvariant)?;
-    let mut envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let mut envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(proof.to_vec())),
+        PrivacyRuntimeProofV1::IrohaZkX509StarkP256V1(PrivacyProofBytesV1::new(proof.to_vec())),
     )
     .map_err(|_| PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected)?;
     mutate_envelope(&mut envelope);
@@ -1550,7 +1556,7 @@ fn verify_zk_x509_release_production_envelope_with_mutations_v1<
         }
         _ => PrivacyReleaseEvidenceErrorClassV1::ProductionEnvelopeRejected,
     })?;
-    if effects.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+    if effects.protocol_id() != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
         || effects.statement_digest() != statement_digest
         || effects.action_index() != authoritative_action_index
         || effects.encoded_action_bytes() != expected_encoded_action_bytes
@@ -1624,7 +1630,7 @@ mod release_kat_tests {
             proof: encoded,
         } = prepare_zk_x509_stage_v1(case_kind).expect("canonical positive release stage");
         let elapsed = started.elapsed();
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         let proof_bytes = u32::try_from(encoded.len()).expect("KAT proof length fits u32");
         let proof_sha256 = sha256_v1(&encoded);
         let proof_sha256_hex = hex::encode(proof_sha256);
@@ -1816,7 +1822,7 @@ mod resource_certificate_tests {
         peak_address_space_bytes: u64,
     ) -> PrivacyReleaseZkX509ResourceObservationV1 {
         let resources = privacy_release_resource_facts_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             case_kind,
         )
         .expect("X.509 release resource shape");
@@ -1876,7 +1882,7 @@ mod resource_certificate_tests {
         );
         reject_mutation!(
             |value: &mut PrivacyReleaseZkX509ResourceCertificateV1| value.protocol_id =
-                PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+                PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
         reject_mutation!(
             |value: &mut PrivacyReleaseZkX509ResourceCertificateV1| value

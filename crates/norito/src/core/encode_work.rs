@@ -43,10 +43,71 @@ pub enum BoundedEncodeWorkError {
     Codec(super::Error),
 }
 
+/// Retained cumulative allowance shared by successive bounded encoding calls.
+/// Moving/copying this counter does not itself reserve source or output memory.
+#[derive(Clone, Copy, Debug)]
+pub struct EncodeWorkBudget {
+    byte_visits: usize,
+    operations: usize,
+}
+
+impl EncodeWorkBudget {
+    /// Start one root's finite, nonrefunded codec-work allowance.
+    pub const fn new(byte_visits: usize, operations: usize) -> Self {
+        Self {
+            byte_visits,
+            operations,
+        }
+    }
+
+    /// Remaining cumulative byte visits.
+    pub const fn remaining_byte_visits(&self) -> usize {
+        self.byte_visits
+    }
+    /// Remaining cumulative codec operations.
+    pub const fn remaining_operations(&self) -> usize {
+        self.operations
+    }
+}
+
+thread_local! {
+    static CUMULATIVE: Cell<Option<EncodeWorkBudget>> = const { Cell::new(None) };
+}
+
+/// Debit every bounded call made by `encode` against one retained root budget.
+/// Local per-frame/depth limits still apply. Neither completion nor unwind refunds work.
+///
+/// # Errors
+/// Refuses nested cumulative scopes or entry from inside an encoding call.
+#[doc(hidden)]
+pub fn with_cumulative_encode_work<T>(
+    budget: &mut EncodeWorkBudget,
+    encode: impl FnOnce() -> T,
+) -> Result<T, BoundedEncodeWorkError> {
+    if CUMULATIVE.get().is_some() || ACTIVE.get().is_some() {
+        return Err(BoundedEncodeWorkError::Refused(
+            EncodeWorkRefusal::NestedScope,
+        ));
+    }
+    struct Guard<'a>(&'a mut EncodeWorkBudget);
+    impl Drop for Guard<'_> {
+        fn drop(&mut self) {
+            *self.0 = CUMULATIVE
+                .replace(None)
+                .expect("cumulative owner installed");
+        }
+    }
+    CUMULATIVE.set(Some(*budget));
+    let _guard = Guard(budget);
+    Ok(encode())
+}
+
 #[derive(Clone, Copy)]
 struct State {
     bytes: usize,
     operations: usize,
+    starting_bytes: usize,
+    starting_operations: usize,
     depth: usize,
     max_depth: usize,
     refusal: Option<EncodeWorkRefusal>,
@@ -64,9 +125,17 @@ impl Guard {
                 first_refusal().expect("active refusal"),
             ));
         }
+        let bytes = CUMULATIVE.get().map_or(limits.max_byte_visits, |budget| {
+            budget.byte_visits.min(limits.max_byte_visits)
+        });
+        let operations = CUMULATIVE.get().map_or(limits.max_operations, |budget| {
+            budget.operations.min(limits.max_operations)
+        });
         ACTIVE.set(Some(State {
-            bytes: limits.max_byte_visits,
-            operations: limits.max_operations,
+            bytes,
+            operations,
+            starting_bytes: bytes,
+            starting_operations: operations,
             depth: 0,
             max_depth: limits.max_depth.min(super::MAX_VALUE_NESTING_DEPTH),
             refusal: None,
@@ -94,7 +163,13 @@ impl Guard {
 }
 impl Drop for Guard {
     fn drop(&mut self) {
-        ACTIVE.set(None);
+        if let Some(state) = ACTIVE.replace(None)
+            && let Some(mut budget) = CUMULATIVE.get()
+        {
+            budget.byte_visits -= state.starting_bytes - state.bytes;
+            budget.operations -= state.starting_operations - state.operations;
+            CUMULATIVE.set(Some(budget));
+        }
     }
 }
 
@@ -204,5 +279,80 @@ impl<W: Write + ?Sized> Write for Output<'_, W> {
     fn flush(&mut self) -> io::Result<()> {
         charge(0)?;
         self.inner.flush()
+    }
+}
+
+#[cfg(test)]
+mod cumulative_tests {
+    use super::*;
+
+    fn limits() -> EncodeWorkLimits {
+        EncodeWorkLimits {
+            max_frame_bytes: 100,
+            max_byte_visits: 100,
+            max_operations: 100,
+            max_depth: 8,
+        }
+    }
+
+    #[test]
+    fn cumulative_encode_work_crosses_calls_without_refunding() {
+        let mut budget = EncodeWorkBudget::new(5, 3);
+        with_cumulative_encode_work(&mut budget, || {
+            super::super::with_bounded_encode_work(limits(), || {
+                charge_encode_prewrite(3)?;
+                Ok(())
+            })
+            .unwrap();
+            super::super::with_bounded_encode_work(limits(), || {
+                charge_encode_prewrite(2)?;
+                Ok(())
+            })
+            .unwrap();
+            assert!(matches!(
+                super::super::with_bounded_encode_work(limits(), || {
+                    charge_encode_prewrite(1)?;
+                    Ok(())
+                }),
+                Err(BoundedEncodeWorkError::Refused(
+                    EncodeWorkRefusal::ByteVisits
+                ))
+            ));
+        })
+        .unwrap();
+        assert_eq!(budget.remaining_byte_visits(), 0);
+        assert_eq!(budget.remaining_operations(), 1);
+        with_cumulative_encode_work(&mut budget, || {
+            super::super::with_bounded_encode_work(limits(), || {
+                charge_encode_prewrite(0)?;
+                Ok(())
+            })
+            .unwrap();
+        })
+        .unwrap();
+        assert_eq!(budget.remaining_operations(), 0);
+    }
+
+    #[test]
+    fn cumulative_encode_work_restores_scope_and_debits_on_unwind() {
+        let mut budget = EncodeWorkBudget::new(20, 20);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _ = with_cumulative_encode_work(&mut budget, || {
+                let _: Result<(), _> = super::super::with_bounded_encode_work(limits(), || {
+                    charge_encode_prewrite(7)?;
+                    panic!("test unwind");
+                });
+            });
+        }));
+        assert!(result.is_err());
+        assert_eq!(budget.remaining_byte_visits(), 13);
+        assert_eq!(budget.remaining_operations(), 19);
+        assert!(ACTIVE.get().is_none());
+        assert!(CUMULATIVE.get().is_none());
+        with_cumulative_encode_work(&mut budget, || {
+            let mut nested = EncodeWorkBudget::new(10, 10);
+            assert!(with_cumulative_encode_work(&mut nested, || ()).is_err());
+        })
+        .unwrap();
     }
 }

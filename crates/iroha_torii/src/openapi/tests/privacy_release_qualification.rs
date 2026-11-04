@@ -22,9 +22,9 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         artifact_digest: PrivacyReleaseArtifactDigestV1::new([1; 32]),
     };
     let protocol_binding = PrivacyReleaseProtocolBindingV1 {
-        protocol_id: PrivacyProtocolIdV1::ALL[0],
-        proof_system_id: PrivacyProtocolIdV1::ALL[0].expected_proof_system(),
-        engine_id: PrivacyProtocolIdV1::ALL[0].expected_engine(),
+        protocol_id: PrivacyRuntimeProtocolIdV1::ALL[0],
+        proof_system_id: PrivacyRuntimeProtocolIdV1::ALL[0].expected_proof_system(),
+        engine_id: PrivacyRuntimeProtocolIdV1::ALL[0].expected_engine(),
         parameter_id: PrivacyParameterIdV1::new([1; 32]),
         parameter_digest: PrivacyParameterDigestV1::new([1; 32]),
         verifier_digest: PrivacyVerifierDigestV1::new([1; 32]),
@@ -32,7 +32,7 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         engine_manifest_digest: PrivacyEngineManifestDigestV1::new([1; 32]),
         security_claim: PrivacySecurityClaimV1 {
             catalog_commitment: PrivacyExact12CatalogCommitmentV1::canonical(),
-            protocol_id: PrivacyProtocolIdV1::ALL[0],
+            protocol_id: PrivacyRuntimeProtocolIdV1::ALL[0],
             security_model: PrivacySecurityModelV1::PostQuantumQrom,
             target_security_bits: 128,
             achieved_security_bits: 128,
@@ -45,7 +45,7 @@ fn privacy_release_qualification_records_match_native_json_fields() {
     };
     let stage_receipt = PrivacyReleaseStageReceiptV1 {
         stage_ordinal: 1,
-        protocol_id: PrivacyProtocolIdV1::ALL[0],
+        protocol_id: PrivacyRuntimeProtocolIdV1::ALL[0],
         stage: PrivacyReleaseStageV1::PositiveCanonicalEndToEnd,
         security_claim_digest: PrivacySecurityClaimDigestV1::new([1; 32]),
         parameter_digest: PrivacyParameterDigestV1::new([1; 32]),
@@ -54,7 +54,7 @@ fn privacy_release_qualification_records_match_native_json_fields() {
         receipt_digest: PrivacyReleaseArtifactDigestV1::new([1; 32]),
     };
     let proof_artifact = PrivacyReleaseProofArtifactV1 {
-        protocol_id: PrivacyProtocolIdV1::ALL[0],
+        protocol_id: PrivacyRuntimeProtocolIdV1::ALL[0],
         stage: PrivacyReleaseStageV1::PositiveCanonicalEndToEnd,
         stage_artifact_ordinal: 1,
         stage_receipt_digest: PrivacyReleaseArtifactDigestV1::new([1; 32]),
@@ -335,7 +335,7 @@ fn privacy_release_qualification_inventory_counts_match_native_contract() {
         (
             "PrivacyExact12ReleaseManifestV1",
             "protocols",
-            PrivacyProtocolIdV1::COUNT,
+            PrivacyRuntimeProtocolIdV1::COUNT,
         ),
         (
             "PrivacyExact12ReleaseManifestV1",

@@ -28,7 +28,8 @@ def test_native_hosts_use_the_typed_local_catalog_without_synthetic_network_stat
         assert test_end is not None
         production = source[:test_start] + source[test_body_start + test_end.end():]
         assert "PrivacyCompiledProfileCatalogV1" in production
-        assert "PrivacyProtocolIdV1::ALL" in production
+        # Local catalogs include additive protocols; network Exact12 admission is separate.
+        assert "PrivacyRuntimeProtocolIdV1::ALL" in production
         assert "compiled_privacy_profile_catalog_v1" in production
         assert "validate_local_privacy_compiled_profile_catalog_archive_v1" in production
         assert "PrivacyConsensusPolicyV1::taira_default()" not in production

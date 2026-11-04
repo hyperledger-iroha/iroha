@@ -637,7 +637,7 @@ pub fn construct_zk_x509_compiled_profile_v1()
 mod tests {
     use super::super::profile::ZK_X509_HASH_FRAME_DOMAIN_V1;
     use super::*;
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     use sha2::{Digest, Sha256};
     fn independently_encode_compiled_profile_frame_v1(fields: &[&[u8]]) -> Vec<u8> {
         let domain_len =
@@ -1586,7 +1586,7 @@ mod tests {
     }
     #[test]
     fn consensus_entry_point_reports_the_missing_joint_security_reduction() {
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         assert_eq!(
             crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id),
             Err(
@@ -1676,7 +1676,7 @@ mod tests {
                 "credential prover must not contain {forbidden}"
             );
         }
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         assert_eq!(
             crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id),
             Err(

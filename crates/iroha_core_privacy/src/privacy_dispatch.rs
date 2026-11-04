@@ -32,7 +32,7 @@
 //! role returns a typed error and an effect of another role cannot leave the
 //! verifier.
 
-use iroha_data_model::privacy::{PrivacyActionRoleV1, PrivacyProtocolIdV1};
+use iroha_data_model::privacy::{PrivacyActionRoleV1, PrivacyRuntimeProtocolIdV1};
 use thiserror::Error;
 
 use crate::privacy_verifier::{
@@ -157,7 +157,7 @@ pub struct PrivacyRoleDispatchRowV1 {
 impl PrivacyRoleDispatchRowV1 {
     /// The registered protocol of this row's role.
     #[must_use]
-    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(self) -> PrivacyRuntimeProtocolIdV1 {
         self.role.protocol_id()
     }
 
@@ -195,7 +195,7 @@ const fn unsupported(limitation: PrivacyRoleLimitationV1) -> PrivacyRoleVerifica
     PrivacyRoleVerificationV1::Unsupported(limitation)
 }
 
-/// The typed Exact12 dispatch registry in [`PrivacyActionRoleV1::ALL`] order.
+/// The typed privacy dispatch registry in [`PrivacyActionRoleV1::ALL`] order.
 pub const PRIVACY_ROLE_DISPATCH_TABLE_V1: [PrivacyRoleDispatchRowV1; PrivacyActionRoleV1::COUNT] = [
     row(
         PrivacyActionRoleV1::ZkAceAuthorization,
@@ -262,6 +262,11 @@ pub const PRIVACY_ROLE_DISPATCH_TABLE_V1: [PrivacyRoleDispatchRowV1; PrivacyActi
         IMPLEMENTED,
         PrivacyRoleEffectClassV1::ProofManagedPool,
     ),
+    row(
+        PrivacyActionRoleV1::IronwoodActions,
+        IMPLEMENTED,
+        PrivacyRoleEffectClassV1::OrchardActions,
+    ),
 ];
 
 // Row `i` describes role `i`: the table is indexed by the role discriminant.
@@ -287,7 +292,7 @@ pub struct PrivacyUnsupportedOperationV1 {
     /// The refused role.
     pub role: PrivacyActionRoleV1,
     /// The registered protocol of the refused role.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// The concrete limitation behind the refusal.
     pub limitation: PrivacyRoleLimitationV1,
 }
@@ -364,9 +369,18 @@ impl VerifiedPrivacyLedgerEffectsV1 {
                     PrivacyActionRoleV1::PqMaspTransition
                 )
             ),
+            Self::OrchardActions(effect) => matches!(
+                (effect.namespace().protocol_id(), role),
+                (
+                    PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+                    PrivacyActionRoleV1::OrchardActions
+                ) | (
+                    PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+                    PrivacyActionRoleV1::IronwoodActions
+                )
+            ),
             Self::None
             | Self::AnonymousPgcPayment(_)
-            | Self::OrchardActions(_)
             | Self::ZkAmsBatchAdmission(_)
             | Self::ZkAmsProvisionAccount(_)
             | Self::ZkAceAuthorization(_)
@@ -480,6 +494,12 @@ mod tests {
                 Class::ProofManagedPool,
                 Effects::Applied,
             ),
+            (
+                Role::IronwoodActions,
+                None,
+                Class::OrchardActions,
+                Effects::Applied,
+            ),
         ];
         assert_eq!(expected.len(), PrivacyActionRoleV1::COUNT);
         for (role, limitation, class, effects) in expected {
@@ -577,7 +597,7 @@ mod tests {
     /// registry refuses in this source tree, so the two cannot drift unnoticed.
     #[test]
     fn registry_support_matches_the_current_compiled_profile_refusals() {
-        for protocol in PrivacyProtocolIdV1::ALL {
+        for protocol in PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS {
             let supported = protocol
                 .action_roles_v1()
                 .iter()
@@ -601,9 +621,8 @@ mod tests {
         }
     }
 
-    /// The tracked operation inventory is a checked view of this registry: the
-    /// typed table is authoritative and `specs/zk_operation_inventory.json`
-    /// (`exact12.roles.list`) must repeat it row by row.
+    /// The frozen Exact12 inventory must repeat every original dispatch row.
+    /// Additive roles are checked separately by the complete typed registry test.
     #[test]
     fn operation_inventory_roles_match_the_typed_dispatch_registry() {
         let inventory: norito::json::Value =
@@ -612,12 +631,15 @@ mod tests {
         let rows = inventory["exact12"]["roles"]["list"]
             .as_array()
             .expect("exact12.roles.list is an array");
-        assert_eq!(rows.len(), PrivacyActionRoleV1::COUNT);
+        assert_eq!(rows.len(), PrivacyActionRoleV1::EXACT12_COUNT);
         assert_eq!(
             inventory["exact12"]["roles"]["count"].as_u64(),
-            Some(PrivacyActionRoleV1::COUNT as u64)
+            Some(PrivacyActionRoleV1::EXACT12_COUNT as u64)
         );
-        for (row, typed) in rows.iter().zip(PRIVACY_ROLE_DISPATCH_TABLE_V1) {
+        for (row, typed) in rows
+            .iter()
+            .zip(PrivacyActionRoleV1::EXACT12_ROLES.map(privacy_role_dispatch_row_v1))
+        {
             let text = |key: &str| {
                 row[key]
                     .as_str()

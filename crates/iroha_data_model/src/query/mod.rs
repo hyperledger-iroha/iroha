@@ -2382,8 +2382,7 @@ impl CommittedTransaction {
         if signed.network_id() != Some(expected_network) || signed.verify_signature().is_err() {
             return false;
         }
-        let crate::block::execution_output::ExecutionOutputV1::Network(output) = &self.output
-        else {
+        let Some(output) = self.output.network() else {
             return false;
         };
         let (Some(inputs), Some(outputs)) = (
@@ -2432,8 +2431,7 @@ impl CommittedTransaction {
     /// that wire separately. Header signatures alone never authenticate outputs.
     #[must_use]
     pub fn verify_inclusion_in_block(&self, block: &SignedBlock) -> bool {
-        let crate::block::execution_output::ExecutionOutputV1::Network(output) = &self.output
-        else {
+        let Some(output) = self.output.network() else {
             return false;
         };
         if block.hash() != self.block_hash

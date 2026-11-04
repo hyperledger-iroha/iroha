@@ -6,6 +6,10 @@ use mv::storage::Storage;
 
 pub(super) fn action() -> LoadedAction<DataEventFilter> {
     LoadedAction {
+        lifecycle_executable_digest:
+            crate::smartcontracts::isi::triggers::set::invocation_identity::inline_executable_digest(
+                &ExecutableRef::Instructions(Vec::<InstructionBox>::new().into()),
+            ),
         executable: ExecutableRef::Instructions(Vec::<InstructionBox>::new().into()),
         repeats: Repeats::Indefinitely,
         authority: ALICE_ID.clone(),
@@ -56,6 +60,7 @@ fn the_same_id_cannot_become_two_independent_typed_actions() {
     set.by_call_triggers = [(
         "a".parse().unwrap(),
         LoadedAction {
+            lifecycle_executable_digest: crate::smartcontracts::isi::triggers::set::invocation_identity::inline_executable_digest(&ExecutableRef::Instructions(Vec::<InstructionBox>::new().into())),
             executable: ExecutableRef::Instructions(Vec::<InstructionBox>::new().into()),
             repeats: Repeats::Indefinitely,
             authority: ALICE_ID.clone(),
@@ -186,7 +191,7 @@ fn original_contract_failure_still_precedes_new_action_index_corruption() {
     let bytes = IvmBytecode::from_compiled(vec![1, 2, 3]);
     let hash = HashOf::new(&bytes);
     let mut entry = action();
-    entry.executable = ExecutableRef::Ivm(hash);
+    entry.replace_executable_for_testing(ExecutableRef::Ivm(hash));
     set.data_triggers = [("a".parse().unwrap(), entry)].into_iter().collect();
     set.ids = Storage::default();
     assert_eq!(checked(&set), Err(fail(SemanticFailure::Missing)));

@@ -78,8 +78,9 @@ fn direct_x509_requires_original_owner_and_complete_security_construction() {
             Some(&mut custody),
         )
         .unwrap_err();
-    let unavailable = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
-        .expect_err("the joint security reduction is incomplete");
+    let unavailable =
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
+            .expect_err("the joint security reduction is incomplete");
     assert!(matches!(
         unavailable,
         crate::privacy_profiles::CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete { .. }
@@ -173,7 +174,7 @@ fn execute_component(
 fn genuine_core_attached_x509_after_admission_is_atomic_and_replay_safe() {
     std::thread::Builder::new().name("x509-attached-core-acceptance".into()).stack_size(32 * 1024 * 1024).spawn(|| {
         use rand::SeedableRng as _;
-        let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1).expect("current native readiness is required, never skipped");
+        let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1).expect("current native readiness is required, never skipped");
         let snapshot = profile.snapshot();
         let mut public = crate::privacy_engines::zk_x509::relation::release_fixture::reference_statement_context_v1();
         public.network_id = test_network_id(); public.action_index = 0;

@@ -18819,7 +18819,7 @@ pub mod isi {
                 DomainEndorsementScope, DomainEndorsementSignature, LaneCatalog, LaneConfig,
             },
             permission::Permission,
-            privacy::PrivacyProtocolIdV1,
+            privacy::PrivacyRuntimeProtocolIdV1,
             proof::{
                 ProofAttachment, ProofBox, VerifyingKeyBox, VerifyingKeyId, VerifyingKeyRecord,
             },
@@ -27311,7 +27311,7 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
                     assert_contains!(format!("{error:?}"), "compiled circuit registry", "unexpected VerifyProof registry error for {near_miss:?}: {error}");
                 }
             }
-            for protocol in PrivacyProtocolIdV1::ALL {
+            for protocol in PrivacyRuntimeProtocolIdV1::ALL {
                 assert_reserved(protocol.canonical_label());
             }
         });
@@ -32323,8 +32323,8 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             original_alice_state_transaction!(state, block, state_block, stx);
             grant_manage_verifying_keys(&mut stx);
             stx.apply();
-            for (label_index, label) in PrivacyProtocolIdV1::ALL
-                .map(PrivacyProtocolIdV1::canonical_label)
+            for (label_index, label) in PrivacyRuntimeProtocolIdV1::ALL
+                .map(PrivacyRuntimeProtocolIdV1::canonical_label)
                 .into_iter()
                 .enumerate()
             {

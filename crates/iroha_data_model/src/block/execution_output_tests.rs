@@ -2249,3 +2249,76 @@ fn lifecycle_retry_json_requires_both_exact_fields_and_rejects_unknowns() {
         actual
     );
 }
+
+#[test]
+fn lifecycle_range_budget_survives_block_boundaries_and_latches_shape_failures() {
+    let rows = vec![lifecycle_network(), lifecycle_pipeline(), lifecycle_time()];
+    let mut limits = lifecycle_fixture_limits();
+    limits.max_frames = 2;
+    let mut budget = TriggerLifecycleActionFrameBudgetV1::new(limits);
+    let mut oracle = LifecycleActionCodecOracle::default();
+    validate_execution_outputs_with_lifecycle_budget_v1(
+        &rows,
+        proposal(),
+        8,
+        &[input()],
+        &mut budget,
+        &mut oracle,
+    )
+    .unwrap();
+    assert!(!budget.is_refused());
+    assert!(
+        validate_execution_outputs_with_lifecycle_budget_v1(
+            &rows,
+            proposal(),
+            8,
+            &[input()],
+            &mut budget,
+            &mut oracle,
+        )
+        .is_err()
+    );
+    assert!(budget.is_refused());
+    assert_eq!(oracle.calls, 2);
+    assert!(
+        validate_execution_outputs_with_lifecycle_budget_v1(
+            &[],
+            proposal(),
+            8,
+            &Vec::<TransactionEntrypoint>::new(),
+            &mut budget,
+            &mut oracle,
+        )
+        .is_err()
+    );
+
+    for malformed in [
+        vec![network()],
+        vec![lifecycle_pipeline(), lifecycle_network()],
+    ] {
+        let mut budget = TriggerLifecycleActionFrameBudgetV1::new(lifecycle_fixture_limits());
+        assert!(
+            validate_execution_outputs_with_lifecycle_budget_v1(
+                &malformed,
+                proposal(),
+                8,
+                &[input()],
+                &mut budget,
+                &mut oracle,
+            )
+            .is_err()
+        );
+        assert!(budget.is_refused());
+        assert!(
+            validate_execution_outputs_with_lifecycle_budget_v1(
+                &[lifecycle_network()],
+                proposal(),
+                8,
+                &[input()],
+                &mut budget,
+                &mut oracle,
+            )
+            .is_err()
+        );
+    }
+}

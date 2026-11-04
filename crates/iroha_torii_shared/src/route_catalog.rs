@@ -1578,6 +1578,30 @@ pub mod core {
     )
     .with_projections(RouteProjections::OPENAPI_AND_SDK)
     .with_cors_options(true);
+    /// Read this validator's consensus-relevant lifecycle activation policy.
+    pub const TRIGGER_LIFECYCLE_ACTIVATION: RouteDescriptor = RouteDescriptor::new(
+        "trigger.lifecycle_activation",
+        HttpMethod::Get,
+        "/v1/triggers/lifecycle-activation",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
+    /// Read compact certified runtime-selection branches for a scheduled proof window.
+    pub const TRIGGER_LIFECYCLE_WITNESS: RouteDescriptor = RouteDescriptor::new(
+        "trigger.lifecycle_witness",
+        HttpMethod::Get,
+        "/v1/triggers/lifecycle-witness",
+        ApiSurface::Public,
+        Listener::Torii,
+        RouteEffect::ReadOnly,
+        AdmissionPolicy::Public,
+    )
+    .with_projections(RouteProjections::OPENAPI_AND_SDK)
+    .with_cors_options(true);
     /// Read the exact canonical executed block wire at one finalized height.
     pub const LEDGER_EXECUTED_BLOCK_WIRE: RouteDescriptor = RouteDescriptor::new(
         "ledger.executed_block_wire",
@@ -1840,6 +1864,8 @@ pub mod core {
         LEDGER_HEADERS,
         LEDGER_STATE_ROOT,
         LEDGER_STATE_PROOF,
+        TRIGGER_LIFECYCLE_WITNESS,
+        TRIGGER_LIFECYCLE_ACTIVATION,
         LEDGER_EXECUTED_BLOCK_WIRE,
         LEDGER_BLOCK_PROOF,
         RESOURCE_NAMES_STATE,
@@ -2893,6 +2919,12 @@ pub mod runtime_governance {
     /// Read the authoritative committed privacy capability snapshot.
     pub const PRIVACY_CAPABILITIES: RouteDescriptor =
         signed_get("privacy.capabilities", "/v1/privacy/capabilities");
+    /// Certified pool anchor and balances; complete World disclosure requires all-ledger read authority.
+    pub const PRIVACY_IRONWOOD_POOL_CUT: RouteDescriptor = app_signed_post(
+        "privacy.ironwood.pool_cut",
+        "/v1/privacy/ironwood/pool-cut/{height}",
+    )
+    .with_private_no_store();
     /// Mint one canonical Bootle/Lantern blind-issuance authorization.
     pub const PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE: RouteDescriptor = public_post(
         "privacy.bootle_lantern.issuance.authorize",
@@ -3143,6 +3175,7 @@ pub mod runtime_governance {
         RUNTIME_METRICS,
         NODE_CAPABILITIES,
         PRIVACY_CAPABILITIES,
+        PRIVACY_IRONWOOD_POOL_CUT,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
         PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
         NODE_PROJECTION_CHECKPOINT,

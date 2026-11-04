@@ -315,6 +315,8 @@ impl_try_from_box! {
 /// a reference to a pre-loaded executable.
 #[derive(Clone, Debug)]
 pub struct LoadedAction<F> {
+    /// Derived immutable executable binding, excluded from all persistent projections.
+    pub(super) lifecycle_executable_digest: Option<iroha_crypto::Hash>,
     /// Reference to the pre-loaded executable.
     pub(super) executable: ExecutableRef,
     /// How many times this trigger may fire.
@@ -331,6 +333,13 @@ pub struct LoadedAction<F> {
     pub metadata: Metadata,
 }
 impl<F> LoadedAction<F> {
+    #[cfg(test)]
+    pub(super) fn replace_executable_for_testing(&mut self, executable: ExecutableRef) {
+        self.lifecycle_executable_digest =
+            super::set::invocation_identity::inline_executable_digest(&executable);
+        self.executable = executable;
+    }
+
     pub(super) fn extract_blob_hash(&self) -> Option<HashOf<IvmBytecode>> {
         match self.executable {
             ExecutableRef::Ivm(blob_hash) => Some(blob_hash),
@@ -458,6 +467,9 @@ where
             trace!(%key, "ignoring unknown loaded trigger action field");
         }
         Ok(Self {
+            lifecycle_executable_digest: super::set::invocation_identity::inline_executable_digest(
+                &executable,
+            ),
             executable,
             repeats,
             authority,
@@ -511,6 +523,7 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
     }
     fn into_boxed(self) -> LoadedAction<EventFilterBox> {
         let Self {
+            lifecycle_executable_digest,
             executable,
             repeats,
             authority,
@@ -520,6 +533,7 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
             metadata,
         } = self;
         LoadedAction {
+            lifecycle_executable_digest,
             executable,
             repeats,
             authority,
@@ -703,6 +717,8 @@ mod tests {
         let instructions = ConstVec::from(vec![instruction]);
         let executable = ExecutableRef::Instructions(instructions.clone());
         let action = LoadedAction {
+            lifecycle_executable_digest:
+                super::super::set::invocation_identity::inline_executable_digest(&executable),
             executable,
             repeats: Repeats::Exactly(3),
             authority: AccountId::new(checked_keypair().public_key().clone()),
@@ -714,6 +730,12 @@ mod tests {
         let json = norito::json::to_json(&action).expect("serialize LoadedAction");
         let reparsed: LoadedAction<DataEventFilter> =
             norito::json::from_json(&json).expect("deserialize LoadedAction");
+        assert_eq!(
+            reparsed.lifecycle_executable_digest,
+            action.lifecycle_executable_digest
+        );
+        assert!(reparsed.lifecycle_executable_digest.is_some());
+        assert!(!json.contains("lifecycle_executable_digest"));
         assert_eq!(reparsed.repeats, action.repeats);
         assert_eq!(
             reparsed.authority.subject_id(),

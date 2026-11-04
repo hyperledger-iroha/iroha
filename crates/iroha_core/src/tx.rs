@@ -29,8 +29,11 @@ use crate::{
         StateBlock, StateReadOnly, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly,
     },
 };
-pub(crate) use authority_admission::instructions_allow_multisig_envelope_authority;
-pub use authority_admission::{allows_unregistered_authority, executable_self_registers_authority};
+pub(crate) use authority_admission::instructions_allow_multisig_envelope_authority_with_selection;
+pub use authority_admission::{
+    allows_unregistered_authority, allows_unregistered_authority_with_selection,
+    executable_self_registers_authority,
+};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use core::{fmt, str::FromStr as _};
 use eyre::Result;
@@ -3089,8 +3092,12 @@ impl StateBlock<'_> {
             ));
         }
         let authority_exists = state_transaction.world.accounts.get(&authority).is_some();
-        let allow_unregistered_authority =
-            !authority_exists && allows_unregistered_authority(tx.instructions(), &authority);
+        let allow_unregistered_authority = !authority_exists
+            && allows_unregistered_authority_with_selection(
+                tx.instructions(),
+                &authority,
+                state_transaction.world.runtime_selection.get(),
+            );
         // Multisig propose/approve envelopes may use an unmaterialized authority because
         // authorization is derived from multisig membership rather than account storage. All
         // other transactions must originate from an existing account.
@@ -3188,7 +3195,10 @@ impl StateBlock<'_> {
             let has_multisig_controller = authority.multisig_policy().is_some();
             let allows_multisig_envelope_authority = match tx.instructions() {
                 Executable::Instructions(instructions) => {
-                    instructions_allow_multisig_envelope_authority(instructions)
+                    instructions_allow_multisig_envelope_authority_with_selection(
+                        instructions,
+                        state_transaction.world.runtime_selection.get(),
+                    )
                 }
                 Executable::ContractCall(_)
                 | Executable::Batch(_)
@@ -3926,9 +3936,10 @@ fn enforce_manifest_quorum(
     alias: &str,
     rules: &GovernanceRules,
     tx: &SignedTransaction,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> Result<(), TransactionRejectionReason> {
     if let Executable::Instructions(instructions) = tx.instructions()
-        && instructions_allow_multisig_envelope_authority(instructions)
+        && instructions_allow_multisig_envelope_authority_with_selection(instructions, selection)
     {
         return Ok(());
     }
@@ -4513,7 +4524,10 @@ fn enforce_lane_policies(
     );
     let allows_multisig_envelope_authority = match tx.instructions() {
         Executable::Instructions(instructions) => {
-            instructions_allow_multisig_envelope_authority(instructions)
+            instructions_allow_multisig_envelope_authority_with_selection(
+                instructions,
+                state_transaction.world.runtime_selection.get(),
+            )
         }
         Executable::ContractCall(_)
         | Executable::Batch(_)
@@ -4571,7 +4585,12 @@ fn enforce_lane_policies(
                 && let Some(authority_rules) = dataspace_authority_rules
                 && authority_rules.quorum.unwrap_or(0).saturating_sub(1) > 0
             {
-                enforce_manifest_quorum(&lane_alias, authority_rules, tx)?;
+                enforce_manifest_quorum(
+                    &lane_alias,
+                    authority_rules,
+                    tx,
+                    state_transaction.world.runtime_selection.get(),
+                )?;
             }
         }
         if governance_manifest {
@@ -13276,7 +13295,12 @@ pub mod tests {
         )
         .with_instructions([Log::new(Level::INFO, "noop".into())])
         .sign(primary_keypair.private_key());
-        match enforce_manifest_quorum(lane_alias, &rules, &tx) {
+        match enforce_manifest_quorum(
+            lane_alias,
+            &rules,
+            &tx,
+            &crate::runtime::release_catalog().unwrap().baseline,
+        ) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
                     msg.contains("quorum"),
@@ -13298,7 +13322,12 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "noop".into())])
         .with_metadata(metadata)
         .sign(primary_keypair.private_key());
-        let result = enforce_manifest_quorum(lane_alias, &rules, &tx);
+        let result = enforce_manifest_quorum(
+            lane_alias,
+            &rules,
+            &tx,
+            &crate::runtime::release_catalog().unwrap().baseline,
+        );
         assert!(result.is_ok(), "quorum satisfied should pass: {result:?}");
     }
     #[test]
@@ -13343,7 +13372,12 @@ pub mod tests {
         .with_instructions([Log::new(Level::INFO, "noop".into())])
         .with_metadata(metadata)
         .sign(primary_keypair.private_key());
-        match enforce_manifest_quorum("gov", &rules, &tx) {
+        match enforce_manifest_quorum(
+            "gov",
+            &rules,
+            &tx,
+            &crate::runtime::release_catalog().unwrap().baseline,
+        ) {
             Err(TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg))) => {
                 assert!(
                     msg.contains("duplicate approvers"),

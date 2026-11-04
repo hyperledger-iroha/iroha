@@ -38,8 +38,8 @@ use iroha_core_privacy::privacy_engines::bootle_lantern::{
 };
 use iroha_data_model::privacy::{
     BootleLanternIssuerPolicyLifecycleV1, BootleLanternIssuerPolicyV1,
-    PrivacyCompiledProfileResultV1, PrivacyIssuerIdV1, PrivacyPolicyIdV1, PrivacyProtocolIdV1,
-    PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
+    PrivacyCompiledProfileResultV1, PrivacyIssuerIdV1, PrivacyPolicyIdV1,
+    PrivacyRuntimeProtocolIdV1, PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
 };
 use iroha_panic_hook::catch_unwind_suppressed;
 use sha2::{Digest as _, Sha256};
@@ -1278,7 +1278,7 @@ fn committed_snapshot_v1(
     let row = capabilities
         .protocols
         .iter()
-        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+        .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1)
         .ok_or(BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
     let profile = match row.compiled_profile {
         PrivacyCompiledProfileResultV1::Available(profile) => profile,
@@ -1287,7 +1287,7 @@ fn committed_snapshot_v1(
         }
     };
     let admitted = view
-        .admitted_privacy_protocol_v1(PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1)
+        .admitted_privacy_protocol_v1(PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1)
         .map_err(|_| BootleLanternIssuanceApiErrorV1::PolicyUnavailable)?;
     let committed_height = capabilities.committed_height;
     if committed_height == 0

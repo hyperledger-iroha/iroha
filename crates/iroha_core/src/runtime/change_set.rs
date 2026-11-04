@@ -112,7 +112,7 @@ where
                     format!("scheduled change set {id} no longer applies: {error}").into(),
                 )
             })?;
-        check_transition_support(&record.change_set, &applied, &lookup)?;
+        check_transition_support(&record.change_set, &selection, &applied, &lookup)?;
         added.extend(applied.published);
         selection = applied.selection;
     }
@@ -207,7 +207,21 @@ where
     let applied = change_set
         .apply(&meets, &lookup)
         .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
-    check_transition_support(change_set, &applied, &lookup)?;
+    check_transition_support(change_set, &meets, &applied, &lookup)?;
+    // The predecessor's generic publication semantics stay unchanged. Once Ironwood has
+    // activated, reject an incompatible successor during proposal/approval, before attestation.
+    if super::ironwood::enabled_with_definitions(&meets, &lookup) {
+        let mut definitions = staged;
+        definitions.extend(applied.published.clone());
+        super::ironwood::validate_admitted_successor(
+            &applied.selection,
+            &Staged {
+                published,
+                added: &definitions,
+            },
+        )
+        .map_err(|error| Error::InvariantViolation(format!("change set {id}: {error}").into()))?;
+    }
     Ok(applied.selection)
 }
 
@@ -222,18 +236,31 @@ where
 /// activation, where an unsupported node stops instead of executing.
 fn check_transition_support(
     change_set: &ChangeSetV1,
+    previous: &RootSelectionV1,
     applied: &AppliedChangeSet,
     published: &impl DefinitionLookup,
 ) -> Result<(), Error> {
-    let descriptor = |id| {
+    let descriptor = |id: &DefinitionId| {
         applied
             .published
             .get(id)
             .or_else(|| published.definition(id))
     };
+    // The fixed Ironwood migration preserves every original row and undo byte. It is
+    // the only implemented codec extension. A superficially identical codec does
+    // not prove another invariant or migration contract; all other retirements
+    // remain refused until their cutover is implemented.
+    let identity_cutover = super::ironwood::supports_identity_cutover(
+        previous,
+        &applied.selection,
+        published,
+        &applied.published,
+    );
     for transition in &change_set.transitions {
         let unsupported = match transition {
-            SelectionTransitionV1::RetireStorage(_) => Some("storage migration cutover"),
+            SelectionTransitionV1::RetireStorage(_) if !identity_cutover => {
+                Some("storage migration cutover")
+            }
             SelectionTransitionV1::RetainCompletion(_)
             | SelectionTransitionV1::ReleaseCompletion(_) => {
                 Some("kernel-registered completion capabilities")
@@ -423,6 +450,7 @@ pub fn activate_due(
                 .filter(|applied| {
                     if let Err(reason) = check_transition_support(
                         &record.change_set,
+                        &current,
                         applied,
                         &PublishedDefinitions(&wtx.runtime_definitions),
                     ) {
@@ -440,6 +468,25 @@ pub fn activate_due(
                         iroha_logger::warn!(change_set = %id, %reason, "change set lapses");
                     }
                     stranded.is_none()
+                })
+                .filter(|applied| {
+                    // A fully attested future release owns unknown codec semantics. Preserve
+                    // the foundation's UnsupportedRuntime stop below; never turn another
+                    // release's successful activation into a locally invented lapse.
+                    if super::release_catalog()
+                        .is_ok_and(|catalog| catalog.unsupported(&applied.selection).is_some())
+                    {
+                        return true;
+                    }
+                    super::ironwood::validate_cutover(
+                        &current,
+                        &applied.selection,
+                        &Staged {
+                            published: &PublishedDefinitions(&wtx.runtime_definitions),
+                            added: &applied.published,
+                        },
+                    )
+                    .is_ok()
                 })
         } else {
             None
@@ -480,6 +527,17 @@ pub fn activate_due(
             },
         );
     }
+    // This is local release support, like the unsupported-definition stop above:
+    // it never rewrites a governed activation into a different ledger result.
+    let block = wtx.parameters.get().block();
+    super::lifecycle_support::selected_output_support(
+        wtx.runtime_selection.get(),
+        block.execution_output(),
+        block.fastpq_source(),
+    )
+    .map_err(
+        |reason| crate::state::StateStorageAdmissionError::UnsupportedRuntime { height, reason },
+    )?;
     Ok(())
 }
 

@@ -1041,13 +1041,14 @@ fn active_config_at_view(
     }
     let admitted = state
         .admitted_privacy_protocol_v1(
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         )
         .map_err(|_| private_settlement_unavailable())?;
     iroha_core_privacy::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
         .map_err(|_| private_settlement_unavailable())?;
-    let iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) =
-        admitted.protocol_limits()
+    let iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+        limits,
+    ) = admitted.protocol_limits()
     else {
         return Err(private_settlement_unavailable());
     };
@@ -1069,7 +1070,7 @@ fn active_config_at_view(
         policy
             .validate_protocol_policy(state.world().privacy_protocol_policies().get(
                 &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-                    iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 ),
             ))
             .map_err(|_| private_settlement_unavailable())?;
@@ -1257,7 +1258,7 @@ fn validate_phase_manifest_policy(
     let config = active_config_at_view(authoritative_height, &view)?;
     let protocol = view.world().privacy_protocol_policies().get(
         &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         ),
     );
     let policy = iroha_data_model::privacy::PrivateSettlementPolicyV1::from_parameters(
@@ -2391,11 +2392,12 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     fn configured_private_settlement_chain_for_test(
-        next_limits: Option<iroha_data_model::privacy::PrivacyProtocolLimitsV1>,
+        next_limits: Option<iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1>,
     ) -> iroha_core::sumeragi::test_chain::CertifiedTestChain {
         use iroha_core::state::World;
         use iroha_data_model::{
-            isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1, privacy::PrivacyProtocolIdV1,
+            isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1,
+            privacy::PrivacyRuntimeProtocolIdV1,
         };
         let config = iroha_config::parameters::actual::Nexus::default();
         let mut chain_config =
@@ -2404,9 +2406,11 @@ mod tests {
         if let Some(next_limits) = next_limits {
             chain_config.genesis_instructions = vec![
                 SchedulePrivacyProtocolLimitsUpdateV1::new(
-                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    (PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+                        .try_into()
+                        .expect("frozen Exact12 test input"),
                     2,
-                    next_limits,
+                    (next_limits).try_into().expect("frozen Exact12 test input"),
                 )
                 .into(),
             ];
@@ -2459,10 +2463,10 @@ mod tests {
         iroha_data_model::nexus::PrivateSettlementReceiptV1,
         iroha_data_model::nexus::PrivateSettlementAbortReceiptV1,
     ) {
-        use iroha_data_model::privacy::{IvmPrivateNoteLimitsV1, PrivacyProtocolLimitsV1};
+        use iroha_data_model::privacy::{IvmPrivateNoteLimitsV1, PrivacyRuntimeProtocolLimitsV1};
 
         let chain = configured_private_settlement_chain_for_test(Some(
-            PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
                 max_input_count: 1,
                 max_output_count: 2,
             }),
@@ -2637,7 +2641,7 @@ mod tests {
     #[test]
     fn settlement_admission_uses_native_defaults_and_rejects_insufficient_ordinary_policy() {
         use iroha_data_model::privacy::{
-            IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+            IvmPrivateNoteLimitsV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
         };
         let chain = configured_private_settlement_chain_for_test(None);
         let view = chain.state().view();
@@ -2647,7 +2651,7 @@ mod tests {
         let row = snapshot
             .protocols
             .iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+            .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
             .unwrap();
         assert!(
             row.policy.is_none(),
@@ -2659,15 +2663,18 @@ mod tests {
             "another committed height cannot replace this view"
         );
         for (inputs, outputs) in [(1, 2), (2, 1)] {
-            let limits =
-                PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
+            let limits = PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                IvmPrivateNoteLimitsV1 {
                     max_input_count: inputs,
                     max_output_count: outputs,
-                });
+                },
+            );
             let chain = configured_private_settlement_chain_for_test(Some(limits));
             let view = chain.state().view();
             let admitted = view
-                .admitted_privacy_protocol_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+                .admitted_privacy_protocol_v1(
+                    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                )
                 .expect(
                     "the genuine native protocol remains available with bounded ordinary limits",
                 );
@@ -2797,7 +2804,7 @@ mod tests {
             "the native default profile serves public pending receipts without a sidecar runtime"
         );
         let chain = configured_private_settlement_chain_for_test(Some(
-            iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+            iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
                 iroha_data_model::privacy::IvmPrivateNoteLimitsV1 {
                     max_input_count: 1,
                     max_output_count: 2,

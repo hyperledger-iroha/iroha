@@ -31,6 +31,8 @@ mod committee_custody;
 mod genesis_policy;
 #[cfg(test)]
 pub(crate) mod kagemusha_setup;
+#[cfg(any(test, feature = "iroha-core-tests"))]
+mod lifecycle_fixture;
 mod local_certificate;
 #[cfg(test)]
 #[path = "test_chain/staking_policy_authoring_tests.rs"]

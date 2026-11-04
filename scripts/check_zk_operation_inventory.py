@@ -2124,11 +2124,23 @@ class Checker:
         all_list = re.search(r"\bALL\s*:[^=]*=\s*\[([^\]]*)\]", implementation)
         if all_list is None or re.findall(r"Self::(\w+)", all_list.group(1)) != [row.get("variant") for row in rows]:
             self.error("exact12: the ALL list of the protocol enum differs from the recorded order")
+        runtime = section.get("runtime_source", {})
+        extensions = section.get("runtime_extensions", [])
+        runtime_rows = rows + extensions
+        runtime_text = self.tree.read(runtime.get("path", "")) or ""
+        self.check_enum("privacy.runtime", runtime, [row.get("variant") for row in runtime_rows])
+        implementation = block_after(runtime_text, r"\bimpl\s+" + re.escape(runtime.get("enum", "")) + r"\s*\{") or ""
+        runtime_base = re.search(r"\bALL\s*:[^=]*=\s*\[([^\]]*)\]", implementation)
+        if runtime_base is None or re.findall(r"Self::(\w+)", runtime_base.group(1)) != [row.get("variant") for row in rows]:
+            self.error("exact12: the ALL list of the protocol enum differs from the frozen order")
+        supported = re.search(r"\bSUPPORTED_PROTOCOLS\s*:[^=]*=\s*\[([^\]]*)\]", implementation)
+        if supported is None or re.findall(r"Self::(\w+)", supported.group(1)) != [row.get("variant") for row in runtime_rows]:
+            self.error("privacy.runtime: SUPPORTED_PROTOCOLS differs from the exact frozen-plus-additive roster")
         for key, function in (("label", "canonical_label"), ("security_model", "security_model"),
                               ("proof_system", "expected_proof_system"), ("engine", "expected_engine")):
             body = fn_body(implementation, function)
             arms = match_arms(body or "")
-            for row in rows:
+            for row in runtime_rows:
                 value = arms.get(row.get("variant"), "").split("::")[-1]
                 if value != row.get(key):
                     self.error(f"exact12[{row.get('variant')}]: {function} gives `{value}`, recorded `{row.get(key)}`")
@@ -2136,12 +2148,12 @@ class Checker:
         dispatch_text = self.tree.read(dispatch.get("path", "")) or ""
         dispatch_body = fn_body(dispatch_text, dispatch.get("function", "")) or ""
         dispatched = sorted(set(re.findall(re.escape(dispatch.get("statement_enum", "")) + r"::(\w+)\s*\(", strip_comments(dispatch_body))))
-        if dispatched != sorted(row.get("variant") for row in rows):
+        if dispatched != sorted(row.get("variant") for row in runtime_rows):
             self.error(f"exact12: the dispatch of {dispatch.get('function')} has arms {dispatched}")
         profiles = section.get("compiled_profiles", {})
         profile_text = self.tree.read(profiles.get("path", "")) or ""
-        profile_arms = match_arms(fn_body(profile_text, profiles.get("function", "")) or "", source.get("enum", ""))
-        for row in rows:
+        profile_arms = match_arms(fn_body(profile_text, profiles.get("function", "")) or "", runtime.get("enum", ""))
+        for row in runtime_rows:
             label = f"exact12[{row.get('variant')}]"
             target = profile_arms.get(row.get("variant"))
             if target != row.get("compiled_profile", {}).get("arm"):
@@ -2168,9 +2180,33 @@ class Checker:
                 self.check_constructed_profile(label, row, profiles)
         effects = section.get("ledger_effects", {})
         variants = enum_variants(self.tree.read(effects.get("path", "")) or "", effects.get("enum", ""))
-        recorded = sorted({effect for row in rows for effect in row.get("ledger_effect", [])})
+        recorded = sorted({effect for row in runtime_rows for effect in row.get("ledger_effect", [])})
         if variants is None or sorted(variants) != recorded:
             self.error(f"exact12: {effects.get('enum')} has variants {variants}, the protocols use {recorded}")
+
+    def check_privacy_wire_separation(self) -> None:
+        """Closed baseline inputs and distinct additive carriers, independent of runtime dispatch."""
+        path = "crates/iroha_data_model/src/isi/privacy.rs"
+        text = code_only(self.tree.read(path) or "")
+        expected = {
+            "SubmitPrivacyProofV1": ("envelope", "PrivacyProofEnvelopeV1"),
+            "PublishPrivacyRootV1": ("publication", "PrivacyRootPublicationV1"),
+            "BootstrapPrivacyPgcAccountsV1": ("bootstrap", "PrivacyPgcAccountBootstrapV1"),
+            "SchedulePrivacyProtocolLimitsUpdateV1": ("next_limits", "PrivacyProtocolLimitsV1"),
+            "SubmitPrivacyIronwoodProofV1": ("envelope", "PrivacyIronwoodProofEnvelopeV1"),
+            "SchedulePrivacyIronwoodLimitsUpdateV1": ("next_limits", "OrchardLimitsV1"),
+        }
+        for structure, (field, kind) in expected.items():
+            body = block_after(text, r"\bstruct\s+" + structure + r"\s*\{") or ""
+            if not re.search(r"\b" + field + r"\s*:\s*" + kind + r"\s*[,}]", body + "}"):
+                self.error(f"privacy.wire_separation: {structure}.{field} must retain {kind}")
+            if "PrivacyRuntime" in body:
+                self.error(f"privacy.wire_separation: {structure} cannot carry a runtime union")
+        frozen = self.tree.read("crates/iroha_data_model/src/privacy/exact12_wire.rs") or ""
+        for kind in ("PrivacyProtocolIdV1", "PrivacyStatementV1", "PrivacyProofV1", "PrivacyProtocolLimitsV1"):
+            variants = enum_variants(frozen, kind)
+            if variants is None or variants != [row.get("variant") for row in self.inv.get("exact12", {}).get("protocols", [])]:
+                self.error(f"privacy.wire_separation: {kind} must preserve the frozen twelve variants")
 
     # ---- Exact12 roles and the single route
 
@@ -2188,18 +2224,23 @@ class Checker:
             self.error("exact12: `roles` is required (the thirteen typed roles of the twelve protocols)")
             return
         rows = roles.get("list", [])
+        frozen_rows = rows
+        rows = rows + roles.get("runtime_extensions", [])
         listed = [row.get("role") for row in rows]
         source = roles.get("source", {})
         self.check_enum("exact12.roles", {"path": source.get("path", ""), "enum": source.get("enum", "")}, listed)
-        if len(rows) != roles.get("count"):
+        if len(frozen_rows) != roles.get("count"):
             self.error(f"exact12.roles: count is {roles.get('count')}, {len(rows)} roles listed")
         text = self.tree.read(source.get("path", "")) or ""
         implementation = block_after(text, r"\bimpl\s+" + re.escape(source.get("enum", "")) + r"\s*\{") or ""
         all_list = re.search(r"\bALL\s*:[^=]*=\s*\[([^\]]*)\]", implementation)
         if all_list is None or re.findall(r"Self::(\w+)", all_list.group(1)) != listed:
             self.error("exact12.roles: the ALL list of the role enum differs from the recorded order")
+        frozen = re.search(r"\bEXACT12_ROLES\s*:[^=]*=\s*\[([^\]]*)\]", implementation)
+        if frozen is None or re.findall(r"Self::(\w+)", frozen.group(1)) != [row.get("role") for row in frozen_rows]:
+            self.error("exact12.roles: EXACT12_ROLES differs from the frozen role order")
         protocol_arms = match_arms(fn_body(implementation, "protocol_id") or "")
-        protocols = {row.get("variant"): row for row in section.get("protocols", [])}
+        protocols = {row.get("variant"): row for row in section.get("protocols", []) + section.get("runtime_extensions", [])}
         registry = roles.get("registry", {})
         registry_text = self.production(registry.get("path", ""))
         table = registry_rows(registry_text, registry.get("table", ""))
@@ -2316,7 +2357,7 @@ class Checker:
         roles = {row.get("role"): row for row in rows}
         seen: set[str] = set()
         generic = code_only(self.production(route.get("handler", {}).get("path", "")))
-        preparation = fn_body(generic, "prepare") or ""
+        preparation = fn_body(generic, "prepare_original") or ""
         for record in route.get("dedicated_requests", []):
             role, owner = record.get("role"), record.get("path")
             label = f"exact12.single_route.dedicated_requests[{role}]"
@@ -2330,7 +2371,7 @@ class Checker:
             if operation is None or operation.get("handler", {}).get("path") != owner:
                 self.error(f"{label}: dedicated instruction must name its actual owner")
             protocol = row.get("protocol", "")
-            guard = f"if instruction.envelope.protocol_id == PrivacyProtocolIdV1::{protocol} {{ return Err("
+            guard = f"if envelope.protocol_id == PrivacyRuntimeProtocolIdV1::{protocol} {{ return Err("
             if not contains(preparation, guard):
                 self.error(f"{label}: generic preparation must reject this protocol")
             effect = row.get("ledger_effect", "")
@@ -2346,7 +2387,7 @@ class Checker:
             admission = (
                 "let admitted = resolve_admitted_privacy_protocol_v1( "
                 "&state_transaction.world.privacy_protocol_policies, "
-                f"PrivacyProtocolIdV1::{protocol}, state_transaction.block_height(), "
+                f"PrivacyRuntimeProtocolIdV1::{protocol}, state_transaction.block_height(), "
                 ") .map_err(|error| invalid_privacy_parameter(error.to_string()))?;"
             )
             if not contains(entry_body, admission):
@@ -2354,7 +2395,7 @@ class Checker:
             body = fn_body(source, "execute_x509_after_admission") or ""
             checks = (
                 f"if effects.role() != PrivacyActionRoleV1::{role}",
-                f"|| effects.protocol_id() != PrivacyProtocolIdV1::{protocol}",
+                f"|| effects.protocol_id() != PrivacyRuntimeProtocolIdV1::{protocol}",
                 "|| effects.statement_digest() != statement_digest",
                 "|| effects.action_index() != expected_action_index",
                 "|| effects.encoded_action_bytes() != encoded_action_bytes { return Err(",
@@ -2377,6 +2418,7 @@ class Checker:
         prefix = "exact12.single_route"
         scan = RouteScan(self.tree, route.get("scan", {}))
         rows = section.get("roles", {}).get("list", []) if isinstance(section.get("roles"), dict) else []
+        rows = rows + section.get("roles", {}).get("runtime_extensions", [])
         role_names = [row.get("role") for row in rows]
 
         # One assembler of the envelope.
@@ -2415,8 +2457,9 @@ class Checker:
         instruction = route.get("instruction", {})
         carrier = instruction.get("carrier", {})
         carried: list[tuple[str, str, str]] = []
+        forbidden_runtime_carriers = ["PrivacyRuntimeProofEnvelopeV1", "PrivacyRuntimeProofV1", "PrivacyRuntimeStatementV1"]
         for path in production_rust(self.tree, instruction.get("roots", []), route.get("scan", {}).get("exclude", [])):
-            for struct, field, _ in struct_fields_of_types(scan.code(path), instruction.get("carried_types", [])):
+            for struct, field, _ in struct_fields_of_types(scan.code(path), [*instruction.get("carried_types", []), *forbidden_runtime_carriers]):
                 carried.append((path, struct, field))
         expected = (carrier.get("path"), carrier.get("struct"), carrier.get("field"))
         if expected not in carried:
@@ -2442,14 +2485,16 @@ class Checker:
             )
             positions = [match.start() for match in pattern.finditer(handler_code)
                          if not re.search(r"\bfn\s+$", handler_code[max(0, match.start() - 8) : match.start()])]
-            if len(positions) != 1:
+            expected_owners = item.get("inside_all", [item.get("inside")])
+            if len(positions) != len(expected_owners):
                 self.error(
                     f"{prefix}: `{call}` is called {len(positions)} time(s) in production code of {handler.get('path')}; "
                     "the single path calls it once"
                 )
                 continue
-            if item.get("inside") not in handler_index.enclosing(positions[0]):
-                self.error(f"{prefix}: `{call}` is no longer called inside `{item.get('inside')}`")
+            actual_owners = [handler_index.enclosing(position) for position in positions]
+            if any(sum(owner in names for names in actual_owners) != 1 for owner in expected_owners):
+                self.error(f"{prefix}: `{call}` must occur once in each recorded owner {expected_owners}")
 
         # One consumer of a verified effect for ledger application.
         effects = route.get("effects", {})
@@ -2500,7 +2545,19 @@ class Checker:
             scope = verifier.get("engine_scope", "")
             if not scope or not any(path.startswith(scope) for path in scan.files):
                 self.error(f"{label}: engine_scope `{scope}` holds no scanned file")
-            callers = scan.calls(name)
+            callers = dict(scan.calls(name))
+            selector = verifier.get("dispatch_selector")
+            if selector:
+                path = selector.get("path", "")
+                body = fn_body(scan.code(path), selector.get("function", "")) or ""
+                arms = match_arms(body, "PrivacyRuntimeProtocolIdV1")
+                expected = {"OrchardHalo2ActionsV1": "verify_orchard_bundle_v1", "IronwoodHalo2ActionsV1": "verify_ironwood_bundle_v1"}
+                if arms != expected or not contains(body, "let verify = match envelope.protocol_id {") or len(re.findall(r"\bverify\s*\(", body)) != 1:
+                    self.error(f"{label}: native verifier selector must preserve both explicit protocol identities and one call")
+                elif expected.get(selector.get("protocol")) != name:
+                    self.error(f"{label}: native verifier selector names another protocol")
+                else:
+                    callers[path] = callers.get(path, 0) + 1
             for path in sorted(callers):
                 if path.startswith(scope) or path in allowed:
                     continue
@@ -3226,6 +3283,7 @@ class Checker:
         self.check_registry()
         self.check_products()
         self.check_exact12()
+        self.check_privacy_wire_separation()
         self.check_action_roles()
         self.check_exact12_single_route()
         self.check_generic()

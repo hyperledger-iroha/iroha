@@ -1522,21 +1522,7 @@ fn contract_emission_page(
             let execution_hash = output
                 .execution_call_hash(block.hash(), &*block)
                 .map_err(conversion_error)?;
-            let fee_payment = match output {
-                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(network) => {
-                    let entrypoint = block
-                        .network_entrypoint_at(network.input_index as usize)
-                        .ok_or_else(|| {
-                            conversion_error("emission output lost its Network input".into())
-                        })?;
-                    tx_fee_projection(&BorrowedNetworkTransaction {
-                        entrypoint,
-                        entrypoint_hash: entrypoint.hash(),
-                        result: &network.result,
-                    })
-                }
-                _ => None,
-            };
+            let fee_payment = output_fee_projection(&block, output)?;
             for (emission_index, emission) in
                 output.result().contract_events().iter().enumerate().rev()
             {

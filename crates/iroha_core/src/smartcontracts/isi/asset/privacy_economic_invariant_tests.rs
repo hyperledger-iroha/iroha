@@ -21,9 +21,9 @@ use crate::smartcontracts::isi::asset::isi::{
 };
 use iroha_data_model::asset::AssetBalanceScope;
 use iroha_data_model::privacy::{
-    PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+    PrivacyNamespaceScopeV1, PrivacyRuntimeNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
     PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
-    PrivacyProofManagedPoolBootstrapDigestV1, PrivacyProtocolIdV1, PrivacyStatementDigestV1,
+    PrivacyProofManagedPoolBootstrapDigestV1, PrivacyRuntimeProtocolIdV1, PrivacyStatementDigestV1,
     PrivacyValueBalanceDirectionV1,
 };
 
@@ -62,8 +62,8 @@ fn apply_faulty_verifier_pool_effect(
 
 fn economic_orchard_owner(pool: u8) -> PrivacyPublicReserveOwnerV1 {
     PrivacyPublicReserveOwnerV1::Orchard {
-        namespace: PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        namespace: PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([pool; 32]),
             }),
@@ -74,8 +74,8 @@ fn economic_orchard_owner(pool: u8) -> PrivacyPublicReserveOwnerV1 {
 
 fn economic_private_ivm_owner(pool: u8) -> PrivacyPublicReserveOwnerV1 {
     PrivacyPublicReserveOwnerV1::PrivateIvm {
-        namespace: PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        namespace: PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([pool; 32]),
                 program_id: PrivacyProgramIdV1::new([pool ^ 0xF0; 32]),

@@ -21,7 +21,7 @@ const PAIRS: usize = 4;
 const WORKERS: usize = 8;
 // Exact private-note labels from ivm_private_note/stark.rs, bound in the packet.
 const CONTEXT: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
-    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
     b"ivm-private-note-stark-profile-v1",
 );
 const LEAF: &[u8] = b"ivm-private-note-stark-base-leaf-v1";

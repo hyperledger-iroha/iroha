@@ -1,6 +1,6 @@
 //! Canonical Model-owned key for committed optional protocol limits.
 
-use super::PrivacyProtocolIdV1;
+use super::PrivacyRuntimeProtocolIdV1;
 use norito::{Decode, Encode};
 
 /// Canonical key of an optional committed per-protocol resource policy.
@@ -22,19 +22,19 @@ use norito::{Decode, Encode};
 )]
 #[norito_schema(name = "iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1")]
 pub struct PrivacyProtocolPolicyKeyV1 {
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 }
 
 impl PrivacyProtocolPolicyKeyV1 {
     /// Select exactly one canonical native protocol.
     #[must_use]
-    pub const fn new(protocol_id: PrivacyProtocolIdV1) -> Self {
+    pub const fn new(protocol_id: PrivacyRuntimeProtocolIdV1) -> Self {
         Self { protocol_id }
     }
 
     /// Protocol identified by this storage key.
     #[must_use]
-    pub const fn protocol_id(self) -> PrivacyProtocolIdV1 {
+    pub const fn protocol_id(self) -> PrivacyRuntimeProtocolIdV1 {
         self.protocol_id
     }
 
@@ -112,7 +112,8 @@ mod tests {
             "iroha_core::privacy_state::PrivacyProtocolPolicyKeyV1"
         );
         let expected = hex::decode(ORIGINAL_FRAME).unwrap();
-        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let key =
+            PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         assert_eq!(norito::encode_canonical(&key).unwrap(), expected);
         assert_eq!(
             norito::decode_canonical::<PrivacyProtocolPolicyKeyV1>(&expected).unwrap(),
@@ -127,10 +128,11 @@ mod tests {
 
     #[test]
     fn policy_key_roundtrip_is_bounded_and_canonical() {
-        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let key =
+            PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         assert_eq!(
             key.protocol_id(),
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
         );
         let mut encoded = String::new();
         key.encode_json_key(&mut encoded);

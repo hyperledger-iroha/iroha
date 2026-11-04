@@ -23,7 +23,7 @@ impl Client {
         expected_provider: iroha_data_model::sorafs::capacity::ProviderId,
         expected_owner: &iroha_data_model::account::AccountId,
         expected_policy: &iroha_data_model::sorafs::reserve::ReserveAuthorityPolicyV1,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
     ) -> Result<iroha_data_model::sorafs::reserve::account_proof::VerifiedReserveAccountStateV1>
     {
@@ -79,7 +79,7 @@ impl Client {
                         provider_id: expected_provider,
                         owner: expected_owner,
                         policy: expected_policy,
-                        schema: native_schema,
+                        schema: native_schema.select_schema(proof.world.schema_hash)?,
                     },
                     block,
                 )?)

@@ -40,7 +40,7 @@ const JOINT_SECURITY: c_int = -24;
 const INTERNAL: c_int = -100;
 const MAX_TRANSACTION: usize = 10 * 1024 * 1024;
 const MAX_OWNERS: usize = 64;
-const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+const PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
 type Result<T> = std::result::Result<T, c_int>;
 fn invalid(_: impl std::fmt::Display) -> c_int {
     SOURCE
@@ -216,7 +216,7 @@ fn policy(
     network: NetworkId,
 ) -> Result<(
     PrivacyCompiledProfileSnapshotV1,
-    PrivacyProtocolLimitsV1,
+    PrivacyRuntimeProtocolLimitsV1,
     PrivacyConsensusLimitsV1,
 )> {
     manifest.validate().map_err(|_| POLICY)?;
@@ -247,7 +247,7 @@ fn policy(
 fn governed(
     statement: &IrohaZkX509StarkP256StatementV1,
     profile: &PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: &PrivacyProtocolLimitsV1,
+    protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
     limits: &PrivacyConsensusLimitsV1,
 ) -> Result<()> {
     profile.validate().map_err(|_| POLICY)?;
@@ -264,7 +264,7 @@ fn governed(
     {
         return Err(POLICY);
     }
-    let tagged = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone());
+    let tagged = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone());
     profile
         .protocol_limits
         .validate_statement(&tagged)
@@ -323,7 +323,7 @@ impl Owner {
             0 => Ok(self.plan.intent.as_bytes().to_vec()),
             1 => Ok(self.plan.action_digest.as_bytes().to_vec()),
             2 => norito::encode_canonical(&self.plan.action).map_err(|_| INTERNAL),
-            3 => norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+            3 => norito::encode_canonical(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
                 self.plan.materialized.clone(),
             ))
             .map_err(|_| INTERNAL),
@@ -545,7 +545,7 @@ mod tests {
         let row = current
             .rows
             .into_iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .expect("one X509 row");
         let payload = ModelBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
             .expect("model payload")
@@ -740,7 +740,7 @@ mod tests {
             verifier_digest: context.verifier_digest,
             statement_schema_digest: context.statement_schema_digest,
             engine_manifest_digest: context.engine_manifest_digest,
-            protocol_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+            protocol_limits: PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1,
         };
         let limits = PrivacyConsensusLimitsV1::taira_default();
         assert_eq!(
@@ -767,7 +767,7 @@ mod tests {
             governed(
                 &plan.materialized,
                 &profile,
-                &PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+                &PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1,
                 &limits
             ),
             Err(POLICY)
@@ -833,10 +833,10 @@ mod tests {
     fn projection_copies_cannot_substitute_the_original_tagged_statement() {
         let owner = structural_owner();
         let mut copied = owner.projection(3).unwrap();
-        let decoded: PrivacyStatementV1 = norito::decode_canonical(&copied).unwrap();
+        let decoded: PrivacyRuntimeStatementV1 = norito::decode_canonical(&copied).unwrap();
         assert_eq!(
             decoded,
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(owner.plan.materialized.clone())
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(owner.plan.materialized.clone())
         );
         copied.fill(0);
         assert_ne!(copied, owner.projection(3).unwrap());

@@ -123,7 +123,7 @@ impl State {
                 hash_value(parameters)?,
             )?;
             let protocol_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-                iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             );
             let protocol_policy = world.privacy_protocol_policies.get(&protocol_key);
             if let Some(policy) = protocol_policy {

@@ -15,15 +15,64 @@ use iroha_data_model::{
         UnregisterBox,
     },
     sumeragi_finality::{
-        SumeragiFinalityCheckpoint, SumeragiFinalityProof, verify_checkpoint_page,
+        SumeragiFinalityCheckpoint, SumeragiFinalityProof, SumeragiFinalityVerifier,
+        verify_checkpoint_page,
     },
 };
 use std::io::{self, Write};
+
+#[path = "scheduled_lifecycle_activation.rs"]
+mod activation;
+#[path = "scheduled_lifecycle_policy.rs"]
+mod activation_policy;
+#[path = "scheduled_lifecycle_trace.rs"]
+mod lifecycle_trace;
+
+/// Share the exact catalog-derived merged fixture with the Ironwood receipt tests.
+#[cfg(test)]
+pub(crate) fn merged_selections_for_testing()
+-> [iroha_data_model::runtime::definition::RootSelectionV1; 2] {
+    activation::merged_selections_for_testing()
+}
 
 const MAX_PROOFS: usize = 4096;
 const MAX_PROOF_BYTES: usize = 16 * 1024 * 1024;
 const MAX_CHECKPOINT_BYTES: usize = 68 * 1024 * 1024;
 const MAX_PROJECTION_BYTES: usize = 32 * 1024 * 1024;
+
+/// Compact references can reuse a large original Action many times. Bound the
+/// original bytes visited by reconstructing its hashes, independently of trace
+/// size; nine hashes cover a successful retry including its native progress debit.
+struct LifecycleHashWork {
+    source_bytes: usize,
+    remaining: usize,
+}
+impl LifecycleHashWork {
+    fn new(original_bytes: usize) -> Self {
+        Self {
+            // Registration normalizes bounded metadata entries not present in the
+            // signed original; this exceeds their fixed canonical overhead.
+            source_bytes: original_bytes.saturating_add(1024),
+            remaining: 256 * 1024 * 1024,
+        }
+    }
+    fn charge(&mut self, hashes: usize) -> PyResult<()> {
+        match self
+            .source_bytes
+            .checked_mul(hashes)
+            .and_then(|bytes| self.remaining.checked_sub(bytes))
+        {
+            Some(remaining) => {
+                self.remaining = remaining;
+                Ok(())
+            }
+            None => {
+                self.remaining = 0;
+                Err(refusal("scheduled lifecycle hash work exceeds its bound"))
+            }
+        }
+    }
+}
 
 fn refusal(message: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(message.to_string())
@@ -75,6 +124,7 @@ fn original_trigger(original: &SignedTransaction, id: &TriggerId) -> PyResult<Tr
             "scheduled observation requires an own-authority one-success retryable native action",
         ));
     }
+    native_progress_declaration(action)?;
     Ok(trigger)
 }
 
@@ -202,14 +252,23 @@ fn check_lifecycle(
     Ok(registrations)
 }
 
+fn time_row(
+    output: &ExecutionOutputV1,
+) -> Option<&iroha_data_model::block::execution_output::TimeExecutionOutputV1> {
+    match output {
+        ExecutionOutputV1::Time(row) => Some(row),
+        ExecutionOutputV1::TimeWithLifecycle(row) => Some(&row.execution),
+        _ => None,
+    }
+}
+
 /// The certified model distinguishes a real execution failure from a healthy
 /// body rolled back only because its complete output exceeded capacity. Only
 /// real failures apply native retry policy, even when their diagnostic is omitted.
 fn scheduled_disposition(output: &ExecutionOutputV1) -> PyResult<&'static str> {
     use iroha_data_model::block::execution_output::TriggerFailureRootV1;
-    let ExecutionOutputV1::Time(row) = output else {
-        return Err(refusal("scheduled disposition requires a Time output"));
-    };
+    let row =
+        time_row(output).ok_or_else(|| refusal("scheduled disposition requires a Time output"))?;
     if row.result.is_ok() {
         if row.failure_root.is_some() {
             return Err(refusal("successful Time output retained a failure root"));
@@ -242,18 +301,53 @@ fn frame<T: norito::NoritoSerialize>(value: &T, writer: &mut dyn Write) -> io::R
         .map_err(|error| io::Error::other(error.to_string()))
 }
 
-/// Same persistent model-frame protocol as Core's invocation_identity::bind_action.
-/// The source bytes and retry tuple are derived from authenticated originals.
-fn action_hash(
+/// Validate the original registration-only autonomous attempt declaration.
+fn native_progress_declaration(action: &TriggerAction) -> PyResult<Option<u32>> {
+    if action.metadata.get("__native_progress_remaining").is_some() {
+        return Err(refusal(
+            "original registration supplies a native progress counter",
+        ));
+    }
+    let Some(value) = action.metadata.get("native_progress_attempts") else {
+        return Ok(None);
+    };
+    let count = value.try_into_any_norito::<u32>().map_err(refusal)?;
+    if !(1..=1_024).contains(&count) {
+        return Err(refusal(
+            "native progress attempts must be between 1 and 1024",
+        ));
+    }
+    Ok(Some(count))
+}
+
+/// Match Core's persistent action frame from the original registration and authenticated counters.
+fn action_hash_with_progress(
     action: &TriggerAction,
     registration_height: u64,
     registration_ms: u64,
     retry: Option<(u32, u64)>,
+    repeats: Repeats,
+    lifecycle: bool,
+    progress: Option<u32>,
 ) -> PyResult<Hash> {
     let EventFilterBox::Time(filter) = action.filter() else {
         return Err(refusal("expected Time action"));
     };
     let mut metadata = action.metadata.clone();
+    match (native_progress_declaration(action)?, progress) {
+        (Some(declared), Some(remaining)) if remaining <= declared => {
+            metadata.insert(
+                "__native_progress_remaining".parse().unwrap(),
+                Json::new(remaining),
+            );
+        }
+        (None, None) => {}
+        _ => {
+            return Err(refusal(
+                "native progress counter differs from its registered allowance",
+            ));
+        }
+    }
     metadata.insert(
         "__registered_block_height".parse().unwrap(),
         Json::from(registration_height),
@@ -263,36 +357,54 @@ fn action_hash(
         Json::from(registration_ms),
     );
     Hash::new_from_writer(|writer| {
-        writer.write_all(b"iroha:trigger-use:action:v1\0")?;
+        writer.write_all(if lifecycle {
+            b"iroha:trigger-lifecycle:action:v1\0"
+        } else {
+            b"iroha:trigger-use:action:v1\0"
+        })?;
         writer.write_all(&[1])?;
         frame(action.authority(), writer)?;
         frame(filter, writer)?;
-        frame(&action.repeats(), writer)?;
+        frame(&repeats, writer)?;
         frame(&metadata, writer)?;
         frame(&action.retry_policy(), writer)?;
         frame(&retry, writer)?;
-        match action.executable() {
-            Executable::Instructions(items) => {
-                writer.write_all(&[0])?;
-                frame(items, writer)?;
-            }
-            Executable::ContractCall(call) => {
-                writer.write_all(&[1])?;
-                frame(call, writer)?;
-            }
-            Executable::Batch(items) => {
-                writer.write_all(&[3])?;
-                frame(items, writer)?;
-            }
-            Executable::Ivm(_) | Executable::IvmProved(_) => {
-                return Err(io::Error::other("unsupported IVM trigger"));
-            }
+        if lifecycle {
+            let executable = Hash::new_from_writer(|writer| {
+                writer.write_all(b"iroha:trigger-lifecycle:executable:v1\0")?;
+                write_selected_executable(action, writer)
+            })?;
+            frame(&executable, writer)?;
+        } else {
+            write_selected_executable(action, writer)?;
         }
         Ok(())
     })
     .map_err(refusal)
 }
 
+fn write_selected_executable(action: &TriggerAction, writer: &mut dyn io::Write) -> io::Result<()> {
+    match action.executable() {
+        Executable::Instructions(items) => {
+            writer.write_all(&[0])?;
+            frame(items, writer)?;
+        }
+        Executable::ContractCall(call) => {
+            writer.write_all(&[1])?;
+            frame(call, writer)?;
+        }
+        Executable::Batch(items) => {
+            writer.write_all(&[3])?;
+            frame(items, writer)?;
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => {
+            return Err(io::Error::other("unsupported IVM trigger"));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
 pub(super) fn authenticate(
     original_bytes: &[u8],
     trigger_id: &str,
@@ -300,6 +412,53 @@ pub(super) fn authenticate(
     network: NetworkId,
     chain: &str,
     checkpoint_bytes: &[u8],
+) -> PyResult<(String, Vec<u8>)> {
+    authenticate_with_activation(
+        original_bytes,
+        trigger_id,
+        proof_json,
+        network,
+        chain,
+        checkpoint_bytes,
+        None,
+    )
+}
+
+#[cfg(test)]
+fn authenticate_with_activation(
+    original_bytes: &[u8],
+    trigger_id: &str,
+    proof_json: &str,
+    network: NetworkId,
+    chain: &str,
+    checkpoint_bytes: &[u8],
+    activation_json: Option<&str>,
+) -> PyResult<(String, Vec<u8>)> {
+    authenticate_with_activation_policy(
+        original_bytes,
+        trigger_id,
+        proof_json,
+        network,
+        chain,
+        checkpoint_bytes,
+        activation_json,
+        None,
+    )
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "independent original proof and optional rollout policy inputs"
+)]
+fn authenticate_with_activation_policy(
+    original_bytes: &[u8],
+    trigger_id: &str,
+    proof_json: &str,
+    network: NetworkId,
+    chain: &str,
+    checkpoint_bytes: &[u8],
+    activation_json: Option<&str>,
+    lifecycle_activation_policy_json: Option<&str>,
 ) -> PyResult<(String, Vec<u8>)> {
     if proof_json.is_empty()
         || proof_json.len() > MAX_PROOF_BYTES
@@ -310,6 +469,13 @@ pub(super) fn authenticate(
     {
         return Err(refusal("scheduled proof inputs exceed their bounds"));
     }
+    let activation_policy =
+        activation_policy::ActivationPolicy::parse(lifecycle_activation_policy_json, network)?;
+    let activation = activation::ActivationWitness::parse(activation_json)?;
+    let activation_selection = activation
+        .as_ref()
+        .map(|witness| witness.selected_identity())
+        .transpose()?;
     let original = decode_canonical_signed_transaction_v1(original_bytes)?;
     original.verify_signature().map_err(refusal)?;
     if original.network_id().copied() != Some(network) {
@@ -333,23 +499,65 @@ pub(super) fn authenticate(
             "scheduled public execution requires the original Global root",
         ));
     }
+    if let Some(policy) = &activation_policy {
+        policy.require_tip(page.tip().height())?;
+    }
     let original_hash = original.hash_as_entrypoint();
     let action = trigger.action();
     let policy = action.retry_policy().expect("validated retry policy");
     let mut registered = None;
     let mut retry = None;
+    let mut progress = native_progress_declaration(action)?;
     let mut terminal = "pending";
     let mut outcomes = Vec::new();
+    let mut traced = false;
+    let mut registration_proof_index = None;
+    let mut cut_verifier = activation
+        .as_ref()
+        .map(|_| {
+            norito::core::with_decode_limits_scope(
+                norito::canonical_decode_limits(MAX_PROOF_BYTES),
+                || SumeragiFinalityVerifier::from_trusted_checkpoint(&checkpoint, &network, chain),
+            )
+        })
+        .transpose()
+        .map_err(refusal)?;
+    let mut trace_budget = lifecycle_trace::frame_budget();
+    let mut hash_work = LifecycleHashWork::new(original_bytes.len());
     // Every proof wire was authenticated above. Decoding the same complete
     // frames lets the application inspect all occurrences without skipping a
     // failed attempt, selecting a favorable tip, or adopting an unproved gap.
-    for proof in &proofs {
+    for (proof_index, proof) in proofs.iter().enumerate() {
+        // The full page above already enforced cumulative range bounds. A
+        // second linear pass supplies authenticated cuts for the selected
+        // native runtime anchor; no row variant substitutes for selection proof.
+        let certified_cut = cut_verifier
+            .as_mut()
+            .map(|verifier| {
+                norito::core::with_decode_limits_scope(
+                    norito::canonical_decode_limits(MAX_PROOF_BYTES),
+                    || {
+                        if proof_index == 0 {
+                            verifier.verify_same_decision(checkpoint.tip(), proof)
+                        } else {
+                            verifier.verify(proof)
+                        }
+                    },
+                )
+            })
+            .transpose()
+            .map_err(refusal)?;
         let block = norito::core::with_decode_limits_scope(
             norito::canonical_decode_limits(proof.block_wire.len()),
             || decode_framed_signed_block(&proof.block_wire),
         )
         .map_err(refusal)?;
         let height = block.header().height().get();
+        if let Some(policy) = &activation_policy {
+            for output in block.execution_outputs() {
+                policy.require_row(height, output.trigger_lifecycle().is_some())?;
+            }
+        }
         let time_ms = u64::try_from(block.header().creation_time().as_millis()).map_err(refusal)?;
         for (index, input) in block.network_entrypoints().enumerate() {
             if input.hash() != original_hash {
@@ -366,10 +574,55 @@ pub(super) fn authenticate(
             if !output.1.result.is_ok() {
                 return Err(refusal("original trigger registration did not apply"));
             }
+            let original_output = &block.execution_outputs()[output.0 as usize];
+            traced = original_output.trigger_lifecycle().is_some();
+            if traced {
+                let witness = activation.as_ref().ok_or_else(|| refusal(
+                    "V2 scheduled observation requires an authenticated lifecycle activation witness",
+                ))?;
+                witness.require_continuation_count(proofs.len() - proof_index - 1)?;
+                registration_proof_index = Some(proof_index);
+            }
             registered = Some((height, time_ms));
         }
+        if traced {
+            activation
+                .as_ref()
+                .expect("V2 witness required above")
+                .authenticate(
+                    certified_cut
+                        .as_ref()
+                        .expect("witness cuts authenticated above"),
+                    proof_index - registration_proof_index.expect("V2 registration found"),
+                    network,
+                    activation_selection.expect("V2 typed selection required above"),
+                )?;
+        }
         if let Some((registered_height, _)) = registered {
-            let count = check_lifecycle(&block, original_hash, &trigger)?;
+            let count = if traced {
+                if height == registered_height {
+                    hash_work.charge(1)?;
+                }
+                lifecycle_trace::check_block(
+                    &block,
+                    original_hash,
+                    &original,
+                    &trigger,
+                    registered.expect("registration found"),
+                    &mut trace_budget,
+                )?
+            } else {
+                if block
+                    .execution_outputs()
+                    .iter()
+                    .any(|output| output.trigger_lifecycle().is_some())
+                {
+                    return Err(refusal(
+                        "preactivation registration cannot acquire lifecycle coverage retrospectively",
+                    ));
+                }
+                check_lifecycle(&block, original_hash, &trigger)?
+            };
             if count != usize::from(height == registered_height) {
                 return Err(refusal(
                     "original activation has no unique applied root registration",
@@ -377,7 +630,7 @@ pub(super) fn authenticate(
             }
         }
         for (index, output) in block.execution_outputs().iter().enumerate() {
-            let ExecutionOutputV1::Time(row) = output else {
+            let Some(row) = time_row(output) else {
                 continue;
             };
             if row.invocation.trigger.trigger_id != id {
@@ -385,12 +638,23 @@ pub(super) fn authenticate(
             }
             let (registered_height, registered_ms) = registered
                 .ok_or_else(|| refusal("Time output precedes its original registration"))?;
+            if traced {
+                hash_work.charge(9)?;
+            }
             if terminal == "applied"
                 || terminal == "exhausted"
                 || registered_height >= height
                 || row.invocation.trigger.registered_at_height != registered_height
                 || row.invocation.trigger.action_hash
-                    != action_hash(action, registered_height, registered_ms, retry)?
+                    != action_hash_with_progress(
+                        action,
+                        registered_height,
+                        registered_ms,
+                        retry,
+                        action.repeats(),
+                        traced,
+                        progress,
+                    )?
             {
                 return Err(refusal(
                     "Time output changed the action, authority, registration or retry chain",
@@ -402,6 +666,19 @@ pub(super) fn authenticate(
                 return Err(refusal("Time retry precedes its authenticated eligibility"));
             }
             let disposition = scheduled_disposition(output)?;
+            if traced {
+                lifecycle_trace::check_occurrence(
+                    output,
+                    &trigger,
+                    registered_height,
+                    registered_ms,
+                    retry,
+                    time_ms,
+                    disposition,
+                    progress,
+                )?;
+            }
+            progress = progress.map(|remaining| remaining.saturating_sub(1));
             let result_ok = row.result.is_ok();
             let reason = row.result.0.as_ref().err();
             outcomes.push(norito::json!({
@@ -458,7 +735,7 @@ pub(super) fn authenticate(
 }
 
 #[pyfunction]
-#[pyo3(name = "verify_scheduled_trigger_execution_v1", signature = (original_signed_registration, trigger_id, native_finality_proof_chain_json, expected_network_id, expected_chain, trusted_checkpoint, *, expected_chain_discriminant))]
+#[pyo3(name = "verify_scheduled_trigger_execution_v1", signature = (original_signed_registration, trigger_id, native_finality_proof_chain_json, expected_network_id, expected_chain, trusted_checkpoint, *, expected_chain_discriminant, lifecycle_activation_json=None, lifecycle_activation_policy_json=None))]
 #[expect(
     clippy::too_many_arguments,
     reason = "PyO3 exposes the named Python arguments and its interpreter token as separate Rust parameters"
@@ -472,6 +749,8 @@ pub(super) fn verify(
     expected_chain: &str,
     trusted_checkpoint: &Bound<'_, PyBytes>,
     #[pyo3(from_py_with = exact_chain_discriminant)] expected_chain_discriminant: u16,
+    lifecycle_activation_json: Option<&str>,
+    lifecycle_activation_policy_json: Option<&str>,
 ) -> PyResult<(String, Py<PyBytes>)> {
     if !original_signed_registration.is_exact_instance_of::<PyBytes>()
         || !trusted_checkpoint.is_exact_instance_of::<PyBytes>()
@@ -481,13 +760,15 @@ pub(super) fn verify(
         ));
     }
     let _guard = ChainDiscriminantGuard::enter(expected_chain_discriminant);
-    let (projection, checkpoint) = authenticate(
+    let (projection, checkpoint) = authenticate_with_activation_policy(
         original_signed_registration.as_bytes(),
         trigger_id,
         native_finality_proof_chain_json,
         *expected_network_id.as_inner(),
         expected_chain,
         trusted_checkpoint.as_bytes(),
+        lifecycle_activation_json,
+        lifecycle_activation_policy_json,
     )?;
     Ok((projection, PyBytes::new(py, &checkpoint).unbind()))
 }

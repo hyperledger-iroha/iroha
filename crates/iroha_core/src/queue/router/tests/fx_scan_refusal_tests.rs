@@ -41,6 +41,7 @@ fn multisig_fx_projection_rejects_changed_hash_and_conflicting_nonce_reuse() {
 
 #[test]
 fn fx_scan_keeps_nested_custom_decode_refusal_through_transaction_and_retries() {
+    let selection = &crate::runtime::release_catalog().unwrap().baseline;
     let (authority, signer) = gen_account_in("fx_scan_refusal");
     let custom = CustomInstruction::new(iroha_primitives::json::Json::new(
         MultisigInstructionBox::Propose(MultisigPropose::new(
@@ -70,14 +71,21 @@ fn fx_scan_keeps_nested_custom_decode_refusal_through_transaction_and_retries() 
     norito::with_decode_limits_scope(
         norito::DecodeLimits::new(usize::MAX, usize::MAX, usize::MAX, 0, usize::MAX),
         || {
-            check(instruction_contains_fx_corridor_settlement(&custom));
-            check(instruction_contains_fx_corridor_settlement(&*nested));
-            check(executable_contains_fx_corridor_settlement(&executable));
-            check(transaction_contains_fx_corridor_settlement(&tx));
+            check(instruction_contains_fx_corridor_settlement(
+                &custom, selection,
+            ));
+            check(instruction_contains_fx_corridor_settlement(
+                &*nested, selection,
+            ));
+            check(executable_contains_fx_corridor_settlement(
+                &executable,
+                selection,
+            ));
+            check(transaction_contains_fx_corridor_settlement(&tx, selection));
         },
     );
-    assert!(!instruction_contains_fx_corridor_settlement(&custom).unwrap());
-    assert!(!instruction_contains_fx_corridor_settlement(&*nested).unwrap());
-    assert!(!executable_contains_fx_corridor_settlement(&executable).unwrap());
-    assert!(!transaction_contains_fx_corridor_settlement(&tx).unwrap());
+    assert!(!instruction_contains_fx_corridor_settlement(&custom, selection).unwrap());
+    assert!(!instruction_contains_fx_corridor_settlement(&*nested, selection).unwrap());
+    assert!(!executable_contains_fx_corridor_settlement(&executable, selection).unwrap());
+    assert!(!transaction_contains_fx_corridor_settlement(&tx, selection).unwrap());
 }

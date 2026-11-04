@@ -5,7 +5,7 @@ use super::{
     PrivacyCompiledProfileResultV1, PrivacyEngineIdV1, PrivacyEngineManifestDigestV1,
     PrivacyExact12CatalogCommitmentV1, PrivacyExact12DeploymentQualificationDigestV1,
     PrivacyExact12ReleaseManifestDigestV1, PrivacyParameterDigestV1, PrivacyParameterIdV1,
-    PrivacyProofSystemIdV1, PrivacyProtocolIdV1, PrivacyReleaseArtifactDigestV1,
+    PrivacyProofSystemIdV1, PrivacyReleaseArtifactDigestV1, PrivacyRuntimeProtocolIdV1,
     PrivacySecurityClaimDigestV1, PrivacySecurityClaimV1, PrivacyStatementSchemaDigestV1,
     PrivacyVerifierDigestV1,
 };
@@ -30,7 +30,7 @@ pub const PRIVACY_EXACT12_ABI_VERSION_V1: u16 = 1;
 pub const PRIVACY_EXACT12_RELEASE_STAGES_PER_PROTOCOL_V1: usize = 4;
 /// Exact number of stage receipts in one release manifest.
 pub const PRIVACY_EXACT12_RELEASE_STAGE_RECEIPTS_V1: usize =
-    PrivacyProtocolIdV1::COUNT * PRIVACY_EXACT12_RELEASE_STAGES_PER_PROTOCOL_V1;
+    PrivacyRuntimeProtocolIdV1::EXACT12_COUNT * PRIVACY_EXACT12_RELEASE_STAGES_PER_PROTOCOL_V1;
 /// Exact number of proof artifacts in one release manifest.
 pub const PRIVACY_EXACT12_RELEASE_PROOF_ARTIFACTS_V1: usize = 54;
 /// Exact number of independent audit classes.
@@ -106,16 +106,18 @@ impl PrivacyReleaseStageV1 {
 /// Return the exact proof-artifact cardinality for one frozen evidence stage.
 #[must_use]
 pub const fn privacy_exact12_release_proof_artifact_count_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     stage: PrivacyReleaseStageV1,
 ) -> u8 {
-    if matches!(protocol_id, PrivacyProtocolIdV1::IrohaZkAmsV1)
-        || (matches!(protocol_id, PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-            && matches!(
-                stage,
-                PrivacyReleaseStageV1::PositiveCanonicalEndToEnd
-                    | PrivacyReleaseStageV1::MaximumShapeResource
-            ))
+    if matches!(protocol_id, PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1)
+        || (matches!(
+            protocol_id,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1
+        ) && matches!(
+            stage,
+            PrivacyReleaseStageV1::PositiveCanonicalEndToEnd
+                | PrivacyReleaseStageV1::MaximumShapeResource
+        ))
     {
         2
     } else {
@@ -462,7 +464,7 @@ pub struct PrivacyReleaseExecutableArtifactV1 {
 )]
 pub struct PrivacyReleaseProtocolBindingV1 {
     /// Exact protocol in catalog order.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact proof-system profile.
     pub proof_system_id: PrivacyProofSystemIdV1,
     /// Exact native engine.
@@ -503,7 +505,7 @@ pub struct PrivacyReleaseStageReceiptV1 {
     /// Exact zero-based position in the 48-stage schedule.
     pub stage_ordinal: u16,
     /// Protocol covered by this receipt.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Mandatory stage covered by this receipt.
     pub stage: PrivacyReleaseStageV1,
     /// Security claim covered by the stage.
@@ -538,7 +540,7 @@ pub struct PrivacyReleaseStageReceiptV1 {
 )]
 pub struct PrivacyReleaseProofArtifactV1 {
     /// Protocol covered by this proof artifact.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact stage whose production proof bytes this artifact records.
     pub stage: PrivacyReleaseStageV1,
     /// Zero-based contiguous ordinal within the stage.
@@ -1207,7 +1209,7 @@ impl PrivacyExact12ReleaseManifestV1 {
             return Err(PrivacyExact12ReleaseManifestValidationErrorV1::AbiBinding);
         }
         self.validate_executables()?;
-        if self.protocols.len() != PrivacyProtocolIdV1::COUNT {
+        if self.protocols.len() != PrivacyRuntimeProtocolIdV1::EXACT12_COUNT {
             return Err(PrivacyExact12ReleaseManifestValidationErrorV1::ProtocolCount);
         }
         if self.stage_receipts.len() != PRIVACY_EXACT12_RELEASE_STAGE_RECEIPTS_V1 {
@@ -1234,7 +1236,11 @@ impl PrivacyExact12ReleaseManifestV1 {
     fn validate_protocol_bindings(
         &self,
     ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
-        for (binding, expected) in self.protocols.iter().zip(PrivacyProtocolIdV1::ALL) {
+        for (binding, expected) in self
+            .protocols
+            .iter()
+            .zip(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
+        {
             if binding.protocol_id != expected
                 || binding.proof_system_id != expected.expected_proof_system()
                 || binding.engine_id != expected.expected_engine()
@@ -1367,7 +1373,10 @@ impl PrivacyExact12ReleaseManifestV1 {
     ) -> Result<(), PrivacyExact12ReleaseManifestValidationErrorV1> {
         let mut digests = BTreeSet::new();
         let mut artifact_index = 0_usize;
-        for (protocol_index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+        for (protocol_index, protocol_id) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
+            .into_iter()
+            .enumerate()
+        {
             let binding = &self.protocols[protocol_index];
             for (stage_index, stage) in PrivacyReleaseStageV1::ALL.into_iter().enumerate() {
                 let receipt_index = protocol_index
@@ -1637,10 +1646,13 @@ impl PrivacyExact12QualificationRecordV1 {
         if self.deployment_qualification.convergence_height > committed_height {
             return Err(PrivacyExact12QualificationRecordValidationErrorV1::NotConverged);
         }
-        if protocols.len() != PrivacyProtocolIdV1::COUNT {
+        if protocols.len() != PrivacyRuntimeProtocolIdV1::EXACT12_COUNT {
             return Err(PrivacyExact12QualificationRecordValidationErrorV1::ProtocolCount);
         }
-        for (index, protocol_id) in PrivacyProtocolIdV1::ALL.into_iter().enumerate() {
+        for (index, protocol_id) in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
+            .into_iter()
+            .enumerate()
+        {
             let row = &protocols[index];
             row.validate_at_committed_height(committed_height)
                 .map_err(|_| PrivacyExact12QualificationRecordValidationErrorV1::ProtocolBinding)?;
@@ -1667,7 +1679,7 @@ impl PrivacyExact12QualificationRecordV1 {
         }
         row.validate_at_committed_height(committed_height)
             .map_err(|_| PrivacyExact12QualificationRecordValidationErrorV1::ProtocolBinding)?;
-        let index = PrivacyProtocolIdV1::ALL
+        let index = PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
             .iter()
             .position(|protocol_id| *protocol_id == row.protocol_id)
             .ok_or(PrivacyExact12QualificationRecordValidationErrorV1::ProtocolBinding)?;
@@ -1677,7 +1689,7 @@ impl PrivacyExact12QualificationRecordV1 {
     fn validate_protocol_binding(
         &self,
         index: usize,
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         row: &PrivacyCapabilityRowV1,
     ) -> Result<(), PrivacyExact12QualificationRecordValidationErrorV1> {
         let release = &self.release_manifest.protocols[index];

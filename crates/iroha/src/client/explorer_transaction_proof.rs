@@ -1,7 +1,9 @@
 //! Authenticated selective Explorer evidence, without a finality authority claim.
 use super::*;
 use base64::Engine as _;
-use iroha_data_model::{block::execution_output::ExecutionOutputV1, query::CommittedTransaction};
+#[cfg(test)]
+use iroha_data_model::block::execution_output::ExecutionOutputV1;
+use iroha_data_model::query::CommittedTransaction;
 
 /// Maximum selective proof response size, including HTTP error bodies.
 pub const EXPLORER_TRANSACTION_PROOF_MAX_BYTES: usize = 16 * 1024 * 1024;
@@ -137,7 +139,7 @@ impl ExplorerTransactionProof {
                 ));
             }
         };
-        let ExecutionOutputV1::Network(output) = &selected.output else {
+        let Some(output) = selected.output.network() else {
             return Err(eyre!(
                 "Explorer transaction proof requires a Network output"
             ));
@@ -178,3 +180,69 @@ impl ExplorerTransactionProof {
 #[cfg(test)]
 #[path = "explorer_transaction_proof_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use iroha_data_model::{
+        block::execution_output::{
+            ExecutionOutputV1, NetworkExecutionOutputV1, NetworkExecutionOutputV2,
+            TriggerLifecycleEffectsV1,
+        },
+        transaction::TransactionResult,
+    };
+
+    #[test]
+    fn lifecycle_explorer_bindings_require_the_full_output_digest() {
+        let network = crate::client::test_network_id();
+        let key =
+            iroha_crypto::KeyPair::from_seed(vec![0x67; 32], iroha_crypto::Algorithm::Ed25519);
+        let tx = iroha_data_model::transaction::TransactionBuilder::new(
+            network,
+            iroha_data_model::account::AccountId::new(key.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(vec![], None),
+        )
+        .sign(key.private_key());
+        let entrypoint = TransactionEntrypoint::External(tx);
+        let hash = entrypoint.hash();
+        let header = BlockHeader::new(std::num::NonZeroU64::new(2).unwrap(), None, None, 1_000, 0);
+        let output = ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+            execution: NetworkExecutionOutputV1 {
+                input_index: 0,
+                result: TransactionResult::new(Ok(vec![])),
+                completions: vec![],
+            },
+            trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: vec![] },
+        });
+        // These are local binding checks only; deliberately opaque certificate
+        // carriers never stand in for finality authentication.
+        let mut proof = ExplorerTransactionProof {
+            version: 1,
+            network_id: network,
+            block_height: 2,
+            block_header: header,
+            transaction: CommittedTransaction {
+                block_hash: header.hash(),
+                entrypoint_hash: hash,
+                entrypoint,
+                entrypoint_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![]),
+                output_hash: HashOf::new(&output),
+                output,
+                output_proof: iroha_crypto::MerkleProof::from_audit_path(0, vec![]),
+            },
+            certificate: ExplorerTransactionProofCertificate {
+                consensus_header: "AQ==".into(),
+                commit_qc: "AQ==".into(),
+                result_preimage: "AQ==".into(),
+            },
+        };
+        proof.validate_bindings(&network, hash).unwrap();
+        proof.transaction.output =
+            ExecutionOutputV1::Network(proof.transaction.output.network().unwrap().clone());
+        assert!(proof.validate_bindings(&network, hash).is_err());
+        proof.transaction.output_hash = HashOf::new(&proof.transaction.output);
+        proof.validate_bindings(&network, hash).unwrap();
+        proof.transaction.entrypoint_proof = iroha_crypto::MerkleProof::from_audit_path(1, vec![]);
+        assert!(proof.validate_bindings(&network, hash).is_err());
+    }
+}

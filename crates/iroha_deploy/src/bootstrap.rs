@@ -70,7 +70,8 @@ pub struct NetworkMetadata {
     pub chain_id: String,
     /// Installed account-address prefix checked against public discovery.
     pub account_chain_discriminant: u16,
-    /// Compiled native World schema for typed current-state proof interpretation.
+    /// Qualified installation schema anchor. Each current/historical proof selects its own
+    /// certified schema from the compiled native family; this field is never a latest-tip pin.
     pub native_world_schema: Hash,
     /// Selected credential-free roots for native reads and operations.
     pub torii_roots: Vec<String>,

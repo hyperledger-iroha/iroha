@@ -407,15 +407,16 @@ fn axt_policy_and_replay_roundtrip_through_persisted_cold_manifest() {
         .snapshot_index;
     drop(backend);
 
-    let manifest_text = fs::read_to_string(
-        root.join(format!("{snapshot_index:020}"))
-            .join("manifest.json"),
+    let snapshot_dir = root.join(format!("{snapshot_index:020}"));
+    let manifest_text = String::from_utf8(
+        TieredStateBackend::persisted_manifest_bytes(&snapshot_dir)
+            .expect("read persisted tiered AXT manifest"),
     )
-    .expect("read persisted tiered AXT manifest");
+    .expect("persisted tiered AXT manifest is UTF-8");
     assert!(manifest_text.contains(r#""axt_policies""#));
     assert!(manifest_text.contains(r#""axt_replay_ledger""#));
-    let manifest: TieredSnapshotManifest =
-        json::from_str(&manifest_text).expect("decode persisted tiered AXT manifest");
+    let manifest = TieredStateBackend::read_persisted_manifest(&snapshot_dir)
+        .expect("decode persisted tiered AXT manifest");
     let policy_entry = manifest
         .cold_entries
         .iter()
@@ -942,6 +943,7 @@ fn snapshot_failure_leaves_existing_snapshot_intact() {
             hot_budget_overflow_keys: 0,
             hot_budget_overflow_bytes: 0,
         },
+        hot_row_ids: Vec::new(),
         cold_entries: Vec::new(),
     };
     let staging_path = plan.snapshot_dir.with_extension("staging");

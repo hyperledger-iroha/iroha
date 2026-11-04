@@ -93,6 +93,7 @@ fn current_constructors() -> BTreeMap<String, Value> {
     values.extend(sorafs_values());
     values.extend(kaigi_records::current_values());
     values.push(capture(pgc_reference_request()));
+    values.push(capture(super::ironwood_reference_request()));
     values.push(capture(
         crate::isi::privacy::current_submit_proof_fixture_v1(),
     ));
@@ -142,9 +143,10 @@ fn privacy_submit_constructor_captures_the_complete_native_catalog() {
 fn pgc_reference_request() -> crate::isi::privacy::BootstrapPrivacyPgcAccountsV1 {
     use crate::{
         privacy::{
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyP256CiphertextV1,
-            PrivacyP256PointV1, PrivacyPgcAccountBootstrapV1, PrivacyPgcAccountV1, PrivacyPoolIdV1,
-            PrivacyPoolNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+            PrivacyNamespaceScopeV1, PrivacyP256CiphertextV1, PrivacyP256PointV1,
+            PrivacyPgcAccountV1, PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyRootV1,
+            PrivacyRuntimeNamespaceV1, PrivacyRuntimePgcAccountBootstrapV1,
+            PrivacyRuntimeProtocolIdV1,
         },
         transaction::signed_attachments::ActionAttachmentRefV1,
     };
@@ -154,9 +156,9 @@ fn pgc_reference_request() -> crate::isi::privacy::BootstrapPrivacyPgcAccountsV1
         bytes[32] = last;
         PrivacyP256PointV1::new(bytes)
     };
-    let bootstrap = PrivacyPgcAccountBootstrapV1 {
-        namespace: PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+    let bootstrap = PrivacyRuntimePgcAccountBootstrapV1 {
+        namespace: PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([20; 32]),
             }),
@@ -176,7 +178,7 @@ fn pgc_reference_request() -> crate::isi::privacy::BootstrapPrivacyPgcAccountsV1
     };
     bootstrap.validate().expect("structural PGC wire fixture");
     crate::isi::privacy::BootstrapPrivacyPgcAccountsV1::new(
-        bootstrap,
+        bootstrap.try_into().expect("frozen Exact12 bootstrap"),
         ActionAttachmentRefV1 {
             action_index: 0,
             slot_index: 0,
@@ -354,7 +356,13 @@ fn complete_rows(
 
 /// Print a complete current capture only after every typed record has succeeded.
 pub(super) fn print_all(records: &[Record]) {
-    let proposed = proposed_rows(SOURCE);
+    let mut proposed = proposed_rows(SOURCE);
+    for (name, row) in proposed_rows(super::IRONWOOD_RECORD_SOURCE) {
+        assert!(
+            proposed.insert(name, row).is_none(),
+            "additive fixture identities are disjoint"
+        );
+    }
     let constructors = current_constructors();
     let rows = complete_rows(records, &proposed, &constructors);
     let document = json::object([
@@ -362,6 +370,12 @@ pub(super) fn print_all(records: &[Record]) {
         (
             "input_sha256",
             Value::String(hex::encode(Sha256::digest(SOURCE.as_bytes()))),
+        ),
+        (
+            "ironwood_input_sha256",
+            Value::String(hex::encode(Sha256::digest(
+                super::IRONWOOD_RECORD_SOURCE.as_bytes(),
+            ))),
         ),
         (
             "constructor_replacements",

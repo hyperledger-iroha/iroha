@@ -800,8 +800,10 @@ define_instruction_handlers! {
     dispatch_instruction::<
         iroha_data_model::isi::privacy::SchedulePrivacyProtocolLimitsUpdateV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::SchedulePrivacyIronwoodLimitsUpdateV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::PublishPrivacyRootV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyOrchardPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
+    dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyIronwoodPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyProofManagedPoolV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyPgcAccountsV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::BootstrapPrivacyZkAmsRegistryV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -843,6 +845,7 @@ define_instruction_handlers! {
     dispatch_instruction::<iroha_data_model::isi::privacy::RevokePrivacyZkX509CrlV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyZkX509CertificateV1> => CoreAuthorized [asset_effect = NoNumericAssetEffect],
     dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyProofV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
+    dispatch_instruction::<iroha_data_model::isi::privacy::SubmitPrivacyIronwoodProofV1> => CoreAuthorized [asset_effect = MayAffectNumericAssets],
     dispatch_instruction::<
         iroha_data_model::isi::private_settlement::ActivatePrivateSettlementPoolV1
     > => CoreAuthorized [asset_effect = NoNumericAssetEffect],
@@ -1250,6 +1253,7 @@ mod registry_dispatch_tests {
         assert_native_registration::<privacy::SchedulePrivacyProtocolLimitsUpdateV1>();
         assert_native_registration::<privacy::PublishPrivacyRootV1>();
         assert_native_registration::<privacy::BootstrapPrivacyOrchardPoolV1>();
+        assert_native_registration::<privacy::BootstrapPrivacyIronwoodPoolV1>();
         assert_native_registration::<privacy::BootstrapPrivacyProofManagedPoolV1>();
         assert_native_registration::<privacy::BootstrapPrivacyPgcAccountsV1>();
         assert_native_registration::<privacy::BootstrapPrivacyZkAmsRegistryV1>();
@@ -1276,7 +1280,7 @@ mod registry_dispatch_tests {
         assert_reviewed_initial_family("iroha_data_model::isi::privacy::", &(BTreeSet::new()));
         assert_reviewed_asset_effect_family(
             "iroha_data_model::isi::privacy::",
-            27,
+            28,
             &(BTreeSet::from([core::any::type_name::<privacy::SubmitPrivacyProofV1>()])),
         );
         assert_reviewed_asset_effect_family(

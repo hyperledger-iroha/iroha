@@ -426,3 +426,42 @@ fn actual_internal_rejection_fallback_fits_derived_terminals_at_descriptor_extre
         }
     }
 }
+
+#[test]
+fn lifecycle_terminal_ceilings_add_explicit_coverage_without_changing_predecessor() {
+    let predecessor = ExecutionOutputTerminalCeilings::derive().unwrap();
+    assert_eq!(
+        predecessor,
+        ExecutionOutputTerminalCeilings::derive_for_lifecycle(false).unwrap()
+    );
+    let successor = ExecutionOutputTerminalCeilings::derive_for_lifecycle(true).unwrap();
+    for phase in [
+        ExecutionOutputPhase::Network,
+        ExecutionOutputPhase::Pipeline,
+        ExecutionOutputPhase::Time,
+    ] {
+        assert!(successor.for_phase(phase) > predecessor.for_phase(phase));
+    }
+}
+
+#[test]
+fn lifecycle_terminal_policy_sizing_propagates_bounded_encoder_refusal() {
+    let mut row = coverage(largest_rows()[3].clone(), true);
+    let ExecutionOutputV1::TimeWithLifecycle(ref time) = row else {
+        unreachable!();
+    };
+    let trigger = time.execution.invocation.trigger.clone();
+    let result = norito::core::with_bounded_encode_work(
+        norito::core::EncodeWorkLimits {
+            max_frame_bytes: 1,
+            max_byte_visits: 1,
+            max_operations: 0,
+            max_depth: 1,
+        },
+        || {
+            assert!(reserve_policy_shape(&mut row, &trigger).is_err());
+            Ok(())
+        },
+    );
+    assert!(result.is_err());
+}

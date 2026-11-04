@@ -29,6 +29,7 @@ _SPEC.loader.exec_module(C)
 INVENTORY = C.load()
 REGISTRY = "crates/iroha_data_model/src/isi/registry/wire_ids.rs"
 PRIVACY_MODEL = "crates/iroha_data_model/src/privacy.rs"
+FROZEN_PRIVACY_MODEL = "crates/iroha_data_model/src/privacy/exact12_wire.rs"
 PRIVACY_HANDLERS = "crates/iroha_core/src/smartcontracts/isi/privacy.rs"
 PGC_NATIVE = "crates/iroha_core/src/executor/attachment_custody/pgc_bootstrap.rs"
 PGC_DIRECT = "crates/iroha_core/src/executor/attachment_direct.rs"
@@ -498,7 +499,7 @@ class Status(Base):
 
 class Exact12(Base):
     def test_thirteenth_protocol_fails(self) -> None:
-        overrides = replaced(PRIVACY_MODEL, '    #[norito(rename = "pq-masp-stark-v1")]\n    PqMaspStarkV1,\n}',
+        overrides = replaced(FROZEN_PRIVACY_MODEL, '    #[norito(rename = "pq-masp-stark-v1")]\n    PqMaspStarkV1,\n}',
                              '    #[norito(rename = "pq-masp-stark-v1")]\n    PqMaspStarkV1,\n    /// New.\n    NewProtocolV1,\n}')
         self.assert_fails(run("check_exact12", overrides=overrides), "PrivacyProtocolIdV1 has variants")
 
@@ -522,13 +523,13 @@ class Exact12(Base):
 
     def test_removed_dispatch_arm_fails(self) -> None:
         text = source(VERIFIER)
-        arm = "        PrivacyStatementV1::PqMaspStarkV1(statement) => {\n            verify_pq_masp_action_v1(statement, proof, envelope, context)?\n        }\n"
+        arm = "        PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) => {\n            verify_pq_masp_action_v1(statement, proof, envelope, context)?\n        }\n"
         self.assertIn(arm, text)
         self.assert_fails(run("check_exact12", overrides={VERIFIER: text.replace(arm, "")}), "the dispatch of verify_privacy_envelope_after_compiled_profile_v1")
 
     def test_changed_compiled_profile_arm_fails(self) -> None:
-        overrides = replaced(PROFILES, "PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => compiled_orchard_profile_v1(),",
-                             "PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }),")
+        overrides = replaced(PROFILES, "PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => compiled_orchard_profile_v1(),",
+                             "PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id }),")
         errors = run("check_exact12", overrides=overrides)
         self.assert_fails(errors, "exact12[OrchardHalo2ActionsV1]: compiled_privacy_profile_v1 dispatches to `Err`")
         self.assert_fails(errors, "the compiled profile arm is an error, state must be refused")
@@ -1958,8 +1959,8 @@ class SelectionEvidence(Base):
         profiles = INVENTORY["exact12"]["compiled_profiles"]
         self.assertEqual(profiles["constructed_test"]["test"], "only_governance_released_engines_have_compiled_profiles")
         path = profiles["constructed_test"]["path"]
-        overrides = replaced(path, "            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,\n            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,",
-                             "            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,")
+        overrides = replaced(path, "            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,\n            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,",
+                             "            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,")
         self.assert_fails(run("check_exact12", overrides=overrides),
                           "exact12[OrchardHalo2ActionsV1]: compiled_profile.state is `constructed`, but")
 
@@ -2062,7 +2063,7 @@ class Maintenance(Base):
     def test_main_exit_codes(self) -> None:
         code, out, err, written = self.call_main(["--no-compile"], [])
         self.assertEqual((code, written), (0, []))
-        self.assertIn("91 operations (79 registered instructions)", out)
+        self.assertIn("94 operations (82 registered instructions)", out)
         code, out, err, _ = self.call_main(["--no-compile"], ["operations[x]: wrong", "routes[y]: wrong"])
         self.assertEqual(code, 1)
         self.assertIn("operations[x]: wrong", err)
@@ -2120,7 +2121,7 @@ PRIVACY_INSTRUCTIONS = "crates/iroha_data_model/src/isi/privacy.rs"
 CORE_PRIVACY = "crates/iroha_core/src/privacy.rs"
 PROOFS_MODEL = "crates/iroha_data_model/src/privacy/proofs.rs"
 ENVELOPE_LITERAL = (
-    "PrivacyProofEnvelopeV1 { wire_magic: Default::default(), catalog_commitment: Default::default(), "
+    "PrivacyRuntimeProofEnvelopeV1 { wire_magic: Default::default(), catalog_commitment: Default::default(), "
     "protocol_id, proof_system_id, engine_id, parameter_id, parameter_digest, verifier_digest, "
     "statement_schema_digest, engine_manifest_digest, statement_digest, statement, proof }"
 )
@@ -2159,19 +2160,19 @@ class Exact12Roles(Base):
         self.assertEqual(verify_only, ["VeRangeRange", "VegaCredentialPresentation", "JindoBatchedEvaluation",
                                        "BootleLanternPresentation"])
 
-    def test_fourteenth_role_and_reordered_roles_fail(self) -> None:
-        overrides = replaced(ROLE_MODEL, "    /// PQ-MASP transition.\n    PqMaspTransition,\n}",
-                             "    /// PQ-MASP transition.\n    PqMaspTransition,\n    /// New.\n    NewRole,\n}")
+    def test_unrecorded_fifteenth_role_and_reordered_roles_fail(self) -> None:
+        overrides = replaced(ROLE_MODEL, "    /// Ironwood cross-address action bundle.\n    IronwoodActions,\n}",
+                             "    /// Ironwood cross-address action bundle.\n    IronwoodActions,\n    /// New.\n    NewRole,\n}")
         self.assert_fails(run("check_action_roles", overrides=overrides), "PrivacyActionRoleV1 has variants")
         overrides = replaced(ROLE_MODEL, "        Self::ZkAceAuthorization,\n        Self::AnonymousPgcPayment,",
                              "        Self::AnonymousPgcPayment,\n        Self::ZkAceAuthorization,")
         self.assert_fails(run("check_action_roles", overrides=overrides), "the ALL list of the role enum differs")
 
     def test_changed_protocol_of_a_role_fails(self) -> None:
-        overrides = replaced(ROLE_MODEL, "Self::VeRangeRange => PrivacyProtocolIdV1::VeRangeTransparentRangeV1,",
-                             "Self::VeRangeRange => PrivacyProtocolIdV1::PqMaspStarkV1,")
+        overrides = replaced(ROLE_MODEL, "Self::VeRangeRange => PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,",
+                             "Self::VeRangeRange => PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,")
         self.assert_fails(run("check_action_roles", overrides=overrides),
-                          "exact12.roles[VeRangeRange]: protocol_id gives `PrivacyProtocolIdV1::PqMaspStarkV1`")
+                          "exact12.roles[VeRangeRange]: protocol_id gives `PrivacyRuntimeProtocolIdV1::PqMaspStarkV1`")
 
     def test_typed_registry_and_recorded_rows_are_compared_field_by_field(self) -> None:
         text = source(DISPATCH_REGISTRY)
@@ -2264,7 +2265,7 @@ class Exact12Roles(Base):
                                   "does not reach native verifier `verify_orchard_shortcut_v1`")
         self.assert_fails(errors, "exact12.roles[PqMaspTransition]: protocol_id gives")
         self.assert_fails(errors, "exact12.roles: protocol PqMaspStarkV1 has no role")
-        self.assert_fails(errors, "exact12.roles: count is 12, 13 roles listed")
+        self.assert_fails(errors, "exact12.roles: count is 12, 14 roles listed")
         self.assert_fails(errors, "exact12.roles.registry.json_view_test: must cite a test that runs by default")
 
     def test_missing_sections_fail(self) -> None:
@@ -2285,50 +2286,50 @@ class Exact12SingleRoute(Base):
         self.assert_clean(run(self.METHOD))
 
     def test_second_envelope_assembler_fails_in_any_production_file(self) -> None:
-        function = f"fn hand_assembled() -> PrivacyProofEnvelopeV1 {{\n    {ENVELOPE_LITERAL}\n}}"
+        function = f"fn hand_assembled() -> PrivacyRuntimeProofEnvelopeV1 {{\n    {ENVELOPE_LITERAL}\n}}"
         for path in ("crates/zk_ace_prover/src/lib.rs", "crates/iroha_core_privacy/src/privacy_engines/jindo.rs",
                      "python/iroha_python/iroha_python_rs/src/privacy_native_actions.rs", ACTION_DRIVER):
             errors = run(self.METHOD, overrides=appended(path, function))
-            self.assert_fails(errors, f"exact12.single_route: {path}: `hand_assembled` assembles PrivacyProofEnvelopeV1 "
+            self.assert_fails(errors, f"exact12.single_route: {path}: `hand_assembled` assembles PrivacyRuntimeProofEnvelopeV1 "
                                       "outside `bind_v1`")
         qualified = "fn qualified() { let _ = iroha_data_model::privacy::" + ENVELOPE_LITERAL + "; }"
         self.assert_fails(run(self.METHOD, overrides=appended(CORE_PRIVACY, qualified)),
-                          f"{CORE_PRIVACY}: `qualified` assembles PrivacyProofEnvelopeV1 outside `bind_v1`")
+                          f"{CORE_PRIVACY}: `qualified` assembles PrivacyRuntimeProofEnvelopeV1 outside `bind_v1`")
 
     def test_test_gated_assemblies_and_signatures_are_not_assemblies(self) -> None:
         gated = (
-            "#[cfg(test)]\nmod hand_assembled_tests {\n    fn fixture() -> PrivacyProofEnvelopeV1 {\n        "
+            "#[cfg(test)]\nmod hand_assembled_tests {\n    fn fixture() -> PrivacyRuntimeProofEnvelopeV1 {\n        "
             + ENVELOPE_LITERAL + "\n    }\n}\n"
-            '#[cfg(any(test, feature = "test-utils"))]\nfn fixture_for_tests() -> PrivacyProofEnvelopeV1 {\n    '
+            '#[cfg(any(test, feature = "test-utils"))]\nfn fixture_for_tests() -> PrivacyRuntimeProofEnvelopeV1 {\n    '
             + ENVELOPE_LITERAL + "\n}\n"
-            "fn passes_through(envelope: PrivacyProofEnvelopeV1) -> PrivacyProofEnvelopeV1 {\n    envelope\n}\n"
-            "// PrivacyProofEnvelopeV1 { .. } in a comment\n"
-            'const NAME: &str = "PrivacyProofEnvelopeV1 { .. }";\n'
+            "fn passes_through(envelope: PrivacyRuntimeProofEnvelopeV1) -> PrivacyRuntimeProofEnvelopeV1 {\n    envelope\n}\n"
+            "// PrivacyRuntimeProofEnvelopeV1 { .. } in a comment\n"
+            'const NAME: &str = "PrivacyRuntimeProofEnvelopeV1 { .. }";\n'
         )
         self.assert_clean(run(self.METHOD, overrides=appended(CORE_PRIVACY, gated)))
         # A builder compiled into the release-evidence feature is production code of that build.
-        feature_gated = ('#[cfg(any(test, feature = "privacy-release-evidence"))]\nfn evidence_builder() -> PrivacyProofEnvelopeV1 {\n    '
+        feature_gated = ('#[cfg(any(test, feature = "privacy-release-evidence"))]\nfn evidence_builder() -> PrivacyRuntimeProofEnvelopeV1 {\n    '
                          + ENVELOPE_LITERAL + "\n}\n")
         self.assert_fails(run(self.METHOD, overrides=appended(CORE_PRIVACY, feature_gated)),
-                          "`evidence_builder` assembles PrivacyProofEnvelopeV1 outside `bind_v1`")
+                          "`evidence_builder` assembles PrivacyRuntimeProofEnvelopeV1 outside `bind_v1`")
 
     def test_second_self_literal_and_missing_assembler_fail(self) -> None:
-        second = ("impl PrivacyProofEnvelopeV1 {\n    /// Second assembler.\n    pub fn rebuilt(self) -> Self {\n"
+        second = ("impl PrivacyRuntimeProofEnvelopeV1 {\n    /// Second assembler.\n    pub fn rebuilt(self) -> Self {\n"
                   "        Self { statement_digest: self.statement_digest, ..self }\n    }\n}")
         self.assert_fails(run(self.METHOD, overrides=appended(ROLE_MODEL, second)),
-                          f"{ROLE_MODEL}: `rebuilt` assembles PrivacyProofEnvelopeV1 outside `bind_v1`")
+                          f"{ROLE_MODEL}: `rebuilt` assembles PrivacyRuntimeProofEnvelopeV1 outside `bind_v1`")
         text = source(ROLE_MODEL)
         self.assertIn("        let envelope = Self {\n", text)
         moved = text.replace("        let envelope = Self {\n", "        let envelope = build_envelope! {\n", 1)
         self.assert_fails(run(self.METHOD, overrides={ROLE_MODEL: moved}),
                           "`bind_v1` of crates/iroha_data_model/src/privacy/action_role.rs must assemble "
-                          "PrivacyProofEnvelopeV1 exactly once, found 0")
+                          "PrivacyRuntimeProofEnvelopeV1 exactly once, found 0")
 
     def test_unrecorded_identity_assignment_fails_and_recorded_sites_are_exact(self) -> None:
-        assignment = "fn relabel(envelope: &mut PrivacyProofEnvelopeV1) {\n    envelope.protocol_id = other();\n}"
+        assignment = "fn relabel(envelope: &mut PrivacyRuntimeProofEnvelopeV1) {\n    envelope.protocol_id = other();\n}"
         self.assert_fails(run(self.METHOD, overrides=appended(CORE_PRIVACY, assignment)),
                           f"{CORE_PRIVACY} assigns an envelope identity field 1 time(s), recorded 0")
-        comparison = "fn same(envelope: &PrivacyProofEnvelopeV1) -> bool {\n    envelope.protocol_id == other()\n}"
+        comparison = "fn same(envelope: &PrivacyRuntimeProofEnvelopeV1) -> bool {\n    envelope.protocol_id == other()\n}"
         self.assert_clean(run(self.METHOD, overrides=appended(CORE_PRIVACY, comparison)))
 
         def edit(inventory: dict) -> None:
@@ -2336,12 +2337,12 @@ class Exact12SingleRoute(Base):
             sites[0]["count"] += 1
             del sites[1]["why"]
         errors = run(self.METHOD, edited(edit))
-        self.assert_fails(errors, "crates/iroha_data_model/src/transaction/signed.rs assigns an envelope identity field 1 time(s), recorded 2")
+        self.assert_fails(errors, "crates/iroha_data_model/src/transaction/signed.rs assigns an envelope identity field 2 time(s), recorded 3")
         self.assert_fails(errors, "field_assignments[crates/iroha_core/src/privacy_release_evidence/zk_x509.rs] needs `why`")
 
     def test_second_instruction_that_carries_an_envelope_statement_or_proof_fails(self) -> None:
-        for field in ("envelope: PrivacyProofEnvelopeV1", "proofs: Vec<crate::privacy::PrivacyProofV1>",
-                      "statement: Option<PrivacyStatementV1>"):
+        for field in ("envelope: PrivacyRuntimeProofEnvelopeV1", "proofs: Vec<crate::privacy::PrivacyProofV1>",
+                      "statement: Option<PrivacyRuntimeStatementV1>"):
             name = field.split(":")[0]
             struct = f"/// Second carrier.\npub struct SubmitSecondPrivacyProofV1 {{\n    /// Payload.\n    pub {field},\n}}"
             self.assert_fails(run(self.METHOD, overrides=appended(PRIVACY_INSTRUCTIONS, struct)),
@@ -2356,14 +2357,15 @@ class Exact12SingleRoute(Base):
         cases = {
             "PreparedPrivacySubmissionV1::prepare": "fn second_entry() { let _ = PreparedPrivacySubmissionV1::prepare(a, b); }",
             "execute_after_admission": "fn second_entry(s: PreparedPrivacySubmissionV1) { let _ = s.execute_after_admission(a, b, c); }",
-            "action_role_v1": "fn second_route(e: &PrivacyProofEnvelopeV1) { let _ = e.action_role_v1(); }",
+            "action_role_v1": "fn second_route(e: &PrivacyRuntimeProofEnvelopeV1) { let _ = e.action_role_v1(); }",
             "verify_privacy_envelope_v1": "fn second_route() { let _ = verify_privacy_envelope_v1(a, b); }",
             "into_ledger": "fn second_executor(e: VerifiedPrivacyEffectsV1) { let _ = e.into_ledger(); }",
         }
         for call, code in cases.items():
             errors = run(self.METHOD, overrides=appended(PRIVACY_HANDLERS, code))
-            self.assert_fails(errors, f"exact12.single_route: `{call}` is called 2 time(s) in production code of "
-                                      f"{PRIVACY_HANDLERS}; the single path calls it once")
+            expected_count = 3 if call == "execute_after_admission" else 2
+            self.assert_fails(errors, f"exact12.single_route: `{call}` is called {expected_count} time(s) in production code of "
+                                      f"{PRIVACY_HANDLERS}")
         text = source(PRIVACY_HANDLERS)
         call = "        let effects = verify_privacy_envelope_v1(\n"
         self.assertIn(call, text)
@@ -2371,9 +2373,9 @@ class Exact12SingleRoute(Base):
                           "`verify_privacy_envelope_v1` is called 0 time(s)")
         moved = text.replace("        let role = self.envelope.action_role_v1().map_err(|error| {",
                              "        let role = resolve(&self.envelope).map_err(|error| {")
-        moved += "\nfn resolve(e: &PrivacyProofEnvelopeV1) -> Result<PrivacyActionRoleV1, ()> { e.action_role_v1().map_err(|_| ()) }\n"
+        moved += "\nfn resolve(e: &PrivacyRuntimeProofEnvelopeV1) -> Result<PrivacyActionRoleV1, ()> { e.action_role_v1().map_err(|_| ()) }\n"
         self.assert_fails(run(self.METHOD, overrides={PRIVACY_HANDLERS: moved}),
-                          "`action_role_v1` is no longer called inside `execute_after_admission`")
+                          "`action_role_v1` must occur once in each recorded owner")
 
     def test_native_verifier_called_outside_its_engine_and_the_dispatch_fails(self) -> None:
         shortcut = "fn shortcut() { let _ = crate::privacy_engines::orchard::verify_orchard_bundle_v1(a, b, c); }"
@@ -2384,8 +2386,9 @@ class Exact12SingleRoute(Base):
         self.assert_clean(run(self.METHOD, overrides=appended("crates/iroha_core_privacy/src/privacy_engines/orchard.rs", shortcut)))
         self.assert_clean(run(self.METHOD, overrides=appended("crates/iroha_core/src/privacy_release_evidence.rs", shortcut)))
         text = source(VERIFIER)
-        self.assertIn("verify_orchard_bundle_v1(", text)
-        without = text.replace("verify_orchard_bundle_v1(", "verify_orchard_bundle_elsewhere_v1(")
+        selector = "PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => verify_orchard_bundle_v1,"
+        self.assertIn(selector, text)
+        without = text.replace(selector, selector.replace("verify_orchard_bundle_v1", "verify_orchard_bundle_elsewhere_v1"))
         self.assert_fails(run(self.METHOD, overrides={VERIFIER: without}),
                           f"role OrchardActions: {VERIFIER} no longer calls native verifier `verify_orchard_bundle_v1`")
 
@@ -2495,7 +2498,7 @@ class Exact12SingleRoute(Base):
                       'statement type")\n}')
         self.assert_fails(run(self.METHOD, overrides=appended(PRIVACY_HANDLERS, old_branch)),
                           "retired[handler_protocol_routing]: `protocol envelope carries a different statement type` is back")
-        old_key = "fn old_key(s: &PreparedPrivacySubmissionV1) -> bool {\n    s.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkAmsV1\n}"
+        old_key = "fn old_key(s: &PreparedPrivacySubmissionV1) -> bool {\n    s.envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1\n}"
         text = source(PRIVACY_HANDLERS).replace("s.envelope", "self.envelope")
         self.assert_fails(run(self.METHOD, overrides={PRIVACY_HANDLERS: text + "\n" + old_key.replace("s.envelope", "self.envelope") + "\n"}),
                           "retired[handler_protocol_routing]: `self\\.envelope\\.protocol_id\\s*==` is back")
@@ -2534,7 +2537,7 @@ class Exact12RouteReaders(Base):
 
     def test_registry_rows_reads_every_row_or_nothing(self) -> None:
         rows = C.registry_rows(source(DISPATCH_REGISTRY), "PRIVACY_ROLE_DISPATCH_TABLE_V1")
-        self.assertEqual(len(rows), 13)
+        self.assertEqual(len(rows), 14)
         self.assertEqual(rows[0], {"role": "ZkAceAuthorization", "verification": "refused",
                                    "limitation": "ZkAceSoundnessDerivationIncomplete", "effect_class": "ZkAceAuthorization"})
         self.assertEqual(rows[2], {"role": "VeRangeRange", "verification": "implemented", "limitation": None,
@@ -2553,12 +2556,12 @@ class Exact12RouteReaders(Base):
         self.assertIsNone(C.driver_operations("fn main() {}", "OPERATION_SPECS_V1"))
 
     def test_struct_fields_of_types_reads_named_fields_only(self) -> None:
-        code = ("pub struct A { pub envelope: PrivacyProofEnvelopeV1, pub other: u8 }\n"
+        code = ("pub struct A { pub envelope: PrivacyRuntimeProofEnvelopeV1, pub other: u8 }\n"
                 "struct B { proofs: Vec<PrivacyProofV1> }\n"
-                "struct C { kept: PrivacyProofEnvelopeV1Digest }\n"
-                "fn f(envelope: PrivacyProofEnvelopeV1) {}\n")
-        self.assertEqual(C.struct_fields_of_types(code, ["PrivacyProofEnvelopeV1", "PrivacyProofV1"]),
-                         [("A", "envelope", "PrivacyProofEnvelopeV1"), ("B", "proofs", "PrivacyProofV1")])
+                "struct C { kept: PrivacyRuntimeProofEnvelopeV1Digest }\n"
+                "fn f(envelope: PrivacyRuntimeProofEnvelopeV1) {}\n")
+        self.assertEqual(C.struct_fields_of_types(code, ["PrivacyRuntimeProofEnvelopeV1", "PrivacyProofV1"]),
+                         [("A", "envelope", "PrivacyRuntimeProofEnvelopeV1"), ("B", "proofs", "PrivacyProofV1")])
 
     def test_envelope_scanners_see_literals_self_literals_and_assignments(self) -> None:
         path = "crates/iroha_core/src/privacy_scan_sample.rs"

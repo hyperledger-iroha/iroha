@@ -1760,6 +1760,14 @@ fn execute_propose(
     authority: &AccountId,
     instruction: &MultisigPropose,
 ) -> Result<(), ValidationFail> {
+    crate::runtime::ironwood::admission::instructions(
+        &instruction.instructions,
+        state_transaction.world.runtime_selection.get(),
+    )
+    .map_err(|error| {
+        state_transaction
+            .attempt_error_to_validation_fail(error.map_rejection(ValidationFail::NotPermitted))
+    })?;
     let account = resolve_signatory_account(state_transaction, &instruction.account)?;
     if account != instruction.account {
         return Err(ValidationFail::NotPermitted(
@@ -1953,7 +1961,7 @@ fn execute_cancel(
     // occurrence cannot itself be canceled; inspect before expiry traversal or writes.
     for inner in &target.instructions {
         if matches!(
-            proposal_instruction_attempt(inner)
+            proposal_instruction_attempt(inner, state_transaction.world.runtime_selection.get())
                 .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?,
             Some(MultisigInstructionBox::Cancel(_))
         ) {
@@ -2060,9 +2068,11 @@ fn prune_expired_with_guard(
             return Ok(());
         }
         for instruction in &proposal_state.instructions {
-            if let Some(MultisigInstructionBox::Approve(approve)) =
-                proposal_instruction_attempt(instruction)
-                    .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?
+            if let Some(MultisigInstructionBox::Approve(approve)) = proposal_instruction_attempt(
+                instruction,
+                state_transaction.world.runtime_selection.get(),
+            )
+            .map_err(|error| retain_multisig_read_attempt(state_transaction, error))?
             {
                 prune_expired_with_guard(
                     state_transaction,
@@ -2855,6 +2865,11 @@ pub(crate) fn validate_persisted_proposals<W: WorldReadOnly>(
             break;
         }
         let proposal = decode_proposal_state_at_key(key, bytes)?;
+        crate::runtime::ironwood::admission::instructions(
+            &proposal.instructions,
+            world.runtime_selection(),
+        )
+        .map_err(|error| error.map_rejection(ValidationFail::NotPermitted))?;
         if expected_network.is_some_and(|network| *network != proposal.network_id) {
             return Err(invalid_proposal_binding().into());
         }
@@ -2871,6 +2886,11 @@ pub(crate) fn validate_persisted_proposals<W: WorldReadOnly>(
         })
         .map_err(multisig_decode_attempt)?;
         validate_terminal_occurrence(&terminal)?;
+        crate::runtime::ironwood::admission::instructions(
+            &terminal.proposal.instructions,
+            world.runtime_selection(),
+        )
+        .map_err(|error| error.map_rejection(ValidationFail::NotPermitted))?;
         if expected_network.is_some_and(|network| *network != terminal.proposal.network_id)
             || *key
                 != multisig_proposal_terminal_state_key(
@@ -2886,8 +2906,9 @@ pub(crate) fn validate_persisted_proposals<W: WorldReadOnly>(
 
 fn proposal_instruction_attempt(
     instruction: &InstructionBox,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> Result<Option<MultisigInstructionBox>, Attempt<ValidationFail>> {
-    match MultisigInstructionBox::try_from(instruction) {
+    match crate::runtime::ironwood::admission::multisig_instruction(instruction, selection) {
         Ok(instruction) => Ok(Some(instruction)),
         Err(error) => match multisig_instruction_decode_attempt(error, |value| {
             multisig_state_decode_error(&value)
@@ -5672,8 +5693,8 @@ mod tests {
     #[test]
     fn rekey_rejects_privacy_reserve_before_moving_account_or_asset() {
         use iroha_data_model::privacy::{
-            PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
-            PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+            PrivacyNamespaceScopeV1, PrivacyOrchardPoolBootstrapDigestV1, PrivacyPoolIdV1,
+            PrivacyPoolNamespaceV1, PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
         };
 
         tx!(
@@ -5709,8 +5730,8 @@ mod tests {
         tx.world.assets.insert(old_asset_id.clone(), value);
         tx.world.track_asset_holder(&old_asset_id);
         let owner = crate::privacy_state::PrivacyPublicReserveOwnerV1::Orchard {
-            namespace: PrivacyNamespaceV1::new(
-                PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            namespace: PrivacyRuntimeNamespaceV1::new(
+                PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
                 PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                     pool_id: PrivacyPoolIdV1::new([0xD7; 32]),
                 }),

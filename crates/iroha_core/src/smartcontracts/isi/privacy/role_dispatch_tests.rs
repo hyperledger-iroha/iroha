@@ -32,6 +32,9 @@ const X509_ATTACHMENT_REQUIRED: &str =
 fn role_sample_rejection_message(role: PrivacyActionRoleV1, error: &Error) -> &str {
     use PrivacyActionRoleV1 as Role;
     let expected = match role {
+        Role::IronwoodActions => {
+            panic!("Ironwood has no placeholder in the frozen Exact12 inventory")
+        }
         Role::ZkAceAuthorization => "ZK-ACE authoritative policy is not registered",
         Role::AnonymousPgcPayment => "trusted Anonymous PGC pool state failed validation",
         Role::ZkAmsBatchAdmission | Role::ZkAmsProvisionAccount => {
@@ -190,7 +193,7 @@ fn assert_no_privacy_state_with_account_count(
 fn substituted_envelopes(
     own: &PrivacyActionRoleSampleV1,
     other: &PrivacyActionRoleSampleV1,
-) -> Vec<(&'static str, PrivacyProofEnvelopeV1)> {
+) -> Vec<(&'static str, PrivacyRuntimeProofEnvelopeV1)> {
     let mut substituted = Vec::new();
     let mut foreign_proof = own.envelope.clone();
     foreign_proof.proof = other.envelope.proof.clone();
@@ -231,13 +234,13 @@ fn handler_refuses_role_protocol_and_statement_substitution_for_every_pair_of_ro
                         "{case}: substitution must not resolve to an action role"
                     );
                     let error = execute_action_role_sample(
-                        SubmitPrivacyProofV1::new(envelope.clone()),
+                        SubmitPrivacyProofV1::new((envelope.clone()).try_into().expect("frozen Exact12 test input")),
                         profile,
                         &mut transaction,
                     )
                     .expect_err("a substituted envelope is never executed");
                     let message = smart_contract_parameter_message(&error);
-                    if envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+                    if envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
                         assert_eq!(message, X509_ATTACHMENT_REQUIRED, "{case}");
                     } else {
                         assert!(
@@ -259,14 +262,14 @@ fn every_role_enters_its_own_branch_of_the_single_handler() {
     let samples = action_role_samples();
     assert_eq!(
         samples.iter().map(|sample| sample.role).collect::<Vec<_>>(),
-        PrivacyActionRoleV1::ALL
+        PrivacyActionRoleV1::EXACT12_ROLES
     );
     let state = action_role_sample_state(&samples);
     for sample in &samples {
         let mut block = state.block(test_header());
         let mut transaction = block.transaction();
         let error = execute_action_role_sample(
-            SubmitPrivacyProofV1::new(sample.envelope.clone()),
+            SubmitPrivacyProofV1::new((sample.envelope.clone()).try_into().expect("frozen Exact12 test input")),
             sample.profile,
             &mut transaction,
         )
@@ -286,7 +289,7 @@ fn typed_handler_and_registry_dispatch_are_one_entry_for_every_role() {
     let state = governance_execution_state();
     let original_accounts = state.view().world.accounts.iter().count();
     for sample in &samples {
-        let instruction = SubmitPrivacyProofV1::new(sample.envelope.clone());
+        let instruction = SubmitPrivacyProofV1::new((sample.envelope.clone()).try_into().expect("frozen Exact12 test input"));
         let mut block = state.block(governance_execution_header(&state));
         let mut transaction = block.transaction();
         assert!(

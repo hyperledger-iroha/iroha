@@ -102,13 +102,74 @@ where
     W: Write + ?Sized,
     F: FnOnce(&mut W, usize) -> Result<(), Error>,
 {
+    write_typed_payload_frame_with_identity_and_prefix::<T, P, W, F>(
+        value, writer, base_flags, None, prefix,
+    )
+}
+
+/// Write an audited payload with a caller-supplied literal frame identity.
+///
+/// The caller must prove this literal equals `T::frame_name()`; this low-level
+/// helper cannot authenticate that relationship for a generic identity. `T`
+/// retains its original archive alignment. Payload bytes use the same checked
+/// two-pass writer and the currently active bounded encoder allowance, without
+/// entering a fresh work scope. No dynamic identity string is constructed.
+/// Ordinary generic framed writers retain their bounded-source refusal.
+///
+/// # Errors
+/// Requires an active bounded encoding scope; rejects an empty identity or a
+/// contradiction with an available static identity before writing any bytes.
+/// Preserves original work, serializer, length, checksum and layout refusals.
+#[doc(hidden)]
+pub fn write_canonical_payload_with_identity<T, P, W>(
+    value: &P,
+    writer: &mut W,
+    identity: &'static str,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    P: super::SerializePayload + ?Sized,
+    W: Write + ?Sized,
+{
+    if !super::charge_encode_prewrite(0)? {
+        return Err(Error::InvalidValue {
+            context: "explicit identity requires bounded encoding",
+        });
+    }
+    if identity.is_empty() || T::static_frame_name().is_some_and(|known| known != identity) {
+        return Err(super::refuse_encode_source());
+    }
+    write_typed_payload_frame_with_identity_and_prefix::<T, P, W, _>(
+        value,
+        writer,
+        default_encode_flags(),
+        Some(identity),
+        |_, _| Ok(()),
+    )
+}
+
+fn write_typed_payload_frame_with_identity_and_prefix<T, P, W, F>(
+    value: &P,
+    writer: &mut W,
+    base_flags: u8,
+    identity: Option<&'static str>,
+    prefix: F,
+) -> Result<(), Error>
+where
+    T: NoritoSerialize,
+    P: super::SerializePayload + ?Sized,
+    W: Write + ?Sized,
+    F: FnOnce(&mut W, usize) -> Result<(), Error>,
+{
     let _work = super::encode_work::ValueGuard::enter()?;
     validate_header_flags(base_flags)?;
     // A bounded frame may not trigger dynamic identity construction, even when
     // an unrelated operation warmed the memo. Prepay literal hashing before
     // source serialization or output allocation; the digest uses fixed scratch.
     let bounded_schema = if super::charge_encode_prewrite(0)? {
-        let name = T::static_frame_name().ok_or_else(super::refuse_encode_source)?;
+        let name = identity
+            .or_else(T::static_frame_name)
+            .ok_or_else(super::refuse_encode_source)?;
         super::charge_encode_prewrite(
             name.len()
                 .checked_add(128)

@@ -5,14 +5,14 @@
 //! while the transaction signature covers the complete payload.
 
 use super::{
-    Executable, ExecutableBatchItem, SignedTransaction, TransactionBuilder, TransactionPayload,
-    normalize_privacy_submission_for_intent_v1,
+    Executable, ExecutableBatchItem, PrivacySubmissionRefV1, SignedTransaction, TransactionBuilder,
+    TransactionPayload, normalize_privacy_submission_for_intent_v1,
 };
 use crate::{
     isi::{
         InstructionBox, instruction_wire_id, is_well_formed_wire_id,
         privacy::{
-            BootstrapPrivacyPgcAccountsV1, PrivacyZkX509RequestErrorV1, SubmitPrivacyProofV1,
+            BootstrapPrivacyPgcAccountsV1, PrivacyZkX509RequestErrorV1,
             SubmitPrivacyZkX509CertificateV1,
         },
     },
@@ -40,13 +40,10 @@ pub const ORDERED_INTENT_DIGEST_DOMAIN_V1: &[u8] = b"iroha.transaction.ordered-i
 /// action/slot reference; the sole proof lives in the signed occurrence. Every
 /// other instruction is independent.
 fn normalize_instruction_for_ordered_intent_v1(instruction: &InstructionBox) -> InstructionBox {
-    instruction
-        .as_any()
-        .downcast_ref::<SubmitPrivacyProofV1>()
-        .map_or_else(
-            || instruction.clone(),
-            normalize_privacy_submission_for_intent_v1,
-        )
+    PrivacySubmissionRefV1::from_instruction(instruction).map_or_else(
+        || instruction.clone(),
+        normalize_privacy_submission_for_intent_v1,
+    )
 }
 
 /// Remove the generated fields of the executable.

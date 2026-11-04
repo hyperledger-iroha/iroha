@@ -2127,7 +2127,7 @@ mod tests {
                 .iter()
                 .map(|row| row.protocol_id)
                 .collect::<Vec<_>>(),
-            iroha_data_model::privacy::PrivacyProtocolIdV1::ALL
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::ALL
         );
         let jindo = &manifest.protocols[6];
         assert_eq!(

@@ -552,7 +552,30 @@ pub(crate) fn validate_contract_lifecycle_completion(
     }
     Ok(())
 }
+/// Whether a stored artifact's fixed program header names an IVM ABI other than this binary's.
+///
+/// Such an artifact was admitted under a retired ABI, for example with a predecessor World
+/// imported at an upgrade checkpoint, and can be neither verified nor executed here.
+fn stored_artifact_has_retired_abi(
+    world: &impl WorldReadOnly,
+    address: &ContractAddress,
+    code_hash: Hash,
+) -> Result<bool, ExecutionAttemptError<ValidationFail>> {
+    let artifact_id = ContractArtifactId::for_address(address, code_hash)
+        .map_err(|error| ValidationFail::InternalError(error.to_string()))?;
+    let Some(bytes) = world.contract_code().get(&artifact_id) else {
+        return Ok(false);
+    };
+    let current = ivm_abi::syscalls::compute_abi_hash(ivm_abi::SyscallPolicy::AbiV1);
+    Ok(bytes.len() >= ivm_abi::metadata::HEADER_SIZE
+        && bytes[0..4] == ivm_abi::metadata::MAGIC[..]
+        && bytes[16] == 1
+        && bytes[17..49] != current[..])
+}
 /// Read immutable admitted artifacts and compute the exact new scalar initialization obligations.
+///
+/// A predecessor with a retired ABI has no interface this binary can compare. It never runs
+/// again, so its fully admitted replacement carries no added-scalar obligations.
 pub(crate) fn contract_upgrade_added_scalars(
     world: &impl WorldReadOnly,
     budget: &iroha_allocation::AllocationBudget,
@@ -598,6 +621,10 @@ pub(crate) fn contract_upgrade_added_scalars(
         }
         Ok(artifact)
     };
+    if stored_artifact_has_retired_abi(world, address, previous_code_hash)? {
+        admitted(replacement_code_hash)?;
+        return Ok(Vec::new());
+    }
     let previous = admitted(previous_code_hash)?;
     let replacement = admitted(replacement_code_hash)?;
     let plan = ivm_abi::upgrade::validate_contract_upgrade(
@@ -1972,6 +1999,104 @@ seiyaku LifecycleTwo { permission CanRunLifecycleTwo;
             .is_err(),
             "kaizen cannot replay after consumption"
         );
+    }
+    #[test]
+    fn retired_abi_predecessor_is_replaced_in_place_without_scalar_obligations() {
+        let manifest_signing = crate::manifest_signing_test_support::ManifestSigningFixture::new();
+        let (state, authority, keypair) = test_state();
+        let mut block = state.block(default_header(1));
+        let mut transaction = block.transaction();
+        let contract_address = ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .expect("canonical test network id"),
+            &authority,
+            9,
+            DataSpaceId::UNIVERSAL,
+        )
+        .expect("contract address");
+        transaction
+            .world
+            .bind_inactive_contract_subject_for_testing(
+                contract_address.clone(),
+                authority.clone(),
+            );
+        let register = |source: &str, transaction: &mut StateTransaction<'_, '_>| {
+            let (code, manifest) = lifecycle_contract(source);
+            let code_hash =
+                register_code_bytes(&authority, DataSpaceId::UNIVERSAL, code, transaction)
+                    .expect("register bytecode");
+            register_manifest(
+                &authority,
+                DataSpaceId::UNIVERSAL,
+                manifest
+                    .try_signed(
+                        manifest_signing.context(),
+                        manifest_signing.max_frame_bytes(),
+                        &keypair,
+                    )
+                    .expect("sign bounded fixture manifest"),
+                transaction,
+            )
+            .expect("register manifest");
+            code_hash
+        };
+        let v1_hash = register(
+            r"seiyaku RetiredOne { permission CanRunRetired; kotoage fn run() authorize(CanRunRetired) {} }",
+            &mut transaction,
+        );
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            1,
+            v1_hash,
+            &mut transaction,
+        )
+        .expect("activate v1");
+        // A World imported at an upgrade checkpoint keeps the predecessor's retired ABI stamp.
+        let artifact_id =
+            ContractArtifactId::for_address(&contract_address, v1_hash).expect("artifact id");
+        let mut retired = transaction
+            .world
+            .contract_code
+            .get(&artifact_id)
+            .cloned()
+            .expect("stored v1 bytecode");
+        retired[17..49].fill(0x5e);
+        transaction.world.contract_code.insert(artifact_id, retired);
+        let v2_hash = register(
+            r"seiyaku RetiredTwo { permission CanRunRetired; kotoage fn run() authorize(CanRunRetired) {} }",
+            &mut transaction,
+        );
+        activate_instance(
+            &authority,
+            contract_address.clone(),
+            2,
+            v2_hash,
+            &mut transaction,
+        )
+        .expect("a retired-ABI predecessor is replaced in place");
+        assert_eq!(
+            transaction
+                .world
+                .contract_instances()
+                .get(&contract_address)
+                .copied(),
+            Some(v2_hash)
+        );
+        assert_eq!(
+            pending_contract_lifecycle(&transaction.world, &contract_address)
+                .expect("valid lifecycle state"),
+            None,
+            "a replacement without kaizen/改善 stages nothing"
+        );
+        validate_contract_lifecycle_call(
+            &transaction.world,
+            &contract_address,
+            v2_hash,
+            EntryPointKind::Kotoage,
+        )
+        .expect("ordinary calls run on the replacement at once");
     }
     #[test]
     fn upgrades_require_exact_storage_and_actual_new_scalar_initialization() {

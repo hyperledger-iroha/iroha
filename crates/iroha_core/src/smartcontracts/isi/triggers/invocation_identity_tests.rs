@@ -31,6 +31,56 @@ fn instructions(message: &str) -> ConstVec<InstructionBox> {
     ConstVec::from(vec![Log::new(Level::INFO, message.to_owned()).into()])
 }
 
+/// Recompute the canonical preimage from the actual executable, without either cache.
+fn fresh_lifecycle_hash<F: norito::NoritoSerialize>(
+    store: &impl SetReadOnly,
+    action: &LoadedAction<F>,
+    kind: u8,
+) -> Hash {
+    let mut executable = EXECUTABLE_DOMAIN.to_vec();
+    match &action.executable {
+        ExecutableRef::Instructions(items) => {
+            executable.push(0);
+            executable.extend(norito::encode_canonical(items).unwrap());
+        }
+        ExecutableRef::ContractCall(call) => {
+            executable.push(1);
+            executable.extend(norito::encode_canonical(call).unwrap());
+        }
+        ExecutableRef::Ivm(blob) => {
+            let artifact = store.get_original_contract(blob).unwrap();
+            let fresh_blob = HashOf::new(artifact);
+            assert_eq!(*blob, fresh_blob);
+            let fresh_code = ivm::contract_code_hash(artifact.as_ref());
+            executable.push(2);
+            executable.extend(norito::encode_canonical(&fresh_blob).unwrap());
+            executable.extend(norito::encode_canonical(&fresh_code).unwrap());
+            executable.extend(norito::encode_canonical(&(artifact.as_ref().len() as u64)).unwrap());
+        }
+        ExecutableRef::Batch(items) => {
+            executable.push(3);
+            executable.extend(norito::encode_canonical(items).unwrap());
+        }
+    }
+    let mut expected = LIFECYCLE_ACTION_DOMAIN.to_vec();
+    expected.push(kind);
+    expected.extend(norito::encode_canonical(&action.authority).unwrap());
+    expected.extend(norito::encode_canonical(&action.filter).unwrap());
+    expected.extend(norito::encode_canonical(&action.repeats).unwrap());
+    expected.extend(norito::encode_canonical(&action.metadata).unwrap());
+    expected.extend(norito::encode_canonical(&action.retry_policy).unwrap());
+    expected.extend(
+        norito::encode_canonical(
+            &action
+                .retry_state
+                .map(|state| (state.retries_used, state.next_retry_at_ms)),
+        )
+        .unwrap(),
+    );
+    expected.extend(norito::encode_canonical(&Hash::new(executable)).unwrap());
+    Hash::new(expected)
+}
+
 fn time_action(executable: Executable) -> SpecializedAction<TimeEventFilter> {
     let mut action = SpecializedAction::new(
         executable,
@@ -149,7 +199,9 @@ fn trigger_use_commits_each_persistent_action_and_retry_field() {
             }
             6 => action.retry_state.as_mut().unwrap().retries_used = 2,
             7 => action.retry_state.as_mut().unwrap().next_retry_at_ms = 501,
-            8 => action.executable = ExecutableRef::Instructions(instructions("other root")),
+            8 => action.replace_executable_for_testing(ExecutableRef::Instructions(instructions(
+                "other root",
+            ))),
             9 => {
                 action.metadata.insert(
                     trigger_registered_block_height_metadata_key().clone(),
@@ -324,7 +376,7 @@ fn trigger_use_authenticates_borrowed_artifact_lookup_and_complete_code_identity
     let different = IvmBytecode::from_compiled(vec![0xBB; 64 * 1024]);
     let different_lookup = HashOf::new(&different);
     let entry = tx.contracts.get_mut(&lookup).unwrap();
-    entry.original_contract = different;
+    entry.original_contract = different.into();
     entry.code_hash = ivm::contract_code_hash(entry.original_contract.as_ref());
     assert!(
         time_trigger_use_v1(&tx, &time, 8)
@@ -335,12 +387,18 @@ fn trigger_use_authenticates_borrowed_artifact_lookup_and_complete_code_identity
     // content binding, not a false negative or permission to execute the bytes.
     let changed_entry = tx.contracts.remove(lookup).unwrap();
     tx.contracts.insert(different_lookup, changed_entry);
-    tx.time_triggers.get_mut(&time).unwrap().executable = ExecutableRef::Ivm(different_lookup);
+    tx.time_triggers
+        .get_mut(&time)
+        .unwrap()
+        .replace_executable_for_testing(ExecutableRef::Ivm(different_lookup));
     assert_ne!(
         time_trigger_use_v1(&tx, &time, 8).unwrap().action_hash,
         original.action_hash
     );
-    tx.time_triggers.get_mut(&time).unwrap().executable = ExecutableRef::Ivm(lookup);
+    tx.time_triggers
+        .get_mut(&time)
+        .unwrap()
+        .replace_executable_for_testing(ExecutableRef::Ivm(lookup));
     tx.contracts.insert(lookup, retained);
     assert_eq!(time_trigger_use_v1(&tx, &time, 8).unwrap(), original);
 }
@@ -379,12 +437,15 @@ fn trigger_use_distinguishes_executable_variant_from_same_instruction_content() 
     let mut block = set.block();
     let mut tx = block.transaction();
     let original = time_trigger_use_v1(&tx, &time, 8).unwrap();
-    tx.time_triggers.get_mut(&time).unwrap().executable = ExecutableRef::Batch(ConstVec::from(
-        body.iter()
-            .cloned()
-            .map(ExecutableBatchItem::Instruction)
-            .collect::<Vec<_>>(),
-    ));
+    tx.time_triggers
+        .get_mut(&time)
+        .unwrap()
+        .replace_executable_for_testing(ExecutableRef::Batch(ConstVec::from(
+            body.iter()
+                .cloned()
+                .map(ExecutableBatchItem::Instruction)
+                .collect::<Vec<_>>(),
+        )));
     assert_ne!(
         time_trigger_use_v1(&tx, &time, 8).unwrap().action_hash,
         original.action_hash
@@ -425,7 +486,10 @@ fn trigger_use_commits_complete_declared_contract_invocation() {
             3 => changed.arguments = Some(ContractArgumentRecord::try_new(vec![1, 2, 3]).unwrap()),
             _ => unreachable!(),
         }
-        tx.time_triggers.get_mut(&time).unwrap().executable = ExecutableRef::ContractCall(changed);
+        tx.time_triggers
+            .get_mut(&time)
+            .unwrap()
+            .replace_executable_for_testing(ExecutableRef::ContractCall(changed));
         assert_ne!(
             time_trigger_use_v1(&tx, &time, 8).unwrap().action_hash,
             original.action_hash,
@@ -531,4 +595,179 @@ fn trigger_use_authority_rekey_changes_action_and_calls_without_growing_descript
         pipeline_trigger_use_v1(&view, &pipeline, 8).unwrap(),
         before_pipeline
     );
+}
+
+#[test]
+fn lifecycle_hash_fixed_frames_preserve_declared_identity_and_original_bytes() {
+    use iroha_allocation::AllocationBudget;
+    use norito::core::{DecodeBudgetContext, DecodeLimits, EncodeWorkLimits};
+    fn check<T: norito::NoritoSerialize>(value: T, identity: &'static str) {
+        assert_eq!(T::frame_name(), identity);
+        let expected = norito::encode_canonical(&value).unwrap();
+        let mut actual = Vec::with_capacity(expected.len());
+        let pool = AllocationBudget::new(2_000_000);
+        let scratch = pool.try_reserve_bytes(262_144).unwrap();
+        let context = DecodeBudgetContext::try_new_owned(
+            DecodeLimits::new(1_000_000, 65_536, 1_000_000, 262_144, 128),
+            &pool,
+        )
+        .unwrap();
+        norito::core::with_prepaid_validation(&scratch, &context, || {
+            norito::core::with_bounded_encode_work(
+                EncodeWorkLimits {
+                    max_frame_bytes: 65_536,
+                    max_byte_visits: 10_000_000,
+                    max_operations: 1_000_000,
+                    max_depth: 128,
+                },
+                || {
+                    fixed_frame(&value, identity, &mut actual, &mut HashFailure::default()).map_err(
+                        |_| norito::Error::InvalidValue {
+                            context: "fixed hash frame test",
+                        },
+                    )
+                },
+            )
+            .unwrap();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(actual, expected);
+    }
+    check(
+        Some(TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(3).unwrap(),
+            retry_after_ms: NonZeroU64::new(100).unwrap(),
+        }),
+        RETRY_POLICY_FRAME,
+    );
+    check(Some((3_u32, 100_u64)), RETRY_STATE_FRAME);
+    check(None::<(u32, u64)>, RETRY_STATE_FRAME);
+    check(instructions("fixed frame"), INSTRUCTIONS_FRAME);
+    check(
+        ConstVec::from(vec![ExecutableBatchItem::Instruction(
+            Log::new(Level::INFO, "batch".into()).into(),
+        )]),
+        BATCH_FRAME,
+    );
+    check(
+        HashOf::new(&IvmBytecode::from_compiled(vec![1, 2, 3])),
+        IVM_HASH_FRAME,
+    );
+    check(123_u64, "u64");
+}
+
+#[test]
+fn lifecycle_bounded_digest_matches_original_recipe_for_each_loaded_executable() {
+    use iroha_allocation::AllocationBudget;
+    use norito::core::{DecodeBudgetContext, DecodeLimits, EncodeWorkLimits};
+    let call = ContractInvocation {
+        contract_address: ContractAddress::derive(
+            &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+                .parse()
+                .unwrap(),
+            &authority(0x31),
+            1,
+            iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+        )
+        .unwrap(),
+        expected_code_hash: Hash::new(b"bounded deployment"),
+        entrypoint: "main".to_owned(),
+        arguments: Some(ContractArgumentRecord::try_new(vec![1, 2, 3]).unwrap()),
+    };
+    for executable in [
+        Executable::Instructions(instructions("bounded")),
+        Executable::Batch(ConstVec::from(vec![ExecutableBatchItem::Instruction(
+            Log::new(Level::INFO, "batch".into()).into(),
+        )])),
+        Executable::Ivm(IvmBytecode::from_compiled(vec![0xA5; 32_768])),
+        Executable::ContractCall(call),
+    ] {
+        let (set, time, pipeline) = fixture(executable);
+        let mut block = set.block();
+        let tx = block.transaction();
+        let pool = AllocationBudget::new(2_000_000);
+        let scratch = pool.try_reserve_bytes(262_144).unwrap();
+        let context = DecodeBudgetContext::try_new_owned(
+            DecodeLimits::new(1_000_000, 65_536, 1_000_000, 262_144, 128),
+            &pool,
+        )
+        .unwrap();
+        let time_hash = fresh_lifecycle_hash(&tx, tx.time_triggers().get(&time).unwrap(), 1);
+        let pipeline_hash =
+            fresh_lifecycle_hash(&tx, tx.pipeline_triggers().get(&pipeline).unwrap(), 0);
+        norito::core::with_prepaid_validation(&scratch, &context, || {
+            let limits = EncodeWorkLimits {
+                max_frame_bytes: 65_536,
+                max_byte_visits: 10_000_000,
+                max_operations: 1_000_000,
+                max_depth: 128,
+            };
+            let bounded = norito::core::with_bounded_encode_work(limits, || {
+                lifecycle_action_hash(&tx, tx.time_triggers().get(&time).unwrap(), 1, &[], None)
+            })
+            .unwrap();
+            assert_eq!(bounded.0, time_hash);
+            if matches!(
+                &tx.time_triggers().get(&time).unwrap().executable,
+                ExecutableRef::Ivm(_)
+            ) {
+                for bytes in [0, 1, 128, 1024] {
+                    let mut short = limits;
+                    short.max_byte_visits = bytes;
+                    assert!(
+                        norito::core::with_bounded_encode_work(short, || lifecycle_action_hash(
+                            &tx,
+                            tx.time_triggers().get(&time).unwrap(),
+                            1,
+                            &[],
+                            None,
+                        ))
+                        .is_err(),
+                        "insufficient mutable-frame work must return a refusal, not panic"
+                    );
+                }
+            }
+
+            let bounded = norito::core::with_bounded_encode_work(limits, || {
+                lifecycle_action_hash(
+                    &tx,
+                    tx.pipeline_triggers().get(&pipeline).unwrap(),
+                    0,
+                    &[],
+                    None,
+                )
+            })
+            .unwrap();
+            assert_eq!(bounded.0, pipeline_hash);
+            Ok(())
+        })
+        .unwrap();
+    }
+}
+
+#[test]
+fn lifecycle_inline_binding_cannot_be_prepared_under_a_snapshot_budget() {
+    use iroha_allocation::AllocationBudget;
+    use norito::core::{DecodeBudgetContext, DecodeLimits};
+    let executable = ExecutableRef::Instructions(instructions("immutable source"));
+    let original = inline_executable_digest(&executable).unwrap();
+    let pool = AllocationBudget::new(2_000_000);
+    let scratch = pool.try_reserve_bytes(262_144).unwrap();
+    let context = DecodeBudgetContext::try_new_owned(
+        DecodeLimits::new(1_000_000, 65_536, 1_000_000, 262_144, 128),
+        &pool,
+    )
+    .unwrap();
+    let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        norito::core::with_prepaid_validation(&scratch, &context, || {
+            inline_executable_digest(&executable);
+            Ok(())
+        })
+    }));
+    assert!(
+        failure.is_err(),
+        "a capture budget must never choose whether an immutable binding is prepared"
+    );
+    assert_eq!(inline_executable_digest(&executable), Some(original));
 }

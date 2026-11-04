@@ -15,6 +15,42 @@ struct NativeValidationFixture {
     chain: CertifiedTestChain,
     user: KeyPair,
 }
+
+#[test]
+fn ironwood_payloads_cannot_commit_even_as_rejected_transactions() {
+    let fixture = NativeValidationFixture::new();
+    let (_, proof, bootstrap) = crate::runtime::catalog::tests::privacy_resolution_instructions();
+    for instruction in [proof, bootstrap] {
+        let mut builder = TransactionBuilder::new(
+            fixture.chain.network_id(),
+            AccountId::new(fixture.user.public_key().clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        );
+        builder.set_creation_time(Duration::from_millis(2_001));
+        let signed = builder
+            .with_instructions([instruction])
+            .sign(fixture.user.private_key());
+        let proposal = fixture.proposal(vec![signed], fixture.cadence());
+        let original = proposal.encode_wire().unwrap();
+        let (refused, error) = fixture
+            .validate(proposal)
+            .unpack(|_| {})
+            .err()
+            .expect("block is structurally inadmissible");
+        assert!(
+            error
+                .to_string()
+                .contains("inactive Ironwood payload grammar"),
+            "{error}"
+        );
+        assert_eq!(refused.encode_wire().unwrap(), original);
+        assert_eq!(fixture.chain.state().view().height(), 2);
+        assert!(
+            !refused.has_results(),
+            "no rejected transaction result can be committed"
+        );
+    }
+}
 impl NativeValidationFixture {
     fn new() -> Self {
         Self::with_configuration(|_| {})
