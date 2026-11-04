@@ -70,7 +70,7 @@ use iroha::{
         },
         parameter::{FastpqSourcePolicyV1, Parameter, system::SumeragiParameters},
         permission::Permission,
-        prelude::{FindAssetById, FindAssets},
+        prelude::FindAssetById,
         privacy::{
             IVM_PRIVATE_NOTE_MAX_INPUTS_V1, IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
             IvmPrivateNoteLimitsV1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
