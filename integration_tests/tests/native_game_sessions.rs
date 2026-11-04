@@ -216,6 +216,36 @@ async fn assert_replicas(
     .map_err(|_| eyre!("validators did not converge on exact retained game state"))?
 }
 
+// The negotiated ledger-state JSON uses Norito's two-space pretty printer.
+fn ledger_state_json_limit(wire_bytes: usize) -> Result<usize> {
+    ensure!(
+        wire_bytes <= iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES,
+        "certified block exceeds the native finality limit"
+    );
+    // Within finality_proof.block_wire each byte is three levels deep.
+    // Keep the original allowance for the remaining four-validator metadata.
+    Ok(2 * 1024 * 1024 + wire_bytes * b"      255,\n".len())
+}
+
+#[test]
+fn ledger_state_json_limit_matches_pretty_printed_proof_bytes() -> Result<()> {
+    fn response(size: usize) -> Result<String> {
+        let proof = norito::json::object([("block_wire", vec![255_u8; size])])?;
+        let value = norito::json::object([("finality_proof", proof)])?;
+        Ok(norito::json::to_json_pretty(&value)?)
+    }
+    let (small, large) = (1, 1024);
+    assert_eq!(
+        response(large)?.len() - response(small)?.len(),
+        ledger_state_json_limit(large)? - ledger_state_json_limit(small)?
+    );
+    assert!(
+        ledger_state_json_limit(iroha_data_model::sumeragi_finality::MAX_FINALITY_BLOCK_BYTES + 1)
+            .is_err()
+    );
+    Ok(())
+}
+
 /// The endpoint supplies carriers, never the committee used to authenticate them.
 async fn finalized_state_observation(
     http: &reqwest::Client,
@@ -302,11 +332,8 @@ async fn finalized_state_observation(
             .is_some_and(|v| v.starts_with("application/json")),
         "ledger-state carrier is not JSON"
     );
-    // Norito JSON spells block_wire as an array of decimal bytes: up to three
-    // digits and a comma per byte. Charge that variable field to the exact
-    // independently certified wire; keep the original fixed metadata allowance.
     let wire = committed.block().encode_wire()?;
-    let carrier_limit = 2 * 1024 * 1024 + 4 * wire.len();
+    let carrier_limit = ledger_state_json_limit(wire.len())?;
     let mut bytes = Vec::new();
     while let Some(chunk) = response.chunk().await? {
         ensure!(
