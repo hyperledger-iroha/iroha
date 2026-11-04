@@ -27,7 +27,7 @@ fn find_asset(
         Ok(asset) => Ok(Some(asset)),
         Err(iroha::query::QueryError::Validation(ValidationFail::QueryFailed(
             QueryExecutionFail::Find(FindError::Asset(missing)),
-        ))) if missing == *asset_id => Ok(None),
+        ))) if missing.as_ref() == asset_id => Ok(None),
         Err(error) => Err(error.into()),
     }
 }

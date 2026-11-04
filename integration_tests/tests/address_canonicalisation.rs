@@ -1615,7 +1615,7 @@ async fn accounts_query_requires_canonical_ids_after_alias_resolution() -> Resul
     let http = http_client();
     wait_for_account_in_query(&http, url.clone(), &expected).await?;
     let canonical_body = norito::json::to_vec(&norito::json!({
-        "filter": {"op": "eq", "args": ["id", expected.as_str()]}, "limit": 4
+        "filter": {"op": "eq", "args": vec!["id", expected.as_str()]}, "limit": 4
     }))?;
     let canonical_response = http
         .post(url.clone())
@@ -1642,7 +1642,7 @@ async fn accounts_query_requires_canonical_ids_after_alias_resolution() -> Resul
             .code_str()
             .to_string();
         let body = norito::json::to_vec(&norito::json!({
-            "filter": {"op": "eq", "args": ["id", rejected.as_str()]}, "limit": 4
+            "filter": {"op": "eq", "args": vec!["id", rejected.as_str()]}, "limit": 4
         }))?;
         let response = http
             .post(url.clone())
