@@ -63937,10 +63937,30 @@
             }
           },
           "401": {
-            "description": "Canonical account request authentication is required."
+            "description": "Canonical account request authentication is required.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The authenticated account lacks CanReadAllLedgerData."
+            "description": "The authenticated account lacks CanReadAllLedgerData.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [
@@ -95643,10 +95663,30 @@
             }
           },
           "401": {
-            "description": "Canonical account request authentication is required."
+            "description": "Canonical account request authentication is required.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           },
           "403": {
-            "description": "The authenticated account lacks CanReadAllLedgerData."
+            "description": "The authenticated account lacks CanReadAllLedgerData.",
+            "headers": {
+              "Cache-Control": {
+                "description": "Authenticated responses which must never be retained.",
+                "required": true,
+                "schema": {
+                  "const": "private, no-store",
+                  "type": "string"
+                }
+              }
+            }
           }
         },
         "security": [

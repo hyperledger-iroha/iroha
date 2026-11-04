@@ -2,8 +2,8 @@
 //!
 //! A node runs one Sumeragi instance for the global chain and one for every active lane
 //! (`specs/sumeragi_lanes.md`). Every series of an instance carries its `lane` label:
-//! [`GLOBAL_LANE`] for the global instance and the decimal lane id for a lane instance. The
-//! remaining labels (`reason`, `kind`, `queue`) come from closed enums, so the label set is
+//! [`GLOBAL_LANE`](crate::metrics::sumeragi::GLOBAL_LANE) for the global instance
+//! and the decimal lane id for a lane instance. The remaining labels (`reason`, `kind`, `queue`) come from closed enums, so the label set is
 //! bounded by the active lane catalog; [`Metrics::remove_sumeragi_instance`] drops the series of
 //! a retired lane. The node's Sumeragi driver is the only writer
 //! (`iroha_core::sumeragi::metrics`).
