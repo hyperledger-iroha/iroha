@@ -1,8 +1,11 @@
 //! Torii contract manifest endpoints: bytecode deploy wraps ISIs and GET reads the derived on-chain manifest.
+#[path = "contracts/collection_inventory.rs"]
+mod collection_inventory;
 #[path = "contracts/ivm_proved.rs"]
 mod ivm_proved;
 use eyre::{Result, eyre};
 use integration_tests::{manifest::ManifestEncodingBudget, sandbox};
+use iroha::collections::Collection;
 use iroha::crypto::{Algorithm, Hash, HashOf, KeyPair};
 use iroha::data_model::prelude::*;
 use iroha::data_model::{
@@ -2616,41 +2619,16 @@ async fn typed_core_query_pagination_is_deterministic_on_four_peers() -> Result<
         read_on_dedicated_thread({
             let client = deploy_client.clone();
             move || -> Result<_> {
-                let account_ids = client
-                    .client()
-                    .query(FindAccounts)
-                    .execute_all()?
-                    .into_iter()
-                    .map(|account| account.id().clone())
-                    .collect::<Vec<_>>();
-                let asset_ids = client
-                    .client()
-                    .query(FindAssets::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|asset| asset.id().clone())
-                    .collect::<Vec<_>>();
-                let asset_definition_ids = client
-                    .client()
-                    .query(FindAssetDefinitions::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|definition| definition.id().clone())
-                    .collect::<Vec<_>>();
-                let domain_ids = client
-                    .client()
-                    .query(FindDomains::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|domain| domain.id().clone())
-                    .collect::<Vec<_>>();
-                let nft_ids = client
-                    .client()
-                    .query(FindNfts::new())
-                    .execute_all()?
-                    .into_iter()
-                    .map(|nft| nft.id().clone())
-                    .collect::<Vec<_>>();
+                let account_ids =
+                    collection_inventory::ids::<AccountId>(&client, Collection::Accounts)?;
+                let asset_ids = collection_inventory::asset_ids(&client, &account_ids)?;
+                let asset_definition_ids = collection_inventory::ids::<AssetDefinitionId>(
+                    &client,
+                    Collection::AssetDefinitions,
+                )?;
+                let domain_ids =
+                    collection_inventory::ids::<DomainId>(&client, Collection::Domains)?;
+                let nft_ids = collection_inventory::ids::<NftId>(&client, Collection::Nfts)?;
                 Ok((
                     account_ids,
                     asset_ids,

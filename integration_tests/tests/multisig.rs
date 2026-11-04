@@ -729,11 +729,11 @@ fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
         .next()
         .map(|(account_id, key_pair)| (account_id.clone(), key_pair.clone()))
         .expect("signatory set must not be empty");
-    let proposer_roles = test_client
-        .client()
-        .query(FindRolesByAccountId::new(proposer.0.clone()))
-        .execute_all()
-        .wrap_err("fetch proposer roles after multisig registration")?;
+    let proposer_roles = integration_tests::collections::role_ids(
+        &test_client,
+        iroha::collections::Collection::AccountRoles(proposer.0.clone()),
+    )
+    .wrap_err("fetch proposer roles after multisig registration")?;
     assert!(
         proposer_roles
             .iter()
