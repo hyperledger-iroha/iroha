@@ -143,8 +143,9 @@ EXACT_ABSENCE_CLASSIFICATION_MARKERS = (
     "finality proof returned height",
     "if block.header() != proof.block_header",
     "finality proof header differs from its finalized block",
-    "let block = exact_block(client, height, network)",
-    "if block.global_beacon_pulse().is_some() {",
+    "let (_, authenticated) = finality::certified_block(network, client, height)",
+    '.wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;',
+    "if authenticated.commitment().beacon.is_some() {",
     EXACT_NON_BOUNDARY_PULSE_ABSENCE,
 )
 CAPACITY_DOMAIN_REGISTRATION = (
@@ -908,6 +909,16 @@ def validate_exact_absence_classification(source: str) -> None:
         "NonZeroU64::new(height)" in exact.group(0),
         "the exact finalized-block helper must reject a zero requested height",
     )
+    absence = compact(corridor_helper(source, "assert_no_global_beacon_pulse_at"))
+    for marker in (
+        "let (_, authenticated) = finality::certified_block(network, client, height)",
+        '.await.wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;',
+        "if authenticated.commitment().beacon.is_some() {",
+    ):
+        require(
+            absence.count(compact(marker)) == 1,
+            "beacon absence must inspect the exact independently certified execution commitment",
+        )
 
     broad_absence_patterns = {
         "governed-contract lookup": (
@@ -2014,6 +2025,9 @@ class SoraParliamentLifecycleCorridorSourceTests(unittest.TestCase):
                 owner = {
                     "match read_on_dedicated_thread({": "assert_asset_not_found",
                     "NonZeroU64::new(height)": "exact_block",
+                    "let (_, authenticated) = finality::certified_block(network, client, height)": "assert_no_global_beacon_pulse_at",
+                    '.wrap_err_with(|| format!("{label}: exact certified block is unavailable"))?;': "assert_no_global_beacon_pulse_at",
+                    "if authenticated.commitment().beacon.is_some() {": "assert_no_global_beacon_pulse_at",
                 }.get(marker)
                 validate_exact_absence_classification(
                     mutate_marker(corridor, marker, owner=owner)
