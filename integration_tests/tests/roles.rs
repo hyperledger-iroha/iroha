@@ -1,7 +1,6 @@
 //! Integration tests for role registration and assignment flows.
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
-use futures_util::future::join_all;
 use integration_tests::{collections, metrics::MetricsReader, sandbox};
 use iroha::{
     blocking::Client,
@@ -13,7 +12,7 @@ use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 use std::time::{Duration, Instant};
-use tokio::{fs, runtime::Runtime, time::timeout};
+use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
@@ -473,70 +472,48 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
 }
 #[tokio::test]
 async fn grant_unexisting_role_in_genesis_fail() {
-    // Grant Alice UNEXISTING role
-    let alice_id = ALICE_ID.clone();
-    let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
-    let grant_genesis_role = Grant::account_role(role_id, alice_id);
-    let Some(network) = sandbox::build_network_or_skip(
+    // Preparation owns native genesis execution before peer startup. The exact
+    // unknown-role rejection must survive as a typed source through that path.
+    let builder =
         NetworkBuilder::new()
-            .with_min_peers(4)
-            .with_genesis_instruction(grant_genesis_role),
-        stringify!(grant_unexisting_role_in_genesis_fail),
-    ) else {
+            .with_peers(4)
+            .with_genesis_block(|topology, topology_entries| {
+                let role_id = "UNEXISTING".parse::<RoleId>().unwrap();
+                let grant = Grant::account_role(role_id.clone(), ALICE_ID.clone());
+                let error = try_genesis_factory(
+                    vec![vec![grant.clone().into()]],
+                    topology.clone(),
+                    topology_entries.clone(),
+                )
+                .expect_err("delegating an unknown role must fail native genesis preparation");
+                let rejection = error
+                    .chain()
+                    .find_map(|cause| {
+                        cause.downcast_ref::<iroha_core::block::GenesisOutputRejection>()
+                    })
+                    .unwrap_or_else(|| {
+                        panic!("expected a native genesis output rejection: {error:?}")
+                    });
+                assert_eq!(
+                    rejection.reason.as_ref(),
+                    &TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                        "cannot delegate an unknown role".to_owned(),
+                    )),
+                );
+                let register = Register::role(Role::new(role_id, ALICE_ID.clone()));
+                try_genesis_factory(
+                    vec![vec![register.into(), grant.into()]],
+                    topology,
+                    topology_entries,
+                )
+                .expect(
+                    "registering the role before delegation must pass the same native validator",
+                )
+            });
+    let Some(network) =
+        sandbox::build_network_or_skip(builder, stringify!(grant_unexisting_role_in_genesis_fail))
+    else {
         return;
     };
-    let peer = network.peer();
-    // Sanity-check stderr to ensure CI surfaces the expected genesis failure diagnostics (see #5423).
-    let terminated_futs = network
-        .peers()
-        .iter()
-        .map(|peer| {
-            let mut events = peer.events();
-            async move {
-                loop {
-                    match events.recv().await {
-                        Ok(PeerLifecycleEvent::Terminated { .. } | PeerLifecycleEvent::Killed) => {
-                            break;
-                        }
-                        Ok(_) => {}
-                        Err(_) => break,
-                    }
-                }
-            }
-        })
-        .collect::<Vec<_>>();
-    for peer in network.peers() {
-        if let Err(err) = peer
-            .start(network.config_layers(), Some(&network.genesis()))
-            .await
-        {
-            if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
-                panic!(
-                    "sandboxed network restriction detected while starting grant_unexisting_role_in_genesis_fail: {reason}"
-                );
-            }
-            panic!("failed to start peer: {err:?}");
-        }
-    }
-    timeout(Duration::from_secs(10), join_all(terminated_futs))
-        .await
-        .expect("must terminate immediately");
-    let stderr_path = peer
-        .latest_stderr_log_path()
-        .expect("stderr log should be captured for failed genesis run");
-    let stderr = fs::read_to_string(&stderr_path)
-        .await
-        .unwrap_or_else(|err| panic!("failed to read {stderr_path:?}: {err}"));
-    let markers = [
-        "confidential.enabled = true",
-        "Failed IO operation",
-        "Block confidential feature digest mismatch.",
-        "Genesis transactions must not contain errors",
-        "Genesis block execution failed",
-        "Block contained no committed overlays",
-    ];
-    assert!(
-        markers.iter().any(|needle| stderr.contains(needle)),
-        "stderr should surface the genesis startup failure cause:\n{stderr}"
-    );
+    assert!(network.genesis().0.has_results());
 }

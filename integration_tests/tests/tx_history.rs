@@ -14,12 +14,49 @@ use iroha::{
     },
 };
 use iroha_crypto::{Hash, HashOf};
+use iroha_data_model::parameter::SumeragiParameter;
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
 use iroha_test_samples::ALICE_ID;
-use std::time::Duration;
+use std::{num::NonZeroU64, time::Duration};
 use tokio::time::{Instant, sleep};
+
+const SEALED_REVEAL_CADENCE_MS: u64 = 10_000;
+
+fn sealed_reveal_payload_retry_parameter() -> Parameter {
+    Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(
+        NonZeroU64::new(SEALED_REVEAL_CADENCE_MS).unwrap(),
+    ))
+}
+
+#[test]
+fn sealed_reveal_cadence_preserves_the_signed_payload_retry_bound() {
+    let parameter = sealed_reveal_payload_retry_parameter();
+    let encoded = norito::to_bytes(&parameter).expect("encode signed retry parameter");
+    let decoded: Parameter = norito::decode_from_bytes(&encoded).expect("decode retry parameter");
+    assert_eq!(parameter, decoded);
+    let Parameter::Sumeragi(SumeragiParameter::PayloadRetryIntervalMs(retry)) = decoded else {
+        panic!("the sealed reveal fixture must author its signed payload retry interval");
+    };
+    let chain = iroha_sumeragi::types::ChainParams {
+        block_time: SEALED_REVEAL_CADENCE_MS,
+        payload_retry_interval: retry.get(),
+        ..Default::default()
+    };
+    let transport = iroha_sumeragi::pacemaker::minimum_transport_frame_bytes(chain.max_block_bytes);
+    iroha_sumeragi::pacemaker::validate_chain(&chain, transport)
+        .expect("ten-second reveal cadence must retain a valid signed retry bound");
+    let old = iroha_sumeragi::types::ChainParams {
+        payload_retry_interval: iroha_sumeragi::types::ChainParams::default()
+            .payload_retry_interval,
+        ..chain
+    };
+    assert_eq!(
+        iroha_sumeragi::pacemaker::validate_chain(&old, transport),
+        Err(iroha_sumeragi::api::ConfigError::BlockTimeAbovePayloadRetry)
+    );
+}
 #[test]
 fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()> {
     let Some((network, _rt)) = sandbox::start_network_blocking_or_skip(
@@ -582,10 +619,13 @@ async fn sealed_commitment_reveal_gossips_and_explorer_lookup_uses_entrypoint_ha
         "explorer detail lookup failed with {status}: {body}"
     );
     let payload: norito::json::Value = norito::json::from_str(&body)?;
-    assert_eq!(
-        payload.get("hash").and_then(norito::json::Value::as_str),
-        Some(reveal_entrypoint_hash.to_string().as_str())
-    );
+    let returned_hash: HashOf<TransactionEntrypoint> = norito::json::from_value(
+        payload
+            .get("hash")
+            .cloned()
+            .ok_or_else(|| eyre!("explorer detail omitted its hash"))?,
+    )?;
+    assert_eq!(returned_hash, reveal_entrypoint_hash);
     assert_eq!(
         payload.get("status").and_then(norito::json::Value::as_str),
         Some("Committed")
@@ -597,7 +637,8 @@ async fn sealed_reveal_adversarial_cases_hold_on_multi_peer_network() -> Result<
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_min_peers(4)
-            .with_block_cadence(Duration::from_secs(10))
+            .with_block_cadence(Duration::from_millis(SEALED_REVEAL_CADENCE_MS))
+            .with_genesis_instruction(SetParameter::new(sealed_reveal_payload_retry_parameter()))
             .with_sync_timeout(Duration::from_secs(480)),
         stringify!(sealed_reveal_adversarial_cases_hold_on_multi_peer_network),
     )

@@ -20,17 +20,10 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
+    ALICE_ID, BOB_ID, BOB_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in,
 };
-use std::{
-    io::ErrorKind,
-    path::PathBuf,
-    time::{Duration, Instant},
-};
-use tokio::{
-    runtime::Runtime,
-    time::{sleep, timeout},
-};
+use std::time::{Duration, Instant};
+use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
 }
@@ -130,32 +123,6 @@ fn wait_for_account_permission_state(
         "timed out waiting for account permission state after {context}; expected_present={expected_present}; last_observed={last_observed}"
     );
 }
-async fn read_peer_log_with_retry(
-    peer: &NetworkPeer,
-    getter: impl Fn(&NetworkPeer) -> Option<PathBuf>,
-) -> String {
-    const MAX_ATTEMPTS: usize = 20;
-    const DELAY: Duration = Duration::from_millis(50);
-    let mut last = String::new();
-    for attempt in 0..MAX_ATTEMPTS {
-        if let Some(path) = getter(peer) {
-            match tokio::fs::read_to_string(&path).await {
-                Ok(content) => {
-                    if !content.is_empty() {
-                        return content;
-                    }
-                    last = content;
-                }
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
-                Err(err) => panic!("failed to read log {}: {err}", path.display()),
-            }
-        }
-        if attempt + 1 < MAX_ATTEMPTS {
-            sleep(DELAY).await;
-        }
-    }
-    last
-}
 #[test]
 #[ignore = "debug helper for inspecting genesis transactions"]
 fn debug_print_genesis_transactions() {
@@ -217,55 +184,45 @@ fn debug_print_genesis_transactions() {
 }
 #[tokio::test]
 async fn genesis_transactions_are_validated_by_executor() {
-    // Registering the same domain twice must be rejected during genesis execution.
-    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
-    let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
+    // Preparation now executes genesis before any peer can start. Inspect the
+    // native typed refusal at that owner, then prepare the one-registration control.
+    let kingdom_id = DomainId::try_new("kingdom", "universal").expect("fixture domain");
+    let builder = NetworkBuilder::new().with_peers(4).with_genesis_block(
+        move |topology, topology_entries| {
+            let register = InstructionBox::from(Register::domain(Domain::new(kingdom_id.clone())));
+            let error = try_genesis_factory(
+                vec![vec![register.clone(), register.clone()]],
+                topology.clone(),
+                topology_entries.clone(),
+            )
+            .expect_err("the native executor must reject duplicate domain registration");
+            let rejection = error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<iroha_core::block::GenesisOutputRejection>())
+                .unwrap_or_else(|| panic!("expected a native genesis output rejection: {error:?}"));
+            let expected =
+                TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+                    iroha_data_model::isi::error::InstructionExecutionError::Repetition(
+                        iroha_data_model::isi::error::RepetitionError {
+                            instruction: iroha_data_model::isi::InstructionType::Register,
+                            id: kingdom_id.clone().into(),
+                        },
+                    ),
+                ));
+            assert_eq!(rejection.reason.as_ref(), &expected);
+            try_genesis_factory(vec![vec![register]], topology, topology_entries)
+                .expect("one registration must prepare through the same native validator")
+        },
+    );
     let Some(network) = sandbox::build_network_or_skip(
-        NetworkBuilder::new()
-            .with_config_layer(|layer| {
-                layer.write(["confidential", "enabled"], true);
-            })
-            .with_genesis_instruction(register_domain)
-            .with_genesis_instruction(duplicate_domain),
+        builder,
         stringify!(genesis_transactions_are_validated_by_executor),
     ) else {
         return;
     };
-    // Build `iroha3d` ahead of the timeout so the initial binary compilation does not consume the limit.
-    iroha_test_network::Program::Irohad
-        .resolve()
-        .expect("iroha3d binary should be buildable");
-    let genesis = network.genesis();
-    let peer = network.peer();
-    let startup_result = timeout(
-        Duration::from_secs(30),
-        peer.start_checked(network.config_layers(), Some(&genesis)),
-    )
-    .await
-    .expect("peer startup should complete within timeout");
-    let err = startup_result.expect_err("invalid genesis should prevent peer startup");
-    if let Some(reason) = integration_tests::sandbox::sandbox_reason(&err) {
-        panic!(
-            "sandboxed network restriction detected while starting genesis_transactions_are_validated_by_executor: {reason}"
-        );
-    }
-    let err_text = format!("{err:?}");
-    let stderr_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stderr_log_path).await;
-    let stdout_log = read_peer_log_with_retry(peer, NetworkPeer::latest_stdout_log_path).await;
-    let mentions_invalid_genesis = err_text.contains("Invalid genesis block")
-        || err_text.contains("Genesis block execution failed during validation")
-        || stderr_log.contains("Invalid genesis block")
-        || stdout_log.contains("Invalid genesis block")
-        || stderr_log.contains("Genesis block execution failed during validation")
-        || stdout_log.contains("Genesis block execution failed during validation")
-        || stderr_log.contains("genesis consensus metadata validation failed")
-        || stdout_log.contains("genesis consensus metadata validation failed");
-    assert!(
-        mentions_invalid_genesis,
-        "startup failure should mention genesis validation; error was:\n{err_text}\nstdout was:\n{stdout_log}\nstderr was:\n{stderr_log}"
-    );
+    assert!(network.genesis().0.has_results());
 }
+
 fn get_assets(client: &Client, id: &AccountId) -> Vec<norito::json::Value> {
     let rows = client
         .list(
@@ -390,11 +347,11 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     )?;
     last_non_empty_height = status.blocks_non_empty;
     let perm: Permission = CanModifyAccountMetadata {
-        account: mouse_id.clone(),
+        account: ALICE_ID.clone(),
     }
     .into();
     client.submit(
-        Grant::account_permission(perm.clone(), ALICE_ID.clone()),
+        Grant::account_permission(perm.clone(), mouse_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let _status = sync_after_submission(
@@ -404,18 +361,14 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         last_non_empty_height,
         "seed detached account permission",
     )?;
-    let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
-    let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
-    let tx = TransactionBuilder::new(
-        network.network_id(),
-        ALICE_ID.clone(),
+    let revoke = Revoke::account_permission(perm.clone(), mouse_id.clone());
+    let grant = Grant::account_permission(perm.clone(), mouse_id.clone());
+    client.submit_all(
+        [InstructionBox::from(revoke), InstructionBox::from(grant)],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([InstructionBox::from(revoke), InstructionBox::from(grant)])
-    .sign(ALICE_KEYPAIR.private_key());
-    client.submit_transaction_and_wait(&tx)?;
+    )?;
     let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let permissions = collections::permissions(&client, &ALICE_ID)?;
+    let permissions = collections::permissions(&client, &mouse_id)?;
     assert!(
         permissions.iter().any(|permission| permission == &perm),
         "last grant should keep permission on account"
@@ -552,7 +505,6 @@ fn permissions_differ_not_only_by_names() {
     ) else {
         return;
     };
-    let network_id = network.network_id();
     let client = network.client();
     submit_ensure_domain_for_network(&network, &client, Domain::new(outfit_domain.clone()))
         .expect("Failed to register outfit domain");
@@ -560,14 +512,14 @@ fn permissions_differ_not_only_by_names() {
                                  authority: &AccountId,
                                  authority_keypair: &KeyPair|
      -> Result<HashOf<SignedTransaction>> {
-        let tx = TransactionBuilder::new(
-            network_id,
-            authority.clone(),
+        let authority_client = integration_tests::sync::rebind_blocking_client(&client, |client| {
+            client.account = authority.clone();
+            client.key_pair = authority_keypair.clone();
+        });
+        authority_client.submit(
+            isi,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
-        .with_instructions([isi])
-        .sign(authority_keypair.private_key());
-        client.submit_transaction_and_wait(&tx)
     };
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
@@ -575,9 +527,17 @@ fn permissions_differ_not_only_by_names() {
     let (mouse_id, mouse_keypair) = gen_account_in("outfit");
     // Registering mouse
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()
+        .expect("canonical fixture fee asset");
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+        100u32,
+        mouse_id.clone(),
+    );
     client
         .submit_all::<InstructionBox>(
-            [register_mouse_account.into()],
+            [register_mouse_account.into(), fund_mouse.into()],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect("Failed to register mouse");
@@ -629,8 +589,17 @@ fn permissions_differ_not_only_by_names() {
         "color".parse().expect("Valid"),
         Json::from("yellow"),
     );
-    let _err = submit_with_authority(set_shoes_color.clone().into(), &bob_id, &bob_keypair)
+    let err = submit_with_authority(set_shoes_color.clone().into(), &bob_id, &bob_keypair)
         .expect_err("Expected Bob to fail to modify Mouse's shoes");
+    assert!(
+        matches!(
+            err.downcast_ref::<TransactionRejectionReason>(),
+            Some(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(_)
+            ))
+        ),
+        "the distinct NFT permission must cause the refusal: {err:?}"
+    );
     let mouse_shoes_permission = CanModifyNftMetadata { nft: shoes_nft_id };
     let allow_bob_to_set_key_value_in_shoes =
         Grant::account_permission(mouse_shoes_permission, bob_id.clone());
@@ -650,7 +619,6 @@ fn stored_vs_granted_permission_payload() {
     else {
         return;
     };
-    let network_id = network.network_id();
     let iroha = network.client();
     // Given
     let alice_id = ALICE_ID.clone();
@@ -665,14 +633,26 @@ fn stored_vs_granted_permission_payload() {
             __asset_definition_id.clone(),
             "xor".to_owned(),
             iroha_data_model::asset::AssetBalancePolicy::Global,
-            None,
+            Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
         )
     });
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()
+        .expect("canonical fixture fee asset");
+    let fund_mouse = Transfer::asset_quantity(
+        AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+        100u32,
+        mouse_id.clone(),
+    );
     iroha
         .submit_all::<InstructionBox>(
-            [register_mouse_account.into(), create_asset.into()],
+            [
+                register_mouse_account.into(),
+                create_asset.into(),
+                fund_mouse.into(),
+            ],
             iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect("Failed to register mouse");
@@ -687,18 +667,24 @@ fn stored_vs_granted_permission_payload() {
         Permission::new("CanMintAssetToAccount".parse().unwrap(), value_json.clone()),
         alice_id.clone(),
     );
-    let attempted_holder_grant = TransactionBuilder::new(
-        network_id,
-        mouse_id,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-    )
-    .with_instructions([allow_alice_to_mint_mouse_asset.clone()])
-    .sign(mouse_keypair.private_key());
+    let holder_client = integration_tests::sync::rebind_blocking_client(&iroha, |client| {
+        client.account = mouse_id;
+        client.key_pair = mouse_keypair;
+    });
+    let err = holder_client
+        .submit(
+            allow_alice_to_mint_mouse_asset.clone(),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .expect_err("an asset holder must not manufacture mint authority for another definition");
     assert!(
-        iroha
-            .submit_transaction_and_wait(&attempted_holder_grant)
-            .is_err(),
-        "an asset holder must not manufacture mint authority for another definition"
+        matches!(
+            err.downcast_ref::<TransactionRejectionReason>(),
+            Some(TransactionRejectionReason::Validation(
+                ValidationFail::NotPermitted(_)
+            ))
+        ),
+        "the holder's lack of mint authority must cause the refusal: {err:?}"
     );
     iroha
         .submit(

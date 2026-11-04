@@ -103,20 +103,54 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
         .build_raw()
         .expect("build complete lightweight integration-test genesis fixture")
 }
+
+fn rebind_genesis_topology(
+    raw: RawGenesisTransaction,
+    topology: Vec<GenesisTopologyEntry>,
+) -> Result<RawGenesisTransaction> {
+    // set_topology replaces only the current transaction's roster. Remove the
+    // original fixture roster before adding the exact four live validators.
+    complete_test_genesis_builder_for_topology(
+        raw.clear_topology().into_builder().next_transaction(),
+        topology,
+    )
+    .build_raw()
+}
+
+#[test]
+fn rebinding_genesis_topology_replaces_the_fixture_roster() -> Result<()> {
+    init_instruction_registry();
+    let raw = fallback_raw_genesis_from_json();
+    let topology: Vec<_> = deterministic_test_genesis_topology()
+        .into_iter()
+        .rev()
+        .collect();
+    let rebound = rebind_genesis_topology(raw, topology.clone())?;
+    let actual: Vec<_> = rebound
+        .transactions()
+        .iter()
+        .flat_map(|transaction| transaction.topology().iter().cloned())
+        .collect();
+    assert_eq!(actual, topology);
+    assert_eq!(
+        actual.len(),
+        4,
+        "the original roster must not remain in an earlier transaction"
+    );
+    rebound.validate_genesis_topology()?;
+    Ok(())
+}
+
 #[test]
 fn genesis_asset_minted_across_peers() -> Result<()> {
     init_instruction_registry();
     let raw_genesis = load_raw_genesis_transaction();
     let builder = NetworkBuilder::new().with_min_peers(4).with_genesis_block(
         move |_topology, topology_entries| {
-            complete_test_genesis_builder_for_topology(
-                raw_genesis.clone().into_builder().next_transaction(),
-                topology_entries,
-            )
-            .build_raw()
-            .expect("rebuild integration-test genesis for the exact network topology")
-            .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
-            .expect("build canonical resultless custom genesis proposal")
+            rebind_genesis_topology(raw_genesis.clone(), topology_entries)
+                .expect("rebuild integration-test genesis for the exact network topology")
+                .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
+                .expect("build canonical resultless custom genesis proposal")
         },
     );
     let Some((network, rt)) = sandbox::build_network_blocking_or_skip(

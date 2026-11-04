@@ -180,6 +180,17 @@ fn random_soranet_transport_key_pair_distinct_from(streaming: &KeyPair) -> KeyPa
 }
 pub use crate::config::genesis as genesis_factory;
 
+/// Prepare the default signed genesis and return native validation failures as typed errors.
+///
+/// Uses the same preparation path as [`genesis_factory`] and [`NetworkBuilder`].
+/// Negative genesis fixtures can inspect the original rejection before any peer starts;
+/// this does not bypass preparation or establish node or network qualification.
+///
+/// # Errors
+/// Returns the original native validation error when an authored genesis instruction,
+/// policy, or execution result is invalid.
+pub use crate::config::try_genesis as try_genesis_factory;
+
 /// Build a signed custom genesis with post-topology instructions and defer
 /// transaction execution to [`NetworkBuilder`].
 ///

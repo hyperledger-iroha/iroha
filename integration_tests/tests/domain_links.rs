@@ -47,8 +47,8 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     let domain: DomainId = DomainId::try_new("receive-without-preregister", "universal")?;
     ensure_registered_domain(&client, &domain)?;
     let source_account = client.client().account().clone();
-    let destination_asset = gen_account_in(&domain).0;
-    let destination_nft = gen_account_in(&domain).0;
+    let destination_asset = gen_account_in(domain.name()).0;
+    let destination_nft = gen_account_in(domain.name()).0;
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::derive_from_components(
         domain.clone(),
         "coin".parse()?,
