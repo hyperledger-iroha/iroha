@@ -13,3 +13,10 @@ I/O helpers; disabling it selects native serial behavior, not another runtime.
 The normalized Cargo.toml is the active manifest; Cargo.toml.orig records the
 unmodified upstream manifest. Remove the macro dependency patch when an upstream
 release carries it; retain the repository's native-only build policy.
+
+Rust 1.99 warning repairs retain the original arithmetic: remove the inapplicable
+`must_use` attribute from a trait implementation and an unused `Vec` import.
+Re-export the existing public `CurveEndo` extension so its scalar decomposition
+and supporting constants remain reachable outside the private arithmetic module.
+Compressed encoding calls its existing `set_flags` helper, which performs the
+same three flag updates in the same order. No encoding or group law changes.

@@ -317,9 +317,7 @@ where
             }
             _ => this.as_mut()[..x_bytes.len()].copy_from_slice(&x_bytes),
         };
-        this.set_identity(c);
-        this.set_sign(c);
-        this.set_compressed();
+        this.set_flags(c);
         this
     }
 
