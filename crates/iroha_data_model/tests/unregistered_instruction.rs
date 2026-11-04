@@ -49,8 +49,8 @@ fn unregistered_instruction_refuses_typed_decode_and_preserves_its_envelope() {
         assert_eq!(error.to_string(), "unknown instruction wire identifier");
         let pair = (name.clone(), frame.clone());
         let bytes = norito::core::to_bytes(&pair).expect("serialize");
-        let archived_tuple = norito::core::from_bytes::<(String, Vec<u8>)>(&bytes)
-            .expect("from_bytes");
+        let archived_tuple =
+            norito::core::from_bytes::<(String, Vec<u8>)>(&bytes).expect("from_bytes");
         let archived = archived_tuple.cast::<InstructionBox>();
         let decoded = norito::core::DeserializePayload::try_deserialize(archived)
             .expect("the envelope retains every unknown well-formed wire ID");

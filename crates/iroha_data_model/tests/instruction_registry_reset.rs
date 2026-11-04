@@ -69,7 +69,10 @@ fn set_instruction_registry_overrides_existing() {
     let opaque = decoded.as_opaque().expect("Log is no longer registered");
     assert_eq!(opaque.wire_id(), wire_id);
     assert_eq!(opaque.frame(), frame);
-    assert_eq!(norito::to_bytes(&decoded).expect("re-encode envelope"), bytes);
+    assert_eq!(
+        norito::to_bytes(&decoded).expect("re-encode envelope"),
+        bytes
+    );
     // Restore the default registry so other tests aren't affected
     set_instruction_registry(iroha_data_model::instruction_registry::default());
     let restored: InstructionBox = norito::decode_from_bytes(&bytes).expect("restored typed Log");
