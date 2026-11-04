@@ -10,6 +10,62 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::runtime::Runtime;
+/// Run a bounded synchronous test operation outside every Tokio runtime context.
+///
+/// Tokio's blocking pool still enters its runtime handle, which the blocking SDK
+/// intentionally refuses. This helper owns a native thread instead; awaiting or
+/// dropping its future joins that exact thread. Callers must supply operations
+/// with their existing transport or test deadlines.
+///
+/// # Errors
+/// Returns thread creation failures, a panic diagnostic, or loss of the result.
+pub fn spawn_blocking<F, T>(operation: F) -> impl std::future::Future<Output = std::io::Result<T>>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: Send + 'static,
+{
+    let (sender, receiver) = tokio::sync::oneshot::channel();
+    let thread = std::thread::Builder::new()
+        .name("iroha-integration-blocking".into())
+        .spawn(move || {
+            let value = operation();
+            let _ = sender.send(value);
+        })
+        .map(|thread| NativeBlockingThread(Some(thread)));
+    async move {
+        let mut thread = thread?;
+        let value = receiver.await;
+        thread.join()?;
+        value.map_err(|_| std::io::Error::other("native blocking task lost its result"))
+    }
+}
+
+struct NativeBlockingThread(Option<std::thread::JoinHandle<()>>);
+
+impl NativeBlockingThread {
+    fn join(&mut self) -> std::io::Result<()> {
+        let Some(thread) = self.0.take() else {
+            return Ok(());
+        };
+        thread.join().map_err(|payload| {
+            let message = payload
+                .downcast_ref::<&str>()
+                .copied()
+                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                .unwrap_or("non-string panic payload");
+            std::io::Error::other(format!("native blocking task panicked: {message}"))
+        })
+    }
+}
+
+impl Drop for NativeBlockingThread {
+    fn drop(&mut self) {
+        // A timeout may stop polling the future, but it does not abandon its
+        // already-started native operation or allow its client to outlive the test.
+        let _ = self.join();
+    }
+}
+
 // Integration submissions occasionally need more time to commit under DA-enabled consensus;
 // give the network a bounded window before failing. Keep bounded to avoid long hangs when
 // Torii is unreachable, but allow env overrides for slower hosts.
@@ -742,5 +798,48 @@ mod tests {
             msg.contains("status retry failed"),
             "expected status retry failure, got: {msg}"
         );
+    }
+}
+
+#[cfg(test)]
+mod native_blocking_tests {
+    use super::spawn_blocking;
+
+    async fn checks_runtime_context() {
+        assert!(
+            tokio::task::spawn_blocking(|| tokio::runtime::Handle::try_current().is_ok())
+                .await
+                .unwrap()
+        );
+        assert!(
+            spawn_blocking(|| tokio::runtime::Handle::try_current().is_err())
+                .await
+                .unwrap()
+        );
+        let error = spawn_blocking::<_, ()>(|| panic!("native fixture panic"))
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("native fixture panic"));
+    }
+
+    #[tokio::test]
+    async fn native_blocking_calls_leave_current_thread_runtime() {
+        checks_runtime_context().await;
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn native_blocking_calls_leave_multi_thread_runtime() {
+        checks_runtime_context().await;
+    }
+
+    #[test]
+    fn dropping_native_blocking_future_joins_its_operation() {
+        let completed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let observed = std::sync::Arc::clone(&completed);
+        let task = spawn_blocking(move || {
+            observed.store(true, std::sync::atomic::Ordering::Release);
+        });
+        drop(task);
+        assert!(completed.load(std::sync::atomic::Ordering::Acquire));
     }
 }
