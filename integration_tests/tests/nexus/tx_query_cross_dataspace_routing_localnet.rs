@@ -1,5 +1,5 @@
 //! Focused wrong-dataspace Torii ingress regression for transaction and query routing.
-use super::localnet_npos::npos_override_transactions;
+use super::localnet_npos::npos_override_instruction;
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::query::QueryError;
@@ -42,10 +42,7 @@ use iroha_model_base::metadata::Metadata;
 use iroha_model_base::peer::PeerId;
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use iroha_primitives::numeric::NumericSpec;
-use iroha_test_network::{
-    NetworkBuilder, genesis_participant_committee_key_instructions,
-    unexecuted_genesis_factory_with_post_topology,
-};
+use iroha_test_network::{NetworkBuilder, genesis_participant_committee_key_instructions};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
 use iroha_torii::{
     HEADER_ACCOUNT, HEADER_NONCE, HEADER_SIGNATURE, HEADER_TIMESTAMP_MS, Method, Uri,
@@ -74,7 +71,7 @@ const DS1_LANE_INDEX: u32 = 1;
 const DS2_LANE_INDEX: u32 = 2;
 const VALIDATORS_PER_LANE: usize = 4;
 const LANE_VALIDATOR_COUNT: usize = VALIDATORS_PER_LANE * 3;
-// Keep the global permissioned committee at exact revision-4 geometry while
+// Keep the global NPoS committee at exact revision-4 geometry while
 // assigning only the first twelve peers to the three disjoint lane committees.
 const TOTAL_PEERS: usize = 13;
 const VALIDATOR_STAKE: u64 = 2_000;
@@ -88,6 +85,13 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
 }
 fn stake_asset_id_literal() -> String {
     stake_asset_definition_id().to_string()
+}
+fn genesis_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    iroha_genesis::default_staking_policy(
+        stake_asset_definition_id(),
+        routing_probe_gas_account_id(),
+        routing_probe_gas_account_id(),
+    )
 }
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::derive_from_components(
@@ -141,22 +145,27 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
 fn localnet_builder() -> NetworkBuilder {
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
+        .with_npos_consensus()
         .without_npos_genesis_bootstrap()
-        .with_genesis_block(|topology, topology_entries| {
-            let post_topology = npos_multilane_genesis_post_topology_transactions(
-                topology.as_ref(),
-                &topology_entries,
-            );
-            let mut genesis = unexecuted_genesis_factory_with_post_topology(
-                npos_override_transactions(VALIDATORS_PER_LANE),
-                post_topology,
-                topology,
-                topology_entries,
-            );
-            genesis
-                .0
-                .set_da_proof_policies(Some(multilane_da_proof_policy_bundle()));
-            genesis
+        .with_genesis_staking_policy(genesis_staking_policy())
+        .with_genesis_instruction(npos_override_instruction(TOTAL_PEERS))
+        .with_genesis_instruction(iroha_data_model::isi::SetParameter::new(
+            iroha_data_model::parameter::Parameter::Custom(
+                iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+                    .into_custom_parameter()
+                    .expect("canonical original routing fee policy"),
+            ),
+        ))
+        .with_genesis_post_topology_isi_from(|topology_entries| {
+            let topology = topology_entries
+                .iter()
+                .map(|entry| entry.peer.clone())
+                .collect::<Vec<_>>();
+            let [post_topology]: [Vec<InstructionBox>; 1] =
+                npos_multilane_genesis_post_topology_transactions(&topology, topology_entries)
+                    .try_into()
+                    .expect("one original routing post-topology transaction");
+            post_topology
         })
         .with_config_layer(move |layer| {
             let mut lane_nexus = Table::new();
@@ -1095,7 +1104,69 @@ fn account_assets_response_contains(
 #[test]
 fn tx_query_cross_dataspace_routing_genesis_preexecution_smoke() {
     let _guard = sandbox::serial_guard();
-    let _network = localnet_builder().build();
+    let network = localnet_builder().build();
+    assert_eq!(network.peers().len(), TOTAL_PEERS);
+    let genesis = network.genesis();
+    assert_eq!(
+        genesis.0.da_proof_policies(),
+        Some(&multilane_da_proof_policy_bundle()),
+        "the final signed genesis must bind all three configured lane policies"
+    );
+    let metadata = iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)
+        .expect("canonical signed routing consensus metadata");
+    assert_eq!(
+        metadata.mode,
+        iroha_data_model::parameter::system::SumeragiConsensusMode::Npos
+    );
+    assert_eq!(
+        iroha_genesis::signed_genesis_validator_pops(&genesis.0)
+            .expect("exact signed global voting roster")
+            .len(),
+        TOTAL_PEERS
+    );
+    let mut npos_parameters = Vec::new();
+    let mut staking_policies = Vec::new();
+    for transaction in genesis.0.external_transactions() {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            panic!("routing genesis must contain instruction transactions");
+        };
+        for instruction in instructions {
+            if let Some(parameter) = instruction
+                .as_any()
+                .downcast_ref::<iroha_data_model::isi::SetParameter>()
+                && let iroha_data_model::parameter::Parameter::Custom(custom) = parameter.inner()
+            {
+                use iroha_data_model::{
+                    block::consensus::PublicLaneStakingPolicy,
+                    parameter::system::SumeragiNposParameters,
+                };
+                if let Some(npos) = SumeragiNposParameters::from_custom_parameter(custom)
+                    .expect("canonical original NPoS parameter")
+                {
+                    npos_parameters.push(npos);
+                }
+                if custom.id() == &PublicLaneStakingPolicy::parameter_id() {
+                    staking_policies.push(
+                        PublicLaneStakingPolicy::from_custom_parameter(custom)
+                            .expect("canonical original staking policy"),
+                    );
+                }
+            }
+        }
+    }
+    let [npos] = npos_parameters.as_slice() else {
+        panic!("routing genesis must carry exactly one original NPoS policy");
+    };
+    assert_eq!(npos.max_validators(), u32::try_from(TOTAL_PEERS).unwrap());
+    assert_eq!(npos.xor_asset_definition_id, stake_asset_definition_id());
+    assert_eq!(staking_policies, vec![genesis_staking_policy()]);
+    assert_eq!(
+        iroha_genesis::signed_genesis_root_fee_policy(&genesis.0)
+            .expect("original signed routing fee policy"),
+        iroha_config::parameters::defaults::nexus::fees::genesis_policy()
+    );
 }
 #[test]
 fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models() -> Result<()>
@@ -1645,6 +1716,16 @@ mod tests {
         let fee_definition_id = nexus_fee_asset_definition_id();
         assert_eq!(stake_asset_id_literal(), stake_definition_id.to_string());
         assert_eq!(stake_definition_id, fee_definition_id);
+        let policy = super::genesis_staking_policy();
+        policy
+            .validate()
+            .expect("valid original routing staking policy");
+        assert_eq!(policy.stake_asset_id, stake_definition_id);
+        assert_eq!(
+            policy.stake_escrow_account_id,
+            routing_probe_gas_account_id()
+        );
+        assert_eq!(policy.slash_sink_account_id, routing_probe_gas_account_id());
         assert_eq!(
             stake_definition_id.to_string(),
             "6TEAJqbb8oEPmLncoNiMRbLEK6tw"
