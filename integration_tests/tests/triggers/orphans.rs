@@ -5,7 +5,7 @@ use iroha::{
     blocking::Client,
     data_model::{prelude::*, query::trigger::FindTriggers},
 };
-use iroha_executor_data_model::permission::trigger::CanRegisterTrigger;
+use iroha_executor_data_model::permission::account::CanUnregisterAccount;
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_test_samples::gen_account_in;
@@ -22,13 +22,9 @@ async fn find_trigger(iroha: &Client, trigger_id: &TriggerId) -> eyre::Result<Op
         Ok(client
             .client()
             .query(FindTriggers::new())
-            .execute_all()
-            .ok()
-            .and_then(|triggers| {
-                triggers
-                    .into_iter()
-                    .find(|trigger| trigger.id() == &trigger_id)
-            }))
+            .execute_all()?
+            .into_iter()
+            .find(|trigger| trigger.id() == &trigger_id))
     })
     .await?
 }
@@ -76,11 +72,18 @@ async fn set_up_trigger(
         )
         .expect("trigger action fixture satisfies validation invariants"),
     ));
-    let grant_register_trigger_permission = Grant::account_permission(
-        CanRegisterTrigger {
-            authority: the_one_who_fails.clone(),
-        },
+    let native_fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    let fund_authority = Transfer::asset_quantity(
+        AssetId::new(native_fee_asset, iroha.client().account().clone()),
+        10_000_u32,
         the_one_who_fails.clone(),
+    );
+    let grant_account_removal = Grant::account_permission(
+        CanUnregisterAccount {
+            account: the_one_who_fails.clone(),
+        },
+        iroha.client().account().clone(),
     );
     let authority_client = network
         .peers()
@@ -90,15 +93,10 @@ async fn set_up_trigger(
     spawn_blocking({
         let client = iroha.clone();
         let create_the_one_who_fails: InstructionBox = create_the_one_who_fails.into();
-        let grant_register_trigger_permission: InstructionBox =
-            grant_register_trigger_permission.into();
+        let fund_authority: InstructionBox = fund_authority.into();
         move || {
             client.submit_all::<InstructionBox>(
-                [
-                    create_failand,
-                    create_the_one_who_fails,
-                    grant_register_trigger_permission,
-                ],
+                [create_failand, create_the_one_who_fails, fund_authority],
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )?;
             eyre::Result::<()>::Ok(())
@@ -110,8 +108,13 @@ async fn set_up_trigger(
         let register_fail_on_account_events: InstructionBox =
             register_fail_on_account_events.into();
         move || {
-            client.submit::<InstructionBox>(
-                register_fail_on_account_events,
+            // The canonical owner registers its own trigger and authorizes the
+            // later exact-account removal; the creator cannot grant for that owner.
+            client.submit_all::<InstructionBox>(
+                [
+                    grant_account_removal.into(),
+                    register_fail_on_account_events,
+                ],
                 iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
         }

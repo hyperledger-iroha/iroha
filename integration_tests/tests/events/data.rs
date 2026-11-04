@@ -73,7 +73,15 @@ fn genesis_alias_payment_bootstrap() -> Result<Vec<InstructionBox>> {
     let payment_asset_definition =
         AssetDefinitionId::parse_address_literal(SNS_LEASE_PAYMENT_ASSET_DEFINITION)
             .wrap_err("parse SNS lease payment asset definition")?;
+    let native_fee_asset = AssetDefinitionId::parse_address_literal(
+        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
+    )?;
     Ok(vec![
+        Mint::asset_quantity(
+            10_000_u32,
+            AssetId::new(native_fee_asset, genesis_id.clone()),
+        )
+        .into(),
         Mint::asset_quantity(
             500_000_u32,
             AssetId::new(payment_asset_definition, genesis_id.clone()),

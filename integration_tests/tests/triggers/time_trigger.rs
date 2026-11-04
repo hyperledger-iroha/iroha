@@ -256,15 +256,12 @@ async fn mint_asset_after_3_sec_scenario(
             .unwrap_or(0);
         let start_time = curr_time();
         let pipeline_time = network.block_cadence();
-        let gap = std::cmp::max(
-            Duration::from_millis(200),
-            pipeline_time.checked_div(2).unwrap_or(pipeline_time),
-        );
-        let schedule_at = start_time + gap;
+        let schedule_at = start_time + Duration::from_secs(3);
         let schedule = TimeSchedule::starting_at(schedule_at);
         let instruction = Mint::asset_quantity(1_u32, asset_id.clone());
+        let trigger_id: TriggerId = "mint_rose_schedule".parse()?;
         let register_trigger = Register::trigger(Trigger::new(
-            "mint_rose_schedule".parse().expect("Valid"),
+            trigger_id.clone(),
             Action::new(
                 vec![instruction],
                 Repeats::from(1_u32),
@@ -284,6 +281,22 @@ async fn mint_asset_after_3_sec_scenario(
         network
             .ensure_blocks_with(|height| height.total >= target_height)
             .await?;
+        let registered = spawn_blocking({
+            let client = test_client.clone();
+            move || client.client().query_single(FindTriggerById::new(trigger_id))
+        })
+        .await??;
+        let registered_at_ms = registered
+            .action()
+            .metadata()
+            .get(&"__registered_at_ms".parse::<Name>()?)
+            .ok_or_else(|| eyre::eyre!("registered schedule omitted its certified time"))?
+            .try_into_any::<u64>()?;
+        eyre::ensure!(
+            u128::from(registered_at_ms) < schedule_at.as_millis(),
+            "one-shot schedule must follow its registration block: registered={registered_at_ms}ms, scheduled={}ms",
+            schedule_at.as_millis()
+        );
         submit_with_context(
             network,
             &test_client,

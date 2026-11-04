@@ -578,15 +578,16 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             })
             .await?
             .expect_err("Error expected");
+            // The depleted trigger was removed, so initial capability validation
+            // rejects its exact ID before the ExecuteTrigger instruction runs.
             let downcasted_error = error
                 .chain()
-                .last()
-                .expect("At least two error causes expected")
-                .downcast_ref::<FindError>();
+                .find_map(|cause| cause.downcast_ref::<ValidationFail>());
             assert!(
                 matches!(
                     downcasted_error,
-                    Some(FindError::Trigger(id)) if *id == trigger_id
+                    Some(ValidationFail::NotPermitted(message))
+                        if message == &format!("permission references unknown trigger `{trigger_id}`")
                 ),
                 "Unexpected error received: {error:?}",
             );
@@ -774,6 +775,21 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
             })
             .await??;
             println!("Rabbit is found.");
+            // Fee admission must succeed before this scenario can exercise its
+            // missing trigger-registration permission and subsequent owner grant.
+            let native_fee_asset =
+                iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+            submit_instruction_and_wait(
+                &network,
+                test_client.clone(),
+                Transfer::asset_quantity(
+                    AssetId::new(native_fee_asset, alice_account_id.clone()),
+                    10_000_u32,
+                    rabbit_account_id.clone(),
+                ),
+                stringify!(only_account_with_permission_can_register_trigger),
+            )
+            .await?;
             // Trying register the trigger without permissions
             let err = spawn_blocking({
                 let client = rabbit_client.clone();
@@ -1305,12 +1321,15 @@ async fn trigger_burn_repetitions() -> Result<()> {
                 match event.status() {
                     TransactionStatus::Queued => {}
                     TransactionStatus::Rejected(reason) => match reason.as_ref() {
-                        TransactionRejectionReason::Validation(
-                            ValidationFail::InstructionFailed(InstructionExecutionError::Find(
-                                FindError::Trigger(id),
-                            )),
-                        ) => {
-                            assert_eq!(id, &trigger_id);
+                        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                            message,
+                        )) => {
+                            // Burning the last repetition pruned the trigger. Its
+                            // absence is rejected by initial capability validation.
+                            assert_eq!(
+                                message,
+                                &format!("permission references unknown trigger `{trigger_id}`")
+                            );
                             break;
                         }
                         other => {

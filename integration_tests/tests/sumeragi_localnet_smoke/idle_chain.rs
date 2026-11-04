@@ -389,7 +389,20 @@ pub(super) async fn run() -> Result<()> {
             .wrap_err("register one-shot native proposal-work schedule")?;
         let registration_height = external_height.saturating_add(1);
         let internal_height = registration_height.saturating_add(1);
-        wait_for_converged_height(&network, internal_height, PROGRESS_TIMEOUT).await?;
+        let progress_deadline = Instant::now() + PROGRESS_TIMEOUT;
+        let committed = integration_tests::blocks::canonical_history(&client).await?;
+        let registration = committed.iter().find(|block| {
+            block.network_input_hashes().any(|hash| hash == registration_entrypoint)
+        }).ok_or_else(|| eyre!("confirmed schedule registration is absent from canonical history"))?;
+        ensure!(
+            registration.header().creation_time() < schedule_at,
+            "one-shot native progress schedule must follow its registration block"
+        );
+        wait_for_converged_height(
+            &network,
+            internal_height,
+            progress_deadline.saturating_duration_since(Instant::now()),
+        ).await?;
         let mut registration_block_hash = None;
         let mut internal_block_hash = None;
         for (index, peer) in network.peers().iter().enumerate() {

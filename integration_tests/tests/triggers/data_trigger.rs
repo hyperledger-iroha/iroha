@@ -16,7 +16,18 @@ use std::time::{Duration, Instant};
 const ASSET_VALUE_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const ASSET_VALUE_TIMEOUT: Duration = Duration::from_secs(30);
 async fn start_network(context: &'static str) -> Result<Option<sandbox::SerializedNetwork>> {
-    Box::pin(start_custom_network(NetworkBuilder::new(), context)).await
+    // These account-alias callbacks require explicitly authored alias scopes.
+    let mut builder = NetworkBuilder::new();
+    for scope in [
+        AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
+        AccountAliasPermissionScope::Domain(DomainId::try_new("wonderland", "universal")?),
+    ] {
+        builder = builder.with_genesis_instruction(Grant::account_permission(
+            Permission::from(CanManageAccountAlias { scope }),
+            ALICE_ID.clone(),
+        ));
+    }
+    Box::pin(start_custom_network(builder, context)).await
 }
 async fn start_custom_network(
     builder: NetworkBuilder,
@@ -96,35 +107,8 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         })
         .await??;
         let instruction = Mint::asset_quantity(1u32, asset_id.clone());
-        let alias_domain = DomainId::try_new("wonderland", "universal")?;
         let account_alias_literal = "mintrose@wonderland.universal";
         let alias_target_account = gen_account_in("wonderland").0;
-        spawn_blocking({
-            let client = test_client.clone();
-            let alias_domain = alias_domain.clone();
-            move || -> Result<()> {
-                client.submit(
-                    Grant::account_permission(
-                        Permission::from(CanManageAccountAlias {
-                            scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::UNIVERSAL),
-                        }),
-                        ALICE_ID.clone(),
-                    ),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )?;
-                client.submit(
-                    Grant::account_permission(
-                        Permission::from(CanManageAccountAlias {
-                            scope: AccountAliasPermissionScope::Domain(alias_domain),
-                        }),
-                        ALICE_ID.clone(),
-                    ),
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                )?;
-                Ok(())
-            }
-        })
-        .await??;
         let register_trigger = Register::trigger(Trigger::new(
             "mint_rose_1".parse()?,
             Action::new(
@@ -344,7 +328,6 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         let ordering_witness: Name = "data_trigger_ordering_witness".parse()?;
         let create_witness_id: TriggerId = "10_create_ordering_witness".parse()?;
         let consume_then_fail_id: TriggerId = "20_consume_then_fail".parse()?;
-        let wonderland = DomainId::try_new("wonderland", "universal")?;
         let create_witness = Register::trigger(Trigger::new(
             create_witness_id.clone(),
             Action::new(
@@ -367,7 +350,7 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
                         ALICE_ID.clone(),
                         ordering_witness.clone(),
                     )),
-                    InstructionBox::from(Register::domain(Domain::new(wonderland.clone()))),
+                    InstructionBox::from(Register::account(Account::new(ALICE_ID.clone()))),
                 ],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
@@ -405,8 +388,8 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         .await?
         .expect_err("the second canonically ordered data trigger must reject the transaction");
         assert!(
-            format!("{error:?}").contains(&wonderland.to_string()),
-            "the rejection must come from the duplicate-domain instruction after the first trigger created and the second consumed its witness: {error:?}"
+            format!("{error:?}").contains(&ALICE_ID.to_string()),
+            "the rejection must come from the duplicate-account instruction after the first trigger created and the second consumed its witness: {error:?}"
         );
 
         let rose_after = spawn_blocking({

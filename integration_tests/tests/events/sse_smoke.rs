@@ -191,13 +191,18 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         let result: Result<()> = (|| {
-            let exec_evt = wait_for_sse(&rx, |val| summary_contains(val, "ExecuteTriggerEvent"))?;
+            // Successful callbacks publish their data before ExecuteTrigger. Keep
+            // both required events instead of discarding data while awaiting execution.
+            let [exec_evt, data_evt] = wait_for_sse_pair(
+                &rx,
+                |val| summary_contains(val, "ExecuteTriggerEvent"),
+                |val| {
+                    val["category"].as_str() == Some("Data")
+                        && summary_contains(val, "Asset(Added")
+                        && summary_contains(val, &asset_id_literal)
+                },
+            )?;
             assert_eq!(exec_evt["category"].as_str(), Some("Other"));
-            let data_evt = wait_for_sse(&rx, |val| {
-                val["category"].as_str() == Some("Data")
-                    && summary_contains(val, "Asset(Added")
-                    && summary_contains(val, &asset_id_literal)
-            })?;
             assert_eq!(data_evt["category"].as_str(), Some("Data"));
             Ok(())
         })();
@@ -248,13 +253,16 @@ fn sse_smoke_scenarios() -> Result<()> {
             return Ok(());
         }
         let result: Result<()> = (|| {
-            let time_evt = wait_for_sse(&rx, |val| summary_contains(val, "TimeEvent"))?;
+            let [time_evt, meta_evt] = wait_for_sse_pair(
+                &rx,
+                |val| summary_contains(val, "TimeEvent"),
+                |val| {
+                    val["category"].as_str() == Some("Data")
+                        && summary_contains(val, "MetadataInserted")
+                        && summary_contains(val, key.as_ref())
+                },
+            )?;
             assert_eq!(time_evt["category"].as_str(), Some("Other"));
-            let meta_evt = wait_for_sse(&rx, |val| {
-                val["category"].as_str() == Some("Data")
-                    && summary_contains(val, "MetadataInserted")
-                    && summary_contains(val, key.as_ref())
-            })?;
             assert_eq!(meta_evt["category"].as_str(), Some("Data"));
             Ok(())
         })();
@@ -406,6 +414,67 @@ where
         }
     }
 }
+fn wait_for_sse_pair<F, G>(reader: &SseReader, first: F, second: G) -> Result<[JsonValue; 2]>
+where
+    F: Fn(&JsonValue) -> bool,
+    G: Fn(&JsonValue) -> bool,
+{
+    let mut matched = [None, None];
+    while matched.iter().any(Option::is_none) {
+        let SseMessage::Event(value) = reader.receive()? else {
+            continue;
+        };
+        if matched[0].is_none() && first(&value) {
+            matched[0] = Some(value);
+        } else if matched[1].is_none() && second(&value) {
+            matched[1] = Some(value);
+        }
+    }
+    Ok(matched.map(|value| value.expect("both required SSE events were observed")))
+}
+
+#[test]
+fn sse_pair_preserves_both_orders_and_requires_both_events() -> Result<()> {
+    let first = norito::json!({"event": "ExecuteTrigger"});
+    let second = norito::json!({"event": "Data"});
+    for values in [
+        vec![first.clone(), second.clone()],
+        vec![second.clone(), first.clone()],
+    ] {
+        let (tx, rx) = mpsc::channel();
+        tx.send(SseMessage::Event(norito::json!({"event": "unrelated"})))?;
+        for value in values {
+            tx.send(SseMessage::Event(value))?;
+        }
+        let reader = SseReader {
+            rx,
+            deadline: Instant::now() + Duration::from_secs(1),
+            shutdown: None,
+            worker: None,
+        };
+        let deadline = reader.deadline;
+        assert_eq!(
+            wait_for_sse_pair(&reader, |value| value == &first, |value| value == &second)?,
+            [first.clone(), second.clone()]
+        );
+        assert_eq!(reader.deadline, deadline);
+    }
+    let (tx, rx) = mpsc::channel();
+    tx.send(SseMessage::Event(first.clone()))?;
+    tx.send(SseMessage::Event(first.clone()))?;
+    drop(tx);
+    let reader = SseReader {
+        rx,
+        deadline: Instant::now() + Duration::from_secs(1),
+        shutdown: None,
+        worker: None,
+    };
+    let error =
+        wait_for_sse_pair(&reader, |value| value == &first, |value| value == &second).unwrap_err();
+    assert!(error.to_string().contains("before the expected event"));
+    Ok(())
+}
+
 fn summary_contains(val: &JsonValue, needle: &str) -> bool {
     val.get("summary")
         .and_then(JsonValue::as_str)
