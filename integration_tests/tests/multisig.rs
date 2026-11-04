@@ -1004,6 +1004,19 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
         materialized.controller().single_signatory().is_some(),
         "materialized signatory must remain a single-key authority"
     );
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()?;
+    let funding_asset = AssetId::new(fee_asset_definition, ALICE_ID.clone());
+    test_client
+        .submit_all(
+            [missing_signer.0.clone(), existing_signer.0.clone()]
+                .into_iter()
+                .map(|authority| {
+                    Transfer::asset_quantity(funding_asset.clone(), 100u32, authority)
+                }),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .wrap_err("fund the already materialized proposer and approver for transaction fees")?;
     let multisig_account_id = canonical_multisig_account_id(&spec);
     let marker: Name = "materialized_author_marker".parse().unwrap();
     let marker_value = Json::new("materialized-approved");
@@ -1027,15 +1040,23 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
     );
     let proposal_tx = {
         let account = proposer_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 core::iter::once::<InstructionBox>(propose.into()),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = proposer_client
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "multisig proposer fee quote changed the selected payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)?
+    };
     assert_eq!(
         proposal_tx.authority().subject_id(),
         missing_signer.0.subject_id(),
@@ -1064,15 +1085,23 @@ fn multisig_materialized_signatory_can_propose_and_approve() -> Result<()> {
         MultisigApprove::new(multisig_account_id.clone(), proposal_id, instructions_hash).into();
     let approve_tx = {
         let account = approver_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 core::iter::once::<InstructionBox>(approve),
                 FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
-    }
-    .expect("build integration-test transaction");
+            ))?;
+        let quote = approver_client
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "multisig approver fee quote changed the selected payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)?
+    };
     assert_eq!(
         approve_tx.authority().subject_id(),
         existing_signer.0.subject_id(),
@@ -1124,6 +1153,18 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
         register_accounts,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()?;
+    test_client
+        .submit(
+            Transfer::asset_quantity(
+                AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+                100u32,
+                non_signatory.0.clone(),
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .wrap_err("fund the existing non-signatory authority for multisig registration fees")?;
     let missing_signer = gen_account_in(domain.name());
     let spec = MultisigSpec::new(
         BTreeMap::from([
@@ -1229,6 +1270,18 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         register_accounts,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    let fee_asset_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+        .parse::<AssetDefinitionId>()?;
+    test_client
+        .submit(
+            Transfer::asset_quantity(
+                AssetId::new(fee_asset_definition, ALICE_ID.clone()),
+                100u32,
+                non_signatory.0.clone(),
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+        .wrap_err("fund the existing non-signatory authority for multisig registration fees")?;
     let missing_signer = gen_account_in(domain.name());
     let spec = MultisigSpec::new(
         BTreeMap::from([
