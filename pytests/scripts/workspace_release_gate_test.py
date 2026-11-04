@@ -902,11 +902,13 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "needs: [rust_changes, pre_build]",
             "if: needs.rust_changes.outputs.has_binary_rust == 'true'",
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
-            "TEST_NETWORK_BIN_IROHAD: bins/iroha3d",
-            "TEST_NETWORK_BIN_IROHA: bins/iroha",
-            "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: bins/iroha3d_private_settlement_routes",
+            "TEST_NETWORK_BIN_IROHAD: ${{ github.workspace }}/bins/iroha3d",
+            "TEST_NETWORK_BIN_IROHA: ${{ github.workspace }}/bins/iroha",
+            "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: ${{ github.workspace }}/bins/iroha3d_private_settlement_routes",
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
-            'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" --checks clippy,build,test,doc',
+            'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
+            '--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}" '
+            '--test-target "${{ matrix.test_target }}"',
         ),
         **{
             name: (
@@ -927,7 +929,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
         for requirement in (
             "needs: [rust_changes]",
             f"if: needs.rust_changes.outputs.run_{name} == 'true'",
-            f"run: bash ci/check_{name}.sh",
+            f"run: python3 -I -S ci/observe_build_capacity.py -- bash ci/check_{name}.sh",
             f"run_{name}: ${{{{ steps.classify.outputs.run_{name} }}}}",
         ):
             owner = _normalized(_job_block(workflow, "rust_changes")) if requirement.startswith("run_") else normalized_job
@@ -1472,6 +1474,43 @@ def test_pr_workflow_retains_locked_workspace_and_numeric_parity() -> None:
 
     workflow = PR_WORKFLOW.read_text(encoding="utf-8")
     assert _validate_pr_parity(workflow) == []
+
+
+@pytest.mark.parametrize("name", (
+    "TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA",
+    "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES",
+))
+def test_pr_network_binaries_cannot_be_package_relative(name: str) -> None:
+    """Cargo's package working directories must resolve the same selected binaries."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(
+        workflow, "rust_network", f"{name}: ${{{{ github.workspace }}}}/bins/",
+        f"{name}: bins/",
+    )
+    assert any(f"{name}:" in error for error in _validate_pr_parity(changed))
+
+
+@pytest.mark.parametrize("original,replacement", (
+    ('--test-target "${{ matrix.test_target }}"', ""),
+    ('--checks "${{ matrix.checks || \'clippy,build,test,doc\' }}"', '--checks test'),
+))
+def test_pr_network_shards_retain_selected_checks_and_target(
+    original: str, replacement: str,
+) -> None:
+    """A shard cannot drop its target or force every lane to run only tests."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(workflow, "rust_network", original, replacement)
+    assert any("PR rust_network" in error for error in _validate_pr_parity(changed))
+
+
+def test_pr_parliament_capacity_observer_retains_qualified_owner() -> None:
+    """The observational wrapper must still invoke the complete qualified corridor."""
+    workflow = PR_WORKFLOW.read_text(encoding="utf-8")
+    changed = _replace_once_in_job(
+        workflow, "sora_parliament_lifecycle", "-- bash ci/check_sora_parliament_lifecycle.sh",
+        "-- true",
+    )
+    assert any("qualified-owner routing" in error for error in _validate_pr_parity(changed))
 
 
 def test_compile_unit_baseline_pins_the_cross_platform_measurement_scope() -> None:
