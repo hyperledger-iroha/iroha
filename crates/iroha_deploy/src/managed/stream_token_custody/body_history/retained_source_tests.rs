@@ -6,6 +6,22 @@ use crate::managed::stream_token_custody::renewal_tests::{Fixture, wait_until};
 use iroha_data_model::sorafs::stream_token_custody::proof::StreamTokenCustodyProofV1;
 use std::time::Duration;
 
+fn assert_same_authenticated_cut(
+    actual: &VerifiedStreamTokenCustodyStateV1,
+    expected: &VerifiedStreamTokenCustodyStateV1,
+) {
+    assert_eq!(actual.network_id(), expected.network_id());
+    assert_eq!(actual.provider_id(), expected.provider_id());
+    assert_eq!(actual.owner(), expected.owner());
+    assert_eq!(actual.height(), expected.height());
+    assert_eq!(actual.context_id(), expected.context_id());
+    let actual = actual.current().unwrap();
+    let expected = expected.current().unwrap();
+    assert_eq!(actual.record(), expected.record());
+    assert_eq!(actual.control(), expected.control());
+    assert_eq!(actual.anchor(), expected.anchor());
+}
+
 #[test]
 fn retained_native_source_finishes_after_other_provider_progress_and_refuses_substitution() {
     let _guard = crate::managed::native_test_guard();
@@ -14,12 +30,7 @@ fn retained_native_source_finishes_after_other_provider_progress_and_refuses_sub
         fixture.initial.issued_at_unix_ms + 2_000,
         Duration::from_secs(4),
     );
-    let (checkpoint, current) = fixture.current();
-    let source = fixture.native.bootstrap_custody_source(
-        &fixture.owner.authority,
-        &fixture.policy,
-        &checkpoint,
-    );
+    let (checkpoint, current, source) = fixture.current_with_source();
     let terms = Terms::new(now_ms().unwrap() + 60_000, &fixture.options).unwrap();
     let unsigned = fixture
         .owner
@@ -57,19 +68,20 @@ fn retained_native_source_finishes_after_other_provider_progress_and_refuses_sub
         &fixture.options,
     );
     assert!(progressed.finalized.unwrap().height > checkpoint.checkpoint().height());
-    let (fresh_checkpoint, fresh_current) = fixture.current();
+    let (fresh_checkpoint, fresh_current, later_source) = fixture.current_with_source();
     assert!(fresh_current.height() > current.height());
     let historical = fixture
         .owner
         .verify_retained_source(&selection, &source, &checkpoint)
         .unwrap();
+    assert_same_authenticated_cut(&historical, &current);
+    let fresh = fixture
+        .owner
+        .verify_retained_source(&selection, &later_source, &fresh_checkpoint)
+        .unwrap();
+    assert_same_authenticated_cut(&fresh, &fresh_current);
 
     // Neither the new cut's proof nor a changed owner/binding can replace original evidence.
-    let later_source = fixture.native.bootstrap_custody_source(
-        &fixture.owner.authority,
-        &fixture.policy,
-        &fresh_checkpoint,
-    );
     assert!(
         fixture
             .owner

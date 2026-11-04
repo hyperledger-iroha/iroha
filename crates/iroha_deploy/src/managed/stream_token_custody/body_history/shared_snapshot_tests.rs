@@ -114,7 +114,7 @@ fn build_history_with_bodies(
         }
         drop(retained.take());
         let mut turn = fixture.renewal_turn();
-        let (checkpoint, current) = fixture.current();
+        let (checkpoint, current, source) = fixture.current_with_source();
         let (finished, authorization) = if ordinal > 1 {
             let previous = BodyHistory::open(&fixture.owner, CustodyPurpose::Renewal(2))
                 .unwrap()
@@ -129,11 +129,7 @@ fn build_history_with_bodies(
                     2,
                     &fixture.policy,
                     &current,
-                    fixture.native.bootstrap_custody_source(
-                        &fixture.owner.authority,
-                        &fixture.policy,
-                        &checkpoint,
-                    ),
+                    source,
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,
@@ -166,11 +162,7 @@ fn build_history_with_bodies(
                     2,
                     &fixture.policy,
                     &current,
-                    fixture.native.bootstrap_custody_source(
-                        &fixture.owner.authority,
-                        &fixture.policy,
-                        &checkpoint,
-                    ),
+                    source,
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,

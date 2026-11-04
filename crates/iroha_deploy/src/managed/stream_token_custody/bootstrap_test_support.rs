@@ -75,13 +75,14 @@ impl ManagedStreamTokenCustody {
         self.authority.validate_profile().unwrap();
         self.validate_policy(policy).unwrap();
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         assert!(current.current().is_none());
         let original = Original {
             selection: self.selection(&policy.binding, &current).unwrap(),
             action: Action::Configure(policy.clone()),
             checkpoint: checkpoint_bytes(&verifier).unwrap(),
-            source: native.bootstrap_custody_source(&self.authority, policy, &verifier),
+            source,
         };
         self.bootstrap_native_original(native, CustodyPurpose::Configure, &original, utc, options);
         self.recover_configure_selected_if_present(
@@ -126,7 +127,8 @@ impl ManagedStreamTokenCustody {
             .unwrap()
             .unwrap();
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         let state = current.current().unwrap();
         assert_eq!(state.control().policy, *policy);
         assert_eq!(state.record().execution_height, finalized.height);
@@ -134,7 +136,6 @@ impl ManagedStreamTokenCustody {
         assert_eq!(state.record().revision, 1);
         assert!(!state.control().signer_revoked && !state.control().attester_revoked);
         assert!(state.control().active_head.is_none());
-        let source = native.bootstrap_custody_source(&self.authority, policy, &verifier);
         let now = now_ms().unwrap();
         let interval = select_interval(now);
         validate_interval(interval, now).unwrap();
@@ -271,14 +272,15 @@ impl ManagedStreamTokenCustody {
         options: &BoundedTransactionOptions,
     ) -> RetainedCustodyEnrollment {
         let verifier = native.observe(&self.authority);
-        let current = native.bootstrap_custody(&self.authority, policy, &verifier);
+        let (current, source) =
+            native.bootstrap_custody_with_source(&self.authority, policy, &verifier);
         let terms = Terms::new(utc, options).unwrap();
         let unsigned = self
             .select_renewal_unsigned(
                 sequence,
                 policy,
                 &current,
-                native.bootstrap_custody_source(&self.authority, policy, &verifier),
+                source,
                 &verifier,
                 &terms,
                 options.deadline,

@@ -97,8 +97,7 @@ impl NativeFixture {
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
     ) -> VerifiedStreamTokenCustodyStateV1 {
-        self.bootstrap_custody_snapshot(authority, policy, checkpoint, None)
-            .unwrap()
+        self.bootstrap_custody_with_source(authority, policy, checkpoint)
             .0
     }
 
@@ -108,9 +107,19 @@ impl NativeFixture {
         policy: &SignerCustodyPolicyV1,
         checkpoint: &FinalityVerifier,
     ) -> Vec<u8> {
+        self.bootstrap_custody_with_source(authority, policy, checkpoint)
+            .1
+    }
+
+    /// Retain one authenticated native cut together with the exact source that proved it.
+    pub(in crate::managed) fn bootstrap_custody_with_source(
+        &self,
+        authority: &ServiceAuthority,
+        policy: &SignerCustodyPolicyV1,
+        checkpoint: &FinalityVerifier,
+    ) -> (VerifiedStreamTokenCustodyStateV1, Vec<u8>) {
         self.bootstrap_custody_snapshot(authority, policy, checkpoint, None)
             .unwrap()
-            .1
     }
 
     // Three component workers share this one executed State. Unlike four HTTP peers, its

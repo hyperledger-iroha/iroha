@@ -159,7 +159,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
         if let Some(diagnostic) = &body_diagnostic {
             diagnostic.successor();
         }
-        let (checkpoint, current) = fixture.current();
+        let (checkpoint, current, source) = fixture.current_with_source();
         assert_eq!(current.current().unwrap().record(), &original_native);
         assert_eq!(current.current().unwrap().control().next_sequence, 2);
 
@@ -182,11 +182,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     2,
                     &fixture.policy,
                     &current,
-                    fixture.native.bootstrap_custody_source(
-                        &fixture.owner.authority,
-                        &fixture.policy,
-                        &checkpoint,
-                    ),
+                    source,
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,
@@ -228,11 +224,7 @@ fn populate_deep_history(fixture: &mut Fixture, complete_before: Instant) -> Com
                     2,
                     &fixture.policy,
                     &current,
-                    fixture.native.bootstrap_custody_source(
-                        &fixture.owner.authority,
-                        &fixture.policy,
-                        &checkpoint,
-                    ),
+                    source,
                     &checkpoint,
                     &terms,
                     fixture.options.deadline,
