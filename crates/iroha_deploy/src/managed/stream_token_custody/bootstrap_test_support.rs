@@ -134,18 +134,12 @@ impl ManagedStreamTokenCustody {
         assert_eq!(state.record().revision, 1);
         assert!(!state.control().signer_revoked && !state.control().attester_revoked);
         assert!(state.control().active_head.is_none());
+        let source = native.bootstrap_custody_source(&self.authority, policy, &verifier);
         let now = now_ms().unwrap();
         let interval = select_interval(now);
         validate_interval(interval, now).unwrap();
         let unsigned = self
-            .unsigned_enrollment(
-                policy,
-                &current,
-                native.bootstrap_custody_source(&self.authority, policy, &verifier),
-                &verifier,
-                interval,
-                now,
-            )
+            .unsigned_enrollment(policy, &current, source, &verifier, interval, now)
             .unwrap();
         let body = self.bootstrap_native_body(
             native,
