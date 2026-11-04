@@ -36,13 +36,23 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let client = network.client();
     let register_tx = {
         let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [register_trigger],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 <_>::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the trigger fixture transaction payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)
     }
     .expect("build integration-test transaction");
     spawn_blocking(move || client.submit_transaction_and_wait(&register_tx)).await??;
@@ -51,16 +61,26 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let ready_client = network.client();
     let ready_tx = {
         let account = ready_client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [Log::new(
                     Level::INFO,
                     "trigger_completion_event_stream_ready".to_string(),
                 )],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the trigger fixture transaction payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)
     }
     .expect("build integration-test transaction");
     let ready_hash = ready_tx.hash();
@@ -113,13 +133,23 @@ async fn trigger_completion_success_should_produce_event_scenario(network: &Netw
     let client = network.client();
     let trigger_tx = {
         let account = client.account_client();
-        account
-            .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                 [Instruction::into_instruction_box(Box::new(call_trigger))],
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 Metadata::default(),
-            ))
-            .and_then(|payload| account.sign_transaction(payload))
+            ))?;
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "fee quote changed the trigger fixture transaction payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        account.sign_transaction(payload)
     }
     .expect("build integration-test transaction");
     let submit_trigger = async {

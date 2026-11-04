@@ -455,8 +455,8 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             let target_non_empty = baseline_non_empty.saturating_add(1);
             let log_tx = {
                 let account = test_client.account_client();
-                account
-                    .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                let mut payload =
+                    account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                         [InstructionBox::from(Log::new(
                             Level::INFO,
                             "trigger probe".to_string(),
@@ -466,8 +466,20 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                             None,
                         ),
                         Metadata::default(),
-                    ))
-                    .and_then(|payload| account.sign_transaction(payload))
+                    ))?;
+                let quote = account
+                    .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
+                        payload: &payload,
+                    })
+                    .await?;
+                eyre::ensure!(
+                    payload
+                        .fee_payment
+                        .has_same_payer_and_gas_bound(&quote.intent),
+                    "fee quote changed the trigger fixture transaction payer or gas bound"
+                );
+                payload.fee_payment = quote.intent;
+                account.sign_transaction(payload)
             }
             .expect("build integration-test transaction");
             spawn_blocking({
@@ -1247,13 +1259,23 @@ async fn trigger_burn_repetitions() -> Result<()> {
         let instruction = Instruction::into_instruction_box(Box::new(execute_trigger));
         let transaction = {
             let account = test_client.account_client();
-            account
-                .prepare_transaction(iroha::client::AccountTransactionDraft::new(
+            let mut payload =
+                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
                     [instruction],
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     Metadata::default(),
-                ))
-                .and_then(|payload| account.sign_transaction(payload))
+                ))?;
+            let quote = account
+                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+                .await?;
+            eyre::ensure!(
+                payload
+                    .fee_payment
+                    .has_same_payer_and_gas_bound(&quote.intent),
+                "fee quote changed the trigger fixture transaction payer or gas bound"
+            );
+            payload.fee_payment = quote.intent;
+            account.sign_transaction(payload)
         }
         .expect("build integration-test transaction");
         let hash = transaction.hash();
