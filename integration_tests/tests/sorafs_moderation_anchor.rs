@@ -1,7 +1,7 @@
 //! Four-validator regressions for `SoraFS` moderation proof admission, sortition and bond settlement.
 
 use eyre::{Result, WrapErr as _, ensure, eyre};
-use futures::StreamExt as _;
+use futures_util::StreamExt as _;
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,

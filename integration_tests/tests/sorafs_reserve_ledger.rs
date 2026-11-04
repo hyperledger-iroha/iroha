@@ -244,9 +244,10 @@ fn reserve_holder_rows_preserve_quantities_and_refuse_duplicate_or_foreign_scope
     let ids = [&*BOB_ID, &*iroha_test_samples::CARPENTER_ID, &*ALICE_ID]
         .map(|account| AssetId::of(definition.clone(), account.clone()));
     let row = |index: usize, scope: &str, quantity: &str| {
+        let account = ids[index].account();
         norito::json!({
             "asset": definition,
-            "account_id": ids[index].account(),
+            "account_id": account,
             "scope": scope,
             "quantity": quantity,
         })
