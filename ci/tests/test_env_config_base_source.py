@@ -27,14 +27,14 @@ class BaseSourceAttributionTests(unittest.TestCase):
         os.chdir(self.root)
         self.addCleanup(os.chdir, self.previous)
         self.blobs = {
-            SCANNER: b"unchanged inventory classifier\n",
+            SCANNER: (GUARD.parents[1] / SCANNER).read_bytes(),
             SOURCE: b'fn example() { std::env::var("EXAMPLE_TOGGLE"); }\n',
         }
         for name, body in self.blobs.items():
             path = self.root / name
             path.parent.mkdir(parents=True)
             path.write_bytes(body)
-        self.rows = [{"path": SOURCE, "scope": "prod", "context": "original read"}]
+        self.rows = [{"path": SOURCE, "scope": "prod", "context": self.blobs[SOURCE].decode().strip()}]
 
     def detect(self, base_prod=0):
         base = {"variables": {"EXAMPLE_TOGGLE": {"counts": {"prod": base_prod}}}}
@@ -62,18 +62,43 @@ class BaseSourceAttributionTests(unittest.TestCase):
             exec(compile(source, str(GUARD), "exec"), {})
         return output.getvalue(), errors.getvalue()
 
-    def test_stale_inventory_accepts_only_identical_existing_source(self):
+    def test_stale_inventory_accepts_existing_production_references(self):
         output, errors = self.detect()
         self.assertEqual(output, "")
-        self.assertIn("already present in identical base source", errors)
+        self.assertIn("already present in reclassified base source", errors)
 
     def test_new_source_remains_a_new_production_toggle(self):
         del self.blobs[SOURCE]
         self.assertIn("EXAMPLE_TOGGLE (prod refs: 1)", self.detect()[0])
 
-    def test_any_source_change_requires_review(self):
+    def test_unrelated_source_change_preserves_existing_reference_attribution(self):
         (self.root / SOURCE).write_bytes(self.blobs[SOURCE] + b"// changed\n")
+        self.assertEqual(self.detect()[0], "")
+
+    def test_base_test_reference_cannot_become_a_production_toggle(self):
+        self.blobs[SOURCE] = b"#[cfg(test)]\n" + self.blobs[SOURCE]
         self.assertIn("EXAMPLE_TOGGLE (prod refs: 1)", self.detect()[0])
+
+    def test_changed_reference_context_requires_review(self):
+        self.rows[0]["context"] = 'fn changed() { std::env::var("EXAMPLE_TOGGLE"); }'
+        self.assertIn("EXAMPLE_TOGGLE (prod refs: 1)", self.detect()[0])
+
+    def test_added_duplicate_reference_requires_review(self):
+        self.rows.append(dict(self.rows[0]))
+        self.assertIn("EXAMPLE_TOGGLE (prod refs: 1)", self.detect()[0])
+
+    def test_different_variable_in_base_cannot_establish_inheritance(self):
+        self.blobs[SOURCE] = self.blobs[SOURCE].replace(b"EXAMPLE_TOGGLE", b"OTHER_TOGGLE")
+        self.assertIn("EXAMPLE_TOGGLE (prod refs: 1)", self.detect()[0])
+
+    def test_source_symlink_outside_repository_requires_review(self):
+        with tempfile.TemporaryDirectory() as outside:
+            target = Path(outside) / "outside.rs"
+            target.write_bytes(self.blobs[SOURCE])
+            current = self.root / SOURCE
+            current.unlink()
+            current.symlink_to(target)
+            self.assertIn("EXAMPLE_TOGGLE (prod refs: 1)", self.detect()[0])
 
     def test_classifier_change_requires_review(self):
         (self.root / SCANNER).write_text("changed classifier\n")
