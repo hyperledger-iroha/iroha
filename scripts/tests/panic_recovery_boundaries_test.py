@@ -158,23 +158,75 @@ def test_core_recovery_support_seals_exact_permission_include(
     assert any("source inventory drifted" in error for error in errors), errors
 
 
+@pytest.mark.parametrize("reference_kind", ("include!", "#[path]"))
 def test_core_recovery_support_rejects_undeclared_permission_sibling(
-    tmp_path: Path,
+    tmp_path: Path, reference_kind: str,
 ) -> None:
     module = load_guard_module()
     source_root = tmp_path / "crates/iroha_core/src"
     source_root.mkdir(parents=True)
     executor = source_root / "executor.rs"
     sibling = source_root / "executor_unreviewed_permission.rs"
-    executor.write_text(f'include!("{sibling.name}");\n', encoding="utf-8")
+    reference = (
+        f'include!("{sibling.name}");\n'
+        if reference_kind == "include!"
+        else f'#[path = "{sibling.name}"] mod unreviewed;\n'
+    )
+    executor.write_text(reference, encoding="utf-8")
     sibling.write_text("fn unreviewed_permission() {}\n", encoding="utf-8")
 
     sources, failures = module.torii_rust_source_closure(tmp_path)
     assert sibling.resolve() not in sources
     assert failures == [
-        "crates/iroha_core/src/executor.rs:1: include! source path escapes "
+        f"crates/iroha_core/src/executor.rs:1: {reference_kind} source path escapes "
         "the audited source roots: executor_unreviewed_permission.rs"
     ]
+
+
+def test_core_recovery_seals_untracked_path_test_module(tmp_path: Path) -> None:
+    module = load_guard_module()
+    parent = tmp_path / "crates/iroha_core/src"
+    parent.mkdir(parents=True)
+    for relative in module.REQUIRED_AUDITED_SOURCE_PATHS:
+        (tmp_path / relative).mkdir(parents=True, exist_ok=True)
+    executor = parent / "executor.rs"
+    executor.write_text(
+        '#[cfg(test)]\n#[path = "executor_formatting_tests.rs"]\n'
+        'mod formatting_tests;\n',
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", str(executor)], cwd=tmp_path, check=True)
+    included = parent / "executor_formatting_tests.rs"
+    included.write_text("fn formatting_control() {}\n", encoding="utf-8")
+
+    sources, failures = module.torii_rust_source_closure(tmp_path)
+    assert failures == []
+    assert included.resolve() in sources
+    assert module.torii_source_path_failures(tmp_path) == []
+    records, _, counts = module.torii_boundary_inventory(tmp_path)
+    relative = included.relative_to(tmp_path).as_posix()
+    assert any(record.startswith(relative + "\t") for record in records)
+    assert subprocess.check_output(
+        ["git", "ls-files", "--", relative], cwd=tmp_path, text=True,
+    ) == "", "the source must be audited before it is staged or committed"
+
+    included.write_text(
+        "fn formatting_control() { changed_redaction(); }\n", encoding="utf-8",
+    )
+    observed = module.torii_boundary_inventory(tmp_path)
+    assert observed[2] == counts, "context-only edits must also invalidate review"
+    failures = module.closed_torii_boundary_inventory_failures(
+        tmp_path, records, observed_inventory=observed,
+    )
+    assert any("source inventory drifted" in failure for failure in failures)
+
+    included.write_text(
+        "fn formatting_control() { std::panic::catch_unwind(|| work()); }\n",
+        encoding="utf-8",
+    )
+    failures = module.closed_torii_boundary_inventory_failures(tmp_path, records)
+    assert "Torii catch_unwind site count drifted (expected 0, found 1)" in failures
 
 
 

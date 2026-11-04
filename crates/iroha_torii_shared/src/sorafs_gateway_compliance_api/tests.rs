@@ -1,5 +1,43 @@
 //! Canonical API projection/query/binding controls without runtime authority construction.
 use super::*;
+
+#[test]
+fn lowercase_digest_decodes_every_byte_at_every_position() {
+    assert_eq!(decode_lower_hex_32(&"00".repeat(32)), Some([0; 32]));
+    for position in 0..32 {
+        for byte in 0..=u8::MAX {
+            let mut expected = [0; 32];
+            expected[position] = byte;
+            assert_eq!(decode_lower_hex_32(&hex::encode(expected)), Some(expected));
+        }
+    }
+}
+
+#[test]
+fn lowercase_digest_rejects_noncanonical_text_without_alternate_spellings() {
+    for length in [0, 1, 2, 31, 32, 63, 65, 66, 128] {
+        assert!(decode_lower_hex_32(&"0".repeat(length)).is_none());
+    }
+    for position in 0..64 {
+        for byte in 0..=127_u8 {
+            if byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte) {
+                continue;
+            }
+            let mut text = [b'0'; 64];
+            text[position] = byte;
+            assert!(decode_lower_hex_32(std::str::from_utf8(&text).unwrap()).is_none());
+        }
+    }
+    for text in [
+        format!("é{}", "0".repeat(62)),
+        format!("{}🔥", "0".repeat(60)),
+        format!("0x{}", "0".repeat(62)),
+        format!("{}\n", "0".repeat(64)),
+    ] {
+        assert!(decode_lower_hex_32(&text).is_none());
+    }
+}
+
 fn catalog() -> GatewayComplianceCatalogStatusV1 {
     GatewayComplianceCatalogStatusV1 {
         digest_hex: hex::encode([0xab; 32]),

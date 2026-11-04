@@ -116,7 +116,7 @@ fn private_note_profile_constraint_residues_inner_v1(
 """
 IVM_PRODUCTION_BRIDGE = """
 fn constraint_residues_v1(
-    self, current_base: &[F], next_base: &[F], current_aux: &[F],
+    current_base: &[F], next_base: &[F], current_aux: &[F],
     next_aux: &[F], fixed: &[F],
 ) -> Result<Vec<F>, ProofManagedNoteStarkErrorV1> {
     private_note_profile_constraint_residues_inner_v1(

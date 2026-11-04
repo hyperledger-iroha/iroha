@@ -12,7 +12,7 @@ import {
 import { blake3 } from "@noble/hashes/blake3.js";
 import { AccountAddress } from "./address.js";
 import { blake2b256 } from "./blake2b.js";
-import { verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
+import { assertValidEd25519PublicKey, verifyEd25519Strict as verifyEd25519 } from "./ed25519Strict.js";
 import { crc64Xz } from "./crc64Xz.js";
 import { parseCanonicalContractAddress } from "./contractAddress.js";
 import {
@@ -1680,8 +1680,10 @@ function validateAccountArchive(payload, context) {
     fail(UNSUPPORTED_ALGORITHM, `${context} must use Ed25519 algorithm tag 0`);
   }
   const publicKey = controller.subarray(1);
+  // Same acceptance set as Iroha's Ed25519 key admission (canonical, prime-order,
+  // not small-order), in pure JavaScript so browsers can admit signed originals.
   try {
-    AccountAddress.fromAccount({ algorithm: ED25519_ALGORITHM, publicKey });
+    assertValidEd25519PublicKey(publicKey);
   } catch (error) {
     fail(INVALID_PUBLIC_KEY, `${context} contains an invalid Ed25519 key: ${error.message}`);
   }

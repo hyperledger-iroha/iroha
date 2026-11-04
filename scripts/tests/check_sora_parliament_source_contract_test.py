@@ -1624,6 +1624,40 @@ def test_sortition_registration_rejects_disconnected_admission(
         guard.require_sortition_registration_guards(mutated)
 
 
+@pytest.mark.parametrize("initial", (False, True))
+def test_sortition_registration_ignores_commented_admission_copies(initial: bool) -> None:
+    """A commented copy of the shared admission call cannot authenticate a disconnected transition."""
+    source = guard.read_rust_with_includes(WORLD_PATH)
+    guard.require_sortition_registration_guards(source)
+    start, end, candidates = (
+        (
+            "gov::ParliamentLifecycleTransitionV1::RegisterInitialSortition => {",
+            "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
+            "&(candidates),",
+        )
+        if initial
+        else (
+            "gov::ParliamentLifecycleTransitionV1::RegisterSortitionRequest(payload) => {",
+            "gov::ParliamentLifecycleTransitionV1::ConsumeSortitionPulseBatch(payload) => {",
+            "&(expected_candidates),",
+        )
+    )
+    branch = guard.section(source, start, end, WORLD_PATH)
+    live = "apply_parliament_sortition_request_batch_v1("
+    assert branch.count(live) == 1 and source.count(start + branch) == 1
+    decoy = (
+        "\n            // no_result_kind = apply_parliament_sortition_request_batch_v1("
+        f"&mut attempt, payload, {candidates} state_transaction)?;"
+    )
+    mutated = source.replace(
+        start + branch,
+        start + decoy + branch.replace(live, "unchecked_sortition_registration("),
+        1,
+    )
+    with pytest.raises(RuntimeError, match="must use shared sortition admission"):
+        guard.require_sortition_registration_guards(mutated)
+
+
 @pytest.mark.parametrize("path", (TYPES_PATH, WORLD_PATH))
 def test_production_checker_enforces_repaired_guards(
     path: str, monkeypatch: pytest.MonkeyPatch

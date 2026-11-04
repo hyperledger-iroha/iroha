@@ -86,7 +86,9 @@ macro_rules! config_enum {
             type Err = $crate::enum_text::ParseError;
 
             #[deny(unreachable_patterns)]
-            fn from_str(value: &str) -> ::core::result::Result<Self, Self::Err> {
+            fn from_str(
+                value: &str,
+            ) -> ::core::result::Result<Self, <Self as ::core::str::FromStr>::Err> {
                 match value {
                     $($spelling => ::core::result::Result::Ok(Self::$variant)),+,
                     _ => ::core::result::Result::Err(
@@ -99,7 +101,9 @@ macro_rules! config_enum {
         impl ::core::convert::TryFrom<&str> for $name {
             type Error = $crate::enum_text::ParseError;
 
-            fn try_from(value: &str) -> ::core::result::Result<Self, Self::Error> {
+            fn try_from(
+                value: &str,
+            ) -> ::core::result::Result<Self, <Self as ::core::convert::TryFrom<&str>>::Error> {
                 <Self as ::core::str::FromStr>::from_str(value)
             }
         }
@@ -148,5 +152,25 @@ mod tests {
         assert_eq!(format!("{error:?}"), "VariantNotFound");
         assert_eq!(format!("{error:>40}"), "Matching variant not found");
         assert!(error.source().is_none());
+    }
+
+    #[test]
+    fn error_named_variants_do_not_shadow_conversion_associated_types() {
+        crate::config_enum! {
+            #[derive(Debug, PartialEq, Eq)]
+            enum Outcome {
+                Error => "error",
+                Err => "err",
+            }
+        }
+
+        for (variant, spelling) in [(Outcome::Error, "error"), (Outcome::Err, "err")] {
+            assert_eq!(spelling.parse::<Outcome>(), Ok(variant));
+            assert_eq!(Outcome::try_from(spelling).unwrap().as_str(), spelling);
+        }
+        assert_eq!(
+            Outcome::try_from("unknown"),
+            Err(ParseError::VariantNotFound)
+        );
     }
 }

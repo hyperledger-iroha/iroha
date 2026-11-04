@@ -79,6 +79,8 @@ EXPECTED_DECLARED_BINS = EXPECTED_DEFAULT_BINS | frozenset(
         ("iroha_genesis", "genesis_inspect"),
         ("iroha_genesis", "genesis_resign"),
         ("iroha_kagami", "iroha_authenticated_tool_controller"),
+        ("iroha_native_source_delivery", "iroha_native_source_delivery"),
+        ("iroha_release_bundle", "iroha_release_bundle"),
         ("iroha_test_network", "taira_beacon_bootstrap"),
         ("irohad", "iroha_test_runtime_provider_broker"),
         ("irohad", "sorafs_external_software_signer"),

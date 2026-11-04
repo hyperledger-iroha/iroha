@@ -171,11 +171,9 @@ pub use confidential::{
     ConfidentialKeyError, ConfidentialKeyset, derive_keyset, derive_keyset_from_slice,
     generate_keyset,
 };
-use derive_more::Display;
 pub use error::Error;
 use error::ParseError;
 pub use fhe_bfv::*;
-use getset::Getters;
 pub use hash::*;
 #[cfg(feature = "pqc")]
 pub use hybrid::{
@@ -373,8 +371,7 @@ impl<K> fmt::Debug for KeyGenOption<K> {
     }
 }
 /// Pair of Public and Private keys.
-#[derive(Clone, PartialEq, Eq, Getters, Debug)]
-#[getset(get = "pub")]
+#[derive(Clone, PartialEq, Eq, Debug)]
 pub struct KeyPair {
     /// Public key.
     public_key: PublicKey,
@@ -490,6 +487,16 @@ impl KeyPair {
     }
 }
 impl KeyPair {
+    /// Public key.
+    #[inline]
+    pub fn public_key(&self) -> &PublicKey {
+        &self.public_key
+    }
+    /// Private key.
+    #[inline]
+    pub fn private_key(&self) -> &PrivateKey {
+        &self.private_key
+    }
     /// Fallibly derive a key pair from seed material.
     ///
     /// Ed25519 uses the seed directly when 32 bytes are provided; other lengths are
@@ -2002,10 +2009,10 @@ impl norito::core::SerializePayload for PublicKeyCompact {
 
 /// Public key used in signatures.
 ///
-/// Its serialized form (via serde `Serialize`/`Deserialize`, plus [`Display`] and [`FromStr`]) is
+/// Its serialized form (via serde `Serialize`/`Deserialize`, plus [`fmt::Display`] and [`FromStr`]) is
 /// represented as a [multihash](https://www.multiformats.io/multihash/) string.
 /// [`FromStr`] also accepts an algorithm-prefixed form like
-/// `"ed25519:<multihash-hex>"` for clarity in JSON. [`Display`] returns
+/// `"ed25519:<multihash-hex>"` for clarity in JSON. [`fmt::Display`] returns
 /// the bare multihash hex. Multihash hex is canonical: varint bytes are
 /// lowercase hex and payload bytes are uppercase hex; parsing rejects
 /// non-canonical casing and `0x` prefixes.
@@ -3005,13 +3012,13 @@ impl norito::json::JsonSerialize for PrivateKey {
 /// Explicit wrapper for formatting or serializing private-key material (for example, in kagami).
 ///
 /// [`FromStr`] accepts both a bare multihash hex string and an algorithm-prefixed
-/// variant such as `"ml-dsa:<multihash-hex>"`. The default [`Display`] formatting returns
+/// variant such as `"ml-dsa:<multihash-hex>"`. The default [`fmt::Display`] formatting returns
 /// the bare multihash hex. Multihash hex is canonical: varint bytes are lowercase hex
 /// and payload bytes are uppercase hex; parsing rejects non-canonical casing and
 /// `0x` prefixes.
 ///
 /// [`Debug`] is always redacted so that embedding this type in another debug-formatted
-/// value cannot disclose key material. [`Display`], JSON/Norito serialization, and the
+/// value cannot disclose key material. [`fmt::Display`], JSON/Norito serialization, and the
 /// named export methods expose the private key deliberately and must not be used in logs.
 #[derive(Clone, Eq, PartialEq, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_crypto::ExposedPrivateKey")]
@@ -3209,19 +3216,29 @@ pub mod error {
     //! Module containing errors
     use super::*;
     /// Error indicating algorithm could not be found
-    #[derive(Debug, Display, Clone, Copy)]
-    #[display("Algorithm not supported")]
+    #[derive(Debug, Clone, Copy)]
     pub struct NoSuchAlgorithm;
+    impl fmt::Display for NoSuchAlgorithm {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("Algorithm not supported")
+        }
+    }
     impl std::error::Error for NoSuchAlgorithm {}
     /// Error parsing a key
-    #[derive(Debug, Display, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq)]
     pub enum ParseError {
         /// The supplied key encoding is malformed.
-        #[display("{_0}")]
         Invalid(String),
         /// Its canonical identity is known but a local implementation is absent.
-        #[display("{_0}")]
         UnsupportedImplementation(UnsupportedImplementation),
+    }
+    impl fmt::Display for ParseError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::Invalid(message) => fmt::Display::fmt(message, f),
+                Self::UnsupportedImplementation(original) => fmt::Display::fmt(original, f),
+            }
+        }
     }
     impl ParseError {
         pub(crate) fn into_decode_error(self) -> norito::Error {
@@ -3238,29 +3255,37 @@ pub mod error {
     }
     impl std::error::Error for ParseError {}
     /// Error when dealing with cryptographic functions
-    #[derive(Debug, Display, PartialEq, Eq)]
+    #[derive(Debug, PartialEq, Eq)]
     pub enum Error {
         /// The known algorithm lacks this local operation's implementation.
-        #[display("{_0}")]
         UnsupportedImplementation(UnsupportedImplementation),
         /// Returned when trying to create an algorithm which does not exist
-        #[display("Algorithm '{_0}' is not supported")]
         NoSuchAlgorithm(String),
         /// Occurs during deserialization of a private or public key
-        #[display("Key could not be parsed. {_0}")]
         Parse(ParseError),
         /// Returned when an error occurs during the signing process
-        #[display("Signing failed. {_0}")]
         Signing(String),
         /// Returned when an error occurs during the signature verification process
-        #[display("Signature verification failed")]
         BadSignature,
         /// Returned when an error occurs during key generation
-        #[display("Key generation failed. {_0}")]
         KeyGen(String),
         /// A General purpose error message that doesn't fit in any category
-        #[display("General error. {_0}")] // This is going to cause a headache
         Other(String),
+    }
+    impl fmt::Display for Error {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            match self {
+                Self::UnsupportedImplementation(original) => fmt::Display::fmt(original, f),
+                Self::NoSuchAlgorithm(algorithm) => {
+                    write!(f, "Algorithm '{algorithm}' is not supported")
+                }
+                Self::Parse(error) => write!(f, "Key could not be parsed. {error}"),
+                Self::Signing(message) => write!(f, "Signing failed. {message}"),
+                Self::BadSignature => f.write_str("Signature verification failed"),
+                Self::KeyGen(message) => write!(f, "Key generation failed. {message}"),
+                Self::Other(message) => write!(f, "General error. {message}"),
+            }
+        }
     }
     impl From<NoSuchAlgorithm> for Error {
         fn from(source: NoSuchAlgorithm) -> Self {
@@ -3283,3 +3308,6 @@ include!("lib_tests.rs");
 
 #[cfg(test)]
 mod bounded_key_encode_tests;
+
+#[cfg(test)]
+mod wrapper_traits_tests;

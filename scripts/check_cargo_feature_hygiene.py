@@ -360,8 +360,9 @@ EXPECTED_FEATURES: dict[str, dict[str, tuple[str, ...]]] = {
  "cli_integration_harness": ("iroha_cli_lib/cli_integration_harness",)},
     "iroha_core_privacy": {"default": ("zk-stark", "simd"),
  "zk-stark": (),
- # SHA3 0.12 dispatches hardware kernels automatically and retains software parity.
- "simd": (),
+ # SHA3 0.12 dispatches hardware kernels automatically and retains software parity;
+ # `simd` also selects FASTPQ's paired NEON/SSE2 Keccak lanes (scalar elsewhere).
+ "simd": ("fastpq_prover/simd",),
  "privacy-release-evidence": ("zk-stark", "iroha_data_model/privacy-exact12-conformance"),
  "test-utils": ("dep:rand_chacha",)},
     "iroha_core_timed_ovn": {"test-utils": ("dep:rand",), "default": ()},

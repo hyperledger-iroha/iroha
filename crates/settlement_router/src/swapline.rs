@@ -1,6 +1,5 @@
 //! Repo/reverse-repo style swap lines that supplement AMM liquidity.
 use crate::{Numeric, NumericOperationError, RoundingMode, XorQuantity, XorQuantityError};
-use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
@@ -10,7 +9,6 @@ use norito::{
     Clone,
     Copy,
     Debug,
-    Display,
     Eq,
     Hash,
     Ord,
@@ -20,18 +18,26 @@ use norito::{
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
-    From,
+    norito::NoritoSchema,
 )]
-#[display("{_0}")]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "settlement_router::swapline::SwapLineId")]
 pub struct SwapLineId(pub u32);
+impl core::fmt::Display for SwapLineId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
+    }
+}
+impl From<u32> for SwapLineId {
+    #[inline]
+    fn from(value: u32) -> Self {
+        Self(value)
+    }
+}
 /// Asset class eligible for posting as collateral against a swap line.
 #[derive(
     Clone,
     Copy,
     Debug,
-    Display,
     Eq,
     PartialEq,
     NoritoSerialize,
@@ -44,14 +50,20 @@ pub struct SwapLineId(pub u32);
 #[norito_schema(name = "settlement_router::swapline::CollateralKind")]
 pub enum CollateralKind {
     /// The dataspace's native CBDC.
-    #[display("cbdc")]
     Cbdc,
     /// XOR posted by the treasury (reverse repo).
-    #[display("xor")]
     Xor,
     /// Governance-approved stablecoin.
-    #[display("stable")]
     Stable,
+}
+impl core::fmt::Display for CollateralKind {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Cbdc => "cbdc",
+            Self::Xor => "xor",
+            Self::Stable => "stable",
+        })
+    }
 }
 /// Swap-line calculation failures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]

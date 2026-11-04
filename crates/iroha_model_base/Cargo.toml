@@ -17,12 +17,9 @@ transparent_api = ["iroha_data_model_derive/transparent_api"]
 [dependencies]
 iroha_allocation = { workspace = true }
 iroha_crypto = { workspace = true, default-features = false, features = ["json"] }
-thiserror = { workspace = true }
-getset = { workspace = true }
 iroha_data_model_derive = { path = "../iroha_data_model_derive" }
 iroha_primitives = { workspace = true, features = ["json"] }
 iroha_schema = { workspace = true }
-derive_more = { workspace = true, features = ["as_ref", "display", "debug", "constructor", "from_str", "from", "into", "try_into", "deref"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 sha2 = { version = "0.11.1", default-features = false, features = ["alloc"] }
 # Name normalization is consensus-visible. The source checks the baked data

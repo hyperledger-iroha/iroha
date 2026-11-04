@@ -232,6 +232,7 @@ class ProjectionControls(unittest.TestCase):
 
 
 
+@unittest.skipUnless(sys.platform == 'linux', 'actual Linux /proc descriptors')
 class ExecutableCloseControls(unittest.TestCase):
     """Real original descriptors with explicitly injected read/terminal failures."""
 

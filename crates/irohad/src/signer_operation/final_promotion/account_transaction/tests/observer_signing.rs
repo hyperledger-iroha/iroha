@@ -308,7 +308,7 @@ fn observer_binding_capacity_expiry_is_local_unavailability_without_resigning() 
     let observer = f.observer_transactions();
     // The lifetime must cover payload preparation and the one signature on a loaded
     // machine; the refused binding's wait below still crosses exactly this deadline.
-    let prepared = f.prepare_receipt_check(None, Duration::from_secs(10));
+    let prepared = f.prepare_receipt_check(None, Duration::from_secs(5));
     let deadline = prepared.deadline();
     let payload = f.observer_payload(prepared.instruction().clone().into());
     let pool = f.native.state().ivm_execution_budget();
@@ -316,6 +316,7 @@ fn observer_binding_capacity_expiry_is_local_unavailability_without_resigning() 
     let baseline = pool.reserved_bytes();
     let mut signer_calls = 0;
     let mut waits = 0;
+    let mut before_retry = None;
     let result = observer.sign_receipt_waiting(
         prepared,
         payload,
@@ -330,13 +331,18 @@ fn observer_binding_capacity_expiry_is_local_unavailability_without_resigning() 
             waits += 1;
             assert_eq!(failure.deadline(), deadline);
             assert!(failure.error().is_retryable());
+            // The refused binding released its whole attempt before the service delay.
+            assert_eq!(pool.reserved_bytes(), baseline);
             // Service delay crosses exactly the existing deadline; no replacement lifetime.
             std::thread::sleep(deadline.saturating_duration_since(std::time::Instant::now()));
+            // The fixture pool may refund its own retired State generations during the
+            // delay; the expired retry below must leave exactly this level untouched.
+            before_retry = Some(pool.reserved_bytes());
         },
     );
     pool.set_limit_bytes(limit);
     assert!(matches!(result, Err(ObserverError::Unavailable)));
     assert_eq!(signer_calls, 1);
     assert_eq!(waits, 1);
-    assert_eq!(pool.reserved_bytes(), baseline);
+    assert_eq!(Some(pool.reserved_bytes()), before_retry);
 }

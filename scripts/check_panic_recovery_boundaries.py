@@ -178,6 +178,7 @@ CORE_RECOVERY_SUPPORT_PATHS = tuple(
     Path("crates/iroha_core/src") / name
     for name in (
         "executor_tests.rs",
+        "executor_formatting_tests.rs",
         "executor_custody_tests.rs",
         "executor_privacy_occurrence_tests.rs",
         "executor_account_lineage_tests.rs",

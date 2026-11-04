@@ -40,6 +40,32 @@ fn captured_original_test_payload_identities() {
 #[norito_schema(name = "iroha_p2p::network::tests::DummyMsg")]
 #[derive(Clone, Debug, Decode, Encode)]
 struct DummyMsg;
+#[test]
+fn network_handle_debug_preserves_literal_flags_failures_without_debug_bounds() {
+    use std::fmt::{self, Write as _};
+
+    // This must type-check for every payload and cipher, without either implementing Debug.
+    fn assert_generic_debug<T: Pload, E: Enc>(handle: &NetworkBaseHandle<T, E>) {
+        let _: &dyn fmt::Debug = handle;
+    }
+
+    let handle = NetworkBaseHandle::<DummyMsg, ChaCha20Poly1305>::closed_for_tests();
+    assert_generic_debug(&handle);
+    let expected = "core::any::type_name::<Self>()";
+    assert_eq!(format!("{handle:?}"), expected);
+    assert_eq!(format!("{handle:#?}"), expected);
+    assert_eq!(format!("{handle:>80.5?}"), expected);
+    assert_eq!(format!("{handle:🦀^80.5?}"), expected);
+
+    struct FailingWriter;
+    impl fmt::Write for FailingWriter {
+        fn write_str(&mut self, _: &str) -> fmt::Result {
+            Err(fmt::Error)
+        }
+    }
+    assert_eq!(write!(FailingWriter, "{handle:?}"), Err(fmt::Error));
+}
+
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_p2p::network::tests::TamperableMsg")]
 #[derive(Clone, Debug, Decode, Encode)]

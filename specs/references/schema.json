@@ -1134,6 +1134,18 @@
       }
     ]
   },
+  "AnonymousPgcLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_anonymity_set_size",
+        "type": "u32"
+      },
+      {
+        "name": "max_recipient_count",
+        "type": "u32"
+      }
+    ]
+  },
   "ArchiveId": "Array<u8, 32>",
   "Array<Hash, 256>": {
     "Array": {
@@ -9553,6 +9565,18 @@
       }
     ]
   },
+  "FcmpLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_input_count",
+        "type": "u32"
+      },
+      {
+        "name": "max_output_count",
+        "type": "u32"
+      }
+    ]
+  },
   "FeeChargeKind": {
     "Enum": [
       {
@@ -13909,6 +13933,18 @@
       }
     ]
   },
+  "IvmPrivateNoteLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_input_count",
+        "type": "u32"
+      },
+      {
+        "name": "max_output_count",
+        "type": "u32"
+      }
+    ]
+  },
   "IvmProved": {
     "Struct": [
       {
@@ -13926,6 +13962,14 @@
       {
         "name": "gas_policy_commitment",
         "type": "Hash"
+      }
+    ]
+  },
+  "JindoLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_polynomial_count",
+        "type": "u32"
       }
     ]
   },
@@ -19700,6 +19744,21 @@
   "Option<PinStatusKindV1>": {
     "Option": "PinStatusKindV1"
   },
+  "Option<PrivacyConsensusPolicyUpdateV1>": {
+    "Option": "PrivacyConsensusPolicyUpdateV1"
+  },
+  "Option<PrivacyProtocolLimitsUpdateV1>": {
+    "Option": "PrivacyProtocolLimitsUpdateV1"
+  },
+  "Option<PrivacyProtocolPolicyV1>": {
+    "Option": "PrivacyProtocolPolicyV1"
+  },
+  "Option<PrivateSettlementPolicyUpdateV1>": {
+    "Option": "PrivateSettlementPolicyUpdateV1"
+  },
+  "Option<PrivateSettlementProtocolClosureDrainV1>": {
+    "Option": "PrivateSettlementProtocolClosureDrainV1"
+  },
   "Option<ProofBlob>": {
     "Option": "ProofBlob"
   },
@@ -20475,6 +20534,14 @@
       {
         "name": "amount",
         "type": "Quantity"
+      }
+    ]
+  },
+  "OrchardLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_action_count",
+        "type": "u32"
       }
     ]
   },
@@ -22619,6 +22686,18 @@
       }
     ]
   },
+  "PqMaspLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_input_count",
+        "type": "u32"
+      },
+      {
+        "name": "max_output_count",
+        "type": "u32"
+      }
+    ]
+  },
   "PricingScheduleRecord": {
     "Struct": [
       {
@@ -22676,6 +22755,78 @@
     ]
   },
   "PrivacyAuditBundleDigestV1": "Array<u8, 32>",
+  "PrivacyConsensusLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_actions_per_transaction",
+        "type": "u32"
+      },
+      {
+        "name": "max_actions_per_block",
+        "type": "u32"
+      },
+      {
+        "name": "max_proof_bytes_per_action",
+        "type": "u32"
+      },
+      {
+        "name": "max_action_bytes",
+        "type": "u32"
+      },
+      {
+        "name": "max_privacy_bytes_per_transaction",
+        "type": "u32"
+      },
+      {
+        "name": "max_privacy_bytes_per_block",
+        "type": "u32"
+      },
+      {
+        "name": "max_statement_and_encrypted_output_bytes_per_transaction",
+        "type": "u32"
+      },
+      {
+        "name": "max_nullifiers_per_action",
+        "type": "u32"
+      },
+      {
+        "name": "max_commitments_per_action",
+        "type": "u32"
+      },
+      {
+        "name": "retained_root_count",
+        "type": "u32"
+      }
+    ]
+  },
+  "PrivacyConsensusPolicyUpdateV1": {
+    "Struct": [
+      {
+        "name": "scheduled_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "effective_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "next_limits",
+        "type": "PrivacyConsensusLimitsV1"
+      }
+    ]
+  },
+  "PrivacyConsensusPolicyV1": {
+    "Struct": [
+      {
+        "name": "current_limits",
+        "type": "PrivacyConsensusLimitsV1"
+      },
+      {
+        "name": "pending_update",
+        "type": "Option<PrivacyConsensusPolicyUpdateV1>"
+      }
+    ]
+  },
   "PrivacyDeploymentValidatorCanaryV1": {
     "Struct": [
       {
@@ -23008,6 +23159,106 @@
       {
         "discriminant": 11,
         "tag": "pq-masp-stark-v1"
+      }
+    ]
+  },
+  "PrivacyProtocolLimitsUpdateV1": {
+    "Struct": [
+      {
+        "name": "scheduled_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "effective_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "next_limits",
+        "type": "PrivacyProtocolLimitsV1"
+      }
+    ]
+  },
+  "PrivacyProtocolLimitsV1": {
+    "Enum": [
+      {
+        "discriminant": 0,
+        "tag": "zk-ace-pq-authorization-v1"
+      },
+      {
+        "discriminant": 1,
+        "tag": "anonymous-pgc-k-out-of-n-v1",
+        "type": "AnonymousPgcLimitsV1"
+      },
+      {
+        "discriminant": 2,
+        "tag": "verange-transparent-range-v1",
+        "type": "VeRangeLimitsV1"
+      },
+      {
+        "discriminant": 3,
+        "tag": "iroha-zk-ams-v1",
+        "type": "ZkAmsLimitsV1"
+      },
+      {
+        "discriminant": 4,
+        "tag": "vega-existing-credential-zk-v1"
+      },
+      {
+        "discriminant": 5,
+        "tag": "iroha-zk-x509-stark-p256-v1"
+      },
+      {
+        "discriminant": 6,
+        "tag": "iroha-jindo-polynomial-commitment-v1",
+        "type": "JindoLimitsV1"
+      },
+      {
+        "discriminant": 7,
+        "tag": "iroha-bootle-lantern-anoncred-v1"
+      },
+      {
+        "discriminant": 8,
+        "tag": "orchard-halo2-actions-v1",
+        "type": "OrchardLimitsV1"
+      },
+      {
+        "discriminant": 9,
+        "tag": "monero-fcmp-plus-plus-v1",
+        "type": "FcmpLimitsV1"
+      },
+      {
+        "discriminant": 10,
+        "tag": "iroha-ivm-private-note-stark-v1",
+        "type": "IvmPrivateNoteLimitsV1"
+      },
+      {
+        "discriminant": 11,
+        "tag": "pq-masp-stark-v1",
+        "type": "PqMaspLimitsV1"
+      }
+    ]
+  },
+  "PrivacyProtocolPolicyKeyV1": {
+    "Struct": [
+      {
+        "name": "protocol_id",
+        "type": "PrivacyProtocolIdV1"
+      }
+    ]
+  },
+  "PrivacyProtocolPolicyV1": {
+    "Struct": [
+      {
+        "name": "protocol_id",
+        "type": "PrivacyProtocolIdV1"
+      },
+      {
+        "name": "current_limits",
+        "type": "PrivacyProtocolLimitsV1"
+      },
+      {
+        "name": "pending_update",
+        "type": "Option<PrivacyProtocolLimitsUpdateV1>"
       }
     ]
   },
@@ -23716,6 +23967,14 @@
         "type": "PrivateSettlementPoolCutProofV1"
       },
       {
+        "name": "parameters",
+        "type": "Parameters"
+      },
+      {
+        "name": "protocol_policy",
+        "type": "Option<PrivacyProtocolPolicyV1>"
+      },
+      {
         "name": "lanes",
         "type": "SumeragiLaneState"
       },
@@ -23738,6 +23997,38 @@
       {
         "name": "contexts",
         "type": "Vec<PrivateSettlementContextProofV1>"
+      }
+    ]
+  },
+  "PrivateSettlementPolicyUpdateV1": {
+    "Struct": [
+      {
+        "name": "scheduled_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "effective_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "next_limits",
+        "type": "PrivateSettlementValidityLimitsV1"
+      }
+    ]
+  },
+  "PrivateSettlementPolicyV1": {
+    "Struct": [
+      {
+        "name": "current_limits",
+        "type": "PrivateSettlementValidityLimitsV1"
+      },
+      {
+        "name": "pending_update",
+        "type": "Option<PrivateSettlementPolicyUpdateV1>"
+      },
+      {
+        "name": "protocol_closure_drain",
+        "type": "Option<PrivateSettlementProtocolClosureDrainV1>"
       }
     ]
   },
@@ -23905,6 +24196,30 @@
       }
     ]
   },
+  "PrivateSettlementProtocolClosureDrainV1": {
+    "Struct": [
+      {
+        "name": "protocol_id",
+        "type": "PrivacyProtocolIdV1"
+      },
+      {
+        "name": "scheduled_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "effective_at_height",
+        "type": "u64"
+      },
+      {
+        "name": "next_limits_hash",
+        "type": "Hash"
+      },
+      {
+        "name": "original_max_expiry_blocks",
+        "type": "u64"
+      }
+    ]
+  },
   "PrivateSettlementRouteV1": {
     "Struct": [
       {
@@ -23918,6 +24233,54 @@
       {
         "name": "lane_incarnation",
         "type": "Hash"
+      }
+    ]
+  },
+  "PrivateSettlementValidityLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_participants",
+        "type": "u16"
+      },
+      {
+        "name": "max_expiry_blocks",
+        "type": "u64"
+      },
+      {
+        "name": "audit_timeout_blocks",
+        "type": "u64"
+      },
+      {
+        "name": "prepare_timeout_blocks",
+        "type": "u64"
+      },
+      {
+        "name": "commit_timeout_blocks",
+        "type": "u64"
+      },
+      {
+        "name": "capsule_padding_classes",
+        "type": "u8"
+      },
+      {
+        "name": "max_proof_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_capsule_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "max_carrier_bytes",
+        "type": "u64"
+      },
+      {
+        "name": "sidecar_retention_blocks",
+        "type": "u64"
+      },
+      {
+        "name": "min_auditor_approvals",
+        "type": "u16"
       }
     ]
   },
@@ -27057,6 +27420,30 @@
       }
     ]
   },
+  "RuntimeUpgradeContainmentResolved": {
+    "Struct": [
+      {
+        "name": "containment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "height",
+        "type": "u64"
+      }
+    ]
+  },
+  "RuntimeUpgradeContainmentReviewed": {
+    "Struct": [
+      {
+        "name": "containment",
+        "type": "Array<u8, 32>"
+      },
+      {
+        "name": "change_set",
+        "type": "ChangeSetId"
+      }
+    ]
+  },
   "RuntimeUpgradeEvent": {
     "Enum": [
       {
@@ -27093,6 +27480,16 @@
         "discriminant": 6,
         "tag": "ContainmentExpired",
         "type": "RuntimeUpgradeContainmentExpired"
+      },
+      {
+        "discriminant": 7,
+        "tag": "ContainmentReviewed",
+        "type": "RuntimeUpgradeContainmentReviewed"
+      },
+      {
+        "discriminant": 8,
+        "tag": "ContainmentResolved",
+        "type": "RuntimeUpgradeContainmentResolved"
       }
     ]
   },
@@ -27138,6 +27535,14 @@
         {
           "mask": 64,
           "name": "ContainmentExpired"
+        },
+        {
+          "mask": 128,
+          "name": "ContainmentReviewed"
+        },
+        {
+          "mask": 256,
+          "name": "ContainmentResolved"
         }
       ],
       "repr": "u32"
@@ -36742,6 +37147,14 @@
       }
     ]
   },
+  "VeRangeLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_aggregation_count",
+        "type": "u32"
+      }
+    ]
+  },
   "Vec<Account>": {
     "Vec": "Account"
   },
@@ -37834,6 +38247,18 @@
       {
         "name": "value",
         "type": "Quantity"
+      }
+    ]
+  },
+  "ZkAmsLimitsV1": {
+    "Struct": [
+      {
+        "name": "max_batch_size",
+        "type": "u32"
+      },
+      {
+        "name": "max_ring_size",
+        "type": "u32"
       }
     ]
   },

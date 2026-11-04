@@ -32,7 +32,6 @@ norito = { path = "../norito", default-features = false, features = ["node-codec
 [dev-dependencies]
 kotodama_lang = { path = "../kotodama_lang" }
 base64 = { workspace = true, features = ["alloc"] }
-hex = { workspace = true, features = ["alloc"] }
 tempfile = { workspace = true }
 
 [lints]

@@ -218,39 +218,53 @@ impl JsonDeserialize for NumericSpec {
     }
 }
 /// Error occurred during creation of [`Numeric`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NumericError {
     /// Mantissa exceeds allowed range
+    #[error("Mantissa exceeds allowed range")]
     MantissaTooLarge,
     /// Scale exceeds allowed range
+    #[error("Scale exceeds allowed range")]
     ScaleTooLarge,
     /// Malformed: expecting number with optional decimal point (10, 10.02)
+    #[error("Malformed: expecting number with optional decimal point (10, 10.02)")]
     Malformed,
 }
 /// Consensus-visible failures produced by exact decimal and quantity operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NumericOperationError {
     /// Canonical result mantissa is outside `-2^511..=2^511-1`
+    #[error("Canonical result mantissa is outside `-2^511..=2^511-1`")]
     MantissaOverflow,
     /// Canonical exact result needs a scale greater than 28
+    #[error("Canonical exact result needs a scale greater than 28")]
     ScaleOverflow,
     /// Divisor is zero
+    #[error("Divisor is zero")]
     DivisionByZero,
     /// Exact quotient is a repeating decimal
+    #[error("Exact quotient is a repeating decimal")]
     RepeatingDecimal,
     /// Exact terminating quotient needs more than 28 fractional digits
+    #[error("Exact terminating quotient needs more than 28 fractional digits")]
     ExactDivisionScaleOverflow,
     /// Requested output scale is outside `0..=28`
+    #[error("Requested output scale is outside `0..=28`")]
     InvalidScale,
     /// Conversion would discard a nonzero fractional part
+    #[error("Conversion would discard a nonzero fractional part")]
     InexactConversion,
     /// Decimal is not in its unique canonical representation
+    #[error("Decimal is not in its unique canonical representation")]
     NonCanonical,
     /// Quantity cannot be negative
+    #[error("Quantity cannot be negative")]
     NegativeQuantity,
     /// Quantity subtraction would produce a negative result
+    #[error("Quantity subtraction would produce a negative result")]
     QuantityUnderflow,
     /// Integer square root received a negative operand
+    #[error("Integer square root received a negative operand")]
     NegativeSquareRoot,
 }
 /// Failures produced while multiplying a quantity by aggregate decimal factors.
@@ -434,22 +448,27 @@ pub enum ExactDivisionClass {
     ScaleOverflow,
 }
 /// The error type returned when a numeric conversion fails.
-#[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("The error type returned when a numeric conversion fails.")]
 pub struct TryFromNumericError;
 /// Error occurred while checking if number satisfy given spec
-#[derive(Clone, Copy, Debug, displaydoc::Display, thiserror::Error)]
+#[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum NumericSpecError {
     /// Given number has scale higher than allowed by spec.
+    #[error("Given number has scale higher than allowed by spec.")]
     ScaleTooHigh,
 }
 /// Error occurred while checking if number satisfy given spec
-#[derive(Clone, Debug, displaydoc::Display, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum NumericSpecParseError {
     /// String representation should start with Numeric
+    #[error("String representation should start with Numeric")]
     StartWithNumeric,
     /// Numeric should be followed by optional scale wrapped in braces
+    #[error("Numeric should be followed by optional scale wrapped in braces")]
     WrappedInBraces,
     /// Scale should be valid integer value: {_0}
+    #[error("Scale should be valid integer value: {0}")]
     InvalidScale(#[source] <u32 as FromStr>::Err),
 }
 impl Numeric {

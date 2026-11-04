@@ -19,13 +19,18 @@ use std::{format, string::String, vec::Vec};
 pub const SMALL_SIZE: usize = 8_usize;
 mod small_string {
     use super::*;
-    #[derive(Debug, derive_more::Display, Clone, PartialEq, Eq, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, IntoSchema)]
     /// Immutable string that stores short values inline using [`ConstString`].
     #[schema(transparent = "String")]
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_primitives::small::small_string::SmallStr")]
     pub struct SmallStr(ConstString);
+    impl fmt::Display for SmallStr {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(&self.0, f)
+        }
+    }
     impl SmallStr {
         #[must_use]
         #[inline]

@@ -24,8 +24,4 @@ norito = { workspace = true, default-features = false, features = ["base-codec"]
 
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros", "signal", "time"] }
 tokio-util = { workspace = true }
-thiserror = { workspace = true }
 error-stack = { workspace = true }
-
-[dev-dependencies]
-tokio-stream = { version = "0.1.17", features = ["sync"] }

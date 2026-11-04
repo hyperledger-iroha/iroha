@@ -31,7 +31,6 @@ thiserror = { workspace = true }
 color-eyre = { workspace = true }
 reqwest = { workspace = true, features = ["rustls", "query"] }
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time"] }
-tokio-stream = { workspace = true }
 futures = { workspace = true, features = ["std", "async-await"] }
 url = { workspace = true }
 iroha_version = { workspace = true }

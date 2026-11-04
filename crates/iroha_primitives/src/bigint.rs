@@ -30,13 +30,16 @@ pub const MAX_BITS: usize = 4_096;
 /// Maximum canonical two's-complement payload length.
 pub const MAX_ENCODED_BYTES: usize = MAX_BITS / 8;
 /// Errors returned by [`BigInt`] operations.
-#[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
 pub enum BigIntError {
     /// Value exceeds configured bit cap
+    #[error("Value exceeds configured bit cap")]
     Overflow,
     /// Two's-complement byte representation is not minimal
+    #[error("Two's-complement byte representation is not minimal")]
     NonCanonical,
     /// Division by zero
+    #[error("Division by zero")]
     DivisionByZero,
 }
 /// Refusal while cloning one exact native-digit magnitude for resource admission.

@@ -3676,8 +3676,12 @@
    }
   },
   "execution-proofs": {
-   "description": "Execution-proof (Race, classed Race, IVM step) fork of the transparent STARK substrate.",
+   "description": "Execution proofs: the RaceV1 adapter over iroha_execution_stark, and the classed Race and IVM step relations on the fork of the transparent STARK substrate.",
    "uses": {
+    "blake2b": {
+     "class": "label-only",
+     "note": "The RaceV1 profile string names the BLAKE2b-384 commitments and transcript of iroha_execution_stark."
+    },
     "digest384": {
      "class": "role",
      "note": "Merkle, transcript and statement digests of the execution fork.",
@@ -3705,6 +3709,19 @@
     "shake": {
      "class": "test-or-tooling",
      "note": "Only tests, fixtures, benches or tooling of this consumer name it."
+    }
+   }
+  },
+  "execution-stark": {
+   "description": "Bounded-integer execution STARK (crates/iroha_execution_stark): engine, circuit builder and the RaceV1 circuit.",
+   "uses": {
+    "blake2b": {
+     "class": "proof-internal",
+     "note": "Native 48-byte BLAKE2b-384 (RFC 7693, 512-bit chaining state) with length-framed items: Merkle leaves and nodes, the Fiat-Shamir transcript and its proof-of-work, circuit and public-column identities (specs/execution_stark_v1.md)."
+    },
+    "blake3": {
+     "class": "test-or-tooling",
+     "note": "Only the race_bench example names it, to fingerprint its binary and proofs (a dev-dependency); no protocol hash uses it."
     }
    }
   },
@@ -4601,6 +4618,10 @@
     "consumer": "bn254-poseidon"
    },
    {
+    "pattern": "^crates/iroha_execution_stark/",
+    "consumer": "execution-stark"
+   },
+   {
     "pattern": "stark|zk",
     "consumer": "zk-generic"
    },
@@ -4857,6 +4878,7 @@
    "crates/iroha_cli/src/soracloud/tests/part_05.rs": ["iroha-hash"],
    "crates/iroha_cli/src/soracloud/tests/part_06.rs": ["sha2-256"],
    "crates/iroha_cli/src/zk.rs": ["poseidon"],
+   "crates/iroha_config/src/enum_text_tests.rs": ["poseidon"],
    "crates/iroha_config/src/parameters/actual.rs": ["argon2", "blake2b", "blake3", "iroha-hash", "pedersen", "poseidon", "scrypt", "sha2-256", "sm3"],
    "crates/iroha_config/src/parameters/defaults.rs": ["blake2b", "pedersen", "poseidon", "scrypt", "sha2-256", "sm3"],
    "crates/iroha_config/src/parameters/user.rs": ["blake2b", "blake3", "iroha-hash", "pedersen", "poseidon", "scrypt", "sha2-256", "sm3"],
@@ -4879,7 +4901,7 @@
    "crates/iroha_core/src/executor/attachment_custody/x509/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/executor_fastpq_rejection_tail.rs": ["poseidon"],
    "crates/iroha_core/src/executor_fastpq_rejection_tail/tests.rs": ["iroha-hash"],
-   "crates/iroha_core/src/executor_tests.rs": ["iroha-hash", "poseidon"],
+   "crates/iroha_core/src/executor_tests.rs": ["iroha-hash", "pedersen", "poseidon"],
    "crates/iroha_core/src/fastpq/digest_backend_tests.rs": ["iroha-hash", "poseidon"],
    "crates/iroha_core/src/fastpq/finalized_source/physical_transfer/tests.rs": ["iroha-hash"],
    "crates/iroha_core/src/fastpq/finalized_source/tests.rs": ["iroha-hash", "poseidon"],
@@ -5075,7 +5097,7 @@
    "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/admission.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/kernel_export.rs": ["poseidon", "sha2-256"],
    "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof.rs": ["digest384", "iroha-hash", "poseidon"],
-   "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof_tests.rs": ["iroha-hash"],
+   "crates/iroha_core_privacy/src/execution_proofs/classed_race_v1/proof_tests.rs": ["digest384", "iroha-hash"],
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air.rs": ["digest384"],
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/branch.rs": ["digest384"],
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/machine_bus.rs": ["digest384"],
@@ -5083,8 +5105,8 @@
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/shift.rs": ["digest384"],
    "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/trace.rs": ["digest384"],
    "crates/iroha_core_privacy/src/execution_proofs/kernel_export.rs": ["sha2-256"],
-   "crates/iroha_core_privacy/src/execution_proofs/proof.rs": ["digest384", "iroha-hash", "poseidon"],
-   "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs": ["digest384", "iroha-hash"],
+   "crates/iroha_core_privacy/src/execution_proofs/proof.rs": ["blake2b", "iroha-hash"],
+   "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/execution_proofs/registry.rs": ["iroha-hash"],
    "crates/iroha_core_privacy/src/execution_proofs/stark/aggregate_stark.rs": ["digest384", "poseidon"],
    "crates/iroha_core_privacy/src/execution_proofs/stark/aggregate_stark/retained_polynomial_tests.rs": ["digest384"],
@@ -5558,6 +5580,7 @@
    "crates/iroha_crypto/src/timed_ovn.rs": ["sha2-256"],
    "crates/iroha_crypto/src/tle.rs": ["hkdf", "sha2-256", "sha2-512"],
    "crates/iroha_crypto/src/vrf.rs": ["blake2b", "sha2-256"],
+   "crates/iroha_crypto/src/wrapper_traits_tests.rs": ["iroha-hash", "sm3"],
    "crates/iroha_crypto/src/xof.rs": ["shake"],
    "crates/iroha_crypto/tests/grouped/group_01.rs": ["sm3"],
    "crates/iroha_crypto/tests/jurisdiction_merkle_golden.rs": ["iroha-hash"],
@@ -5675,6 +5698,14 @@
    "crates/iroha_data_model/tests/ram_lfe_canonical_v1.rs": ["iroha-hash"],
    "crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs": ["iroha-hash"],
    "crates/iroha_data_model/tests/zk_x509_presentation_interval.rs": ["iroha-hash"],
+   "crates/iroha_execution_stark/examples/race_bench.rs": ["blake3"],
+   "crates/iroha_execution_stark/src/hash.rs": ["blake2b"],
+   "crates/iroha_execution_stark/src/lib.rs": ["blake2b"],
+   "crates/iroha_execution_stark/src/merkle.rs": ["blake2b"],
+   "crates/iroha_execution_stark/src/params.rs": ["blake2b"],
+   "crates/iroha_execution_stark/src/proof.rs": ["blake2b"],
+   "crates/iroha_execution_stark/src/prover.rs": ["blake2b"],
+   "crates/iroha_execution_stark/src/transcript.rs": ["blake2b"],
    "crates/iroha_fhe/src/bgv/coins.rs": ["blake3"],
    "crates/iroha_fhe/src/bgv/fixtures.rs": ["blake3"],
    "crates/iroha_fhe/src/bgv/mod.rs": ["blake3"],
@@ -8466,7 +8497,7 @@
     },
     "measured": ["inclusive and exclusive wall and CPU time per phase", "trace rows, columns and constraint degree as work counters", "proof, public-input and transaction bytes", "peak RSS and scoped allocation counters", "worker count and its provenance", "unattributed share of the root phase"],
     "phases": ["prove_flow", "trace_build", "trace_commit", "composition", "deep", "fri_commit", "grinding", "query_open", "proof_frame_encode", "verify_flow", "proof_frame_decode", "verify"],
-    "note": "Runs on the execution fork until B.3.",
+    "note": "Runs on iroha-execution-stark since 2026-11-03 (specs/execution_stark_v1.md); B.3 decides whether it moves to the shared backend.",
     "profiles": ["fastpq.transcript.q77.v1"],
     "profile_set_identity": "bfb562bb5f9b2c66103aeb4dfbf98b274ea9da5abbabe65e8cc6e79cf52ce225"
    },
@@ -8900,6 +8931,13 @@
     "symbol": "pub struct TransparentTranscriptV1 {",
     "own_transcript": true,
     "hash": "six-lane digest384 frames"
+   },
+   {
+    "engine": "iroha-execution-stark",
+    "path": "crates/iroha_execution_stark/src/transcript.rs",
+    "symbol": "pub struct Transcript {",
+    "own_transcript": true,
+    "hash": "BLAKE2b-384 length-framed absorb and squeeze transcript"
    },
    {
     "engine": "privacy-substrate",
@@ -12125,6 +12163,12 @@
      "disposition": "adopts-at-migration",
      "owner_tasks": ["C.9", "B.3"],
      "note": "Proof material whose transcript label the generic verifier consumes; follows that verifier's migration."
+    },
+    {
+     "engine": "iroha-execution-stark",
+     "disposition": "conditional",
+     "owner_tasks": ["B.3"],
+     "note": "Added on 2026-11-03 as a generic prover for SORA Nexus games; RaceV1 proves on it. It adopts the frozen construction only if B.3 consolidates it onto the shared backend; otherwise its BLAKE2b-384 transcript stays separately analysed (specs/execution_stark_v1.md). It has no frozen profile."
     },
     {
      "engine": "zk-ams-rns-qpcs",

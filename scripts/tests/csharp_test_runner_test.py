@@ -21,7 +21,9 @@ class CsharpTestRunnerTests(unittest.TestCase):
     def run_launcher(self, privacy: bool, version: str) -> tuple[subprocess.CompletedProcess[str], list[dict]]:
         """Run a launcher with recorded SDK calls and a synthetic native preflight."""
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            # The privacy launcher accepts only physically canonical (`pwd -P`) native paths;
+            # resolve symlinked temporary roots such as macOS `/var` -> `/private/var`.
+            root = Path(directory).resolve()
             (root / "csharp").mkdir()
             (root / "csharp/global.json").write_bytes((REPO_ROOT / "csharp/global.json").read_bytes())
             (root / "scripts").mkdir()

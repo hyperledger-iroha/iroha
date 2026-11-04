@@ -68,25 +68,64 @@ impl Default for EncoderConfig {
     }
 }
 /// Errors emitted by the deterministic audio helpers.
-#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CodecError {
-    #[error("expected {expected} PCM samples, got {found}")]
+    /// The PCM buffer does not contain a complete frame.
     InvalidPcmLength { expected: usize, found: usize },
-    #[error("unsupported audio payload version {0}")]
+    /// The packet advertises an unsupported payload version.
     UnsupportedVersion(u8),
-    #[error("audio packet too short")]
+    /// The packet is shorter than its required header or frame data.
     PacketTooShort,
-    #[error("invalid channel count: expected {expected:?}, found {found}")]
+    /// The packet channel count does not match the expected layout.
     InvalidChannelCount { expected: Option<u8>, found: u8 },
-    #[error("invalid frame sample count: expected {expected}, found {found}")]
+    /// The frame sample count is invalid for the configuration.
     InvalidSampleCount { expected: u16, found: u16 },
-    #[error("audio backend unavailable for layout {layout:?}")]
+    /// The requested backend is unavailable for the channel layout.
     BackendUnavailable { layout: ChannelLayout },
-    #[error("audio backend does not support layout {layout:?}")]
+    /// The requested backend does not support the channel layout.
     UnsupportedLayout { layout: ChannelLayout },
-    #[error("libopus backend error: {message}")]
+    /// The libopus backend reported an error.
     LibopusError { message: Arc<str> },
 }
+
+impl std::fmt::Display for CodecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPcmLength { expected, found } => {
+                write!(f, "expected {expected} PCM samples, got {found}")
+            }
+            Self::UnsupportedVersion(version) => {
+                write!(f, "unsupported audio payload version {version}")
+            }
+            Self::PacketTooShort => f.write_str("audio packet too short"),
+            Self::InvalidChannelCount { expected, found } => {
+                write!(
+                    f,
+                    "invalid channel count: expected {expected:?}, found {found}"
+                )
+            }
+            Self::InvalidSampleCount { expected, found } => {
+                write!(
+                    f,
+                    "invalid frame sample count: expected {expected}, found {found}"
+                )
+            }
+            Self::BackendUnavailable { layout } => {
+                write!(f, "audio backend unavailable for layout {layout:?}")
+            }
+            Self::UnsupportedLayout { layout } => {
+                write!(f, "audio backend does not support layout {layout:?}")
+            }
+            Self::LibopusError { message } => write!(f, "libopus backend error: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for CodecError {}
+
+#[cfg(test)]
+mod error_tests;
+
 impl CodecError {
     fn invalid_pcm_length(expected: usize, found: usize) -> Self {
         Self::InvalidPcmLength { expected, found }

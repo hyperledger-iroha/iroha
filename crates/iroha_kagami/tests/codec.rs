@@ -1,5 +1,4 @@
 //! Tests for Kagami codec error handling and Norito/JSON roundtrips.
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use iroha_data_model::{account::NewAccount, domain::Domain};
 use norito::{
     core::{Error, MAGIC},
@@ -21,17 +20,20 @@ where
     iroha_genesis::init_instruction_registry();
     let json = fs::read_to_string(format!("{SAMPLE_DIR}/{name}.json")).expect("read json sample");
     let bin = fs::read(format!("{SAMPLE_DIR}/{name}.bin")).expect("read bin sample");
+    assert_sample_roundtrip::<T>(&json, &bin);
+}
+fn assert_sample_roundtrip<T>(json: &str, bin: &[u8])
+where
+    T: JsonSerialize
+        + JsonDeserializeOwned
+        + PartialEq
+        + Debug
+        + norito::core::NoritoSerialize
+        + for<'de> norito::NoritoDeserialize<'de>,
+{
     // Check provided sample binary prefix
     assert_eq!(MAGIC.as_ref(), &bin[..MAGIC.len()]);
-    let json_value: norito::json::Value = norito::json::from_str(&json).expect("parse JSON sample");
-    if let norito::json::Value::String(encoded) = &json_value {
-        let expected_b64 = BASE64.encode(&bin);
-        assert_eq!(
-            encoded, &expected_b64,
-            "base64 JSON sample diverges from binary"
-        );
-        return;
-    }
+    let json_value: norito::json::Value = norito::json::from_str(json).expect("parse JSON sample");
     // JSON -> Norito
     let from_json: T = norito::json::from_value(json_value.clone()).expect("decode JSON sample");
     let encoded = to_bytes(&from_json).expect("encode sample to Norito");
@@ -48,6 +50,23 @@ fn account_roundtrip() {
 #[test]
 fn domain_roundtrip() {
     roundtrip::<Domain>("domain");
+}
+#[test]
+fn base64_samples_cannot_bypass_typed_roundtrip() {
+    iroha_genesis::init_instruction_registry();
+    let cases: [(&str, fn(&str, &[u8])); 2] = [
+        ("account", assert_sample_roundtrip::<NewAccount>),
+        ("domain", assert_sample_roundtrip::<Domain>),
+    ];
+    for (name, validate) in cases {
+        let bin = fs::read(format!("{SAMPLE_DIR}/{name}.bin")).expect("read bin sample");
+        let mut json = String::new();
+        norito::json::write_base64_json(&bin, &mut json);
+        assert!(
+            std::panic::catch_unwind(|| validate(&json, &bin)).is_err(),
+            "{name} must validate its typed JSON instead of accepting a matching base64 string"
+        );
+    }
 }
 #[test]
 fn decoder_returns_invalid_magic_error_on_bad_prefix() {

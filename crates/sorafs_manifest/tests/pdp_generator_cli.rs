@@ -1,14 +1,14 @@
 //! Isolated-output and filesystem-safety tests for the PDP fixture generator.
-use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{HashAlgorithmV1, PdpCommitmentV1};
 use std::{
     fs,
     path::{Path, PathBuf},
-    process::Output,
+    process::{Command, Output, Stdio},
 };
 use tempfile::tempdir;
 fn run_generator(current_dir: &Path, arguments: &[String]) -> Output {
-    cargo_bin_cmd!("generate_pdp_fixtures")
+    Command::new(env!("CARGO_BIN_EXE_generate_pdp_fixtures"))
+        .stdin(Stdio::piped())
         .current_dir(current_dir)
         .args(arguments)
         .output()

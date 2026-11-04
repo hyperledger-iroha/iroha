@@ -14,7 +14,7 @@ SOURCE_PATH = REPO_ROOT / "crates/iroha_core/src/smartcontracts/isi/soracloud_te
 
 REGION_START = '#[derive(Clone, Copy)]\nenum FheInputAdmissionPayloadShape'
 REGION_END = '#[cfg(feature = "zk-stark")]\n#[test]\nfn mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof'
-REGION_HASH = "e055766708b398b2296ebc032ef89731800127ca0dacd9b55c90af55f4b3b6ed"
+REGION_HASH = "e8599a8fa3eb3868df32f14864565f9be368aa06d7f86d3846ac0fde1e01063c"
 
 TEST_CASES = {
     "mutate_soracloud_state_rejects_fhe_input_admission_proof_without_registered_verifier": (
@@ -115,8 +115,8 @@ RUNNER_TOKENS = (
     "Some(Hash::new(&payload))",
     "Some(admission_proof)",
     ".expect_err(spec.expectation)",
-    "assert_invalid_parameter_contains(err, spec.error_fragment)",
-    "assert_invariant_contains(err, spec.error_fragment)",
+    "assert_invalid_parameter_contains(&(err), spec.error_fragment)",
+    "assert_invariant_contains(&(err), spec.error_fragment)",
     "soracloud_service_state_entries",
     ".is_none()",
     "spec.storage_message",

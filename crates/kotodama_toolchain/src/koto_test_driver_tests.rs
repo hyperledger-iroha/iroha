@@ -6,6 +6,55 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 static TEMP_DIR_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+#[test]
+fn hex_lower_preserves_empty_all_bytes_and_large_payloads() {
+    assert_eq!(hex_lower(&[]), "");
+    assert_eq!(
+        hex_lower(&[0, 1, 15, 16, 127, 128, 254, 255]),
+        "00010f107f80feff"
+    );
+    let bytes: Vec<u8> = (0..=u8::MAX).collect();
+    let expected = concat!(
+        "000102030405060708090a0b0c0d0e0f",
+        "101112131415161718191a1b1c1d1e1f",
+        "202122232425262728292a2b2c2d2e2f",
+        "303132333435363738393a3b3c3d3e3f",
+        "404142434445464748494a4b4c4d4e4f",
+        "505152535455565758595a5b5c5d5e5f",
+        "606162636465666768696a6b6c6d6e6f",
+        "707172737475767778797a7b7c7d7e7f",
+        "808182838485868788898a8b8c8d8e8f",
+        "909192939495969798999a9b9c9d9e9f",
+        "a0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+        "b0b1b2b3b4b5b6b7b8b9babbbcbdbebf",
+        "c0c1c2c3c4c5c6c7c8c9cacbcccdcecf",
+        "d0d1d2d3d4d5d6d7d8d9dadbdcdddedf",
+        "e0e1e2e3e4e5e6e7e8e9eaebecedeeef",
+        "f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    );
+    assert_eq!(hex_lower(&bytes), expected);
+    assert_eq!(hex_lower(&bytes.repeat(256)), expected.repeat(256));
+    assert_eq!(hex_lower(&[7; 32]), "07".repeat(32));
+    assert_eq!(hex_lower(&[9; 32]), "09".repeat(32));
+}
+
+#[test]
+fn state_cursor_hex_rendering_preserves_short_and_abbreviated_boundaries() {
+    assert_eq!(render_state_cursor(&[]), "StateCursor(0x)");
+    assert_eq!(
+        render_state_cursor(&[0, 1, 15, 16, 127, 128, 254, 255]),
+        "StateCursor(0x00010f107f80feff)"
+    );
+    assert_eq!(
+        render_state_cursor(&[0xab; 16]),
+        "StateCursor(0xabababababababababababababababab)"
+    );
+    assert_eq!(
+        render_state_cursor(&[0xab; 17]),
+        "StateCursor(0xabababababababab… /* 17 bytes */)"
+    );
+}
 /// Fixture environment with no constants and the default chain discriminant.
 fn fixture_environment() -> FixtureEnvironment<'static> {
     static NO_CONSTS: std::sync::LazyLock<HashMap<String, Expr>> =
@@ -944,7 +993,7 @@ fn execute_suite_supports_native_contract_flow_helpers() {
                 }}
                 "#,
                 actor_account = actor_account,
-                seed_hex = hex::encode(actor_seed),
+                seed_hex = hex_lower(&actor_seed),
             ),
         );
     let suite = discover_suite(&test_path).expect("discover suite");
@@ -1599,7 +1648,7 @@ fn execute_suite_runs_compiled_contract_flow_helpers_from_standalone_test() {
                 }}
                 "#,
                 actor_account = actor_account,
-                seed_hex = hex::encode(actor_seed),
+                seed_hex = hex_lower(&actor_seed),
             ),
         );
     let suite = discover_suite(&test_path).expect("discover suite");
@@ -2076,7 +2125,7 @@ fn apply_fixture_action_registers_actor_seed() {
             args: vec![
                 Expr::String("seller".to_string()),
                 Expr::String(actor_account.clone()),
-                Expr::String(format!("0x{}", hex::encode(actor_seed))),
+                Expr::String(format!("0x{}", hex_lower(&actor_seed))),
             ],
         },
         &mut host,

@@ -4,20 +4,25 @@ use core::{result::Result, time::Duration};
 use futures::{SinkExt, StreamExt};
 use norito::prelude::*;
 /// Error type with generic for actual Stream/Sink error type
-#[derive(Debug, displaydoc::Display, thiserror::Error)]
-#[ignore_extra_doc_attributes]
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     /// Read message timeout
+    #[error("Read message timeout")]
     ReadTimeout,
     /// Send message timeout
+    #[error("Send message timeout")]
     SendTimeout,
     /// WebSocket error: {_0}
+    #[error("WebSocket error: {0}")]
     WebSocket(#[source] axum::Error),
     /// Error during Norito message decoding
+    #[error("Error during Norito message decoding")]
     Decode(#[from] norito::Error),
     /// Error during Norito message encoding
+    #[error("Error during Norito message encoding")]
     Encode(norito::Error),
     /// Unexpected WebSocket frame `{actual}`; expected {expected}
+    #[error("Unexpected WebSocket frame `{actual}`; expected {expected}")]
     UnexpectedFrame {
         /// Expected frame kind for the current protocol state.
         expected: &'static str,
@@ -25,6 +30,7 @@ pub enum Error {
         actual: &'static str,
     },
     /// Connection is closed
+    #[error("Connection is closed")]
     Closed,
 }
 /// RFC 6455 close code for invalid frame payload data.

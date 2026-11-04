@@ -671,7 +671,15 @@ class SmokeEvidenceTests(unittest.TestCase):
         root = SCRIPT.parent.parent
         model = (root / "crates/iroha_data_model/src/nexus/private_settlement.rs").read_text()
         policy = (root / "crates/iroha_data_model/src/privacy/private_settlement_policy.rs").read_text()
-        protocol_default = policy.split("pub const fn protocol_default() -> Self {", 1)[1].split("\n    }", 1)[0]
+        def protocol_default_of(owner):
+            body = policy.split(f"impl {owner} {{", 1)[1]
+            return body.split("pub const fn protocol_default() -> Self {", 1)[1].split("\n    }", 1)[0]
+        # Authenticated parameter absence selects exactly the canonical limits, unscheduled.
+        policy_default = protocol_default_of("PrivateSettlementPolicyV1")
+        self.assertIn("current_limits: PrivateSettlementValidityLimitsV1::protocol_default(),", policy_default)
+        self.assertIn("pending_update: None,", policy_default)
+        self.assertIn("protocol_closure_drain: None,", policy_default)
+        protocol_default = protocol_default_of("PrivateSettlementValidityLimitsV1")
         defaults = (root / "crates/iroha_config/src/parameters/defaults.rs").read_text()
         private_defaults = defaults.split("pub mod atomic_private_settlement {", 1)[1].split("\n    }", 1)[0]
         def constant(source, name):

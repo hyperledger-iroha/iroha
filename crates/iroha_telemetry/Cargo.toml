@@ -77,7 +77,6 @@ prometheus = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls"], optional = true }
 blake3 = { workspace = true }
 thiserror = { workspace = true }
-hex = { workspace = true }
 
 [target.'cfg(windows)'.dependencies]
 iroha_fs = { workspace = true }

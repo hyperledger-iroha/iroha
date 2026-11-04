@@ -1,5 +1,4 @@
 //! Static configuration for the settlement router.
-use derive_more::Display;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
@@ -13,19 +12,22 @@ use time::Duration;
     Clone,
     Copy,
     Debug,
-    Display,
     Eq,
     PartialEq,
     NoritoSerialize,
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
+    norito::NoritoSchema,
 )]
-#[display("{} bps", value)]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "settlement_router::config::EpsilonBps")]
 pub struct EpsilonBps {
     value: u16,
+}
+impl core::fmt::Display for EpsilonBps {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{} bps", self.value)
+    }
 }
 impl EpsilonBps {
     /// Basis points representing 100% (used when circuit breakers clamp the price).

@@ -1,6 +1,5 @@
 //! Numeric topology identities, canonical codecs and storage keys.
 
-use derive_more::Display;
 use iroha_schema::IntoSchema;
 use norito::json::JsonKeyCodec;
 use norito::{
@@ -8,23 +7,10 @@ use norito::{
     json,
 };
 use std::{num::NonZeroU32, str::FromStr};
-use thiserror::Error;
 
 /// Identifier for a logical execution lane.
 #[derive(
-    Debug,
-    Display,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    Encode,
-    Decode,
-    IntoSchema,
+    Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
 )]
 #[repr(transparent)]
 #[norito(decode_from_slice, decode_fields)]
@@ -37,14 +23,17 @@ pub struct LaneId(u32);
 /// Shards map to DA/Kura partitions; today they track lane bindings one-to-one
 /// but remain distinct to allow future resharding. A shard is not a separate
 /// validator/server boundary; that identity belongs to [`DataSpaceId`].
-#[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::ShardId")]
 pub struct ShardId(u32);
+impl core::fmt::Display for LaneId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
+    }
+}
 impl LaneId {
     /// Canonical primary lane identifier used by the default single-lane catalog.
     pub const SINGLE: Self = Self(0);
@@ -82,6 +71,11 @@ impl From<u32> for LaneId {
 impl From<LaneId> for u64 {
     fn from(value: LaneId) -> Self {
         u64::from(value.0)
+    }
+}
+impl core::fmt::Display for ShardId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
     }
 }
 impl ShardId {
@@ -122,10 +116,9 @@ impl From<ShardId> for LaneId {
     }
 }
 /// Errors returned when deriving a lane identifier from configuration.
-#[derive(Debug, Copy, Clone, Error, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum LaneIdError {
     /// Provided index exceeds the configured number of lanes.
-    #[error("lane index {index} out of bounds for lane count {lane_count}")]
     OutOfBounds {
         /// Lane index that triggered the error.
         index: u32,
@@ -133,6 +126,19 @@ pub enum LaneIdError {
         lane_count: u32,
     },
 }
+
+impl core::fmt::Display for LaneIdError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::OutOfBounds { index, lane_count } => write!(
+                formatter,
+                "lane index {index} out of bounds for lane count {lane_count}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for LaneIdError {}
 
 impl norito::json::FastJsonWrite for LaneId {
     fn write_json(&self, out: &mut String) {
@@ -192,14 +198,17 @@ impl norito::json::JsonDeserialize for ShardId {
     }
 }
 /// Identifier for a physical execution, storage, and validator boundary.
-#[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[norito(decode_from_slice, decode_fields)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_data_model::nexus::DataSpaceId")]
 pub struct DataSpaceId(u64);
+impl core::fmt::Display for DataSpaceId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
+    }
+}
 impl DataSpaceId {
     /// Identifier for the reserved `universal` data space.
     pub const UNIVERSAL: Self = Self(0);

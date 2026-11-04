@@ -795,8 +795,13 @@ def require_public_finding_endorsement_order(types: str) -> None:
 
 
 def require_sortition_registration_guards(world: str) -> None:
-    """Follow both registration transitions into their shared admission helper."""
+    """Follow both registration transitions into their shared admission helper.
+
+    Comments and literals are masked first, so a commented or quoted copy of the
+    shared admission call cannot stand in for a disconnected live call.
+    """
     path = "crates/iroha_core/src/smartcontracts/isi/world.rs"
+    world = mask_rust(world)
     for start, end, snapshot, candidates in (
         (
             "gov::ParliamentLifecycleTransitionV1::RegisterInitialSortition => {",

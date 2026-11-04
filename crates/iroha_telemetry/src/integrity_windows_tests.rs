@@ -478,7 +478,10 @@ async fn pending_hash_and_signature_validation_run_before_original_release() {
             .unwrap()
             .as_object_mut()
             .unwrap()
-            .insert(field.into(), Value::from(hex::encode([0_u8; 32])));
+            .insert(
+                field.into(),
+                Value::from(crate::integrity::hash_hex::encode(&[0_u8; 32])),
+            );
         snapshot.insert(
             "pending_record".into(),
             Value::from(norito::json::to_json(&pending).unwrap()),

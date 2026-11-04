@@ -108,14 +108,18 @@ fn nfc_normalizer() -> Result<&'static ComposingNormalizerBorrowed<'static>, Par
 #[model]
 mod model {
     use super::*;
-    use derive_more::{Debug, Display};
     use iroha_schema::IntoSchema;
     /// Canonical business name used by domain-owned entities and named protocol fields.
-    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::name::model::Name")]
     pub struct Name(pub(super) ConstString);
+}
+impl core::fmt::Display for Name {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
+    }
 }
 impl Name {
     /// Exact optional persistent backing requested by the canonical JSON reader.

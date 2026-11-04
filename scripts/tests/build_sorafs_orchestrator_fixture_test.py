@@ -345,10 +345,11 @@ def test_fixture_file_size_fstat_error_is_sanitized(
     def fstat(_fd: int):
         raise OSError(raw_error)
 
-    monkeypatch.setattr(MODULE.os, "fstat", fstat)
-
+    # Restore os.fstat before pytest's own capture inspects its descriptors.
     try:
-        MODULE.fixture_file_size(payload, "chunker payload")
+        with monkeypatch.context() as patch:
+            patch.setattr(MODULE.os, "fstat", fstat)
+            MODULE.fixture_file_size(payload, "chunker payload")
     except ValueError as error:
         message = str(error)
         assert message == (

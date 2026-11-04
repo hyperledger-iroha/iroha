@@ -276,9 +276,9 @@ jobs:
       - name: Exercise retained Python source delivery
         run: |
           set -euo pipefail
-          cargo test --locked -p iroha_native_source_delivery 2>&1 | tee target/platform-native/source-delivery-rust.log
-          cargo clippy --locked -p iroha_native_source_delivery --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
-          cargo build --locked -p iroha_native_source_delivery
+          cargo test --locked -p iroha_native_source_delivery --features dev-tools 2>&1 | tee target/platform-native/source-delivery-rust.log
+          cargo clippy --locked -p iroha_native_source_delivery --features dev-tools --all-targets -- -D warnings 2>&1 | tee target/platform-native/source-delivery-clippy.log
+          cargo build --locked -p iroha_native_source_delivery --features dev-tools
           python -m pip install --require-hashes --only-binary=:all: -r python/iroha_python/requirements-ci.lock
           export IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="$(python -c 'import os; from pathlib import Path; print(Path("target/debug/iroha_native_source_delivery" + (".exe" if os.name == "nt" else "")).resolve(), end="")')"
           python -m pytest -q \

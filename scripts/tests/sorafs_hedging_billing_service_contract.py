@@ -192,7 +192,7 @@ def assert_shipped_hedging_billing_service_surface_is_exact_and_authenticated() 
 
     status_handler = api_source[
         api_source.index("async fn billing_status_inner(") : api_source.index(
-            "pub(crate) async fn handle_get_sorafs_billing_statements"
+            "pub async fn handle_get_sorafs_billing_statements"
         )
     ]
     assert "require_canonical_auth" in status_handler
@@ -274,8 +274,8 @@ def assert_shipped_hedging_billing_service_surface_is_exact_and_authenticated() 
             "fn runtime_error_response("
         )
     ]
-    assert api_source.count("require_method(&method, Method::GET)") == 5
-    assert "actual == &expected" in method_guard
+    assert api_source.count("require_method(&method, &(Method::GET))") == 5
+    assert "actual == expected" in method_guard
     assert "Method::HEAD" not in method_guard
     sorafs_catalog_start = route_catalog_source.index("pub mod sorafs {")
     public_get_start = route_catalog_source.index(

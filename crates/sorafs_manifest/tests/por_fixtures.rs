@@ -1,7 +1,5 @@
 //! Deterministic SoraFS PoR and cross-SDK fixture regeneration checks.
 #![allow(unexpected_cfgs)]
-#[cfg(feature = "dev-tools")]
-use assert_cmd::cargo::cargo_bin_cmd;
 use sorafs_manifest::{
     PotrReceiptV1, ProofStreamTier, RepairTaskRecordV1, RepairTaskStateV1,
     governance::{
@@ -11,7 +9,10 @@ use sorafs_manifest::{
 };
 use std::fs;
 #[cfg(feature = "dev-tools")]
-use std::path::Path;
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
 #[cfg(feature = "dev-tools")]
 use tempfile::tempdir;
 const FIXTURES_ROOT: &str = concat!(
@@ -52,7 +53,8 @@ fn seed_generator_inputs(root: &Path) {
 }
 #[cfg(feature = "dev-tools")]
 fn run_generator(root: &Path, arguments: &[&str]) -> std::process::Output {
-    cargo_bin_cmd!("generate_por_fixtures")
+    Command::new(env!("CARGO_BIN_EXE_generate_por_fixtures"))
+        .stdin(Stdio::piped())
         .current_dir(root)
         .args(arguments)
         .output()

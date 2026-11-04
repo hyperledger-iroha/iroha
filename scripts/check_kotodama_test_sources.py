@@ -39,9 +39,10 @@ EXPECTED_TEST_MODULES = {
         ("rematerialized", "crates/kotodama_lang/src/compiler/tests/rematerialized.rs"),
         ("state_operands", "crates/kotodama_lang/src/compiler/tests/state_operands.rs"),
         ("controlled_asset_lock_tests", "crates/kotodama_lang/src/compiler/controlled_asset_lock_tests.rs"),
-        ("uid_holding_quote_tests", "crates/kotodama_lang/src/compiler/uid_holding_quote_tests.rs"),
         ("fi_link_revision_tests", "crates/kotodama_lang/src/compiler/fi_link_revision_tests.rs"),
         ("same_uid_tests", "crates/kotodama_lang/src/compiler/same_uid_tests.rs"),
+        ("uid_holding_quote_tests", "crates/kotodama_lang/src/compiler/uid_holding_quote_tests.rs"),
+        ("x509_pending_action_tests", "crates/kotodama_lang/src/compiler/x509_pending_action_tests.rs"),
         ("fi_waterfall", "crates/kotodama_lang/src/compiler/tests/fi_waterfall.rs"),
     ),
 }

@@ -4199,7 +4199,6 @@ dependencies = [
  "base64 0.23.1",
  "blake3",
  "bytes",
- "derive_more",
  "error-stack",
  "eyre",
  "futures-util",
@@ -4229,7 +4228,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-stream",
  "tokio-tungstenite 0.30.0",
  "toml",
  "tracing",
@@ -4258,7 +4256,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_schema",
  "opus",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4394,7 +4391,6 @@ dependencies = [
 name = "iroha_config_base"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "derive_more",
  "error-stack",
  "expect-test",
  "hex",
@@ -4444,7 +4440,6 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-queue",
  "dashmap",
- "derive_more",
  "displaydoc",
  "expect-test",
  "eyre",
@@ -4525,6 +4520,7 @@ dependencies = [
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
+ "iroha_execution_stark",
  "iroha_fhe",
  "iroha_measurement",
  "iroha_model_base",
@@ -4622,13 +4618,10 @@ dependencies = [
  "criterion",
  "crypto-bigint",
  "curve25519-dalek",
- "derive_more",
  "digest 0.11.3",
- "displaydoc",
  "ed25519-dalek",
  "elliptic-curve",
  "fastpq_isi",
- "getset",
  "group 0.13.0",
  "hex",
  "hex-literal",
@@ -4813,10 +4806,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "iroha_execution_stark"
+version = "2.0.0-rc.2.0"
+dependencies = [
+ "blake2",
+ "blake3",
+ "rayon",
+ "rustix 1.1.6",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "iroha_executor_data_model"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "derive_more",
  "iroha_crypto",
  "iroha_data_model",
  "iroha_executor_data_model_derive",
@@ -4881,9 +4884,7 @@ dependencies = [
  "iroha_derive",
  "iroha_logger",
  "norito",
- "thiserror 2.0.21",
  "tokio",
- "tokio-stream",
  "tokio-util",
 ]
 
@@ -4892,7 +4893,6 @@ name = "iroha_genesis"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.23.1",
- "derive_more",
  "eyre",
  "hex",
  "iroha_config",
@@ -4973,12 +4973,10 @@ dependencies = [
 name = "iroha_kagami"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "base64 0.23.1",
  "blake3",
  "clap",
  "clap-markdown",
  "color-eyre",
- "derive_more",
  "hex",
  "inquire",
  "iroha",
@@ -5034,11 +5032,9 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "color-eyre",
  "console-subscriber",
- "derive_more",
  "iroha_config",
  "iroha_model_base",
  "norito",
- "thiserror 2.0.21",
  "tokio",
  "tracing",
  "tracing-core",
@@ -5058,7 +5054,6 @@ name = "iroha_managed_ipc"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "blake3",
- "hex",
  "iroha_fs",
  "iroha_primitives",
  "libc",
@@ -5087,8 +5082,6 @@ dependencies = [
 name = "iroha_model_base"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "derive_more",
- "getset",
  "hex",
  "icu_normalizer",
  "idna",
@@ -5100,7 +5093,6 @@ dependencies = [
  "mv",
  "norito",
  "sha2 0.11.1",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -5115,7 +5107,6 @@ dependencies = [
  "norito",
  "ratatui",
  "tokio",
- "unicode-width",
 ]
 
 [[package]]
@@ -5159,7 +5150,6 @@ name = "iroha_operation_journal"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "eyre",
- "hex",
  "iroha_fs",
  "norito",
  "sha2 0.11.1",
@@ -5175,8 +5165,6 @@ dependencies = [
  "base64 0.23.1",
  "bytes",
  "criterion",
- "derive_more",
- "displaydoc",
  "futures",
  "iroha_config",
  "iroha_config_base",
@@ -5317,8 +5305,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "blake3",
  "criterion",
- "derive_more",
- "displaydoc",
  "iroha_allocation",
  "iroha_macro",
  "iroha_primitives_derive",
@@ -5579,7 +5565,6 @@ dependencies = [
 name = "iroha_swarm"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "displaydoc",
  "iroha_config",
  "iroha_crypto",
  "iroha_model_base",
@@ -5595,7 +5580,6 @@ dependencies = [
  "expect-test",
  "eyre",
  "futures",
- "hex",
  "iroha_config",
  "iroha_data_model",
  "iroha_fs",
@@ -5685,7 +5669,6 @@ dependencies = [
  "criterion",
  "crossbeam-epoch",
  "dashmap",
- "displaydoc",
  "ed25519-dalek",
  "error-stack",
  "eyre",
@@ -5696,7 +5679,6 @@ dependencies = [
  "hex",
  "http",
  "http-body-util",
- "humantime",
  "hyper",
  "iroha",
  "iroha_allocation",
@@ -5794,7 +5776,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_macro",
  "norito",
- "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6075,7 +6056,6 @@ name = "ivm_artifact_admission"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "base64 0.23.1",
- "hex",
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
@@ -6361,7 +6341,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "clap",
  "ed25519-dalek",
- "hex",
  "iroha_allocation",
  "iroha_crypto",
  "iroha_data_model",
@@ -6777,7 +6756,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
- "tokio-stream",
  "tokio-tungstenite 0.30.0",
  "url",
 ]
@@ -6806,7 +6784,6 @@ version = "0.1.0"
 dependencies = [
  "eframe",
  "egui",
- "hex",
  "iroha_data_model",
  "iroha_deploy",
  "iroha_test_samples",
@@ -7113,7 +7090,6 @@ dependencies = [
  "norito_derive",
  "rand 0.10.3",
  "rayon",
- "regex",
  "ryu",
  "serde",
  "serde_json",
@@ -9627,7 +9603,6 @@ dependencies = [
 name = "settlement_router"
 version = "0.1.0"
 dependencies = [
- "derive_more",
  "expect-test",
  "iroha_primitives",
  "norito",
@@ -9892,7 +9867,6 @@ name = "sm3-neon"
 version = "0.1.0"
 dependencies = [
  "criterion",
- "hex-literal",
  "rand 0.10.3",
  "sm3",
 ]
@@ -10037,7 +10011,6 @@ dependencies = [
  "time",
  "tokio",
  "tokio-rustls",
- "tokio-stream",
  "tracing",
  "tracing-subscriber",
 ]
@@ -10096,7 +10069,6 @@ dependencies = [
 name = "sorafs_manifest"
 version = "0.1.0"
 dependencies = [
- "assert_cmd",
  "base64 0.23.1",
  "blake3",
  "chacha20poly1305",
@@ -10854,7 +10826,6 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
- "tokio-util",
 ]
 
 [[package]]

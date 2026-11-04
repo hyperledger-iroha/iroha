@@ -4,7 +4,7 @@
 //! helpers for common HTTP interactions. Ledger streams use the account-bound
 //! Rust SDK; Mochi owns only summaries, fanout and local reconnect policy.
 use crate::compose::{InstructionPermission, SigningAuthority};
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all};
 use iroha::client::AccountClient;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
@@ -57,7 +57,6 @@ use tokio::{
     task::JoinHandle,
     time::{sleep, timeout},
 };
-use tokio_stream::StreamExt;
 use url::Url;
 mod operator_auth;
 pub use operator_auth::OperatorSigningContext;

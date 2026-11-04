@@ -20,6 +20,8 @@ mod bridge_attestation;
 mod canonical_history;
 mod certified_originals_auth;
 mod error_chain;
+#[cfg(test)]
+mod error_display_tests;
 mod finality_interval;
 mod game;
 mod game_partitions;
@@ -43700,13 +43702,16 @@ fn build_gc_runtime(
 /// Torii errors.
 ///
 /// `Debug` prints the message followed by its chain of causes.
-#[derive(thiserror::Error, displaydoc::Display)]
+#[derive(thiserror::Error)]
 pub enum Error {
     /// Failed to process query
+    #[error("Failed to process query")]
     Query(#[from] iroha_data_model::ValidationFail),
     /// Original native evidence decode is locally refused: {0}
+    #[error("Original native evidence decode is locally refused: {0}")]
     NativeEvidenceDecode(#[source] norito::core::DecodeLocalRefusal),
     /// Validation error for app-facing query parameters `{code}`: {message}
+    #[error("Validation error for app-facing query parameters `{code}`: {message}")]
     AppQueryValidation {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43715,9 +43720,11 @@ pub enum Error {
     },
     /// Invalid collection query: {0}
     #[cfg(feature = "app_api")]
+    #[error("Invalid collection query: {0}")]
     CollectionQuery(Box<collections::CollectionError>),
     /// Account onboarding validation failed `{code}`: {message}; hint: {hint:?}
     #[cfg(feature = "app_api")]
+    #[error("Account onboarding validation failed `{code}`: {message}; hint: {hint:?}")]
     AccountOnboardingValidation {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43727,6 +43734,7 @@ pub enum Error {
         hint: Option<&'static str>,
     },
     /// Authentication is required for app-facing operation `{code}`: {message}
+    #[error("Authentication is required for app-facing operation `{code}`: {message}")]
     AppUnauthorized {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43734,6 +43742,7 @@ pub enum Error {
         message: String,
     },
     /// Forbidden error for app-facing operation `{code}`: {message}
+    #[error("Forbidden error for app-facing operation `{code}`: {message}")]
     AppForbidden {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43741,6 +43750,7 @@ pub enum Error {
         message: String,
     },
     /// Not-found error for app-facing operation `{code}`: {message}
+    #[error("Not-found error for app-facing operation `{code}`: {message}")]
     AppNotFound {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43748,6 +43758,7 @@ pub enum Error {
         message: String,
     },
     /// Conflict error for app-facing operation `{code}`: {message}
+    #[error("Conflict error for app-facing operation `{code}`: {message}")]
     AppConflict {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43755,6 +43766,7 @@ pub enum Error {
         message: String,
     },
     /// Temporarily unavailable app-facing operation `{code}`: {message}
+    #[error("Temporarily unavailable app-facing operation `{code}`: {message}")]
     AppServiceUnavailable {
         /// Stable machine-readable code.
         code: &'static str,
@@ -43762,6 +43774,9 @@ pub enum Error {
         message: String,
     },
     /// Committed history read needs at least {required} {resource}, above this request's own budget {limit}
+    #[error(
+        "Committed history read needs at least {required} {resource}, above this request's own budget {limit}"
+    )]
     HistoryReadExceedsBudget {
         /// Exhausted resource of the request's own finite read budget.
         resource: &'static str,
@@ -43771,6 +43786,7 @@ pub enum Error {
         limit: u64,
     },
     /// Proof endpoint `{endpoint}` throttled the request; retry after `{retry_after_secs}s`
+    #[error("Proof endpoint `{endpoint}` throttled the request; retry after `{retry_after_secs}s`")]
     ProofRateLimited {
         /// Logical endpoint label.
         endpoint: &'static str,
@@ -43778,24 +43794,32 @@ pub enum Error {
         retry_after_secs: u64,
     },
     /// Failed to accept transaction
+    #[error("Failed to accept transaction")]
     AcceptTransaction(#[source] iroha_core::tx::AcceptTransactionFail),
     /// Local readiness or resources prevented transaction admission; no acceptance or rejection was produced.
+    #[error(
+        "Local readiness or resources prevented transaction admission; no acceptance or rejection was produced."
+    )]
     TransactionAdmissionDeferred(#[source] iroha_core::execution_attempt::ExecutionDeferred),
     /// Failed to get or set configuration
+    #[error("Failed to get or set configuration")]
     Config(#[source] eyre::Report),
     /// `SoraFS` moderation runtime startup failed `{code}`
     #[cfg(feature = "app_api")]
+    #[error("`SoraFS` moderation runtime startup failed `{code}`")]
     SorafsModerationStartup {
         /// Stable payload-free startup failure code.
         code: &'static str,
     },
     /// `SoraFS` evidence-viewer runtime startup failed `{code}`
     #[cfg(feature = "app_api")]
+    #[error("`SoraFS` evidence-viewer runtime startup failed `{code}`")]
     SorafsEvidenceViewerStartup {
         /// Stable payload-free startup failure code.
         code: &'static str,
     },
     /// Failed to serialize response payload for `{context}`: {source}
+    #[error("Failed to serialize response payload for `{context}`: {source}")]
     SerializationFailure {
         /// Logical context for the serialization failure.
         context: &'static str,
@@ -43804,11 +43828,13 @@ pub enum Error {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
     /// Failed to apply Nexus lane lifecycle plan: {reason}
+    #[error("Failed to apply Nexus lane lifecycle plan: {reason}")]
     LaneLifecycle {
         /// Human-readable reason for the failure.
         reason: String,
     },
     /// Failed to push into queue ({source}; backpressure={backpressure:?})
+    #[error("Failed to push into queue ({source}; backpressure={backpressure:?})")]
     PushIntoQueue {
         /// Root cause from the core queue implementation.
         #[source]
@@ -43818,15 +43844,19 @@ pub enum Error {
     },
     #[cfg(feature = "telemetry")]
     /// Failed to get Prometheus metrics
+    #[error("Failed to get Prometheus metrics")]
     Prometheus(#[source] eyre::Report),
     #[cfg(feature = "profiling")]
     /// Failed to get pprof profile
+    #[error("Failed to get pprof profile")]
     Pprof(#[source] eyre::Report),
     #[cfg(feature = "telemetry")]
     /// Failed to get status
+    #[error("Failed to get status")]
     StatusFailure(#[source] eyre::Report),
     #[cfg(feature = "telemetry")]
     /// Telemetry endpoint {endpoint} disabled by active profile {profile:?}
+    #[error("Telemetry endpoint {endpoint} disabled by active profile {profile:?}")]
     TelemetryProfileRestricted {
         /// Logical endpoint or capability name
         endpoint: &'static str,
@@ -43834,10 +43864,13 @@ pub enum Error {
         profile: TelemetryProfile,
     },
     /// Failure caused by configuration subsystem
+    #[error("Failure caused by configuration subsystem")]
     ConfigurationFailure(#[from] KisoError),
     /// Failed to start Torii
+    #[error("Failed to start Torii")]
     StartServer,
     /// Torii server terminated with an error
+    #[error("Torii server terminated with an error")]
     FailedExit,
 }
 

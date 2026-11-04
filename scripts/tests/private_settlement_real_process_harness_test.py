@@ -609,8 +609,9 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
         self.assertIn("atomic_private_settlement_real_process_leakage_harness", harness)
         self.assertIn("run_real_process_leakage_campaign", harness)
         self.assertIn("ensure_leakage_sources_redacted", harness)
-        self.assertIn("let mut output_rng = rand_core_06::OsRng;", harness)
-        self.assertIn("let mut capsule_rng = rand::rngs::OsRng;", harness)
+        self.assertIn("let mut output_rng = rand::rngs::SysRng;", harness)
+        self.assertIn("let mut capsule_rng = rand::rngs::SysRng;", harness)
+        self.assertNotIn("rand_core_06", harness)
         self.assertIn("prepare_leg_with_private_data_and_rngs", harness)
         self.assertIn('TCPDUMP = Path("/usr/sbin/tcpdump")', python_harness)
         self.assertIn("process.send_signal(signal.SIGINT)", python_harness)
@@ -641,7 +642,7 @@ class PrivateSettlementRealProcessHarnessTests(unittest.TestCase):
             "recovered_finality_requires_the_original_anchor_without_new_transport", harness
         )
         self.assertIn(
-            "pub(super) fn verify(log: &[u8], expected: &Expected) -> Result<Verified>",
+            "pub fn verify(log: &[u8], expected: &Expected) -> Result<Verified>",
             transport,
         )
         self.assertIn("fn substituted_or_incomplete_transport_never_qualifies", transport)

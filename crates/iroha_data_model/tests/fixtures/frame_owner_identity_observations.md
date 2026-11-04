@@ -43,3 +43,8 @@ its public reexport. HTTP fixture SHA-256:
 The shared test checker verifies all three immutable files, all 104 direction
 records and all 53 distinct production owners. Malformed test-only frame producers use
 explicit test identities and are qualified by their rejection tests separately.
+
+`ProposeEndorsedRuntimeUpgradeProposal` was introduced after this capture. Its
+current complete frames are covered by the separate
+[endorsed proposal fixture](endorsed_runtime_upgrade_identity_frames.md), not by
+an invented original-code observation in these immutable files.

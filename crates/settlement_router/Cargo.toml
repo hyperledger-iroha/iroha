@@ -21,7 +21,6 @@ default = []
 json = []
 
 [dependencies]
-derive_more = { workspace = true, features = ["display", "from"] }
 iroha_primitives = { workspace = true, default-features = false, features = ["json"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 thiserror = { workspace = true }

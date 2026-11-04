@@ -20,3 +20,4 @@ Iroha schema descriptors or a sample type changes.
 - Each regenerated account/domain JSON/binary pair must round-trip through its registered Iroha type. The
   generated descriptor inventory in `specs/references/schema.json` must
   be regenerated with `kagami advanced schema` and remain non-empty.
+- JSON-string wrappers of binary bytes are rejected so every fixture exercises typed JSON conversion.

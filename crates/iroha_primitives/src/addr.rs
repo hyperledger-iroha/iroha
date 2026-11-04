@@ -5,7 +5,6 @@
 //! Iroha data model. A companion [`socket_addr!`] macro parses address literals at compile
 //! time for convenience while keeping the canonical Norito codecs.
 use crate::conststr::ConstString;
-use derive_more::{AsRef, Debug, Display, From, IntoIterator};
 use iroha_macro::FromVariant;
 /// Parses an IPv4 or IPv6 socket address literal at compile time.
 pub use iroha_primitives_derive::socket_addr;
@@ -15,46 +14,65 @@ use norito::json::{self, FastJsonWrite, JsonDeserialize};
 use norito::{Decode, Encode, literal};
 use std::{borrow::Cow, format, string::String, vec::Vec};
 /// Error when parsing an address
-#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ParseError {
     /// Not enough segments in IP address
+    #[error("Not enough segments in IP address")]
     NotEnoughSegments,
     /// Too many segments in IP address
+    #[error("Too many segments in IP address")]
     TooManySegments,
     /// Failed to parse segment in IP address
+    #[error("Failed to parse segment in IP address")]
     InvalidSegment,
     /// Failed to parse port number in socket address
+    #[error("Failed to parse port number in socket address")]
     InvalidPort,
     /// Failed to find port number in socket address
+    #[error("Failed to find port number in socket address")]
     NoPort,
     /// Ipv6 address contains more than one '::' abbreviation
+    #[error("Ipv6 address contains more than one '::' abbreviation")]
     UnexpectedAbbreviation,
 }
 /// An Iroha-native version of [`std::net::Ipv4Addr`] that integrates with Norito and schema tooling.
-#[derive(
-    Debug,
-    Display,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    AsRef,
-    From,
-    IntoIterator,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
-#[display("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
-#[debug("{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_primitives::addr::Ipv4Addr")]
 #[norito(decode_from_slice)]
 pub struct Ipv4Addr([u8; 4]);
+impl core::fmt::Display for Ipv4Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}.{}.{}.{}", self.0[0], self.0[1], self.0[2], self.0[3])
+    }
+}
+impl core::fmt::Debug for Ipv4Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
+impl AsRef<[u8; 4]> for Ipv4Addr {
+    #[inline]
+    fn as_ref(&self) -> &[u8; 4] {
+        &self.0
+    }
+}
+impl From<[u8; 4]> for Ipv4Addr {
+    #[inline]
+    fn from(value: [u8; 4]) -> Self {
+        Self(value)
+    }
+}
+impl IntoIterator for Ipv4Addr {
+    type Item = u8;
+    type IntoIter = core::array::IntoIter<u8, 4>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 impl Ipv4Addr {
     /// Construct new [`Ipv4Addr`] from given octets
     pub const fn new(octets: [u8; 4]) -> Self {
@@ -120,27 +138,38 @@ impl Ipv4Addr {
     pub const UNSPECIFIED: Self = Self([0, 0, 0, 0]);
 }
 /// An Iroha-native version of [`std::net::Ipv6Addr`] that integrates with Norito and schema tooling.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    AsRef,
-    From,
-    IntoIterator,
-    Encode,
-    Decode,
-    IntoSchema,
-)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema)]
 #[repr(transparent)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_primitives::addr::Ipv6Addr")]
 #[norito(decode_from_slice)]
 pub struct Ipv6Addr([u16; 8]);
+impl core::fmt::Debug for Ipv6Addr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        fmt_debug_tuple(f, "Ipv6Addr", &self.0)
+    }
+}
+impl AsRef<[u16; 8]> for Ipv6Addr {
+    #[inline]
+    fn as_ref(&self) -> &[u16; 8] {
+        &self.0
+    }
+}
+impl From<[u16; 8]> for Ipv6Addr {
+    #[inline]
+    fn from(value: [u16; 8]) -> Self {
+        Self(value)
+    }
+}
+impl IntoIterator for Ipv6Addr {
+    type Item = u16;
+    type IntoIter = core::array::IntoIter<u16, 8>;
+
+    #[inline]
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
 impl Ipv6Addr {
     /// The analogue of [`std::net::Ipv4Addr::LOCALHOST`], an address associated
     /// with the local machine.
@@ -299,18 +328,7 @@ impl JsonDeserialize for Ipv6Addr {
 }
 /// An Iroha-native version of [`std::net::IpAddr`] used for deterministic serialization.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Encode,
-    Decode,
-    IntoSchema,
-    FromVariant,
-    Hash,
+    Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema, FromVariant, Hash,
 )]
 #[allow(variant_size_differences)] // Boxing 16 bytes probably doesn't make sense
 #[derive(norito::NoritoSchema)]
@@ -320,6 +338,14 @@ pub enum IpAddr {
     V4(Ipv4Addr),
     /// Ipv6 variant
     V6(Ipv6Addr),
+}
+impl core::fmt::Debug for IpAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::V4(addr) => fmt_debug_tuple(f, "V4", addr),
+            Self::V6(addr) => fmt_debug_tuple(f, "V6", addr),
+        }
+    }
 }
 #[cfg(feature = "json")]
 impl FastJsonWrite for IpAddr {
@@ -363,17 +389,34 @@ impl JsonDeserialize for IpAddr {
 }
 /// This struct provides an Iroha-native version of [`std::net::SocketAddrV4`] used for deterministic serialization.
 #[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
 )]
-#[display("{}:{}", self.ip, self.port)]
-#[debug("{}:{}", self.ip, self.port)]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_primitives::addr::SocketAddrV4")]
 pub struct SocketAddrV4 {
     /// The Ipv4 address.
     pub ip: Ipv4Addr,
     /// The port number.
     pub port: u16,
+}
+impl core::fmt::Display for SocketAddrV4 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}:{}", self.ip, self.port)
+    }
+}
+impl core::fmt::Debug for SocketAddrV4 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
 }
 impl From<([u8; 4], u16)> for SocketAddrV4 {
     fn from(value: ([u8; 4], u16)) -> Self {
@@ -422,17 +465,34 @@ impl JsonDeserialize for SocketAddrV4 {
 }
 /// This struct provides an Iroha-native version of [`std::net::SocketAddrV6`] used for deterministic serialization.
 #[derive(
-    Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, Decode, IntoSchema,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Encode,
+    Decode,
+    IntoSchema,
+    norito::NoritoSchema,
 )]
-#[display("[{}]:{}", self.ip, self.port)]
-#[debug("[{}]:{}", self.ip, self.port)]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_primitives::addr::SocketAddrV6")]
 pub struct SocketAddrV6 {
     /// The Ipv6 address.
     pub ip: Ipv6Addr,
     /// The port number.
     pub port: u16,
+}
+impl core::fmt::Display for SocketAddrV6 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "[{}]:{}", self.ip, self.port)
+    }
+}
+impl core::fmt::Debug for SocketAddrV6 {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
 }
 impl From<([u16; 8], u16)> for SocketAddrV6 {
     fn from(value: ([u16; 8], u16)) -> Self {
@@ -547,8 +607,6 @@ impl JsonDeserialize for SocketAddrHost {
 // Norito derives now implement DecodeFromSlice for these enums and structs.
 /// This enum provides an Iroha-native version of [`std::net::SocketAddr`] used for deterministic serialization.
 #[derive(
-    Debug,
-    Display,
     Clone,
     PartialEq,
     Eq,
@@ -568,6 +626,39 @@ pub enum SocketAddr {
     Ipv6(SocketAddrV6),
     /// A socket address identified by hostname
     Host(SocketAddrHost),
+}
+impl core::fmt::Debug for SocketAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Ipv4(addr) => fmt_debug_tuple(f, "Ipv4", addr),
+            Self::Ipv6(addr) => fmt_debug_tuple(f, "Ipv6", addr),
+            Self::Host(addr) => fmt_debug_tuple(f, "Host", addr),
+        }
+    }
+}
+
+fn fmt_debug_tuple(
+    f: &mut core::fmt::Formatter<'_>,
+    name: &str,
+    value: &impl core::fmt::Debug,
+) -> core::fmt::Result {
+    if f.alternate() {
+        // Pretty tuple fields use their own formatter, without outer width or numeric flags.
+        f.debug_tuple(name)
+            .field(&format_args!("{value:#?}"))
+            .finish()
+    } else {
+        f.debug_tuple(name).field(value).finish()
+    }
+}
+impl core::fmt::Display for SocketAddr {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Ipv4(addr) => core::fmt::Display::fmt(addr, f),
+            Self::Ipv6(addr) => core::fmt::Display::fmt(addr, f),
+            Self::Host(addr) => core::fmt::Display::fmt(addr, f),
+        }
+    }
 }
 #[cfg(feature = "json")]
 fn parse_socket_addr(input: &str) -> Option<SocketAddr> {

@@ -458,6 +458,8 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
     init_instruction_registry();
     let second_key = input_key(30);
     let second_account = AccountId::new(second_key.public_key().clone());
+    let fee_asset: AssetDefinitionId =
+        iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -476,7 +478,17 @@ async fn run_pending_inputs_forfeit_and_restart_four_validators() -> Result<()> 
                     1_073_741_824_i64,
                 );
         })
-        .with_genesis_instruction(Register::account(Account::new(second_account.clone())));
+        .with_genesis_instruction(Register::account(Account::new(second_account.clone())))
+        // Zero stake does not waive transaction fees. The generated bootstrap funds
+        // only its standard accounts; fund this custom entrant after the bootstrap
+        // registers the fee asset, preserving authority-paid admission throughout.
+        .with_genesis_post_bootstrap_isi(vec![
+            Mint::asset_quantity(
+                1_000_000_u32,
+                AssetId::new(fee_asset, second_account.clone()),
+            )
+            .into(),
+        ]);
     let network = sandbox::start_network_async_or_skip(
         builder,
         stringify!(generic_game_pending_inputs_forfeit_and_restart_four_validators),

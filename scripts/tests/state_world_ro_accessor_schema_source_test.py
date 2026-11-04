@@ -226,43 +226,55 @@ class StateWorldReadOnlyAccessorSchemaSourceTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text(encoding="utf-8")
 
+    def mutated(self, old: str, new: str) -> str:
+        """Apply one mutation whose target must exist in the current source."""
+        self.assertIn(old, self.source, "mutation target is absent from the current source")
+        return self.source.replace(old, new, 1)
+
     def test_current_schema_contract(self) -> None:
         validate_source(self.source)
 
     def test_documentation_may_evolve_without_changing_access(self) -> None:
-        validate_source(self.source.replace("/// Global parameters registry.", "/// Current global parameters.", 1))
+        validate_source(self.mutated(
+            "/// Committed parameters and their validated execution projections.",
+            "/// Current committed parameters.",
+        ))
 
     def test_every_accessor_requires_documentation(self) -> None:
         with self.assertRaisesRegex(GuardError, "Rustdoc"):
-            validate_source(self.source.replace("            /// Global parameters registry.\n", "", 1))
+            validate_source(self.mutated(
+                "            /// Committed parameters and their validated execution projections.\n", "",
+            ))
 
     def test_duplicate_accessor_is_rejected(self) -> None:
         with self.assertRaisesRegex(GuardError, "unique"):
-            validate_source(self.source.replace("cell_ref peers: Peers;", "cell_ref parameters: Peers;", 1))
+            validate_source(self.mutated("cell_ref peers: Peers;", "cell_ref parameters: Peers;"))
 
     def test_malformed_type_boundary_is_rejected(self) -> None:
         with self.assertRaisesRegex(GuardError, "key/value boundary"):
-            validate_source(self.source.replace("storage domains: DomainId => Domain;", "storage domains: DomainId;", 1))
+            validate_source(self.mutated("storage domains: DomainId => Domain;", "storage domains: DomainId;"))
 
     def test_executable_schema_row_is_rejected(self) -> None:
         with self.assertRaisesRegex(GuardError, "typed accessor row"):
-            validate_source(self.source.replace("cell_ref parameters: Parameters;", "callback parameters: FnMut();", 1))
+            validate_source(self.mutated(
+                "cell_ref parameters: RetainedStateParameters;", "callback parameters: FnMut();",
+            ))
 
     def test_emitter_cannot_replace_physical_field_owner(self) -> None:
         with self.assertRaisesRegex(GuardError, "emitter behavior"):
-            validate_source(self.source.replace("fn $name(&self) -> &impl StorageReadOnly<$key, $value> {\n            &self.$name", "fn $name(&self) -> &impl StorageReadOnly<$key, $value> {\n            self.$name.get()", 1))
+            validate_source(self.mutated("fn $name(&self) -> &impl StorageReadOnly<$key, $value> {\n            &self.$name", "fn $name(&self) -> &impl StorageReadOnly<$key, $value> {\n            self.$name.get()"))
 
     def test_group_wiring_cannot_be_omitted(self) -> None:
         with self.assertRaisesRegex(GuardError, "wire every schema group"):
-            validate_source(self.source.replace("world_ro_accessors!(assets, declaration);", "", 1))
+            validate_source(self.mutated("world_ro_accessors!(assets, declaration);", ""))
 
     def test_emitter_cannot_add_arbitrary_method(self) -> None:
         with self.assertRaisesRegex(GuardError, "only their fixed field methods"):
-            validate_source(self.source.replace("            &self.$name\n        }", "            &self.$name\n        }\n        fn mutate(&self) {}", 1))
+            validate_source(self.mutated("            &self.$name\n        }", "            &self.$name\n        }\n        fn mutate(&self) {}"))
 
     def test_required_world_view_cannot_be_omitted(self) -> None:
         with self.assertRaisesRegex(GuardError, "all physical world views"):
-            validate_source(self.source.replace("Box<WorldTransaction<'_, '_>>, WorldView<'_>", "Box<WorldTransaction<'_, '_>>", 1))
+            validate_source(self.mutated("Box<WorldTransaction<'_, '_>>, WorldView<'_>", "Box<WorldTransaction<'_, '_>>"))
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 //! Canonical exact ASCII chain labels, bounded validation and structural codecs.
 
-use derive_more::Display;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
@@ -23,11 +22,16 @@ mod model {
     ///
     /// The value is exact, case-sensitive ASCII. It starts and ends with an alphanumeric byte and
     /// may otherwise contain ASCII alphanumerics plus `.`, `_`, `:`, or `-`.
-    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, IntoSchema)]
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::id::model::ChainId")]
     pub struct ChainId(Box<str>);
+    impl core::fmt::Display for ChainId {
+        fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            core::fmt::Display::fmt(&self.0, formatter)
+        }
+    }
     impl ChainId {
         fn parse(value: &str) -> Result<Self, ParseError> {
             iroha_primitives::chain_id::validate_chain_id(value).map_err(ParseError::new)?;

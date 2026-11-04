@@ -2525,7 +2525,7 @@ impl Watchdog {
             fn pipe(fds: *mut i32) -> i32;
             fn fork() -> i32;
             fn close(fd: i32) -> i32;
-            fn read(fd: i32, buffer: *mut u8, count: usize) -> isize;
+            fn read(fd: i32, buffer: *mut std::ffi::c_void, count: usize) -> isize;
             fn kill(pid: i32, signal: i32) -> i32;
             fn usleep(microseconds: u32) -> i32;
             fn _exit(status: i32) -> !;
@@ -2546,7 +2546,7 @@ impl Watchdog {
             unsafe {
                 close(fds[1]);
                 let mut normal = 0u8;
-                let read_count = read(fds[0], &raw mut normal, 1);
+                let read_count = read(fds[0], (&raw mut normal).cast(), 1);
                 close(fds[0]);
                 if read_count != 1 || normal != b'N' {
                     kill(-process_group, 15);
@@ -2573,12 +2573,12 @@ impl Watchdog {
     )]
     fn finish(mut self) -> Result<()> {
         unsafe extern "C" {
-            fn write(fd: i32, buffer: *const u8, count: usize) -> isize;
+            fn write(fd: i32, buffer: *const std::ffi::c_void, count: usize) -> isize;
             fn close(fd: i32) -> i32;
             fn waitpid(pid: i32, status: *mut i32, options: i32) -> i32;
         }
         let normal = b'N';
-        let wrote = unsafe { write(self.write_fd, &raw const normal, 1) };
+        let wrote = unsafe { write(self.write_fd, (&raw const normal).cast(), 1) };
         let closed = unsafe { close(self.write_fd) };
         self.write_fd = -1;
         let watchdog_pid = self.pid;

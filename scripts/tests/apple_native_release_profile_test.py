@@ -72,7 +72,9 @@ class AppleNativeReleaseProfileTests(unittest.TestCase):
         self.assertIn('--cargo-build-dir "$CARGO_TARGET_DIR/$target_triple/apple-release/build"', builder)
         self.assertNotIn('build --locked --offline --jobs 1 -p "$LIB_CRATE_NAME" --lib --release', builder)
         self.assertIn('-Wl,-all_load "$library"', builder)
-        self.assertIn('"$PQCRYPTO_ARCHIVE_NORMALIZER"', builder)
+        # The native archive auditor replaced the retired pqcrypto normalizer.
+        self.assertIn('run_isolated_python "$NATIVE_STATIC_ARCHIVE_AUDITOR"', builder)
+        self.assertNotIn("PQCRYPTO_ARCHIVE_NORMALIZER", builder)
 
 
 if __name__ == "__main__":

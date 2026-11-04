@@ -15,6 +15,7 @@ import linux_root_observer_abi as abi
 import zk_resource_harness as harness
 
 
+# CPython omits os.waitid on macOS, so these pure controls patch it with create=True.
 class LifetimeControls(unittest.TestCase):
     """Retained error and finish-before-reap transitions stay independent of status."""
 
@@ -47,7 +48,7 @@ class LifetimeControls(unittest.TestCase):
         owner.native.read=Mock(return_value=(abi.OK,{'root_pid':0},b'pending'))
         original=owner.child
         with patch.object(lifetime.time,'monotonic_ns',side_effect=[0,0,1_000_000]), \
-             patch.object(lifetime.time,'sleep'),patch.object(lifetime.os,'waitid',return_value=None), \
+             patch.object(lifetime.time,'sleep'),patch.object(lifetime.os,'waitid',create=True,return_value=None), \
              patch.object(lifetime.os,'wait4') as reap:
             with self.assertRaisesRegex(abi.Refusal,'overall deadline') as caught:
                 owner.install(original,1)
@@ -74,7 +75,7 @@ class LifetimeControls(unittest.TestCase):
 
     def test_live_poll_never_calls_wait4(self):
         owner=self.owner();owner.poll=Mock()
-        with patch.object(lifetime.os,'waitid',return_value=None),patch.object(lifetime.os,'wait4') as wait:
+        with patch.object(lifetime.os,'waitid',create=True,return_value=None),patch.object(lifetime.os,'wait4') as wait:
             self.assertIsNone(owner.try_reap())
         wait.assert_not_called();owner.poll.assert_called_once()
 
@@ -88,7 +89,7 @@ class LifetimeControls(unittest.TestCase):
         def wait(pid,flags):
             events.append('wait4');return pid,101<<8,usage
         terminal=types.SimpleNamespace(si_pid=12345,si_code=os.CLD_EXITED,si_status=101)
-        with patch.object(lifetime.os,'waitid',return_value=terminal),patch.object(lifetime.os,'wait4',side_effect=wait):
+        with patch.object(lifetime.os,'waitid',create=True,return_value=terminal),patch.object(lifetime.os,'wait4',side_effect=wait):
             self.assertEqual(owner.try_reap(),(101<<8,usage))
         self.assertEqual(events,['finish','wait4','finish'])
         self.assertEqual(owner.child.returncode,101);self.assertTrue(owner.joined)
@@ -97,7 +98,7 @@ class LifetimeControls(unittest.TestCase):
         owner=self.owner();first=OSError(5,'first native failure');owner.native.read.side_effect=first
         owner.native.join_wait.side_effect=abi.Refusal('no certificate')
         terminal=types.SimpleNamespace(si_pid=12345,si_code=os.CLD_EXITED,si_status=0)
-        with patch.object(lifetime.os,'waitid',return_value=terminal), \
+        with patch.object(lifetime.os,'waitid',create=True,return_value=terminal), \
              patch.object(lifetime.os,'wait4',return_value=(12345,0,object())) as wait:
             owner.try_reap()
         self.assertTrue(owner.finish_attempted);wait.assert_called_once_with(12345,0)
@@ -105,7 +106,7 @@ class LifetimeControls(unittest.TestCase):
 
     def test_repeated_reap_uses_stored_original_status_without_pid_lookup(self):
         owner=self.owner();owner.waited=(12345,101<<8,object())
-        with patch.object(lifetime.os,'waitid') as peek,patch.object(lifetime.os,'wait4') as wait:
+        with patch.object(lifetime.os,'waitid',create=True) as peek,patch.object(lifetime.os,'wait4') as wait:
             self.assertEqual(owner.try_reap(),owner.waited[1:])
         peek.assert_not_called();wait.assert_not_called()
 
@@ -123,7 +124,7 @@ class LifetimeControls(unittest.TestCase):
         owner.drain_once=Mock(side_effect=first)
         thread=Mock(ident=17);owner.pipes[0].thread=thread
         terminal=types.SimpleNamespace(si_pid=12345,si_code=os.CLD_EXITED,si_status=0)
-        with patch.object(lifetime.os,'waitid',return_value=terminal), \
+        with patch.object(lifetime.os,'waitid',create=True,return_value=terminal), \
              patch.object(lifetime.os,'wait4',return_value=(12345,0,object())) as wait:
             owner.complete(Mock());owner.complete(Mock())
         wait.assert_called_once_with(12345,0)
@@ -144,7 +145,7 @@ class LifetimeControls(unittest.TestCase):
             self.assertIsNone(owner.waited);self.assertEqual(pid,12345)
             events.append('deadline');state['killed']=True
         def reap(pid,flags):events.append('wait4');return pid,9,object()
-        with patch.object(lifetime.os,'waitid',side_effect=peek), \
+        with patch.object(lifetime.os,'waitid',create=True,side_effect=peek), \
              patch.object(lifetime.os,'wait4',side_effect=reap) as wait:
             owner.complete(kill)
         self.assertEqual(events,['deadline','wait4']);wait.assert_called_once()

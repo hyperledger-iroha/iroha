@@ -219,7 +219,6 @@ crossbeam-queue = { workspace = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 parking_lot = { workspace = true, features = ["deadlock_detection"] }
-derive_more = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
 blake3 = "1.8.2"

@@ -1,16 +1,18 @@
 //! HTTP polling utilities for `iroha_monitor`.
 //!
 //! The monitor keeps one task per peer that periodically pulls `/status` and
-//! `/metrics` endpoints.  This module hides the blocking HTTP client behind
-//! `tokio::spawn_blocking` and normalises the responses into lightweight snapshots used by the TUI.
+//! `/metrics` endpoints concurrently through a reusable async client. Each request has
+//! a body cap and an absolute deadline; dropping the fetcher cancels pending requests.
 use eyre::Result;
 use norito::{derive::JsonDeserialize, json};
 use std::{
     collections::HashMap,
-    io::Read,
-    time::{Duration, Instant},
+    time::Duration,
 };
 use tokio::{sync::mpsc, task::JoinHandle};
+
+mod http;
+use http::PollingClient;
 pub const STATUS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const METRICS_HTTP_TIMEOUT: Duration = Duration::from_secs(2);
 pub const STATUS_BODY_LIMIT: usize = 128 * 1024;
@@ -120,50 +122,26 @@ pub struct PeerFetcher {
     handles: Vec<JoinHandle<()>>,
 }
 impl PeerFetcher {
-    pub fn new(endpoints: Vec<String>, interval: Duration) -> Self {
+    pub fn new(endpoints: Vec<String>, interval: Duration) -> Result<Self> {
+        let client = PollingClient::new()?;
         let (tx, rx) = mpsc::channel::<PeerUpdate>(endpoints.len().max(1) * 2);
         let mut handles = Vec::with_capacity(endpoints.len());
         for (index, endpoint) in endpoints.into_iter().enumerate() {
             let tx = tx.clone();
+            let client = client.clone();
             handles.push(tokio::spawn(async move {
                 let mut ticker = tokio::time::interval(interval);
                 ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
                 loop {
                     ticker.tick().await;
-                    let endpoint_owned = endpoint.clone();
-                    let tx_cloned = tx.clone();
-                    let result =
-                        tokio::task::spawn_blocking(move || fetch_once(index, &endpoint_owned))
-                            .await;
-                    match result {
-                        Ok(snapshot) => {
-                            if tx_cloned.send(snapshot).await.is_err() {
-                                break;
-                            }
-                        }
-                        Err(err) => {
-                            let snapshot = PeerSnapshot {
-                                status: None,
-                                metrics: MetricsSnapshot::default(),
-                                latency: None,
-                                notices: vec![PeerNotice::critical(
-                                    NoticeKind::InternalFetchFailure,
-                                    format!("fetch task join error: {err}"),
-                                )],
-                            };
-                            if tx_cloned
-                                .send(PeerUpdate { index, snapshot })
-                                .await
-                                .is_err()
-                            {
-                                break;
-                            }
-                        }
+                    let snapshot = fetch_once(&client, index, &endpoint).await;
+                    if tx.send(snapshot).await.is_err() {
+                        break;
                     }
                 }
             }));
         }
-        Self { rx, handles }
+        Ok(Self { rx, handles })
     }
     pub async fn recv(&mut self) -> Option<PeerUpdate> {
         self.rx.recv().await
@@ -176,12 +154,15 @@ impl Drop for PeerFetcher {
         }
     }
 }
-fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
+async fn fetch_once(client: &PollingClient, index: usize, endpoint: &str) -> PeerUpdate {
     let mut notices = Vec::new();
     let trimmed = endpoint.trim_end_matches('/');
     let status_url = format!("{trimmed}/status");
     let metrics_url = format!("{trimmed}/metrics");
-    let status_result = fetch_status(&status_url);
+    let (status_result, metrics_result) = tokio::join!(
+        fetch_status(client, &status_url),
+        fetch_metrics(client, &metrics_url),
+    );
     let latency = status_result.as_ref().ok().and_then(|info| info.latency);
     if let Err(notice) = &status_result {
         notices.push(notice.clone());
@@ -207,7 +188,7 @@ fn fetch_once(index: usize, endpoint: &str) -> PeerUpdate {
             ));
         }
     }
-    let metrics = match fetch_metrics(&metrics_url) {
+    let metrics = match metrics_result {
         Ok(metrics) => metrics,
         Err(notice) => {
             notices.push(notice);
@@ -228,7 +209,7 @@ struct StatusFetch {
     payload: Option<StatusPayload>,
     latency: Option<Duration>,
 }
-fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
+async fn fetch_status(client: &PollingClient, url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/status") {
         let payload = stub_status_payload(descriptor.peer_index, descriptor.total_peers);
         return Ok(StatusFetch {
@@ -236,35 +217,17 @@ fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
             latency: Some(Duration::from_millis(5)),
         });
     }
-    let start = Instant::now();
-    let response = attohttpc::get(url)
-        .timeout(STATUS_HTTP_TIMEOUT)
-        .send()
-        .map_err(|err| {
-            PeerNotice::critical(
-                NoticeKind::StatusFetchFailed,
-                format!("GET {url} failed: {err}"),
-            )
-        })?;
-    let latency = Some(start.elapsed());
-    if !response.is_success() {
-        return Err(PeerNotice::critical(
-            NoticeKind::StatusFetchFailed,
-            format!("GET {url} returned {}", response.status()),
-        ));
-    }
-    let (body, truncated) = read_body_with_limit(response, STATUS_BODY_LIMIT).map_err(|err| {
-        PeerNotice::critical(
-            NoticeKind::StatusFetchFailed,
-            format!("failed to read status body from {url}: {err}"),
-        )
+    let response = client.get(url, STATUS_BODY_LIMIT, STATUS_HTTP_TIMEOUT).await.map_err(|err| {
+        PeerNotice::critical(NoticeKind::StatusFetchFailed, format!("GET {url} failed: {err}"))
     })?;
-    if truncated {
+    let latency = Some(response.latency);
+    if response.truncated {
         return Err(PeerNotice::warning(
             NoticeKind::StatusPayloadTooLarge,
             format!("GET {url} body exceeds {STATUS_BODY_LIMIT} bytes"),
         ));
     }
+    let body = response.body;
     if body.is_empty() {
         return Ok(StatusFetch {
             payload: None,
@@ -282,37 +245,20 @@ fn fetch_status(url: &str) -> std::result::Result<StatusFetch, PeerNotice> {
         latency,
     })
 }
-fn fetch_metrics(url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> {
+async fn fetch_metrics(client: &PollingClient, url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> {
     if let Some(descriptor) = parse_stub_descriptor(url, "/metrics") {
         return Ok(stub_metrics_snapshot(descriptor.peer_index));
     }
-    let response = attohttpc::get(url)
-        .timeout(METRICS_HTTP_TIMEOUT)
-        .send()
-        .map_err(|err| {
-            PeerNotice::warning(
-                NoticeKind::MetricsFetchFailed,
-                format!("GET {url} failed: {err}"),
-            )
-        })?;
-    if !response.is_success() {
-        return Err(PeerNotice::warning(
-            NoticeKind::MetricsFetchFailed,
-            format!("GET {url} returned {}", response.status()),
-        ));
-    }
-    let (body, truncated) = read_body_with_limit(response, METRICS_BODY_LIMIT).map_err(|err| {
-        PeerNotice::warning(
-            NoticeKind::MetricsFetchFailed,
-            format!("failed to read metrics body from {url}: {err}"),
-        )
+    let response = client.get(url, METRICS_BODY_LIMIT, METRICS_HTTP_TIMEOUT).await.map_err(|err| {
+        PeerNotice::warning(NoticeKind::MetricsFetchFailed, format!("GET {url} failed: {err}"))
     })?;
-    if truncated {
+    if response.truncated {
         return Err(PeerNotice::warning(
             NoticeKind::MetricsPayloadTooLarge,
             format!("GET {url} body exceeds {METRICS_BODY_LIMIT} bytes"),
         ));
     }
+    let body = response.body;
     let text = String::from_utf8_lossy(&body);
     if text.lines().any(|line| {
         let line = line.trim();
@@ -324,19 +270,6 @@ fn fetch_metrics(url: &str) -> std::result::Result<MetricsSnapshot, PeerNotice> 
         ));
     }
     Ok(parse_prometheus_metrics(&text))
-}
-fn read_body_with_limit<R: Read>(mut reader: R, limit: usize) -> Result<(Vec<u8>, bool)> {
-    let mut buf = Vec::new();
-    {
-        let mut limited = (&mut reader).take((limit + 1) as u64);
-        limited.read_to_end(&mut buf)?;
-    }
-    if buf.len() > limit {
-        buf.truncate(limit);
-        Ok((buf, true))
-    } else {
-        Ok((buf, false))
-    }
 }
 fn parse_prometheus_metrics(text: &str) -> MetricsSnapshot {
     let mut values: HashMap<&str, u64> = HashMap::new();
@@ -431,17 +364,6 @@ mod tests {
         assert_eq!(metrics.fee_scale, Some(3));
     }
     #[test]
-    fn read_body_respects_limit() {
-        let data = vec![b'x'; 16];
-        let (body, truncated) = read_body_with_limit(std::io::Cursor::new(data), 32).unwrap();
-        assert!(!truncated);
-        assert_eq!(body.len(), 16);
-        let data = vec![b'y'; 64];
-        let (body, truncated) = read_body_with_limit(std::io::Cursor::new(data), 32).unwrap();
-        assert!(truncated);
-        assert_eq!(body.len(), 32);
-    }
-    #[test]
     fn parse_prometheus_skips_non_integer_samples() {
         let text = "block_gas_used 12.5\nblock_gas_used 42\nblock_fee_total_units NaN\nblock_fee_total_units 24\nblock_fee_total_scale oops\nblock_fee_total_scale 2";
         let metrics = parse_prometheus_metrics(text);
@@ -458,19 +380,21 @@ mod tests {
         assert!(parse_stub_descriptor("stub://other/1/2/status", "/status").is_none());
         assert!(parse_stub_descriptor("stub://peer/1/status", "/status").is_none());
     }
-    #[test]
-    fn stub_fetch_status_returns_payload() {
-        let fetch = fetch_status("stub://peer/3/4/status").expect("stub status should succeed");
+    #[tokio::test]
+    async fn stub_fetch_status_returns_payload() {
+        let client = PollingClient::new().unwrap();
+        let fetch = fetch_status(&client, "stub://peer/3/4/status").await.expect("stub status should succeed");
         let payload = fetch.payload.expect("payload expected");
         assert_eq!(payload.alias.as_deref(), Some("祭りノード"));
         assert_eq!(payload.peers, Some(4));
         assert_eq!(payload.blocks, Some(45));
         assert!(fetch.latency.is_some());
     }
-    #[test]
-    fn stub_fetch_metrics_returns_synthetic_values() {
+    #[tokio::test]
+    async fn stub_fetch_metrics_returns_synthetic_values() {
+        let client = PollingClient::new().unwrap();
         let metrics =
-            fetch_metrics("stub://peer/1/4/metrics").expect("stub metrics should succeed");
+            fetch_metrics(&client, "stub://peer/1/4/metrics").await.expect("stub metrics should succeed");
         assert_eq!(metrics.gas_used, Some(117));
         assert_eq!(metrics.fee_units, Some(57));
     }

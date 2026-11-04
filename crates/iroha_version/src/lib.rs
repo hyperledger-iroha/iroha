@@ -7,16 +7,15 @@
 use core::ops::Range;
 /// Re-export Norito codec helpers required by consumers of versioned types.
 pub use norito::codec::{Decode, DecodeAll, Encode};
-use std::{format, vec::Vec};
+use std::vec::Vec;
 /// Module which contains error and result for versioning
 /// Error types emitted while working with versioned containers.
 pub mod error {
     use super::UnsupportedVersion;
-    use super::*;
     use iroha_macro::FromVariant;
-    use std::{borrow::ToOwned, boxed::Box, fmt};
+    use std::{boxed::Box, fmt};
     /// Versioning errors
-    #[derive(Debug, FromVariant, thiserror::Error)]
+    #[derive(Debug, FromVariant)]
     pub enum Error {
         /// This is not a versioned object
         NotVersioned,
@@ -44,20 +43,22 @@ pub mod error {
     }
     impl fmt::Display for Error {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-            let msg = match self {
-                Self::NotVersioned => "Not a versioned object".to_owned(),
-                Self::NoritoCodec(x) => format!("Norito (de)serialization issue: {x}"),
+            match self {
+                Self::NotVersioned => f.write_str("Not a versioned object"),
+                Self::NoritoCodec(error) => write!(f, "Norito (de)serialization issue: {error}"),
                 Self::NoritoResourceLimit(_) => {
-                    "Norito decoding exceeded its resource limit".to_owned()
+                    f.write_str("Norito decoding exceeded its resource limit")
                 }
-                Self::UnsupportedVersion(v) => {
-                    format!("Input version {} is unsupported", v.version)
+                Self::UnsupportedVersion(version) => {
+                    write!(f, "Input version {} is unsupported", version.version)
                 }
-                Self::ExtraBytesLeft(n) => format!("Buffer contains {n} bytes after decoding"),
-            };
-            write!(f, "{msg}")
+                Self::ExtraBytesLeft(bytes) => {
+                    write!(f, "Buffer contains {bytes} bytes after decoding")
+                }
+            }
         }
     }
+    impl std::error::Error for Error {}
     impl Error {
         /// Return whether decoding reported an original resource failure or format ceiling.
         #[must_use]
@@ -101,27 +102,25 @@ pub trait Version {
     }
 }
 /// Structure describing a container content which version is not supported.
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    thiserror::Error,
-    norito::Encode,
-    norito::Decode,
-    norito::NoritoSchema,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, norito::Encode, norito::Decode, norito::NoritoSchema)]
 #[norito_schema(name = "iroha_version::UnsupportedVersion")]
-#[error(
-    "Unsupported version. Expected: {}, got: {version}",
-    Self::expected_version()
-)]
 pub struct UnsupportedVersion {
     /// Version of the content.
     pub version: u8,
     /// Raw content.
     pub raw: RawVersioned,
 }
+impl core::fmt::Display for UnsupportedVersion {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "Unsupported version. Expected: {}, got: {}",
+            Self::expected_version(),
+            self.version,
+        )
+    }
+}
+impl std::error::Error for UnsupportedVersion {}
 impl UnsupportedVersion {
     /// Constructs [`UnsupportedVersion`].
     #[must_use]
@@ -227,6 +226,8 @@ pub mod codec {
 pub mod prelude {
     pub use super::{codec::*, *};
 }
+#[cfg(test)]
+mod error_tests;
 #[cfg(test)]
 mod tests {
     use super::*;

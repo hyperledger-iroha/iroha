@@ -1,9 +1,10 @@
 """Execute the CoreNFC callback ownership cut without invoking platform radio.
 
 The guarded statements and retry/epoch gates come from maintained Swift source.
-The harness supplies only session identity and progress observation; NSLock and
-Task cancellation are genuine Foundation/Swift behavior. This catches stale
-callbacks clearing a newer operation's deadline without requiring NFC hardware.
+The harness supplies session identity, progress observation and an injected clock;
+NSLock and Task cancellation are genuine Foundation/Swift behavior. This catches
+stale callbacks clearing a newer operation's deadline or starting its fixed-time
+retry budget, including while connection or exchange work is already in flight.
 It is not device, native monetary, or full CoreNFC runtime qualification.
 """
 
@@ -68,15 +69,26 @@ final class Reporter {
     }
 }
 
+final class Clock: @unchecked Sendable {
+    var nanoseconds: UInt64 = 100
+}
+
 final class ReaderCut {
     let lock = NSLock()
     var completed = false
     let session = Session()
     var operationGate = IrohaPeerNfcReaderOperationGateV1()
-    var retryGate: IrohaPeerNfcRetryGateV1? = .init(.init(maximumContactAttempts: 3))
+    let clock = Clock()
+    lazy var retryGate: IrohaPeerNfcRetryGateV1? = .init(
+        .init(redetectionTimeoutMilliseconds: 30, minimumRestartIntervalMilliseconds: 1),
+        now: { [clock] in clock.nanoseconds }
+    )
     var platformCallGate: IrohaPeerNfcReaderPlatformCallGateV1? = .init()
+    var exchangeTask: Task<Void, Never>?
     var retryTimeoutTask: Task<Void, Never>?
     var operationTimeoutTask: Task<Void, Never>?
+    var recoveryWait: UInt64? = 7
+    var retryPollingGate: IrohaPeerNfcAsyncOperationGateV1? = .init()
     var progressReporter: Reporter? = Reporter()
 
     func invalidDetection(_ session: Session) {
@@ -98,7 +110,8 @@ func require(_ value: @autoclosure () -> Bool, _ label: String) {
     }
 }
 
-for mode in ["current", "stale-session", "completed", "inactive-epoch"] {
+for mode in ["current", "stale-session", "completed", "inactive-epoch",
+             "exchange-in-flight", "connect-in-flight"] {
     let reader = ReaderCut()
     if mode != "inactive-epoch" {
         _ = reader.operationGate.beginOperation()
@@ -108,8 +121,16 @@ for mode in ["current", "stale-session", "completed", "inactive-epoch"] {
     }
     let retry = Task<Void, Never> {}
     let operation = Task<Void, Never> {}
+    let exchange = Task<Void, Never> {}
+    if mode == "exchange-in-flight" {
+        reader.exchangeTask = exchange
+    }
+    if mode == "connect-in-flight" {
+        _ = reader.operationGate.beginConnect(capturedEpoch: reader.operationGate.activeEpoch)
+    }
     reader.retryTimeoutTask = retry
     reader.operationTimeoutTask = operation
+    let polling = reader.retryPollingGate!
     let supplied = mode == "stale-session" ? Session() : reader.session
     reader.invalidDetection(supplied)
     let current = mode == "current"
@@ -118,11 +139,35 @@ for mode in ["current", "stale-session", "completed", "inactive-epoch"] {
     require(reader.operationTimeoutTask != nil, mode + ": operation deadline retained")
     require(!operation.isCancelled, mode + ": operation deadline not cancelled")
     require(reader.progressReporter!.count == (current ? 1 : 0), mode + ": progress ownership")
-    let dispositions = (0..<3).map { _ in reader.retryGate!.recordInvalidDetection() }
+    require((reader.recoveryWait == nil) == current, mode + ": recovery wait ownership")
+    require((reader.retryPollingGate == nil) == current, mode + ": polling gate ownership")
+    var pollingActive = true
+    do { try polling.validate() } catch { pollingActive = false }
+    require(pollingActive != current, mode + ": polling cancellation ownership")
+    // Only an admitted callback may start the fixed elapsed-time budget.
+    reader.clock.nanoseconds += 15_000_000
+    if current {
+        require(reader.retryGate!.recordInvalidDetection() == .retry,
+                mode + ": another contact before the original deadline")
+    }
+    reader.clock.nanoseconds += 15_000_000
     require(
-        dispositions == (current ? [.retry, .exhausted, .exhausted] : [.retry, .retry, .exhausted]),
-        mode + ": shared retry budget"
+        reader.retryGate!.recordInvalidDetection() == (current ? .exhausted : .retry),
+        mode + ": retry deadline ownership"
     )
+    let dispositions = (0..<4).map { _ in reader.retryGate!.recordInvalidDetection() }
+    require(
+        dispositions == Array(repeating: current ? .exhausted : .retry, count: 4),
+        mode + ": contact count cannot replace the time budget"
+    )
+    reader.clock.nanoseconds += 15_000_000
+    require(
+        reader.retryGate!.recordInvalidDetection() == (current ? .exhausted : .retry),
+        mode + ": intermediate contact retains the original deadline"
+    )
+    reader.clock.nanoseconds += 15_000_000
+    require(reader.retryGate!.recordInvalidDetection() == .exhausted,
+            mode + ": fixed recovery deadline is not extended")
     let unlocked = reader.lock.try()
     require(unlocked, mode + ": lock released")
     if unlocked {
@@ -130,6 +175,7 @@ for mode in ["current", "stale-session", "completed", "inactive-epoch"] {
     }
     retry.cancel()
     operation.cancel()
+    exchange.cancel()
 }
 
 print("ASSERTIONS \\(assertions) FAILURES \\(failures); exact source ownership cut, no platform radio")
@@ -144,6 +190,7 @@ class NfcCallbackOwnershipTests(unittest.TestCase):
         progress_source = (REPOSITORY_ROOT / PROGRESS_SOURCE).read_text()
         declaration_names = (
             "public struct IrohaPeerNfcReaderRetryPolicyV1:",
+            "final class IrohaPeerNfcAsyncOperationGateV1:",
             "final class IrohaPeerNfcReaderPlatformCallGateV1:",
             "final class IrohaPeerNfcRetryGateV1:",
             "struct IrohaPeerNfcReaderOperationGateV1:",

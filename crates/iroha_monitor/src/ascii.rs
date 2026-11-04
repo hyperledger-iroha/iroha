@@ -8,7 +8,6 @@
 //! transcription so the animation mirrors the music’s phrasing.
 use crate::etenraku::{self, hyoshi_breath_scalar};
 use std::convert::TryFrom;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 const SKY_FRAMES_NIGHT: [&[&str]; 4] = [
     &[
         "             ☆         ✦              ✧        ☆         ",
@@ -186,15 +185,14 @@ impl AsciiAnimator {
             .saturating_add(self.wave_offset % width.max(1))
             .min(width.saturating_sub(1));
         let accents = horizon_accents(self.config.theme);
-        let koi_chars: Vec<char> = koi.chars().collect();
-        let mut koi_index = 0usize;
+        let mut koi_chars = koi.chars();
         let mut consumed = 0usize;
         let mut column_index = 0usize;
         let mut line = String::with_capacity(width);
         while consumed < width {
-            let mut ch = if column_index >= koi_start && koi_index < koi_chars.len() {
-                let symbol = koi_chars[koi_index];
-                koi_index += 1;
+            let mut ch = if column_index >= koi_start
+                && let Some(symbol) = koi_chars.next()
+            {
                 symbol
             } else if column_index % 7 == (self.wave_offset % 7) {
                 accents.0
@@ -203,7 +201,7 @@ impl AsciiAnimator {
             } else {
                 accents.2
             };
-            let mut ch_width = UnicodeWidthChar::width(ch).unwrap_or(1).max(1);
+            let mut ch_width = glyph_width(ch);
             if consumed + ch_width > width {
                 ch = ' ';
                 ch_width = 1;
@@ -238,7 +236,7 @@ impl AsciiAnimator {
             if is_obachi_marker(local) {
                 symbol = '|';
             }
-            let sym_width = UnicodeWidthChar::width(symbol).unwrap_or(1).max(1);
+            let sym_width = glyph_width(symbol);
             if consumed + sym_width > width {
                 line.push(' ');
                 consumed += 1;
@@ -341,10 +339,10 @@ fn truncate_to_width(src: &str, width: usize) -> String {
     if width == 0 {
         return String::new();
     }
-    let mut buf = String::new();
+    let mut buf = String::with_capacity(width);
     let mut consumed = 0;
     for ch in src.chars() {
-        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        let w = glyph_width(ch);
         if consumed + w > width {
             break;
         }
@@ -356,8 +354,22 @@ fn truncate_to_width(src: &str, width: usize) -> String {
     }
     buf
 }
+/// Terminal columns for this module's fixed artwork palette, not arbitrary user text.
+/// New non-ASCII artwork must declare its width here before it can be rendered.
+fn glyph_width(ch: char) -> usize {
+    if (' '..='~').contains(&ch) {
+        return 1;
+    }
+    match ch {
+        '˜' | 'ˉ' | 'ˍ' | '☆' | '✦' | '✧' | '✶' | '☀' | '❀' | '✿' | '❁' | '≋' | '∽' | '≈' => {
+            1
+        }
+        '祭' | '富' | '士' | 'ゝ' | 'ゞ' | '゠' | '〜' | '、' | '〰' | '﹌' | '﹋' => 2,
+        _ => panic!("glyph {ch:?} is not in the monitor artwork palette"),
+    }
+}
 fn display_width(text: &str) -> usize {
-    UnicodeWidthStr::width(text)
+    text.chars().map(glyph_width).sum()
 }
 fn clip_lines(mut lines: Vec<String>, limit: usize) -> Vec<String> {
     if limit == 0 {
@@ -373,6 +385,78 @@ fn clip_lines(mut lines: Vec<String>, limit: usize) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn artwork_glyphs_have_declared_column_widths() {
+        for ch in ' '..='~' {
+            assert_eq!(glyph_width(ch), 1);
+        }
+        for ch in "˜ˉˍ☆✦✧✶☀❀✿❁≋∽≈".chars() {
+            assert_eq!(glyph_width(ch), 1, "{ch}");
+        }
+        for ch in "祭富士ゝゞ゠〜、〰﹌﹋".chars() {
+            assert_eq!(glyph_width(ch), 2, "{ch}");
+        }
+        assert_eq!(display_width(""), 0);
+        assert_eq!(display_width("祭☆ 富士"), 8);
+    }
+    #[test]
+    fn undeclared_glyphs_and_controls_are_rejected() {
+        for ch in ['\0', '\n', '\t', '\u{7f}', '\u{301}', '😀', '界'] {
+            assert!(std::panic::catch_unwind(|| glyph_width(ch)).is_err());
+        }
+    }
+    #[test]
+    fn every_artwork_palette_declares_its_widths() {
+        for theme in [AsciiTheme::Night, AsciiTheme::Dawn, AsciiTheme::Sakura] {
+            for phase in 0..sky_cycle_len() {
+                for line in sky_frame(theme, phase) {
+                    assert!(display_width(line) > 0);
+                }
+            }
+            let (first, second, third) = horizon_accents(theme);
+            for ch in [first, second, third] {
+                assert!((1..=2).contains(&glyph_width(ch)));
+            }
+            for energy in [WaveEnergy::Calm, WaveEnergy::Lively, WaveEnergy::Crest] {
+                for &ch in wave_palette(theme, energy) {
+                    assert!((1..=2).contains(&glyph_width(ch)));
+                }
+            }
+        }
+        for line in TORII_ART.into_iter().chain(MOUNTAIN_ART).chain(KOI_FRAMES) {
+            assert!(display_width(line) > 0);
+        }
+    }
+    #[test]
+    fn truncation_preserves_wide_glyphs_and_pads_partial_columns() {
+        for (width, expected) in [
+            (0, ""),
+            (1, " "),
+            (2, "祭"),
+            (3, "祭☆"),
+            (4, "祭☆ "),
+            (5, "祭☆富"),
+            (6, "祭☆富 "),
+        ] {
+            assert_eq!(truncate_to_width("祭☆富", width), expected);
+        }
+        assert_eq!(pad_center("富士", 3), "富 ");
+        assert_eq!(pad_center("富士", 7), " 富士  ");
+    }
+    #[test]
+    fn all_themes_keep_exact_width_through_animation_cycles() {
+        for theme in [AsciiTheme::Night, AsciiTheme::Dawn, AsciiTheme::Sakura] {
+            let mut anim = AsciiAnimator::with_config(AsciiConfig { speed: 1, theme });
+            for _ in 0..48 {
+                for width in 0..=128 {
+                    for line in anim.frame(width) {
+                        assert_eq!(display_width(&line), usize::from(width.max(1)));
+                    }
+                }
+                anim.advance();
+            }
+        }
+    }
     #[test]
     fn frame_has_consistent_width() {
         let mut anim = AsciiAnimator::new();

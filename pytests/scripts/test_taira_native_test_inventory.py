@@ -60,6 +60,43 @@ class NativeInventoryTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "registration differs"):
             self.validate()
 
+    def test_windows_only_declarations_need_review_and_never_become_selectors(self):
+        """The darwin/linux gate never compiles #[cfg(windows)] tests, so --list cannot select them."""
+        windows = (("tests.rs", "windows_case"),)
+        for source in ('#[cfg(windows)]\n#[test]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n',
+                       '#[test]\n#[cfg( windows )]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n'):
+            with self.subTest(source=source):
+                self.source.write_text(source)
+                self.assertEqual(inventory.validate_native_source_inventory(
+                    self.root, owners=self.owners, windows_only=windows), {"owner::tests::exact_case"})
+                with self.assertRaisesRegex(ValueError, r"Windows-only census differs.*extra=\['windows_case'\]"):
+                    self.validate()
+        # A reviewed entry never hides a compiled, commented-out or removed declaration.
+        for source in ('#[cfg(not(windows))]\n#[test]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n',
+                       '// #[cfg(windows)]\n#[test]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n',
+                       '#[test]\nfn exact_case() {}\n'):
+            with self.subTest(source=source):
+                self.source.write_text(source)
+                with self.assertRaisesRegex(ValueError, r"Windows-only census differs.*missing=\['windows_case'\]"):
+                    inventory.validate_native_source_inventory(self.root, owners=self.owners, windows_only=windows)
+        self.source.write_text('#[cfg(windows)]\n#[test]\nfn exact_case() {}\n')
+        with self.assertRaisesRegex(ValueError, r"source census differs.*missing=\['exact_case'\]"):
+            inventory.validate_native_source_inventory(
+                self.root, owners=self.owners, windows_only=(("tests.rs", "exact_case"),))
+
+    def test_reviewed_windows_only_declarations_are_gated_and_unselected(self):
+        owners = {row[2]: row for row in inventory.NATIVE_CORE_TEST_OWNERS}
+        selectors = {name for _, names in inventory.native_owner_stages() for name in names}
+        self.assertTrue(inventory.NATIVE_WINDOWS_ONLY_TESTS)
+        for source, leaf in inventory.NATIVE_WINDOWS_ONLY_TESTS:
+            with self.subTest(source=source, leaf=leaf):
+                owner = owners[source]
+                self.assertNotIn(leaf, owner[-1])
+                self.assertNotIn(owner[4] + "::" + leaf, selectors)
+                with self.assertRaisesRegex(ValueError, "Windows-only census differs") as refusal:
+                    inventory.validate_native_source_inventory(ROOT, owners=(owner,), windows_only=())
+                self.assertIn(leaf, str(refusal.exception))
+
     def test_merged_original_custody_and_sccp_schedule_controls_require_exact_owners(self):
         """Merged controls remain mandatory and reject equal-count substitutions."""
         expected = {'native State preverify backend and key admission': (('state.rs',
@@ -132,7 +169,7 @@ class NativeInventoryTests(unittest.TestCase):
     def test_real_checkout_matches_every_reviewed_owner(self):
         names = inventory.validate_native_source_inventory(ROOT)
         self.assertEqual(len(names), sum(len(row[-1]) for row in inventory.NATIVE_CORE_TEST_OWNERS))
-        self.assertEqual(len(names), 633)
+        self.assertEqual(len(names), 636)
 
     def test_authenticated_epoch_schedule_stays_in_exact_boundary_census(self):
         owner, = (row for row in inventory.NATIVE_CORE_TEST_OWNERS

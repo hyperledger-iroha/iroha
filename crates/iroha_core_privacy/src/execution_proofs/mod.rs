@@ -18,7 +18,6 @@ mod proof;
 pub mod race;
 mod race_air;
 mod registry;
-mod staged_race_air;
 mod stark;
 
 pub use error::ExecutionProofErrorV1;

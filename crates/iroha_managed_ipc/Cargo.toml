@@ -16,7 +16,6 @@ iroha_primitives = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 blake3 = { workspace = true }
-hex = { workspace = true, features = ["alloc"] }
 rand = { workspace = true }
 thiserror = { workspace = true }
 zeroize = { workspace = true }

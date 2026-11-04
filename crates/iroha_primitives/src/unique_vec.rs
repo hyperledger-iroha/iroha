@@ -5,7 +5,6 @@
 //! inline, discarding any duplicates in the provided list.
 //! Norito and JSON decoders reject duplicate elements instead of changing the encoded collection.
 use core::borrow::Borrow;
-use derive_more::{AsRef, Deref};
 use iroha_schema::IntoSchema;
 use norito::{
     DeserializePayload, SerializePayload, core as ncore,
@@ -28,10 +27,24 @@ macro_rules! unique_vec {
     }};
 }
 /// Wrapper type for [`Vec`] which ensures that all elements are unique.
-#[derive(Debug, Deref, AsRef, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, IntoSchema)]
 #[repr(transparent)]
 #[schema(transparent)]
 pub struct UniqueVec<T>(Vec<T>);
+impl<T> AsRef<Vec<T>> for UniqueVec<T> {
+    #[inline]
+    fn as_ref(&self) -> &Vec<T> {
+        &self.0
+    }
+}
+impl<T> core::ops::Deref for UniqueVec<T> {
+    type Target = Vec<T>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 impl<T: norito::NoritoSchema> norito::NoritoSchema for UniqueVec<T> {
     fn nominal_name() -> String {
         norito::schema::identity::generic_name(
@@ -202,6 +215,17 @@ mod tests {
     use super::*;
     use core::borrow::Borrow;
     use norito::codec::{Decode, Encode};
+
+    #[test]
+    fn borrow_traits_preserve_vec_storage_without_element_trait_bounds() {
+        struct NoTraits(u8);
+        let value = UniqueVec(vec![NoTraits(7)]);
+        let as_ref: &Vec<NoTraits> = value.as_ref();
+        let dereferenced: &Vec<NoTraits> = &value;
+        assert!(std::ptr::eq(as_ref, &value.0));
+        assert!(std::ptr::eq(dereferenced, &value.0));
+        assert_eq!(as_ref[0].0, 7);
+    }
     // Tests covering the behaviour of `UniqueVec` to ensure it maintains
     // uniqueness of elements and behaves like a typical vector otherwise.
     // Verify that `UniqueVec` uses the `Default` trait to create an empty

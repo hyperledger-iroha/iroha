@@ -40,7 +40,6 @@ iroha_core_zk = { workspace = true, default-features = false }
 iroha_version = { workspace = true }
 iroha_test_samples.workspace = true
 iroha_torii_shared.workspace = true
-base64.workspace = true
 url.workspace = true
 
 color-eyre.workspace = true
@@ -58,6 +57,7 @@ zeroize.workspace = true
 windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Threading"] }
 
 [dev-dependencies]
+base64 = { workspace = true, features = ["alloc"] }
 iroha_sumeragi = { workspace = true }
 iroha_core = { workspace = true, default-features = false, features = ["iroha-core-tests"] }
 irohad_lib = { path = "../irohad", default-features = false, features = ["daemon"] }

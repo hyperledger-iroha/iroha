@@ -2105,6 +2105,126 @@ fn nonzero_hex_pattern_is_enforced_without_regex_lookaround() {
     assert!(validate_tool_arguments(&tool, valid.as_object().expect("object")).is_ok());
 }
 #[test]
+fn fixed_header_patterns_match_regex_for_ascii_and_unicode() {
+    for pattern in ["^[!-~]+$", "^(0|[1-9][0-9]*)$"] {
+        let regex = regex::Regex::new(pattern).expect("fixed header pattern compiles");
+        let check = |value: &str| {
+            let expected = regex.is_match(value);
+            assert_eq!(
+                custom_advertised_pattern_matches(pattern, value),
+                Some(expected),
+                "pattern={pattern:?}, value={value:?}"
+            );
+            assert_eq!(advertised_pattern_matches(pattern, value), Ok(expected));
+        };
+        check("");
+        for first in 0..=127_u8 {
+            check(&char::from(first).to_string());
+            for second in 0..=127_u8 {
+                let bytes = [first, second];
+                check(std::str::from_utf8(&bytes).expect("ASCII is UTF-8"));
+            }
+        }
+        for value in [
+            "!~",
+            "0123456789",
+            "1\n",
+            "1\r\n",
+            "\n1",
+            "ok\n",
+            "ok\r\n",
+            "ok\nnext",
+            "\u{80}",
+            "\u{a0}",
+            "\u{7ff}",
+            "\u{800}",
+            "\u{2003}",
+            "\u{2028}",
+            "\u{feff}",
+            "１２３",
+            "١٢٣",
+            "é",
+            "次",
+            "🦀",
+            "1é",
+            "é1",
+        ] {
+            check(value);
+        }
+    }
+}
+
+#[test]
+fn fixed_header_patterns_preserve_unbounded_lexical_validation() {
+    for pattern in ["^[!-~]+$", "^(0|[1-9][0-9]*)$"] {
+        let regex = regex::Regex::new(pattern).expect("fixed header pattern compiles");
+        let mut cases = [
+            "0",
+            "00",
+            "01",
+            "10",
+            "+1",
+            "-1",
+            "1.0",
+            "1e3",
+            " 1",
+            "1 ",
+            "18446744073709551615",
+            "18446744073709551616",
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        for len in [20, 21, 256, 257, 4096, 65_536] {
+            let digits = "9".repeat(len);
+            cases.extend([
+                digits.clone(),
+                format!("0{digits}"),
+                format!("{digits}\n"),
+                format!("{digits}\r\n"),
+                "~".repeat(len),
+            ]);
+        }
+        for value in cases {
+            let expected = regex.is_match(&value);
+            assert_eq!(
+                custom_advertised_pattern_matches(pattern, &value),
+                Some(expected)
+            );
+            assert_eq!(advertised_pattern_matches(pattern, &value), Ok(expected));
+        }
+    }
+    assert_eq!(
+        custom_advertised_pattern_matches("^(0|[1-9][0-9]*)$", "18446744073709551616"),
+        Some(true),
+        "numeric bounds belong to schemas and route parsers"
+    );
+}
+
+#[test]
+fn fixed_header_fast_paths_preserve_other_patterns_and_errors() {
+    for (pattern, value) in [
+        ("^[ -~]+$", " "),
+        ("(?m)^[!-~]+$", "ok\n"),
+        (r"^\d+$", "１２３"),
+        ("^(?:0|[1-9][0-9]*)$", "123"),
+    ] {
+        assert_eq!(custom_advertised_pattern_matches(pattern, value), None);
+        let expected = regex::Regex::new(pattern).unwrap().is_match(value);
+        assert_eq!(advertised_pattern_matches(pattern, value), Ok(expected));
+    }
+    for pattern in ["[", "(?=unsupported)"] {
+        assert_eq!(custom_advertised_pattern_matches(pattern, "value"), None);
+        let error = regex::Regex::new(pattern).expect_err("invalid pattern");
+        assert_eq!(
+            advertised_pattern_matches(pattern, "value"),
+            Err(format!(
+                "advertised schema contains unsupported pattern `{pattern}`: {error}"
+            ))
+        );
+    }
+}
+
+#[test]
 fn unsupported_schema_pattern_fails_registry_validation() {
     let mut tool = sample_tool("iroha.schema-test", Method::POST, ToolEffect::Write);
     tool.input_schema = norito::json!({
