@@ -39,12 +39,15 @@ on:
       - "scripts/kotodama_perf_bundle.py"
       - "scripts/check_kotodama_docs.py"
       - "scripts/regenerate_kotodama_goldens.py"
+      - "scripts/stage_kotodama_artifact_tools.py"
+      - "scripts/check_native_sdk_artifact.py"
       - "scripts/ivm_artifacts.tsv"
       - "pytests/scripts/check_kotodama_perf_test.py"
       - "pytests/scripts/kotodama_query_driver_test.py"
       - "pytests/scripts/kotodama_perf_bundle_test.py"
       - "pytests/scripts/check_kotodama_docs_test.py"
       - "pytests/scripts/regenerate_kotodama_goldens_test.py"
+      - "pytests/scripts/stage_kotodama_artifact_tools_test.py"
       - "**/*.ko"
       - "**/*.to"
       - "demo/*.manifest.json"
@@ -569,16 +572,23 @@ jobs:
         working-directory: candidate
         run: cargo build --locked -p kotodama_toolchain --bin koto -p ivm_artifact_admission --features ivm_artifact_admission/dev-tools --bin ivm_artifact_admit
 
+      - name: Stage private single-link Kotodama tools
+        working-directory: candidate
+        run: >-
+          python3 scripts/stage_kotodama_artifact_tools.py
+          --build-directory "$CARGO_TARGET_DIR/debug"
+          --output "$RUNNER_TEMP/kotodama-artifact-tools"
+
       - name: Compile every Kotodama documentation source
         working-directory: candidate
         run: >-
           python3 scripts/check_kotodama_docs.py
-          --koto ../target-kotodama-perf/debug/koto
+          --koto "$RUNNER_TEMP/kotodama-artifact-tools/koto"
 
       - name: Enforce complete artifact release gate
         working-directory: candidate
         run: >-
           python3 scripts/regenerate_kotodama_goldens.py
           --check
-          --koto ../target-kotodama-perf/debug/koto
-          --admission-tool ../target-kotodama-perf/debug/ivm_artifact_admit
+          --koto "$RUNNER_TEMP/kotodama-artifact-tools/koto"
+          --admission-tool "$RUNNER_TEMP/kotodama-artifact-tools/ivm_artifact_admit"
