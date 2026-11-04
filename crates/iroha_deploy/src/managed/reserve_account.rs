@@ -135,6 +135,21 @@ impl ManagedReserveAccountRegistration {
         .map(|authority| authority.map(|authority| Self { authority }))
     }
 
+    /// Retain existing custody or create it after live permission, in one parent bracket.
+    pub(super) fn open_for_bootstrap(
+        parent: &ServiceAuthority,
+        provider: iroha_data_model::sorafs::capacity::ProviderId,
+        authorize_creation: &dyn Fn() -> Result<bool>,
+    ) -> Result<Option<Self>> {
+        ServiceAuthority::open_provider_for_bootstrap(
+            parent,
+            provider,
+            ProviderPurpose::ReserveAccountRegistration,
+            authorize_creation,
+        )
+        .map(|authority| authority.map(|authority| Self { authority }))
+    }
+
     /// Retain the selected policy, underwriting and original bounded authorization, then advance.
     /// # Errors
     /// Rejects changed original inputs, unavailable native prerequisites or unsafe wallet custody.

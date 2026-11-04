@@ -60,7 +60,22 @@ fn absent<T>(step: ServiceBootstrapStep) -> Phase<T> {
 // the scheduling census supplies no authority. Only the live startup branch may then create.
 // Advance has no import scope; active/owned originals use their full standalone producer.
 macro_rules! open_child {
-    ($run:expr, $owner:ty, $step:expr $(, $provider:expr)?) => {{
+    ($run:expr, $owner:ty, $step:expr, $provider:expr) => {{
+        if $run.mode == Mode::Advance {
+            match <$owner>::open_for_bootstrap(
+                $run.authority, $provider, &|| $run.may_submit(),
+            )? {
+                Some(owner) => owner,
+                None => return Ok(absent($step)),
+            }
+        } else {
+            open_child!(@existing $run, $owner, $step, $provider)
+        }
+    }};
+    ($run:expr, $owner:ty, $step:expr) => {
+        open_child!(@existing $run, $owner, $step)
+    };
+    (@existing $run:expr, $owner:ty, $step:expr $(, $provider:expr)?) => {{
         let existing = <$owner>::open_existing_from_original(
             $run.authority $(, $provider)?, $run.checkpoint_import_scope.as_ref()
         );
