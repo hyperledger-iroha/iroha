@@ -2,6 +2,10 @@
 """
 Guardrail that fails when Rust functions change without unit-test coverage
 evidence (crate `tests/` or inline `#[cfg(test)]`/`#[test]` blocks).
+
+Complete files with identical rustfmt output are formatting-only. Rustfmt is
+optional for this exemption: a missing tool, parse failure or timeout retains
+the ordinary coverage requirement. No source files are written.
 """
 
 from __future__ import annotations
@@ -296,6 +300,27 @@ def function_has_test(name: str, test_blob: str) -> bool:
     return bool(TEST_NAME_RE_CACHE[name].search(test_blob))
 
 
+def formatting_only_change(base: str, head: str, *, root: pathlib.Path) -> bool:
+    """Require identical complete rustfmt output; parse/tool failure keeps coverage mandatory."""
+    if not base or not head:
+        return False
+    outputs = []
+    for source in (base, head):
+        try:
+            result = subprocess.run(
+                ["rustfmt", "--edition", "2024", "--emit", "stdout",
+                 "--config", "skip_children=true"],
+                input=source, cwd=root, capture_output=True, text=True,
+                timeout=60, check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if result.returncode != 0 or not result.stdout.strip():
+            return False
+        outputs.append(result.stdout)
+    return outputs[0] == outputs[1]
+
+
 def gather_violations(base_commit: str, *, root: pathlib.Path = DEFAULT_ROOT) -> List[Violation]:
     root = root.resolve()
     files = changed_rust_files(base_commit, root=root)
@@ -333,6 +358,12 @@ def gather_violations(base_commit: str, *, root: pathlib.Path = DEFAULT_ROOT) ->
         removed_names = functions_for_lines(removed_lines, base_ranges)
         names.update(name for name in removed_names if name in head_function_names)
 
+        # Whitespace, line wrapping and rustfmt's trailing commas do not
+        # change behavior. Compare complete parsed output, preserving literals,
+        # attributes and tokens; never strip arbitrary whitespace or skip checks
+        # when the formatter is missing or cannot parse either version.
+        if names and formatting_only_change(base_text, head_text, root=root):
+            continue
         if names:
             crate_entry = changed_functions.setdefault(crate, {})
             crate_entry.setdefault(rel_path, set()).update(names)
