@@ -904,6 +904,7 @@ def _validate_pr_parity(workflow: str) -> list[str]:
             "matrix: ${{ fromJSON(needs.rust_changes.outputs.binary_matrix) }}",
             "TEST_NETWORK_BIN_IROHAD: ${{ github.workspace }}/bins/iroha3d",
             "TEST_NETWORK_BIN_IROHA: ${{ github.workspace }}/bins/iroha",
+            "TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli",
             "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES: ${{ github.workspace }}/bins/iroha3d_private_settlement_routes",
             'IROHA_TEST_REQUIRE_NETWORK: "1"',
             'python3 scripts/rust_ci.py run --packages "${{ matrix.packages }}" '
@@ -1478,7 +1479,7 @@ def test_pr_workflow_retains_locked_workspace_and_numeric_parity() -> None:
 
 @pytest.mark.parametrize("name", (
     "TEST_NETWORK_BIN_IROHAD", "TEST_NETWORK_BIN_IROHA",
-    "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES",
+    "TEST_NETWORK_BIN_IROHAD_PRIVATE_SETTLEMENT_ROUTES", "TEST_NETWORK_BIN_SORAFS_CLI",
 ))
 def test_pr_network_binaries_cannot_be_package_relative(name: str) -> None:
     """Cargo's package working directories must resolve the same selected binaries."""

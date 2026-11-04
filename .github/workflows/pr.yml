@@ -53,7 +53,7 @@ jobs:
     if: needs.rust_changes.outputs.has_binaries == 'true'
     needs: [rust_changes]
     runs-on: ubuntu-24.04
-    # Selected shipping, route-control, and disposable-broker feature graphs build separately.
+    # Selected daemon and SoraFS CLI feature graphs build separately.
     timeout-minutes: 240
     env:
       VERGEN_GIT_SHA: ${{ github.sha }}
@@ -626,6 +626,7 @@ jobs:
       TEST_NETWORK_BIN_IROHAD_TAIRA: ${{ github.workspace }}/bins/iroha3d_taira
       TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER: ${{ github.workspace }}/bins/iroha_test_runtime_provider_broker
       KAGAMI_BIN: ${{ github.workspace }}/bins/kagami
+      TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

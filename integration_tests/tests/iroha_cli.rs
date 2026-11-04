@@ -1686,11 +1686,17 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
     else {
         return Ok(());
     };
-    assert_soracloud_hf_lease_asset_ready(
-        &network.client(),
-        std::slice::from_ref(network.client().client().account()),
-        100_000,
-    )?;
+    integration_tests::sync::spawn_blocking({
+        let client = network.client();
+        move || {
+            assert_soracloud_hf_lease_asset_ready(
+                &client,
+                std::slice::from_ref(client.client().account()),
+                100_000,
+            )
+        }
+    })
+    .await??;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -1986,11 +1992,17 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     else {
         return Ok(());
     };
-    assert_soracloud_hf_lease_asset_ready(
-        &network.client(),
-        std::slice::from_ref(network.client().client().account()),
-        100_000,
-    )?;
+    integration_tests::sync::spawn_blocking({
+        let client = network.client();
+        move || {
+            assert_soracloud_hf_lease_asset_ready(
+                &client,
+                std::slice::from_ref(client.client().account()),
+                100_000,
+            )
+        }
+    })
+    .await??;
     let config = ProgramConfig::from(&network.client());
     let dir = tempfile::tempdir()?;
     tokio::fs::write(
@@ -2273,15 +2285,21 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
     else {
         return Ok(());
     };
-    assert_soracloud_hf_lease_asset_ready(
-        &network.client(),
-        &[
-            network.client().client().account().clone(),
-            BOB_ID.clone(),
-            CARPENTER_ID.clone(),
-        ],
-        100_000,
-    )?;
+    integration_tests::sync::spawn_blocking({
+        let client = network.client();
+        move || {
+            assert_soracloud_hf_lease_asset_ready(
+                &client,
+                &[
+                    client.client().account().clone(),
+                    BOB_ID.clone(),
+                    CARPENTER_ID.clone(),
+                ],
+                100_000,
+            )
+        }
+    })
+    .await??;
     let alice_config = ProgramConfig::from(&network.client());
     let bob_config = program_config_for_account(&network.client(), &BOB_KEYPAIR);
     let carpenter_config = program_config_for_account(&network.client(), &CARPENTER_KEYPAIR);

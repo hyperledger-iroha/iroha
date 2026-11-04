@@ -41,6 +41,9 @@ Its `irohad/test-network-private-settlement-route-control` feature is compiled s
 `irohad/test-network-disposable-broker` feature uses its own
 `target/ci-binaries/disposable-broker` directory. Only `iroha_test_network`
 requires the shipping `iroha3d_taira` launcher through `TEST_NETWORK_BIN_IROHAD_TAIRA`.
+The integration suite also receives `sorafs_cli` through `TEST_NETWORK_BIN_SORAFS_CLI`.
+Its `cli-orchestrator` and `moderation-grpc` binary prerequisites build separately
+under `target/ci-binaries/sorafs-cli`, preserving all three daemon feature graphs.
 Staging preserves each exact artifact; every network override is an absolute
 workspace path. Cargo's `CARGO_BIN_EXE_*` supplies sibling binaries for other
 package tests.

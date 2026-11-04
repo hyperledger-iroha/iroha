@@ -189,7 +189,7 @@ iroha_test_network = [
 izanami = ["iroha3d", "iroha"]
 integration_tests = [
   "iroha3d", "iroha", "iroha3d_private_settlement_routes",
-  "iroha_test_runtime_provider_broker", "kagami",
+  "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
 ]
 
 # Non-Cargo consumers participate in the same artifact-union calculation.

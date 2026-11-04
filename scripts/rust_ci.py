@@ -76,6 +76,10 @@ BINARY_ARTIFACTS = {
     "iroha": BinaryArtifact("iroha_cli", "iroha"),
     "kagami": BinaryArtifact("iroha_kagami", "kagami"),
     "koto": BinaryArtifact("kotodama_toolchain", "koto"),
+    "sorafs_cli": BinaryArtifact(
+        "sorafs_orchestrator", "sorafs_cli",
+        ("cli-orchestrator", "moderation-grpc"), "sorafs-cli"
+    ),
     "iroha_test_runtime_provider_broker": BinaryArtifact(
         "irohad", "iroha_test_runtime_provider_broker",
         ("test-network-disposable-broker",), "disposable-broker"

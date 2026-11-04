@@ -117,10 +117,13 @@ def test_network_artifact_overrides_are_absolute_and_complete() -> None:
         "TEST_NETWORK_BIN_IROHAD_TAIRA": "iroha3d_taira",
         "TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER": "iroha_test_runtime_provider_broker",
         "KAGAMI_BIN": "kagami",
+        "TEST_NETWORK_BIN_SORAFS_CLI": "sorafs_cli",
     }
     assert overrides == {key: "${{ github.workspace }}/bins/" + binary for key, binary in expected.items()}
     manifest = rust_ci.load_lane_manifest()
-    assert set(expected.values()) == set(manifest.package_binaries["iroha_test_network"])
+    assert set(expected.values()) == set().union(*map(set, manifest.package_binaries.values()))
+    assert "sorafs_cli" in manifest.package_binaries["integration_tests"]
+    assert "sorafs_cli" not in manifest.package_binaries["iroha_test_network"]
     assert '      IROHA_TEST_REQUIRE_NETWORK: "1"' in job
 
 
@@ -235,7 +238,7 @@ def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: P
     environment = {
         **os.environ, "PATH": f"{tools}{os.pathsep}{os.environ['PATH']}",
         "RUNNER_TEMP": str(runner_temp), "CARGO_CALLS": str(calls),
-        "REQUIRED_BINARIES": "iroha,iroha3d,iroha3d_private_settlement_routes,iroha3d_taira,iroha_test_runtime_provider_broker,kagami,koto",
+        "REQUIRED_BINARIES": "iroha,iroha3d,iroha3d_private_settlement_routes,iroha3d_taira,iroha_test_runtime_provider_broker,kagami,koto,sorafs_cli",
     }
     result = subprocess.run(["/bin/sh", "-c", command], cwd=workspace, env=environment,
                             capture_output=True, text=True, check=False)
@@ -246,13 +249,15 @@ def test_pre_build_stages_fresh_outputs_outside_restored_cargo_cache(tmp_path: P
     assert (output / "iroha3d_private_settlement_routes").read_bytes() == b"private-settlement-route-control:iroha3d"
     assert (output / "iroha3d_taira").read_bytes() == b"shipping:iroha3d_taira"
     assert (output / "iroha_test_runtime_provider_broker").read_bytes() == b"disposable-broker:iroha_test_runtime_provider_broker"
+    assert (output / "sorafs_cli").read_bytes() == b"sorafs-cli:sorafs_cli"
     invocations = calls.read_bytes()
-    assert len(invocations.splitlines()) == 3
+    assert len(invocations.splitlines()) == 4
     groups = {Path(args[args.index("--target-dir") + 1]).name: args
               for args in map(json.loads, invocations.splitlines())}
     assert "--features" not in groups["shipping"]
     assert groups["disposable-broker"][-2:] == ["--features", "irohad/test-network-disposable-broker"]
     assert groups["private-settlement-route-control"][-2:] == ["--features", "irohad/test-network-private-settlement-route-control"]
+    assert groups["sorafs-cli"][-2:] == ["--features", "sorafs_orchestrator/cli-orchestrator,sorafs_orchestrator/moderation-grpc"]
     assert stale.read_bytes() == b"previous candidate" and stale.stat().st_ino == stale_inode
     # Repeated publication and the old restored-cache destination both refuse
     # before Cargo; neither can overwrite the original binaries or reuse them.
@@ -1256,7 +1261,7 @@ def test_checked_in_external_binary_requirements_are_package_scoped() -> None:
     assert manifest.package_binaries == {
         "integration_tests": (
             "iroha", "iroha3d", "iroha3d_private_settlement_routes",
-            "iroha_test_runtime_provider_broker", "kagami",
+            "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
         ),
         "iroha_test_network": (
             "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
@@ -1585,7 +1590,7 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
     assert "irohad" in result.lane_packages["node"]
     assert result.binaries == (
         "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
-        "iroha_test_runtime_provider_broker", "kagami",
+        "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
     )
     network_rows = result.as_dict()["binary_matrix"]["include"]
     assert network_rows[0] == {"lane": "node", "packages": "iroha_test_network", "package_count": 1}
@@ -1593,7 +1598,7 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
     assert result.consumers["sora_parliament_lifecycle"]
 
 
-def test_integration_only_selection_requires_kagami_and_broker_without_taira(tmp_path: Path) -> None:
+def test_integration_only_selection_requires_its_tools_without_taira(tmp_path: Path) -> None:
     """Direct integration work builds its real external programs without widening to a launcher."""
     metadata, manifest = _real_owner_routing_fixture(tmp_path)
     result = rust_ci.classify_paths(
@@ -1602,7 +1607,7 @@ def test_integration_only_selection_requires_kagami_and_broker_without_taira(tmp
     )
     assert result.binaries == (
         "iroha", "iroha3d", "iroha3d_private_settlement_routes",
-        "iroha_test_runtime_provider_broker", "kagami",
+        "iroha_test_runtime_provider_broker", "kagami", "sorafs_cli",
     )
     _assert_complete_integration_shards(result.as_dict()["binary_matrix"]["include"])
 
@@ -1757,15 +1762,17 @@ def test_rust_ownership_still_precedes_non_prose_directory_ignores(tmp_path: Pat
     assert result.has_rust
 
 
-@pytest.mark.parametrize(("name", "binary", "feature", "group"), (
-    ("iroha3d_private_settlement_routes", "iroha3d",
-     "test-network-private-settlement-route-control", "private-settlement-route-control"),
-    ("iroha_test_runtime_provider_broker", "iroha_test_runtime_provider_broker",
-     "test-network-disposable-broker", "disposable-broker"),
+@pytest.mark.parametrize(("name", "package", "binary", "features", "group"), (
+    ("iroha3d_private_settlement_routes", "irohad", "iroha3d",
+     ("test-network-private-settlement-route-control",), "private-settlement-route-control"),
+    ("iroha_test_runtime_provider_broker", "irohad", "iroha_test_runtime_provider_broker",
+     ("test-network-disposable-broker",), "disposable-broker"),
+    ("sorafs_cli", "sorafs_orchestrator", "sorafs_cli",
+     ("cli-orchestrator", "moderation-grpc"), "sorafs-cli"),
 ))
 def test_isolated_only_union_does_not_build_shipping_daemon(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-    name: str, binary: str, feature: str, group: str,
+    name: str, package: str, binary: str, features: tuple[str, ...], group: str,
 ) -> None:
     """An isolated artifact never widens to a shipping build or another test feature."""
 
@@ -1781,7 +1788,8 @@ def test_isolated_only_union_does_not_build_shipping_daemon(
     assert calls == [[
         "cargo", "build", "--locked", "--release", "--target-dir",
         str(tmp_path / "target/ci-binaries" / group),
-        "-p", "irohad", "--bin", binary, "--features", "irohad/" + feature,
+        "-p", package, "--bin", binary, "--features",
+        ",".join(f"{package}/{feature}" for feature in features),
     ]]
     assert sorted(path.name for path in output.iterdir()) == [name]
     assert (output / name).read_bytes() == b"control only"
