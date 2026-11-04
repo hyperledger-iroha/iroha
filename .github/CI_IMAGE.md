@@ -23,9 +23,8 @@ the x86_64 and aarch64 package/version sets must match.
 Before promoting a candidate digest to `IROHA_CI_IMAGE`, the image owner must
 build and scan those exact Linux image bytes and run the repository's CI jobs
 against them. A recipe edit or successful digest preflight does not establish
-Linux runtime qualification. The historical May 2025 image is not represented
-as a current rebuilt image, and this change does not publish or select a new
-image on the owner's behalf.
+Linux runtime qualification. Changing the recipe does not itself qualify or
+select a rebuilt image.
 
 The image workflow passes the hosted runner's actual non-root UID/GID into the
 existing builder arguments. This keeps GitHub's mounted workspace and command
@@ -40,3 +39,26 @@ tools, filesystem custody tests and strict Clippy, primitive tests, and workspac
 formatting. These checks establish component/tooling evidence; full release and
 network qualification remain separate. Both jobs must pass before the owner
 selects the candidate, and the workflow never changes `IROHA_CI_IMAGE` itself.
+
+The final CI image contains Docker client tools only; the mounted host socket owns
+engine execution. Buildx 0.38.2 is rebuilt from its hash-pinned upstream archive
+with Go 1.27.3 and the reviewed module locks in `scripts/ci_image_buildx.go.*`.
+The locks update `golang.org/x/net` to 0.60.0 and `moby/go-archive` to 0.3.0.
+The adjacent test-only patch requires invalid IDNA input to be rejected under the
+updated library. The build runs upstream unit tests and retains the compiled
+module versions and package import graph in the image. Docker CLI and Compose
+come from an isolated Arch package stage; the engine and containerd never enter
+the final image.
+
+Scanning retains both raw and qualified JSON reports. The latter applies only a
+candidate-digest-bound VEX generated after checking the image's exact inventory:
+
+| Finding | Exact component | Evidence |
+| --- | --- | --- |
+| AVG-2901 / CVE-2025-6020 | Arch pam 1.7.3-1 | [Linux-PAM 1.7.1 fixed it](https://github.com/linux-pam/linux-pam/releases/tag/v1.7.1); [Arch's group](https://security.archlinux.org/AVG-2901) still has an unknown fixed version. |
+| AVG-2898 | Arch libxml2 2.15.4-1 | [2.14.5 fixed the Schematron and shell issues](https://raw.githubusercontent.com/GNOME/libxml2/v2.14.5/NEWS) collected by [Arch's group](https://security.archlinux.org/AVG-2898). |
+| GO-2026-4887 | Buildx's docker/docker 28.5.2 module | The retained compiled import graph must contain only `pkg/namesgenerator` from this module. The [vulnerable Engine AuthZ handler](https://github.com/moby/moby/security/advisories/GHSA-x744-4wpc-v9h2) is absent. |
+
+A package, toolchain or import change refuses VEX generation and requires renewed
+review. These statements do not waive vulnerable versions or apply to the host
+Docker engine. Unknown findings still face the unchanged high/critical gate.

@@ -1,0 +1,5 @@
+# The candidate-specific VEX is the only applicability input. Keep unknown fixes.
+ignore: []
+only-fixed: false
+only-notfixed: false
+vex-documents: []

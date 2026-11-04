@@ -1,5 +1,48 @@
 ARG IROHA_CI_BUILDER_IMAGE
 
+# CI uses the host engine through its mounted socket; retain only client tools.
+FROM ${IROHA_CI_BUILDER_IMAGE} AS docker-clients
+RUN pacman -Syu docker docker-compose --noconfirm --disable-download-timeout && \
+    install -d /out/licenses && \
+    cp /usr/bin/docker /out/docker && \
+    cp /usr/lib/docker/cli-plugins/docker-compose /out/docker-compose && \
+    cp -a /usr/share/licenses/docker-compose /out/licenses/ && \
+    pacman -Q > /out/docker-client-source-packages.txt
+
+FROM ${IROHA_CI_BUILDER_IMAGE} AS buildx
+RUN pacman -Syu ca-certificates curl git tar --noconfirm --disable-download-timeout
+RUN case "$(uname -m)" in \
+      x86_64) go_arch=amd64; go_sha=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40 ;; \
+      aarch64) go_arch=arm64; go_sha=a06e99309dbcbdca1a8ccd2282c3ee146e55930886e26b4f1193269587165f49 ;; \
+      *) exit 1 ;; \
+    esac && \
+    curl --fail --show-error --location --retry 3 "https://go.dev/dl/go1.27.3.linux-${go_arch}.tar.gz" --output /tmp/go.tar.gz && \
+    printf '%s  /tmp/go.tar.gz\n' "$go_sha" | sha256sum --check --strict && \
+    tar --extract --gzip --no-same-owner --file /tmp/go.tar.gz --directory /usr/local && \
+    rm /tmp/go.tar.gz
+ENV PATH=/usr/local/go/bin:$PATH GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS=-mod=readonly
+RUN curl --fail --show-error --location --retry 3 \
+      https://codeload.github.com/docker/buildx/tar.gz/refs/tags/v0.38.2 --output /tmp/buildx.tar.gz && \
+    printf '%s  /tmp/buildx.tar.gz\n' 1d20ca3cec6438b008eb6e0805c4842d4e27447690b4150df607790ca75629c0 | sha256sum --check --strict && \
+    mkdir /src && tar --extract --gzip --no-same-owner --strip-components=1 --file /tmp/buildx.tar.gz --directory /src && \
+    rm /tmp/buildx.tar.gz
+WORKDIR /src
+# Preserve upstream application code; update the two vulnerable dependencies.
+# The test patch requires rejection of the invalid IDNA input the old fixture accepted.
+COPY scripts/ci_image_buildx.go.mod /src/go.mod
+COPY scripts/ci_image_buildx.go.sum /src/go.sum
+COPY scripts/ci_image_buildx-tests.patch /tmp/buildx-tests.patch
+RUN git apply --check /tmp/buildx-tests.patch && git apply /tmp/buildx-tests.patch
+RUN mkdir /out && \
+    cp LICENSE /out/buildx-LICENSE && \
+    go mod verify && \
+    go list -deps ./cmd/buildx > /out/buildx-packages.txt && \
+    SKIP_INTEGRATION_TESTS=1 go test ./... && \
+    go build -trimpath -ldflags '-s -w -X github.com/docker/buildx/version.Version=v0.38.2-iroha.1 -X github.com/docker/buildx/version.Revision=v0.38.2-with-reviewed-module-lock' \
+      -o /out/docker-buildx ./cmd/buildx && \
+    go version -m /out/docker-buildx > /out/buildx-build-info.txt && \
+    /out/docker-buildx version
+
 FROM ${IROHA_CI_BUILDER_IMAGE}
 
 ENV RUSTUP_HOME=/usr/local/rustup \
@@ -13,10 +56,21 @@ ENV RUSTUP_HOME=/usr/local/rustup \
 ENV PATH=$POETRY_HOME/bin:$PATH
 
 RUN pacman -Syu rustup mold openssl libgit2 jq unzip curl ca-certificates tar bzip2 \
-    git docker docker-buildx docker-compose \
+    git \
     python python-pip --noconfirm --disable-download-timeout && \
     install -d /usr/local/share/iroha-ci && \
     pacman -Q > /usr/local/share/iroha-ci/arch-packages.txt
+COPY --from=docker-clients /out/licenses/ /usr/share/licenses/
+COPY --from=buildx /out/buildx-LICENSE /usr/share/licenses/docker-buildx/LICENSE
+COPY --from=docker-clients /out/docker /usr/bin/docker
+COPY --from=docker-clients /out/docker-compose /usr/lib/docker/cli-plugins/docker-compose
+COPY --from=docker-clients /out/docker-client-source-packages.txt /usr/local/share/iroha-ci/
+COPY --from=buildx /out/docker-buildx /usr/lib/docker/cli-plugins/docker-buildx
+COPY --from=buildx /out/buildx-packages.txt /out/buildx-build-info.txt /usr/local/share/iroha-ci/
+RUN docker --version && docker buildx version && docker compose version && \
+    ! command -v dockerd && ! command -v containerd && ! command -v ctr && \
+    groupadd --system docker
+
 RUN rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal \
     --component llvm-tools-preview --component clippy --component rust-src --component rustfmt && \
     rustup default "$RUSTUP_TOOLCHAIN"

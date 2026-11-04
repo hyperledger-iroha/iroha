@@ -68,6 +68,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Retain every raw finding before reviewed applicability checks
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          grype-version: v0.121.0
+          image: ${{ needs.dockerhub.outputs.image }}
+          fail-build: false
+          severity-cutoff: high
+          config: scripts/ci_image_grype.yaml
+          output-format: json
+          output-file: ci-image-vulnerabilities-raw.json
+          cache-db: true
+      - name: Bind reviewed findings to the candidate's retained inventory
+        env:
+          CANDIDATE_IMAGE: ${{ needs.dockerhub.outputs.image }}
+        run: |
+          set -euo pipefail
+          mkdir ci-image-evidence
+          candidate_container="$(docker create "$CANDIDATE_IMAGE" /bin/true)"
+          trap 'docker rm "$candidate_container" >/dev/null' EXIT
+          docker cp "$candidate_container:/usr/local/share/iroha-ci/." ci-image-evidence/
+          python3 -I -S scripts/ci_image_vex.py --image "$CANDIDATE_IMAGE" \
+            --evidence ci-image-evidence --output ci-image-vex.json
       - name: Reject high or critical known vulnerabilities
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
@@ -75,15 +100,21 @@ jobs:
           image: ${{ needs.dockerhub.outputs.image }}
           fail-build: true
           severity-cutoff: high
-          output-format: sarif
-          output-file: ci-image-vulnerabilities.sarif
+          config: scripts/ci_image_grype.yaml
+          vex: ci-image-vex.json
+          output-format: json
+          output-file: ci-image-vulnerabilities.json
           cache-db: true
       - name: Retain the candidate scan
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ci-image-scan-${{ github.run_id }}
-          path: ci-image-vulnerabilities.sarif
+          path: |
+            ci-image-vulnerabilities-raw.json
+            ci-image-vulnerabilities.json
+            ci-image-vex.json
+            ci-image-evidence
           if-no-files-found: error
 
   linux_components:
@@ -113,6 +144,12 @@ jobs:
           cargo fmt --version
           grcov --version
           poetry --version
+          docker --version
+          docker buildx version
+          docker compose version
+          ! command -v dockerd
+          ! command -v containerd
+          ! command -v ctr
           python3 -I -S -c 'import sys; assert sys.version_info[:2] == (3, 14)'
           /opt/poetry/bin/python -m pip check
       - name: Run repository filesystem custody checks
