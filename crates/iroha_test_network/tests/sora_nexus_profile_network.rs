@@ -49,6 +49,7 @@ use iroha_crypto::{ExposedPrivateKey, KeyPair, PublicKey};
 use iroha_data_model::{
     Level, NetworkId,
     account::{AccountId, address::ChainDiscriminantGuard},
+    block::consensus::RootFeePolicy,
     consensus::GlobalThresholdBeaconChainAnchorV1,
     isi::{InstructionBox, Log, consensus_keys::ApplyThresholdKeyLifecycleCertificateV1},
     parameter::system::{Parameters, SumeragiNposParameters},
@@ -283,6 +284,25 @@ fn taira_catalog_only(instruction: &Value, lanes: &BTreeSet<i64>) -> Result<bool
     Ok(false)
 }
 
+/// Read the explicitly committed gas receiver and require both root fee custody roles to agree.
+fn committed_fee_custody(parameters: &Parameters) -> Result<AccountId> {
+    let _discriminant = ChainDiscriminantGuard::enter(369);
+    let gas_parameter = "ivm_gas_tech_account_id".parse()?;
+    ensure!(
+        parameters.custom().get(&gas_parameter).is_some(),
+        "Kagami genesis omitted its committed gas custody account"
+    );
+    let committed = iroha_core::state::StateParameters::try_from(parameters.clone())?;
+    let custody = AccountId::parse_encoded(&committed.gas().tech_account_id)?;
+    let fees = RootFeePolicy::from_parameters(parameters)?
+        .ok_or_else(|| eyre!("Kagami genesis omitted its fee policy"))?;
+    ensure!(
+        fees.fee_sink_account_id == custody && fees.sponsor_vault_custody_account_id == custody,
+        "Kagami custody roles no longer share one account"
+    );
+    Ok(custody)
+}
+
 /// Re-target Kagami's Taira manifest to the profile (see the module documentation).
 fn profile_manifest(
     kagami: &Path,
@@ -358,6 +378,11 @@ fn profile_manifest(
     );
     let raw = RawGenesisTransaction::from_json_slice_at_path(&json::to_vec(&value)?, output)?
         .with_consensus_meta()?;
+    ensure!(
+        committed_fee_custody(&raw.effective_parameters()?)?
+            == AccountId::parse_encoded(profile_custody)?,
+        "profile manifest did not replace every committed fee custody role"
+    );
     fs::write(output, json::to_vec(&raw)?)?;
     Ok(())
 }
@@ -1078,16 +1103,11 @@ async fn four_peer_sora_nexus_qual_predealt_beacon_installs_without_restart() ->
         // 3. Re-target the manifest and sign it against the flattened profile render.
         let genesis_dir = root.join("genesis");
         owner_only_dir(&genesis_dir)?;
-        let kagami_custody = seats[0].text(&["pipeline", "gas", "tech_account_id"])?;
+        let kagami_custody = committed_fee_custody(
+            &RawGenesisTransaction::from_path(kagami_dir.join("genesis.json"))?.effective_parameters()?
+        )?.to_i105_for_discriminant(369)?;
         let profile_custody = protocol_custody_account(ProfileId::SoraNexusV1)
             .to_i105_for_discriminant(369)?;
-        ensure!(
-            iroha_data_model::block::consensus::RootFeePolicy::from_parameters(
-                &RawGenesisTransaction::from_path(kagami_dir.join("genesis.json"))?.effective_parameters()?
-            )?.ok_or_else(|| eyre!("Kagami genesis omitted its fee policy"))?
-                .fee_sink_account_id.to_i105_for_discriminant(369)? == kagami_custody,
-            "Kagami custody roles no longer share one account"
-        );
         profile_manifest(
             &kagami_dir,
             &genesis_dir.join("genesis.json"),
@@ -1445,4 +1465,51 @@ fn account_literal_encodes_for_the_profile_discriminant() {
     let custody = protocol_custody_account(ProfileId::SoraNexusV1);
     let literal = custody.to_i105_for_discriminant(369).unwrap();
     assert_eq!(AccountId::parse_encoded(&literal).unwrap(), custody);
+}
+
+#[test]
+fn committed_fee_custody_requires_explicit_matching_roles() {
+    use iroha_data_model::parameter::CustomParameter;
+    use iroha_primitives::json::Json;
+
+    let _discriminant = ChainDiscriminantGuard::enter(369);
+    let profile = Profile::compiled(PROFILE).unwrap();
+    let custody = protocol_custody_account(ProfileId::SoraNexusV1);
+    let gas_parameter = "ivm_gas_tech_account_id".parse().unwrap();
+    let mut parameters = Parameters::default();
+    parameters.custom.insert(CustomParameter::new(
+        gas_parameter,
+        Json::new(custody.to_string()),
+    ));
+    let gas_only = parameters.clone();
+    let fees = profile.genesis_recipe().root_fees.clone();
+    parameters
+        .custom
+        .insert(fees.clone().into_custom_parameter().unwrap());
+    assert_eq!(committed_fee_custody(&parameters).unwrap(), custody);
+
+    let mut missing_gas = Parameters::default();
+    missing_gas
+        .custom
+        .insert(fees.clone().into_custom_parameter().unwrap());
+    assert!(committed_fee_custody(&missing_gas).is_err());
+    assert!(committed_fee_custody(&gas_only).is_err());
+    let mut malformed_gas = parameters.clone();
+    malformed_gas.custom.insert(CustomParameter::new(
+        "ivm_gas_tech_account_id".parse().unwrap(),
+        Json::new("invalid account"),
+    ));
+    assert!(committed_fee_custody(&malformed_gas).is_err());
+    for change_sink in [true, false] {
+        let mut changed = parameters.clone();
+        let mut fees = fees.clone();
+        let other = protocol_custody_account(ProfileId::IrohaDevV1);
+        if change_sink {
+            fees.fee_sink_account_id = other;
+        } else {
+            fees.sponsor_vault_custody_account_id = other;
+        }
+        changed.custom.insert(fees.into_custom_parameter().unwrap());
+        assert!(committed_fee_custody(&changed).is_err());
+    }
 }
