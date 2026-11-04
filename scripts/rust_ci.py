@@ -166,11 +166,25 @@ class Classification:
                     if bool(self.package_binaries.get(package)) == requires_binaries
                 )
                 if selected:
-                    matrices[kind].append({
+                    row = {
                         "lane": lane,
                         "packages": ",".join(selected),
                         "package_count": len(selected),
-                    })
+                    }
+                    if kind == "binary" and "integration_tests" in selected:
+                        others = tuple(package for package in selected if package != "integration_tests")
+                        if others:
+                            matrices[kind].append({**row, "packages": ",".join(others), "package_count": len(others)})
+                        matrices[kind].append({
+                            "lane": lane + "-library", "packages": "integration_tests",
+                            "package_count": 1, "test_target": "library",
+                        })
+                        matrices[kind].extend({
+                            "lane": lane + "-" + target, "packages": "integration_tests",
+                            "package_count": 1, "test_target": target, "checks": "test",
+                        } for target in integration_test_targets())
+                    else:
+                        matrices[kind].append(row)
         return {
             "version": 2,
             "has_rust": self.has_rust,
@@ -910,15 +924,68 @@ def _supported_feature_args(
     return ["--features", ",".join(features)] if features else []
 
 
+def integration_test_targets(root: Path = ROOT) -> tuple[str, ...]:
+    """Enumerate every explicit integration harness selected by Cargo's default features."""
+
+    manifest = tomllib.loads((root / "integration_tests" / "Cargo.toml").read_text())
+    package = manifest["package"]
+    if package.get("autotests", True) or package.get("autobins", True):
+        raise ClassificationError("integration sharding requires explicit test and binary targets")
+    features = manifest.get("features", {})
+    enabled = {"default"}
+    while True:
+        discovered = {
+            item for name in enabled for item in features.get(name, ()) if item in features
+        }
+        if discovered <= enabled:
+            break
+        enabled.update(discovered)
+    # Fail closed if Cargo gains another default target that these scoped test
+    # commands would omit. Clippy still checks all declared targets separately.
+    directory = root / "integration_tests"
+    if (manifest.get("example") or manifest.get("bench")
+            or (directory / "examples").is_dir() or (directory / "benches").is_dir()):
+        raise ClassificationError("integration sharding requires explicit coverage for examples and benches")
+    for target in manifest.get("bin", ()):
+        required = target.get("required-features", ())
+        if not all(isinstance(feature, str) and feature in features for feature in required):
+            raise ClassificationError("unknown integration binary feature")
+        if set(required) <= enabled:
+            raise ClassificationError("integration sharding requires explicit coverage for enabled binaries")
+    names = []
+    declared = set()
+    for target in manifest.get("test", ()):
+        name = target.get("name", "")
+        if not name or not set(name) <= PACKAGE_NAME_CHARACTERS or name == "library":
+            raise ClassificationError("invalid explicit integration test target")
+        if name in declared:
+            raise ClassificationError("integration targets must be unique")
+        declared.add(name)
+        required = target.get("required-features", ())
+        if not all(isinstance(feature, str) and feature in features for feature in required):
+            raise ClassificationError(f"unknown integration target feature: {name}")
+        if set(required) <= enabled:
+            names.append(name)
+    if not names or len(names) != len(set(names)):
+        raise ClassificationError("integration targets must be nonempty and unique")
+    return tuple(sorted(names))
+
+
 def commands_for_checks(
     packages: Sequence[str], checks: Sequence[str],
     *, features_by_package: Mapping[str, Sequence[str]] | None = None,
     workspace: bool = False,
+    test_target: str | None = None,
 ) -> list[list[str]]:
     """Build locked, package-scoped Cargo validation commands."""
 
     if not packages:
         return []
+    if test_target and (
+        workspace or tuple(packages) != ("integration_tests",)
+        or test_target not in ("library", *integration_test_targets())
+    ):
+        raise ClassificationError("a scoped integration check requires one declared integration target")
     invalid_packages = [
         package
         for package in packages
@@ -964,9 +1031,16 @@ def commands_for_checks(
             ]
             test_features = (["--features", ",".join(selected_features)]
                              if selected_features else [])
-            commands.append(
-                ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
-            )
+            test = ["cargo", "test", "--locked", "--no-fail-fast", *test_features, *package_args]
+            if test_target == "library":
+                commands.extend([
+                    [*test, "--lib", "--", "--test-threads=1"],
+                    [*test, "--doc", "--", "--test-threads=1"],
+                ])
+            elif test_target:
+                commands.append([*test, "--test", test_target, "--", "--test-threads=1"])
+            else:
+                commands.append(test)
         elif check == "doc":
             commands.append(
                 [
@@ -993,6 +1067,7 @@ def run_checks(
     dry_run: bool = False,
     workspace: bool = False,
     local: bool = False,
+    test_target: str | None = None,
 ) -> None:
     """Execute locked checks, optionally reusing the local incremental build lane."""
 
@@ -1000,7 +1075,8 @@ def run_checks(
     if workspace:
         packages = tuple(sorted(inventory))
     commands = commands_for_checks(
-        packages, checks, features_by_package=inventory, workspace=workspace
+        packages, checks, features_by_package=inventory, workspace=workspace,
+        test_target=test_target,
     )
     if not commands:
         print("No affected Rust packages; Cargo validation is not required.")
@@ -1211,6 +1287,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--local", action="store_true",
         help="use cargo_fast with stable development metadata and incremental reuse",
     )
+    run.add_argument(
+        "--test-target", default="",
+        help="one declared integration harness, or library for unit tests and doctests",
+    )
     binaries = subparsers.add_parser(
         "build-binaries", help="build selected binaries with their declared feature isolation"
     )
@@ -1254,6 +1334,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 workspace=args.workspace,
                 local=args.local,
+                **({"test_target": args.test_target} if args.test_target else {}),
             )
         elif args.command == "build-binaries":
             build_binaries(_parse_packages(args.binaries), args.output_dir)

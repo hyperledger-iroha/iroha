@@ -1540,10 +1540,9 @@ def test_mixed_foundation_and_network_changes_select_complete_artifact_union(tmp
         "iroha", "iroha3d", "iroha3d_private_settlement_routes", "iroha3d_taira",
         "iroha_test_runtime_provider_broker", "kagami",
     )
-    assert result.as_dict()["binary_matrix"]["include"] == [
-        {"lane": "node", "packages": "iroha_test_network", "package_count": 1},
-        {"lane": "integration", "packages": "integration_tests", "package_count": 1},
-    ]
+    network_rows = result.as_dict()["binary_matrix"]["include"]
+    assert network_rows[0] == {"lane": "node", "packages": "iroha_test_network", "package_count": 1}
+    _assert_complete_integration_shards(network_rows[1:])
     assert result.consumers["sora_parliament_lifecycle"]
 
 
@@ -1558,9 +1557,7 @@ def test_integration_only_selection_requires_kagami_and_broker_without_taira(tmp
         "iroha", "iroha3d", "iroha3d_private_settlement_routes",
         "iroha_test_runtime_provider_broker", "kagami",
     )
-    assert result.as_dict()["binary_matrix"]["include"] == [
-        {"lane": "integration", "packages": "integration_tests", "package_count": 1},
-    ]
+    _assert_complete_integration_shards(result.as_dict()["binary_matrix"]["include"])
 
 
 def test_foundation_and_direct_python_input_retains_python_network_consumer(tmp_path: Path) -> None:
@@ -2063,3 +2060,97 @@ def test_default_base_prefers_the_configured_branch_then_falls_back(tmp_path: Pa
     assert rust_ci.default_base(tmp_path) == "origin/main"
     git("update-ref", "refs/remotes/origin/next", "HEAD")
     assert rust_ci.default_base(tmp_path) == "origin/next"
+
+
+INTEGRATION_TARGETS = {
+    "consensus_and_da", "core_api", "events_and_triggers", "network_functional",
+    "nexus_and_streaming", "queries_and_proofs", "sccp_lanes", "sumeragi",
+    "sumeragi_lanes", "sumeragi_npos_committee_transition", "torii_load_profile",
+}
+
+
+def _assert_complete_integration_shards(rows) -> None:
+    assert len(rows) == len(INTEGRATION_TARGETS) + 1
+    assert {row["test_target"] for row in rows} == INTEGRATION_TARGETS | {"library"}
+    assert len({row["lane"] for row in rows}) == len(rows)
+    for row in rows:
+        assert row["packages"] == "integration_tests" and row["package_count"] == 1
+        assert row.get("checks", "clippy,build,test,doc") == (
+            "clippy,build,test,doc" if row["test_target"] == "library" else "test"
+        )
+
+
+def test_integration_shards_cover_every_default_cargo_target_and_unit_doctest() -> None:
+    """Splitting runtime jobs retains the entire previous default test selection."""
+    assert set(rust_ci.integration_test_targets()) == INTEGRATION_TARGETS
+    manifest = rust_ci.tomllib.loads((ROOT / "integration_tests/Cargo.toml").read_text())
+    deferred = {target["name"] for target in manifest["test"]} - INTEGRATION_TARGETS
+    assert deferred == {"sora_parliament_lifecycle_smoke"}
+    assert "ci/check_sora_parliament_lifecycle.sh" in _workflow_job("sora_parliament_lifecycle")
+    assert "sora_parliament_lifecycle_smoke" in (ROOT / "ci/check_sora_parliament_lifecycle.sh").read_text()
+    commands = rust_ci.commands_for_checks(
+        ("integration_tests",), ("clippy", "build", "test", "doc"),
+        features_by_package={"integration_tests": ()}, test_target="library",
+    )
+    assert [command[1] for command in commands] == ["clippy", "build", "test", "test", "doc"]
+    assert "--all-targets" in commands[0] and commands[0][-3:] == ["--", "-D", "warnings"]
+    assert "--lib" in commands[2] and "--doc" in commands[3]
+    for target in INTEGRATION_TARGETS:
+        command, = rust_ci.commands_for_checks(("integration_tests",), ("test",), test_target=target)
+        assert command == ["cargo", "test", "--locked", "--no-fail-fast", "-p",
+                           "integration_tests", "--test", target, "--", "--test-threads=1"]
+        assert "--jobs" not in command
+    job = _workflow_job("rust_network")
+    assert '--test-target "${{ matrix.test_target }}"' in job
+    assert "timeout-minutes: 220" in job and "timeout-minutes: 240" in job
+    assert "Upload failed test-network artifacts" in job
+
+
+@pytest.mark.parametrize("packages,target,workspace", [
+    (("iroha_core",), "core_api", False),
+    (("integration_tests", "iroha_core"), "core_api", False),
+    (("integration_tests",), "nonexistent", False),
+    (("integration_tests",), "sora_parliament_lifecycle_smoke", False),
+    (("integration_tests",), "core_api;echo", False),
+    (("integration_tests",), "core_api", True),
+])
+def test_integration_target_refuses_wrong_owner_or_unselected_harness(packages, target, workspace) -> None:
+    with pytest.raises(rust_ci.ClassificationError, match="scoped integration check"):
+        rust_ci.commands_for_checks(packages, ("test",), test_target=target, workspace=workspace)
+
+
+def test_integration_inventory_adopts_new_defaults_and_refuses_implicit_targets(tmp_path: Path) -> None:
+    directory = tmp_path / "integration_tests"
+    directory.mkdir()
+    path = directory / "Cargo.toml"
+    source = '\n'.join([
+        '[package]', 'name = "integration_tests"', 'autotests = false', 'autobins = false',
+        '[features]', 'default = ["outer"]', 'outer = ["inner"]', 'inner = []', 'explicit = []',
+        '[[test]]', 'name = "new_default"', 'required-features = ["inner"]',
+        '[[test]]', 'name = "release_only"', 'required-features = ["explicit"]',
+    ])
+    path.write_text(source)
+    assert rust_ci.integration_test_targets(tmp_path) == ("new_default",)
+    for modified in (source.replace('autotests = false', 'autotests = true'),
+                     source + '\n[[test]]\nname = "new_default"\n',
+                     source.replace('required-features = ["inner"]', 'required-features = ["typo"]'),
+                     source + '\n[[bin]]\nname = "enabled"\n',
+                     source + '\n[[example]]\nname = "example"\n',
+                     source + '\n[[bench]]\nname = "benchmark"\n',
+                     source + '\n[[test]]\nname = "release_only"\nrequired-features = ["explicit"]\n'):
+        path.write_text(modified)
+        with pytest.raises(rust_ci.ClassificationError):
+            rust_ci.integration_test_targets(tmp_path)
+
+
+def test_scoped_integration_cli_preserves_command_and_failure_propagation(monkeypatch) -> None:
+    calls = []
+    monkeypatch.setattr(rust_ci, "workspace_check_features", lambda root: {"integration_tests": ()})
+    def child(command, **kwargs):
+        calls.append(command)
+        raise rust_ci.ClassificationError("deliberate actual child refusal")
+    monkeypatch.setattr(rust_ci, "_run", child)
+    assert rust_ci.main(["run", "--packages", "integration_tests", "--checks", "test",
+                        "--test-target", "core_api"]) == 2
+    assert calls == [["cargo", "test", "--locked", "--no-fail-fast", "-p", "integration_tests",
+                      "--test", "core_api", "--", "--test-threads=1"]]
