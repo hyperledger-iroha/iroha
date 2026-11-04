@@ -1,6 +1,7 @@
 //! Closed startup diagnostics shared by the main process owner and bounded background work.
 
 use super::readiness;
+use crate::managed::service_bootstrap::diagnostics;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +59,7 @@ impl Phase {
 pub(super) struct Progress {
     phase: AtomicU8,
     pub(super) readiness: readiness::Progress,
+    pub(super) bootstrap: std::sync::Arc<diagnostics::Progress>,
 }
 impl Progress {
     pub(super) fn enter(&self, phase: Phase) {
@@ -95,6 +97,11 @@ impl Progress {
         self.failure(Cause::Cancelled)
     }
     fn failure(&self, cause: Cause) -> Failure {
+        if self.phase() == Phase::Bootstrap
+            && let Some(snapshot) = self.bootstrap.snapshot()
+        {
+            return Failure::BootstrapProgress { cause, snapshot };
+        }
         Failure::Activation {
             phase: self.phase(),
             cause,
@@ -114,9 +121,18 @@ pub(super) enum Cause {
 pub(super) enum Failure {
     Readiness(readiness::Failure),
     ObservationExpired,
-    ValidatorExited { index: u8 },
+    ValidatorExited {
+        index: u8,
+    },
     Bootstrap(crate::managed::ManagedBootstrapFailure),
-    Activation { phase: Phase, cause: Cause },
+    Activation {
+        phase: Phase,
+        cause: Cause,
+    },
+    BootstrapProgress {
+        cause: Cause,
+        snapshot: diagnostics::Snapshot,
+    },
 }
 impl From<readiness::Failure> for Failure {
     fn from(value: readiness::Failure) -> Self {
@@ -133,6 +149,10 @@ impl Failure {
                 format!("a supervised validator exited; inspect its retained log peer{index}.log")
             }
             Self::ObservationExpired => "generated service readiness observation expired; fresh authenticated activation is required".into(),
+            Self::BootstrapProgress { cause, snapshot } => {
+                let prefix = Self::Activation { phase: Phase::Bootstrap, cause }.message();
+                format!("{prefix}; bootstrap observations:{}", snapshot.message())
+            }
             Self::Activation { phase, cause } => {
                 let cause = match cause {
                     Cause::Deadline => "startup deadline expired",
@@ -142,5 +162,51 @@ impl Failure {
                 format!("{cause} while {}", phase.description())
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bootstrap_deadline_carries_only_closed_observations() {
+        let progress = Progress::default();
+        progress.enter(Phase::Bootstrap);
+        assert_eq!(
+            progress.deadline(),
+            Failure::Activation {
+                phase: Phase::Bootstrap,
+                cause: Cause::Deadline
+            }
+        );
+        progress.bootstrap.parent_begin(true);
+        progress
+            .bootstrap
+            .parent_finish::<()>(&Err(crate::managed::Error::Invalid(
+                "private endpoint/key/body".into(),
+            )));
+        let failure = progress.deadline();
+        assert!(matches!(
+            failure,
+            Failure::BootstrapProgress {
+                cause: Cause::Deadline,
+                ..
+            }
+        ));
+        let message = failure.message();
+        assert!(message.starts_with("startup deadline expired while recovering and advancing the original native service bootstrap"));
+        assert!(message.contains(
+            "parent=Advance/Parent,calls=1,attempts=1,outcome=Error,last_error=Some(Invalid)"
+        ));
+        assert!(!message.contains("private endpoint/key/body"));
+        progress.enter(Phase::Catalog);
+        assert_eq!(
+            progress.deadline(),
+            Failure::Activation {
+                phase: Phase::Catalog,
+                cause: Cause::Deadline
+            }
+        );
     }
 }

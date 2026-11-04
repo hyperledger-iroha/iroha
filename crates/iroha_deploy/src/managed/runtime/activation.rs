@@ -222,13 +222,25 @@ pub(super) fn initial(
     budget.progress.enter(Phase::Bootstrap);
     let bootstrap = loop {
         validate_gateways(prepared, &mut live, budget)?;
+        budget
+            .progress
+            .bootstrap
+            .parent_begin(authorization.is_some());
         let result = {
-            let mut parent = budget.call(|_| owner.open_original_bootstrap(prepared))?;
+            let mut parent = budget.call(|_| {
+                let result = owner.open_original_bootstrap(prepared);
+                if result.is_err() {
+                    budget.progress.bootstrap.parent_finish(&result);
+                }
+                result
+            })?;
+            parent.observe_startup(Arc::clone(&budget.progress.bootstrap));
             match &authorization {
                 Some(authorization) => parent.advance(authorization, budget.deadline()?),
                 None => parent.recover(budget.deadline()?),
             }
         };
+        budget.progress.bootstrap.parent_finish(&result);
         budget.check()?;
         validate_gateways(prepared, &mut live, budget)?;
         match result {

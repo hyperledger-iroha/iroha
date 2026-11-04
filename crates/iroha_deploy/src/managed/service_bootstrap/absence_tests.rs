@@ -59,6 +59,7 @@ impl Fixture {
         deadline: Instant,
     ) -> Result<Phase<ManagedTransactionFinality>> {
         Run {
+            diagnostics: None,
             authority: &self.authority,
             original: &self.original,
             deadline,
@@ -80,6 +81,7 @@ impl Fixture {
         deadline: Instant,
     ) -> Result<Phase<(ManagedTransactionFinality, ManagedTransactionFinality)>> {
         Run {
+            diagnostics: None,
             authority: &self.authority,
             original: &self.original,
             deadline,

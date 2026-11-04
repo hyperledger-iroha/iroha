@@ -89,10 +89,15 @@ macro_rules! open_child {
     }};
 }
 
-// Test-only observations stay in the original phase frame. Counters are thread-local;
+// Startup diagnostics borrow only closed outcomes. Existing test counters are thread-local;
 // the parallel branch never reports a parent-thread count as the aggregate worker count.
 macro_rules! observed_phase {
         ($run:expr, $call:expr, $stage:literal, $slot:expr) => {{
+            let diagnostic_stage = diagnostic_stage($stage);
+            if let Some(progress) = $run.diagnostics {
+                progress.begin(diagnostic_stage, $run.mode, $slot);
+            }
+            let observed_result = {
             #[cfg(not(test))]
             {
                 $call
@@ -129,8 +134,54 @@ macro_rules! observed_phase {
                 );
                 result
             }
+            };
+            if let Some(progress) = $run.diagnostics {
+                progress.finish(diagnostic_stage, $slot, diagnostic_outcome(&observed_result));
+            }
+            observed_result
         }};
     }
+
+fn diagnostic_stage(stage: &'static str) -> diagnostics::Stage {
+    match stage {
+        "reserve" => diagnostics::Stage::Reserve,
+        "custody" => diagnostics::Stage::Custody,
+        "account" => diagnostics::Stage::Account,
+        "funding" => diagnostics::Stage::Funding,
+        "ingest" => diagnostics::Stage::Ingest,
+        "gateway" => diagnostics::Stage::Gateway,
+        "reputation" => diagnostics::Stage::Reputation,
+        _ => diagnostics::Stage::Parent,
+    }
+}
+
+fn diagnostic_outcome<T>(result: &Result<Phase<T>>) -> diagnostics::Outcome {
+    use crate::managed::provider_funding::FundingStep;
+    use diagnostics::Outcome;
+    match result {
+        Ok(Phase::Complete(_)) => Outcome::Complete,
+        Err(error) => Outcome::Error(diagnostics::ErrorClass::of(error)),
+        Ok(Phase::Incomplete(Incomplete::Pending { status, .. })) => Outcome::Pending(*status),
+        Ok(Phase::Incomplete(Incomplete::Funding { progress, .. })) => match progress.as_ref() {
+            ProviderFundingProgress::Unprepared { step, status } => {
+                Outcome::Funding(*step, *status)
+            }
+            ProviderFundingProgress::Request(value) => {
+                Outcome::Funding(FundingStep::Request, value.transaction_status)
+            }
+            ProviderFundingProgress::Approval(value) => {
+                Outcome::Funding(FundingStep::Approval, value.transaction_status)
+            }
+            ProviderFundingProgress::Credit(value) => {
+                Outcome::Funding(FundingStep::Credit, value.transaction_status)
+            }
+            ProviderFundingProgress::Capacity(value) => {
+                Outcome::Funding(FundingStep::Capacity, value.transaction_status)
+            }
+            ProviderFundingProgress::Complete { .. } => Outcome::Complete,
+        },
+    }
+}
 
 struct Run<'a> {
     authority: &'a ServiceAuthority,
@@ -139,6 +190,7 @@ struct Run<'a> {
     mode: Mode,
     authorization: Option<&'a GeneratedBootstrapAuthorization>,
     checkpoint_import_scope: Option<CheckpointImportScope>,
+    diagnostics: Option<&'a diagnostics::Progress>,
 }
 
 /// Recover each provider frontier independently after reserve finality, retaining every
@@ -149,6 +201,7 @@ pub(super) fn run(
     deadline: Instant,
     mode: Mode,
     authorization: Option<&GeneratedBootstrapAuthorization>,
+    diagnostics: Option<&diagnostics::Progress>,
 ) -> Result<RunOutcome> {
     #[cfg(test)]
     test_passes::record(mode);
@@ -171,6 +224,7 @@ pub(super) fn run(
         mode,
         authorization,
         checkpoint_import_scope,
+        diagnostics,
     };
     // Preserve any enclosing counter owner. These guards retain only scalar previous values.
     #[cfg(test)]
@@ -918,3 +972,45 @@ mod original_profile_tests;
 #[cfg(test)]
 #[path = "creating_original_tests.rs"]
 mod creating_original_tests;
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    #[test]
+    fn phase_outcomes_keep_original_errors_and_pending_statuses() {
+        for (name, expected) in [
+            ("reserve", diagnostics::Stage::Reserve),
+            ("custody", diagnostics::Stage::Custody),
+            ("account", diagnostics::Stage::Account),
+            ("funding", diagnostics::Stage::Funding),
+            ("ingest", diagnostics::Stage::Ingest),
+            ("gateway", diagnostics::Stage::Gateway),
+            ("reputation", diagnostics::Stage::Reputation),
+        ] {
+            assert_eq!(diagnostic_stage(name), expected);
+        }
+        let original: Result<Phase<()>> = Err(crate::managed::Error::Invalid(
+            "original refusal retained".into(),
+        ));
+        assert_eq!(
+            diagnostic_outcome(&original),
+            diagnostics::Outcome::Error(diagnostics::ErrorClass::Invalid)
+        );
+        assert!(
+            matches!(original, Err(crate::managed::Error::Invalid(value)) if value == "original refusal retained")
+        );
+        let pending: Result<Phase<()>> = Ok(Phase::Incomplete(Incomplete::Pending {
+            step: ServiceBootstrapStep::ReservePolicy,
+            status: OperationStatus::Rejected,
+        }));
+        assert_eq!(
+            diagnostic_outcome(&pending),
+            diagnostics::Outcome::Pending(OperationStatus::Rejected)
+        );
+        assert_eq!(
+            diagnostic_outcome(&Ok(Phase::Complete(()))),
+            diagnostics::Outcome::Complete
+        );
+    }
+}

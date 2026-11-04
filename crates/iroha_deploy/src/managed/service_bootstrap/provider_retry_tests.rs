@@ -62,6 +62,7 @@ impl Fixture {
 
     fn run(&self, deadline: Instant) -> Run<'_> {
         Run {
+            diagnostics: None,
             authority: &self.owner.authority,
             original: &self.original,
             deadline,

@@ -26,6 +26,8 @@ const MAX_CARRIERS: usize = 29;
 #[path = "service_bootstrap/authorization.rs"]
 pub(super) mod authorization;
 pub(super) use authorization::GeneratedBootstrapAuthorization;
+#[path = "service_bootstrap/diagnostics.rs"]
+pub(super) mod diagnostics;
 #[path = "service_bootstrap/inventory.rs"]
 mod inventory;
 #[path = "service_bootstrap/phases.rs"]
@@ -345,7 +347,7 @@ impl ServiceBootstrapProgress {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
     Advance,
     Recover,
@@ -355,12 +357,18 @@ enum Mode {
 /// The private initial bootstrap does not accept caller-selected policy families or key roles.
 pub(super) struct ManagedServiceBootstrap {
     authority: ServiceAuthority,
+    diagnostics: Option<std::sync::Arc<diagnostics::Progress>>,
 }
 
 impl ManagedServiceBootstrap {
+    pub(super) fn observe_startup(&mut self, progress: std::sync::Arc<diagnostics::Progress>) {
+        self.diagnostics = Some(progress);
+    }
+
     pub(super) fn open(prepared: &PreparedLocalnet) -> Result<Self> {
         Ok(Self {
             authority: ServiceAuthority::open_network(prepared, NetworkPurpose::ServiceBootstrap)?,
+            diagnostics: None,
         })
     }
 
@@ -386,7 +394,12 @@ impl ManagedServiceBootstrap {
             NetworkPurpose::ServiceBootstrap,
             None,
         )
-        .map(|authority| authority.map(|authority| Self { authority }))
+        .map(|authority| {
+            authority.map(|authority| Self {
+                authority,
+                diagnostics: None,
+            })
+        })
     }
 
     pub(super) fn open_existing_in_runtime(
@@ -398,7 +411,12 @@ impl ManagedServiceBootstrap {
             NetworkPurpose::ServiceBootstrap,
             read,
         )
-        .map(|authority| authority.map(|authority| Self { authority }))
+        .map(|authority| {
+            authority.map(|authority| Self {
+                authority,
+                diagnostics: None,
+            })
+        })
     }
 
     /// A newly created worker alone calls this finite authorization producer. Existing worker
@@ -640,7 +658,14 @@ impl ManagedServiceBootstrap {
             .ok_or_else(|| invalid("original service bootstrap intent is absent"))?;
         authorization::validate_inventory(&directory, &original)?;
         // Keep the original directory and intent alive across every joined native child owner.
-        phases::run(&self.authority, &original, deadline, mode, authorization)
+        phases::run(
+            &self.authority,
+            &original,
+            deadline,
+            mode,
+            authorization,
+            self.diagnostics.as_deref(),
+        )
     }
 }
 
