@@ -83,19 +83,21 @@ fn guest_stack_top_is_an_exclusive_memory_boundary() {
 #[test]
 fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
     const IVM_SOURCE: &str = include_str!("../src/ivm.rs");
+    const DAEMON_SOURCE: &str = include_str!("../../irohad/src/main.rs");
     let sources = [
         include_str!("../src/lib.rs"),
         include_str!("../src/memory.rs"),
         IVM_SOURCE,
+        DAEMON_SOURCE,
     ];
     let forbidden = [
         "static GAS_TO_STACK_MULTIPLIER",
         "static DEFAULT_STACK_LIMIT",
         "static STACK_BUDGET_LIMIT",
         "pub fn gas_to_stack_multiplier",
-        "pub fn set_gas_to_stack_multiplier",
+        "set_gas_to_stack_multiplier(",
         "pub fn guest_stack_limit",
-        "pub fn set_guest_stack_limit",
+        "set_guest_stack_limit(",
         "Memory::default_stack_limit",
         "Memory::stack_budget_limit",
         "with_stack_budget_bytes",
@@ -104,7 +106,7 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
     for needle in forbidden {
         assert!(
             sources.iter().all(|source| !source.contains(needle)),
-            "production IVM source contains retired guest-stack control `{needle}`"
+            "production IVM or daemon source contains retired guest-stack control `{needle}`"
         );
     }
     assert!(
@@ -120,7 +122,6 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
         include_str!("../../iroha_config/src/parameters/actual.rs"),
         include_str!("../../iroha_config/src/parameters/defaults.rs"),
         include_str!("../../iroha_config/src/parameters/user.rs"),
-        include_str!("../../irohad/src/main.rs"),
     ];
     for retired_setting in [
         "guest_stack_bytes",
@@ -134,4 +135,8 @@ fn production_ivm_sources_have_no_mutable_guest_stack_policy() {
             "node configuration contains retired guest-stack setting `{retired_setting}`",
         );
     }
+    // The daemon reports the immutable guest policy through the telemetry schema;
+    // that field is an observation, while configuration fields above are controls.
+    assert!(DAEMON_SOURCE.contains("let guest_policy = ivm::IvmStackPolicy::V1;"));
+    assert!(DAEMON_SOURCE.contains("gas_to_stack_multiplier: guest_policy.bytes_per_gas()"));
 }
