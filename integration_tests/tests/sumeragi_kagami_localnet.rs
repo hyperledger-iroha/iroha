@@ -117,8 +117,12 @@ impl KagamiLocalnet {
                 .join("storage")
                 .join(format!("peer{idx}"))
                 .join("snapshot");
-            fs::create_dir_all(&snapshot_dir)
-                .wrap_err_with(|| format!("create snapshot dir {}", snapshot_dir.display()))?;
+            // Kura authenticates its empty root before the daemon creates snapshot storage.
+            // Precreating this child would make a fresh generated ledger non-pristine.
+            assert!(
+                !snapshot_dir.exists(),
+                "fresh localnet has no snapshot storage"
+            );
             let log_path = out_dir.join(format!("peer{idx}.log"));
             let log_file = fs::File::create(&log_path)
                 .wrap_err_with(|| format!("create log file {}", log_path.display()))?;

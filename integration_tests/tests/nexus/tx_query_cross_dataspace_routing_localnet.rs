@@ -139,9 +139,6 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
     }
 }
 fn localnet_builder() -> NetworkBuilder {
-    let gas_account_str = routing_probe_gas_account_id()
-        .canonical_i105()
-        .expect("canonical I105 gas account literal");
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
         .without_npos_genesis_bootstrap()
@@ -288,18 +285,6 @@ fn localnet_builder() -> NetworkBuilder {
                 .write(
                     ["nexus", "staking", "public_validator_mode"],
                     "stake_elected",
-                )
-                .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id_literal(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str.clone(),
                 )
                 .write(
                     ["nexus", "staking", "max_validators"],

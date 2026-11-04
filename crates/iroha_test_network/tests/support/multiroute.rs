@@ -183,7 +183,9 @@ fn route_multilane_genesis_post_topology_transactions(
                     Metadata::default(),
                     iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                        AssetId::new(stake_asset_id.clone(), gas_account_id.clone()),
+                        // The custom genesis factory authors Alice as staking custody.
+                        // The separate gas account is only a funded route probe.
+                        AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
                         Quantity::from(ROUTE_VALIDATOR_STAKE),
                     ),
                 )
@@ -288,10 +290,6 @@ pub(super) fn network_builder_with_genesis_transactions(
             TomlValue::Table(rule_bob),
         ]),
     );
-    let gas_account_str = route_bootstrap_gas_account_id()
-        .canonical_i105()
-        .expect("canonical I105 bootstrap gas account literal");
-    let stake_asset_id_literal = route_stake_asset_definition_id().to_string();
     let fee_asset_id_literal = route_fee_asset_definition_id().to_string();
     let npos = SumeragiNposParameters {
         max_validators: 4,
@@ -356,18 +354,6 @@ pub(super) fn network_builder_with_genesis_transactions(
                     TomlValue::Table(policy.clone()),
                 )
                 .write(
-                    ["nexus", "staking", "stake_asset_id"],
-                    stake_asset_id_literal.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "stake_escrow_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
-                    ["nexus", "staking", "slash_sink_account_id"],
-                    gas_account_str.clone(),
-                )
-                .write(
                     ["nexus", "staking", "restricted_validator_mode"],
                     "stake_elected",
                 )
@@ -401,6 +387,7 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
         Some(iroha_crypto::HashOf::new(policies))
     );
     let mut native_policies = Vec::new();
+    let mut staking_policies = Vec::new();
     for input in genesis.0.network_entrypoints() {
         let iroha_data_model::transaction::TransactionEntrypoint::External(tx) = input else {
             panic!("genesis must contain signed transactions");
@@ -420,8 +407,25 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
             if let Some(policy) = SumeragiLanePolicy::from_custom_parameter(custom) {
                 native_policies.push(policy.expect("canonical signed native policy"));
             }
+            if custom.id()
+                == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
+            {
+                staking_policies.push(
+                    iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(custom)
+                        .expect("canonical original signed staking policy"),
+                );
+            }
         }
     }
+    assert_eq!(
+        staking_policies,
+        vec![iroha_genesis::default_staking_policy(
+            route_stake_asset_definition_id(),
+            ALICE_ID.clone(),
+            ALICE_ID.clone(),
+        )],
+        "all validator monetary plans use the single signed staking authority"
+    );
     assert_eq!(
         native_policies.len(),
         1,
