@@ -10,7 +10,6 @@ use iroha::{
         prelude::*,
     },
 };
-use iroha_data_model::query::dsl::IntoPredicate as _;
 use iroha_data_model::{
     ValidationFail,
     query::error::{FindError, QueryExecutionFail},
@@ -409,15 +408,16 @@ async fn account_exists(client: &Client, account_id: &AccountId) -> Result<bool>
     let client = client.clone();
     let account_id = account_id.clone();
     read_on_dedicated_thread(move || {
-        let found = client
+        match client
             .client()
-            .query(FindAccounts)
-            .filter_with(|item| item.equals("id", account_id.clone()).into_predicate())
-            .execute_single_opt()?;
-        match found {
-            Some(account) if account.id() == &account_id => Ok(true),
-            Some(_) => Err(eyre!("exact account query returned a different account")),
-            None => Ok(false),
+            .query_single(FindAccountById::new(account_id.clone()))
+        {
+            Ok(account) if account.id() == &account_id => Ok(true),
+            Ok(_) => Err(eyre!("exact account query returned a different account")),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Account(missing),
+            )))) if missing == account_id => Ok(false),
+            Err(error) => Err(eyre!(error)),
         }
     })
     .await
@@ -430,20 +430,18 @@ async fn asset_definition_exists(
     let client = client.clone();
     let asset_definition_id = asset_definition_id.clone();
     read_on_dedicated_thread(move || {
-        let found = client
+        match client
             .client()
-            .query(FindAssetDefinitions)
-            .filter_with(|item| {
-                item.equals("id", asset_definition_id.clone())
-                    .into_predicate()
-            })
-            .execute_single_opt()?;
-        match found {
-            Some(definition) if definition.id() == &asset_definition_id => Ok(true),
-            Some(_) => Err(eyre!(
+            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
+        {
+            Ok(definition) if definition.id() == &asset_definition_id => Ok(true),
+            Ok(_) => Err(eyre!(
                 "exact definition query returned a different asset definition"
             )),
-            None => Ok(false),
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::AssetDefinition(missing),
+            )))) if missing == asset_definition_id => Ok(false),
+            Err(error) => Err(eyre!(error)),
         }
     })
     .await
@@ -467,7 +465,7 @@ async fn setup_ledger_for_sample(
                 asset_definition_id.clone(),
                 "threshold_escrow_asset".to_owned(),
                 iroha_data_model::asset::AssetBalancePolicy::Global,
-                None,
+                Some("wonderland".parse()?),
             ))
             .into(),
         );
@@ -526,8 +524,41 @@ fn threshold_state_paths() -> [&'static str; 9] {
         "is_refunded",
     ]
 }
-#[tokio::test]
-async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
+// Native genesis/configuration construction uses the same bounded host stack
+// as the four-validator contract corridor in contracts.rs. The default libtest
+// stack overflowed before this scenario could complete; the IVM limits and all
+// transaction deadlines remain those of the original scenario.
+fn run_native_escrow_test<F, Fut>(context: &'static str, scenario: F) -> Result<()>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<()>>,
+{
+    const NATIVE_TEST_STACK_BYTES: usize = 64 * 1024 * 1024;
+    let worker = std::thread::Builder::new()
+        .name(context.to_owned())
+        .stack_size(NATIVE_TEST_STACK_BYTES)
+        .spawn(move || {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(4)
+                .thread_stack_size(NATIVE_TEST_STACK_BYTES)
+                .enable_all()
+                .build()?;
+            runtime.block_on(scenario())
+        })?;
+    match worker.join() {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
+}
+
+#[test]
+fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
+    run_native_escrow_test(
+        stringify!(threshold_escrow_releases_when_fully_funded),
+        threshold_escrow_releases_when_fully_funded_impl,
+    )
+}
+async fn threshold_escrow_releases_when_fully_funded_impl() -> Result<()> {
     let register_permission: Permission = CanManageSmartContractCode.into();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -815,8 +846,14 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
     .await?;
     Ok(())
 }
-#[tokio::test]
-async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
+#[test]
+fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
+    run_native_escrow_test(
+        stringify!(threshold_escrow_refunds_when_unresolved),
+        threshold_escrow_refunds_when_unresolved_impl,
+    )
+}
+async fn threshold_escrow_refunds_when_unresolved_impl() -> Result<()> {
     let register_permission: Permission = CanManageSmartContractCode.into();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
