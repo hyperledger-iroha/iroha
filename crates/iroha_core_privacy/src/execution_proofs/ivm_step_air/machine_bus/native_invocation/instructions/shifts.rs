@@ -408,6 +408,10 @@ fn maximum_shift_profile_keeps_all_windows_and_small_stack_evaluation() {
     ));
     assert_eq!(native.instructions(), 64);
     std::thread::Builder::new()
+        .name(
+            stringify!(maximum_shift_profile_keeps_all_windows_and_small_stack_evaluation)
+                .to_owned(),
+        )
         .stack_size(256 * 1024)
         .spawn(move || {
             let held = budget.reserved_bytes();

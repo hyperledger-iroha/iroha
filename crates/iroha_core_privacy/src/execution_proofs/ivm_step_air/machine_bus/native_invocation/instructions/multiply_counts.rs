@@ -443,6 +443,10 @@ fn maximum_product_count_profile_retains_fixed_workspace_on_small_stack() {
     ));
     assert_eq!(native.instructions(), 64);
     std::thread::Builder::new()
+        .name(
+            stringify!(maximum_product_count_profile_retains_fixed_workspace_on_small_stack)
+                .to_owned(),
+        )
         .stack_size(256 * 1024)
         .spawn(move || {
             let held = budget.reserved_bytes();

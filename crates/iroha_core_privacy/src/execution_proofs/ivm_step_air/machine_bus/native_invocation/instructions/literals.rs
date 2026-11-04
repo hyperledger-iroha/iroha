@@ -165,6 +165,7 @@ fn maximum_load_profile_uses_the_same_bounded_stack_and_backing() {
         &[i64::cast_unsigned(i64::MIN)],
     ));
     std::thread::Builder::new()
+        .name(stringify!(maximum_load_profile_uses_the_same_bounded_stack_and_backing).to_owned())
         .stack_size(256 * 1024)
         .spawn(move || {
             let held = budget.reserved_bytes();

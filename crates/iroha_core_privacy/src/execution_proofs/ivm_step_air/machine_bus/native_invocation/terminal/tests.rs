@@ -306,6 +306,10 @@ fn terminal_stream_uses_bounded_stack_and_degree_two_for_all_original_fields() {
     assert_eq!(degree, 2);
     let (native, budget) = native(64, 0, 1000);
     std::thread::Builder::new()
+        .name(
+            stringify!(terminal_stream_uses_bounded_stack_and_degree_two_for_all_original_fields)
+                .to_owned(),
+        )
         .stack_size(256 * 1024)
         .spawn(move || {
             let terminal = Terminal::new(&native, &plan(&native), &budget).unwrap();

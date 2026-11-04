@@ -136,6 +136,7 @@ mod tests {
     #[test]
     fn construction_uses_bounded_stack_for_the_full_scan() {
         std::thread::Builder::new()
+            .name(stringify!(construction_uses_bounded_stack_for_the_full_scan).to_owned())
             .stack_size(256 * 1024)
             .spawn(|| {
                 let budget = AllocationBudget::new(Scan::BYTES);
