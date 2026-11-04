@@ -2,7 +2,9 @@
 """Enforce the Kotodama V1 Criterion regression budget.
 
 The gate compares every current compiler/runtime workload against Criterion's
-runner-local ``base`` samples captured from the clean reset anchor. Missing or
+runner-local ``base`` samples captured from the clean reset anchor. Typed queries
+use a separately attested dispatch-only driver; original setup, assertions and
+timed bodies remain bound to each clean revision. Missing or
 malformed samples fail closed. A workload fails when its median is more than
 five percent slower, and List sugar has an independent zero-slowdown check
 against its manual-loop counterpart. Candidate samples can never be captured
@@ -23,6 +25,7 @@ import hashlib
 import json
 import math
 import re
+import runpy
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -486,6 +489,7 @@ def write_evidence_report(
     candidate_revision: str,
     candidate_lock_sha256: str,
     confidence_bounds: Mapping[str, object],
+    query_drivers: Mapping[str, object],
 ) -> None:
     """Create one source- and sample-bound machine-readable gate receipt."""
 
@@ -498,6 +502,7 @@ def write_evidence_report(
         "schema": EVIDENCE_SCHEMA,
         "threshold": threshold,
         "confidence_bounds": confidence_bounds,
+        "derived_query_drivers": query_drivers,
         "benchmark_count": len(comparisons),
         "criterion_estimates_sha256": criterion_estimates_sha256(criterion_dir),
         "baseline": {
@@ -1350,6 +1355,8 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         ),
     )
     parser.add_argument("--threshold", type=float, default=MAX_REGRESSION)
+    parser.add_argument("--query-driver-root", type=Path,
+                        help="paired derived driver evidence; defaults beside Criterion output")
     parser.add_argument(
         "--candidate-root",
         type=Path,
@@ -1376,6 +1383,17 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def validate_query_drivers(
+    output: Path, baseline: Path, candidate: Path, expected_candidate: str
+) -> dict[str, object]:
+    """Require both fresh, dispatch-only driver receipts before qualification."""
+    driver = runpy.run_path(str(Path(__file__).with_name("kotodama_query_driver.py")))
+    try:
+        return driver["validate_pair"](output, baseline, candidate, expected_candidate)
+    except (ValueError, OSError, KeyError, RuntimeError) as error:
+        raise GateError(f"derived query driver evidence is invalid: {error}") from error
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
@@ -1393,6 +1411,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         validate_benchmark_policy()
         validate_baseline_provenance(args.baseline_root)
+        candidate_root = args.candidate_root or Path(__file__).resolve().parents[1]
+        query_drivers = validate_query_drivers(
+            args.query_driver_root or args.criterion_dir.parent / "kotodama-query-drivers",
+            args.baseline_root, candidate_root,
+            args.expected_candidate_commit or _git_head(candidate_root),
+        )
         current = read_current_samples(
             args.criterion_dir, REPRESENTATIVE_BENCHMARKS
         )
@@ -1421,6 +1445,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 candidate_revision=candidate_revision,
                 candidate_lock_sha256=candidate_lock_sha256,
                 confidence_bounds=confidence_bounds,
+                query_drivers=query_drivers,
             )
     except GateError as error:
         print(f"error: {error}", file=sys.stderr)

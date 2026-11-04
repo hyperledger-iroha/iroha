@@ -33,10 +33,12 @@ on:
       - "scripts/sorafs_javascript_native_cache.mjs"
       - "crates/irohad/src/soracloud_runtime.rs"
       - "scripts/check_kotodama_perf.py"
+      - "scripts/kotodama_query_driver.py"
       - "scripts/check_kotodama_docs.py"
       - "scripts/regenerate_kotodama_goldens.py"
       - "scripts/ivm_artifacts.tsv"
       - "pytests/scripts/check_kotodama_perf_test.py"
+      - "pytests/scripts/kotodama_query_driver_test.py"
       - "pytests/scripts/check_kotodama_docs_test.py"
       - "pytests/scripts/regenerate_kotodama_goldens_test.py"
       - "**/*.ko"
@@ -115,7 +117,9 @@ jobs:
         run: npm run test:native-provenance --prefix javascript/iroha_js
 
   representative-regression:
-    # Both immutable revisions are measured serially on this same hosted VM.
+    # Both revision-native runtimes are measured serially on this same hosted VM.
+    # Source checkouts remain immutable; typed queries use the separately
+    # attested main-dispatch-only driver described below.
     # Conservative median confidence bounds must establish the unchanged 5%
     # ceiling; noisy/inconclusive paired runs cannot qualify. List retains its
     # zero-slowdown median policy and reports interval overlap separately.
@@ -170,15 +174,20 @@ jobs:
 
       - name: Test regression checker
         working-directory: candidate
-        run: python3 pytests/scripts/check_kotodama_perf_test.py
+        run: |
+          python3 pytests/scripts/check_kotodama_perf_test.py
+          python3 pytests/scripts/kotodama_query_driver_test.py
 
       # Rust build caches may retain Criterion output from an older workflow
       # run. Performance evidence must be produced by this exact base/candidate
       # pair, so remove only the generated Criterion results before sampling.
       - name: Clear cached benchmark evidence
-        run: rm -rf "$CARGO_TARGET_DIR/criterion"
+        run: rm -rf "$CARGO_TARGET_DIR/criterion" "$CARGO_TARGET_DIR/kotodama-query-drivers"
 
-      # Benchmark sources are revision-native. The policy also requires the
+      # Runtime and original benchmark sources remain revision-native. Only the
+      # query driver main dispatch is derived outside both checkouts, with its
+      # original/derived bytes and fresh compiled artifact independently admitted.
+      # The policy also requires the
       # exact selected Git commit and the policy-pinned digest of that
       # revision's original Cargo.lock before any timing comparison.
       - name: Require authenticated baseline provenance
@@ -213,10 +222,14 @@ jobs:
         run: |
           # Retain the original benchmark warning policy, before shared setup.
           # Diagnostics stay visible; the immutable baseline is never patched.
+          # The separately identified query driver preserves all original timed bodies.
           unset CARGO_BUILD_WARNINGS
           cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline base
           cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline base
-          cargo bench --locked --jobs 1 -p iroha_core --features bench,iroha-core-tests --bench queries -- typed_core_query_ --save-baseline base
+          python3 ../candidate/scripts/kotodama_query_driver.py \
+            --revision-root . --candidate-root ../candidate \
+            --expected-candidate-commit "${{ github.sha }}" --label base \
+            --output "$CARGO_TARGET_DIR/kotodama-query-drivers/base"
 
       # Criterion writes a `new` sample even while saving the named `base`.
       # Delete those current slots so a benchmark omitted by the candidate
@@ -241,7 +254,10 @@ jobs:
           unset CARGO_BUILD_WARNINGS
           cargo bench --locked --jobs 1 -p ivm --bench bench_kotodama -- --save-baseline candidate
           cargo bench --locked --jobs 1 -p iroha_core --bench kotodama_runtime_cache -- --save-baseline candidate
-          cargo bench --locked --jobs 1 -p iroha_core --features bench,iroha-core-tests --bench queries -- typed_core_query_ --save-baseline candidate
+          python3 scripts/kotodama_query_driver.py \
+            --revision-root . --candidate-root . \
+            --expected-candidate-commit "${{ github.sha }}" --label candidate \
+            --output "$CARGO_TARGET_DIR/kotodama-query-drivers/candidate"
 
       - name: Enforce five-percent ceiling
         working-directory: candidate
@@ -253,6 +269,7 @@ jobs:
           mkdir -p "$evidence"
           python3 scripts/check_kotodama_perf.py \
             --criterion-dir ../target-kotodama-perf/criterion \
+            --query-driver-root ../target-kotodama-perf/kotodama-query-drivers \
             --baseline-root ../baseline \
             --candidate-root . \
             --expected-candidate-commit "${{ github.sha }}" \
@@ -293,11 +310,14 @@ jobs:
 
           target = Path(os.environ["CARGO_TARGET_DIR"])
           criterion = target / "criterion"
+          drivers = target / "kotodama-query-drivers"
           evidence = target / "kotodama-perf-evidence"
           if criterion.is_symlink() or not criterion.is_dir():
               raise SystemExit("Criterion evidence directory is absent or a symlink")
           if evidence.is_symlink() or not evidence.is_dir():
               raise SystemExit("performance evidence directory is absent or a symlink")
+          if drivers.is_symlink() or not drivers.is_dir():
+              raise SystemExit("derived query driver directory is absent or a symlink")
           workflow = {
               "schema": "iroha.kotodama.performance.workflow.v1",
               "candidate_sha": os.environ["CANDIDATE_SHA"],
@@ -324,7 +344,8 @@ jobs:
           )
           manifest = evidence / "SHA256SUMS"
           entries = []
-          for label, root in (("criterion", criterion), ("evidence", evidence)):
+          for label, root in (("criterion", criterion), ("evidence", evidence),
+                              ("derived-query-drivers", drivers)):
               for path in sorted(root.rglob("*")):
                   if path == manifest:
                       continue
@@ -350,6 +371,7 @@ jobs:
           path: |
             target-kotodama-perf/criterion
             target-kotodama-perf/kotodama-perf-evidence
+            target-kotodama-perf/kotodama-query-drivers
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 90
@@ -385,5 +407,6 @@ jobs:
           path: |
             target-kotodama-perf/criterion
             target-kotodama-perf/kotodama-perf-evidence
+            target-kotodama-perf/kotodama-query-drivers
           if-no-files-found: warn
           retention-days: 14

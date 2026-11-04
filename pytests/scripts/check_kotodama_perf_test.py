@@ -84,7 +84,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         baseline = self.root / "baseline"
         with mock.patch.object(
             PERF, "validate_baseline_provenance"
-        ) as validate:
+        ) as validate, mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}):
             result = PERF.main(
                 [
                     "--criterion-dir",
@@ -153,6 +153,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         report = self.root / "report.json"
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(PERF, "validate_candidate_provenance") as candidate,
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()) as stderr,
@@ -873,6 +874,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
 
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(
                 PERF,
                 "validate_candidate_provenance",
@@ -917,6 +919,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
             report["baseline"]["cargo_lock_sha256"],
             PERF.BASELINE_CARGO_LOCK_SHA256,
         )
+        self.assertEqual(report["derived_query_drivers"], {"base": {}, "candidate": {}})
         self.assertEqual(report["candidate"]["revision"], candidate_revision)
         self.assertEqual(
             report["candidate"]["cargo_lock_sha256"], candidate_lock
@@ -929,6 +932,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         original = report_path.read_bytes()
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(
                 PERF,
                 "validate_candidate_provenance",
@@ -956,11 +960,33 @@ class KotodamaPerfGateTests(unittest.TestCase):
             )
         self.assertEqual(report_path.read_bytes(), original)
 
+    def test_missing_derived_driver_never_compares_or_qualifies_samples(self) -> None:
+        populate(self.root, "base")
+        populate(self.root, "new")
+        report = self.root / "report.json"
+        with (
+            mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "read_current_samples") as samples,
+            contextlib.redirect_stdout(io.StringIO()) as stdout,
+            contextlib.redirect_stderr(io.StringIO()) as stderr,
+        ):
+            result = PERF.main([
+                "--criterion-dir", str(self.root), "--baseline-root", str(self.root / "absent-base"),
+                "--candidate-root", str(ROOT), "--expected-candidate-commit", "c" * 40,
+                "--json-output", str(report),
+            ])
+        self.assertEqual(result, 1)
+        self.assertIn("derived query driver evidence is invalid", stderr.getvalue())
+        self.assertNotIn("benchmark | baseline ns", stdout.getvalue())
+        samples.assert_not_called()
+        self.assertFalse(report.exists())
+
     def test_evidence_arguments_are_all_or_nothing(self) -> None:
         populate(self.root, "base")
         populate(self.root, "new")
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()) as stderr,
         ):
@@ -985,6 +1011,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         report = evidence / "report.json"
         with (
             mock.patch.object(PERF, "validate_baseline_provenance"),
+            mock.patch.object(PERF, "validate_query_drivers", return_value={"base": {}, "candidate": {}}),
             mock.patch.object(
                 PERF, "validate_candidate_provenance"
             ) as validate_candidate,
@@ -1081,15 +1108,16 @@ class KotodamaPerfGateTests(unittest.TestCase):
         for revision in ("base", "candidate"):
             marker = f"      - name: Measure {revision} revision\n"
             step = workflow.split(marker, 1)[1].split("\n      - name:", 1)[0]
-            command = textwrap.dedent(step.split("        run: |\n", 1)[1])
+            command = textwrap.dedent(step.split("        run: |\n", 1)[1]).replace("${{ github.sha }}", "c" * 40)
             expected = [
                 ["bench", "--locked", "--jobs", "1", "-p", "ivm", "--bench",
                  "bench_kotodama", "--", "--save-baseline", revision],
                 ["bench", "--locked", "--jobs", "1", "-p", "iroha_core", "--bench",
                  "kotodama_runtime_cache", "--", "--save-baseline", revision],
-                ["bench", "--locked", "--jobs", "1", "-p", "iroha_core", "--features",
-                 "bench,iroha-core-tests", "--bench", "queries", "--", "typed_core_query_",
-                 "--save-baseline", revision],
+                ["../candidate/scripts/kotodama_query_driver.py" if revision == "base" else "scripts/kotodama_query_driver.py",
+                 "--revision-root", ".", "--candidate-root", "../candidate" if revision == "base" else ".",
+                 "--expected-candidate-commit", "c" * 40, "--label", revision,
+                 "--output", str(self.root / "target/kotodama-query-drivers" / revision)],
             ]
             for failure_at in (0, 1, 2, 3):
                 with self.subTest(revision=revision, failure_at=failure_at):
@@ -1114,6 +1142,12 @@ class KotodamaPerfGateTests(unittest.TestCase):
                         "raise SystemExit(23 if count + 1 == int(os.environ['TEST_FAIL_AT']) else 0)\n"
                     )
                     cargo.chmod(0o700)
+                    # The derived driver itself has executable/compiler controls
+                    # in kotodama_query_driver_test.py; here its shell invocation
+                    # must retain argv, environment and failure propagation.
+                    driver_python = bin_dir / "python3"
+                    driver_python.write_bytes(cargo.read_bytes())
+                    driver_python.chmod(0o700)
                     retained = {
                         "RUSTUP_TOOLCHAIN": "1.99.1", "CARGO_BUILD_JOBS": "1",
                         "CARGO_INCREMENTAL": "0", "CARGO_TARGET_DIR": str(self.root / "target"),
@@ -1285,11 +1319,9 @@ class KotodamaPerfGateTests(unittest.TestCase):
                 if line.strip().startswith("cargo bench ")
             )
         )
-        self.assertIn("--bench queries -- typed_core_query_", base_step)
-        self.assertIn(
-            "-p iroha_core --features bench,iroha-core-tests --bench queries",
-            base_step,
-        )
+        self.assertIn("python3 ../candidate/scripts/kotodama_query_driver.py", base_step)
+        self.assertIn("--label base", base_step)
+        self.assertIn("--revision-root . --candidate-root ../candidate", base_step)
 
         candidate_marker = "      - name: Measure candidate revision\n"
         self.assertEqual(workflow.count(candidate_marker), 1)
@@ -1306,11 +1338,9 @@ class KotodamaPerfGateTests(unittest.TestCase):
                 if line.strip().startswith("cargo bench ")
             )
         )
-        self.assertIn("--bench queries -- typed_core_query_", candidate_step)
-        self.assertIn(
-            "-p iroha_core --features bench,iroha-core-tests --bench queries",
-            candidate_step,
-        )
+        self.assertIn("python3 scripts/kotodama_query_driver.py", candidate_step)
+        self.assertIn("--label candidate", candidate_step)
+        self.assertIn("--revision-root . --candidate-root .", candidate_step)
         self.assertNotIn("KOTODAMA_BASE_FILTER", workflow)
 
         enforcement_marker = "      - name: Enforce five-percent ceiling\n"
