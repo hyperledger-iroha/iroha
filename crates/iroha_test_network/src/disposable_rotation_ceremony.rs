@@ -23,7 +23,7 @@ use iroha_data_model::{
 use iroha_fs::ProcessStdio as Stdio;
 use norito::derive::JsonSerialize;
 #[cfg(test)]
-use std::os::fd::{AsFd as _, BorrowedFd};
+use std::os::fd::BorrowedFd;
 use std::{
     os::unix::fs::{MetadataExt as _, OpenOptionsExt as _},
     time::Instant,
