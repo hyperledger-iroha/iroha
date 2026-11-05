@@ -29,8 +29,8 @@ use iroha_data_model::{
     privacy::{
         JindoLimitsV1, PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
         PrivacyCompiledProfileUnavailableReasonV1, PrivacyExact12CapabilityManifestV1,
-        PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProofEnvelopeV1,
-        PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
+        PrivacyProofEnvelopeV1, PrivacyProtocolLimitsUpdateV1, PrivacyProtocolPolicyV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
         privacy_exact12_fixture_bundle_v1,
     },
     transaction::{
@@ -497,7 +497,7 @@ fn unavailable_fixture_transactions_preserve_native_admission_boundaries() -> Re
             .find(|row| row.protocol_id == protocol_id)
             .expect("exact12 fixture includes every protocol");
         let envelope: PrivacyRuntimeProofEnvelopeV1 =
-            norito::decode_from_bytes(&row.envelope_norito)?;
+            norito::decode_from_bytes::<PrivacyProofEnvelopeV1>(&row.envelope_norito)?.into();
         let network_id = envelope.statement.context().network_id;
         let mut builder = TransactionBuilder::new(network_id, ALICE_ID.clone(), no_fee())
             .with_instructions([SubmitPrivacyProofV1::new(
@@ -756,12 +756,14 @@ async fn all_unreleased_profiles_fail_closed_across_four_peer_restart_impl() -> 
                     )
                 })?;
             let envelope: PrivacyRuntimeProofEnvelopeV1 =
-                norito::decode_from_bytes(&fixture_row.envelope_norito).wrap_err_with(|| {
-                    format!(
-                        "decode canonical `{}` fixture envelope",
-                        protocol_id.canonical_label()
-                    )
-                })?;
+                norito::decode_from_bytes::<PrivacyProofEnvelopeV1>(&fixture_row.envelope_norito)
+                    .wrap_err_with(|| {
+                        format!(
+                            "decode canonical `{}` fixture envelope",
+                            protocol_id.canonical_label()
+                        )
+                    })?
+                    .into();
             let action = unavailable_protocol_transaction(&client, envelope).await?;
             let action_error = submit_signed_transaction(
                 &client,
