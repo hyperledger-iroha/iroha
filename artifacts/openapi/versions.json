@@ -2,33 +2,33 @@
   "versions": [
     "current"
   ],
-  "generatedAt": "2026-11-04T14:35:21.000Z",
+  "generatedAt": "2026-11-05T15:30:00.000Z",
   "entries": [
     {
       "label": "latest",
       "path": "torii.json",
-      "bytes": 4242579,
-      "sha256": "61c443ef5bc763d6cee5bc29dc96866ddb2589dc6b607e23064ef435714ca77e",
-      "blake3": "aa541db1435fa993e3fef391f4e4e8925cd81c539785fbf7fea878c27fd4d991",
+      "bytes": 4263701,
+      "sha256": "4ff606134462bc1e75d45d1a9bc9867bb254394052c143956f161de01ca61364",
+      "blake3": "88bd38043cd8d211a07a8d945ee1864e0d37b6245cf058756384f2b56b02f429",
       "signed": false,
       "manifestPath": "manifest.json",
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
       "signatureHex": null,
-      "updatedAt": "2026-11-04T14:35:21.000Z"
+      "updatedAt": "2026-11-05T15:30:00.000Z"
     },
     {
       "label": "current",
       "path": "versions/current/torii.json",
-      "bytes": 4242579,
-      "sha256": "61c443ef5bc763d6cee5bc29dc96866ddb2589dc6b607e23064ef435714ca77e",
-      "blake3": "aa541db1435fa993e3fef391f4e4e8925cd81c539785fbf7fea878c27fd4d991",
+      "bytes": 4263701,
+      "sha256": "4ff606134462bc1e75d45d1a9bc9867bb254394052c143956f161de01ca61364",
+      "blake3": "88bd38043cd8d211a07a8d945ee1864e0d37b6245cf058756384f2b56b02f429",
       "signed": false,
       "manifestPath": "versions/current/manifest.json",
       "signatureAlgorithm": null,
       "signaturePublicKeyHex": null,
       "signatureHex": null,
-      "updatedAt": "2026-11-04T14:35:21.000Z"
+      "updatedAt": "2026-11-05T15:30:00.000Z"
     }
   ]
 }
