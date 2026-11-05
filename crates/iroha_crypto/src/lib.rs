@@ -13,6 +13,7 @@ mod confidential;
 pub mod confidential_memo;
 /// Authenticated, process-local spooling for bounded confidential chunks.
 pub mod confidential_spool;
+mod decode_validation_cache;
 #[cfg(feature = "bls")]
 /// Verification primitives for drand BLS12-381 randomness beacons.
 pub mod drand;
