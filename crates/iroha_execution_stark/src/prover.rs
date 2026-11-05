@@ -41,13 +41,31 @@ struct Phases {
     enabled: bool,
     start: std::time::Instant,
     last: std::time::Instant,
-    last_cpu: f64,
+    last_cpu: Option<f64>,
 }
 
+#[cfg(unix)]
 #[allow(clippy::cast_precision_loss)] // diagnostics only; seconds and nanoseconds are small
-fn process_cpu_seconds() -> f64 {
+fn process_cpu_seconds() -> Option<f64> {
     let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
-    (t.tv_nsec as f64).mul_add(1e-9, t.tv_sec as f64)
+    if t.tv_sec < 0 || !(0..1_000_000_000).contains(&t.tv_nsec) {
+        return None;
+    }
+    Some((t.tv_nsec as f64).mul_add(1e-9, t.tv_sec as f64))
+}
+
+#[cfg(not(unix))]
+fn process_cpu_seconds() -> Option<f64> {
+    None
+}
+
+fn cpu_elapsed_label(previous: Option<f64>, current: Option<f64>) -> String {
+    match previous.zip(current) {
+        Some((previous, current)) if current >= previous => {
+            format!("{:>7.3} s", current - previous)
+        }
+        _ => "unavailable".to_owned(),
+    }
 }
 
 impl Phases {
@@ -58,7 +76,7 @@ impl Phases {
             enabled,
             start: now,
             last: now,
-            last_cpu: if enabled { process_cpu_seconds() } else { 0.0 },
+            last_cpu: if enabled { process_cpu_seconds() } else { None },
         }
     }
 
@@ -67,9 +85,9 @@ impl Phases {
             let now = std::time::Instant::now();
             let cpu = process_cpu_seconds();
             eprintln!(
-                "  {phase:<28} wall {:>7.3} s  cpu {:>7.3} s   (total wall {:>7.3} s)",
+                "  {phase:<28} wall {:>7.3} s  cpu {}   (total wall {:>7.3} s)",
                 (now - self.last).as_secs_f64(),
-                cpu - self.last_cpu,
+                cpu_elapsed_label(self.last_cpu, cpu),
                 (now - self.start).as_secs_f64()
             );
             self.last = now;
@@ -861,5 +879,32 @@ mod hash_binding_tests {
         let mut bounded = circuit;
         bounded.registers[0].hi += 1;
         assert_ne!(circuit_id(&bounded), digest);
+    }
+}
+
+#[cfg(test)]
+mod timing_tests {
+    use super::*;
+
+    #[test]
+    fn missing_cpu_samples_are_unavailable_without_elapsed_subtraction() {
+        for (previous, current) in [(None, None), (Some(1.0), None), (None, Some(2.0))] {
+            assert_eq!(cpu_elapsed_label(previous, current), "unavailable");
+        }
+        assert_eq!(cpu_elapsed_label(Some(2.0), Some(1.0)), "unavailable");
+    }
+
+    #[test]
+    fn measured_cpu_zero_and_elapsed_time_remain_distinct_from_unavailable() {
+        assert_eq!(cpu_elapsed_label(Some(1.0), Some(1.0)), "  0.000 s");
+        assert_eq!(cpu_elapsed_label(Some(1.25), Some(2.75)), "  1.500 s");
+    }
+
+    #[test]
+    fn cpu_sample_reports_native_platform_availability() {
+        #[cfg(unix)]
+        assert!(process_cpu_seconds().is_some_and(|seconds| seconds.is_finite() && seconds >= 0.0));
+        #[cfg(not(unix))]
+        assert_eq!(process_cpu_seconds(), None);
     }
 }

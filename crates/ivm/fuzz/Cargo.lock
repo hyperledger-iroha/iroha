@@ -1036,7 +1036,6 @@ dependencies = [
  "num-traits",
  "pairing",
  "pastey",
- "plonky2_maybe_rayon",
  "rand_core 0.6.4",
  "sha2 0.10.9",
  "static_assertions",
@@ -1273,9 +1272,6 @@ version = "2.0.0-rc.2.0"
 [[package]]
 name = "iroha_audio"
 version = "2.0.0-rc.2.0"
-dependencies = [
- "thiserror",
-]
 
 [[package]]
 name = "iroha_crypto"
@@ -1293,13 +1289,10 @@ dependencies = [
  "chacha20poly1305",
  "crypto-bigint",
  "curve25519-dalek",
- "derive_more",
  "digest 0.11.3",
- "displaydoc",
  "ed25519-dalek",
  "elliptic-curve",
  "fastpq_isi",
- "getset",
  "group 0.13.0",
  "hex",
  "hex-literal",
@@ -1445,8 +1438,6 @@ dependencies = [
 name = "iroha_model_base"
 version = "2.0.0-rc.2.0"
 dependencies = [
- "derive_more",
- "getset",
  "icu_normalizer",
  "idna",
  "iroha_allocation",
@@ -1456,7 +1447,6 @@ dependencies = [
  "iroha_schema",
  "norito",
  "sha2 0.11.1",
- "thiserror",
 ]
 
 [[package]]
@@ -1494,8 +1484,6 @@ name = "iroha_primitives"
 version = "2.0.0-rc.2.0"
 dependencies = [
  "blake3",
- "derive_more",
- "displaydoc",
  "iroha_allocation",
  "iroha_macro",
  "iroha_primitives_derive",
@@ -1555,7 +1543,6 @@ version = "2.0.0-rc.2.0"
 dependencies = [
  "iroha_macro",
  "norito",
- "thiserror",
 ]
 
 [[package]]
@@ -2168,12 +2155,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
-name = "plonky2_maybe_rayon"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9e1e554181dc95243b8d9948ae7bae5759c7fb2502fed28f671f95ef38079406"
-
-[[package]]
 name = "poly1305"
 version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2703,7 +2684,6 @@ name = "sorafs_chunker"
 version = "0.1.0"
 dependencies = [
  "blake3",
- "hex",
  "iroha_crypto",
  "norito",
  "sha3 0.12.0",

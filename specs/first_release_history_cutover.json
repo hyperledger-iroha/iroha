@@ -30,6 +30,10 @@
   ],
   "test_only_version_impls": [
     {
+      "type": "Payload",
+      "path": "crates/iroha_version/src/error_tests.rs"
+    },
+    {
       "type": "ExactPayload",
       "path": "crates/iroha_version/src/lib.rs"
     },

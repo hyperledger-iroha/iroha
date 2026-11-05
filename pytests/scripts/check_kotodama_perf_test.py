@@ -1051,6 +1051,14 @@ class KotodamaPerfGateTests(unittest.TestCase):
         ):
             PERF.criterion_estimates_sha256(self.root)
 
+    def test_candidate_lock_policy_matches_the_current_source_lock(self) -> None:
+        """Catch a stale candidate pin before CI starts benchmark preparation."""
+
+        self.assertEqual(
+            PERF.CANDIDATE_CARGO_LOCK_SHA256,
+            hashlib.sha256((ROOT / "Cargo.lock").read_bytes()).hexdigest(),
+        )
+
     def test_candidate_provenance_requires_exact_clean_revision(self) -> None:
         candidate = self.root / "candidate"
         candidate.mkdir()
@@ -1397,16 +1405,27 @@ class KotodamaPerfGateTests(unittest.TestCase):
         self.assertIn("scripts/regenerate_kotodama_goldens.py", release_gate)
         self.assertIn("--check", release_gate)
         self.assertIn(
-            "--koto ../target-kotodama-perf/debug/koto", release_gate
+            '--koto "$RUNNER_TEMP/kotodama-artifact-tools/koto"', release_gate
         )
         self.assertIn(
-            "--admission-tool ../target-kotodama-perf/debug/ivm_artifact_admit", release_gate
+            '--admission-tool "$RUNNER_TEMP/kotodama-artifact-tools/ivm_artifact_admit"',
+            release_gate,
         )
         self.assertNotIn("--skip-runtime-manifest-check", release_gate)
         self.assertNotIn("--skip-contract-tests", release_gate)
 
         build_marker = "      - name: Build canonical Kotodama release tools\n"
         self.assertEqual(workflow.count(build_marker), 1)
+        stage_marker = "      - name: Stage private single-link Kotodama tools\n"
+        self.assertEqual(workflow.count(stage_marker), 1)
+        stage_step = workflow.split(stage_marker, 1)[1].split(
+            "\n      - name:", 1
+        )[0]
+        self.assertIn("scripts/stage_kotodama_artifact_tools.py", stage_step)
+        self.assertIn('--build-directory "$CARGO_TARGET_DIR/debug"', stage_step)
+        self.assertIn('--output "$RUNNER_TEMP/kotodama-artifact-tools"', stage_step)
+        self.assertLess(workflow.index(build_marker), workflow.index(stage_marker))
+        self.assertLess(workflow.index(stage_marker), workflow.index(marker))
         self.assertLess(
             workflow.index(enforcement_marker), workflow.index(seal_marker)
         )
@@ -1425,7 +1444,7 @@ class KotodamaPerfGateTests(unittest.TestCase):
         )
         self.assertIn("python3 scripts/check_kotodama_docs.py", build_step)
         self.assertIn(
-            "--koto ../target-kotodama-perf/debug/koto", build_step
+            '--koto "$RUNNER_TEMP/kotodama-artifact-tools/koto"', build_step
         )
         self.assertIn("bash scripts/check_no_legacy_codec.sh", workflow)
         self.assertIn("npm test --prefix javascript/iroha_js", workflow)

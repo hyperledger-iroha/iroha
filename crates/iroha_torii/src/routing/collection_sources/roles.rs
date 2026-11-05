@@ -337,9 +337,29 @@ mod complete_role_controls {
         let mut limits = collection_limits();
         limits.max_scanned_rows = 1;
         let target = CollectionTarget::AccountRoles(owner.to_string());
-        let error = run(&state, &target, &ListQuery::new(), &limits).unwrap_err();
+        // Counting scans the entire collection; ordinary ordered reads instead
+        // stop at their page scan budget and expose a bounded continuation.
+        let counted = ListQuery::new().include_total();
+        let error = run(&state, &target, &counted, &limits).unwrap_err();
         assert!(
             matches!(error, Error::CollectionQuery(error) if error.code == "query_scan_limit_exceeded")
         );
+        limits.max_scanned_rows = 3;
+        limits.ordered_page_scan_budget = 1;
+        let page = run(&state, &target, &counted, &limits).unwrap();
+        assert_eq!(page.items.len(), 3);
+        assert_eq!(page.total, Some(3));
+        assert!(page.next_cursor.is_none());
+
+        let query = ListQuery::new();
+        let first = run(&state, &target, &query, &limits).unwrap();
+        assert_eq!(first.items.len(), 1);
+        assert_eq!(first.items[0]["id"].as_str(), Some("alpha"));
+        assert_eq!(first.total, None);
+        let next = query.cursor(first.next_cursor.expect("bounded page continuation"));
+        let second = run(&state, &target, &next, &limits).unwrap();
+        assert_eq!(second.items.len(), 1);
+        assert_eq!(second.items[0]["id"].as_str(), Some("bravo"));
+        assert!(second.next_cursor.is_some());
     }
 }
