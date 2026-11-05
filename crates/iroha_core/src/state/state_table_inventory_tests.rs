@@ -10037,9 +10037,16 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
             );
         }
     }
+    // The linked registration verifier prepares candidate-only borrowed values.
+    // It does not open ballot execution or create an authoritative ballot State owner.
     assert!(
-        !source("crates/iroha_core/Cargo.toml").contains("iroha_parliament_ballot"),
-        "the node depends on a ballot crate: review the anonymous-ballot tag classification"
+        !iroha_data_model::governance::anonymous_ballot::parliament_ballot_qualified_v1(),
+        "binding ballots remain unqualified"
+    );
+    assert_eq!(
+        crate::tx::anonymous_ballot_unavailable().reason(),
+        ivm::error::ExecutionDeferral::VerifierInitializationUnavailable,
+        "candidate registration preparation must not supply a ballot verifier"
     );
 }
 

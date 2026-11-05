@@ -24,6 +24,30 @@ fn limits() -> LifecycleJournalLimits {
     }
 }
 
+#[test]
+fn lifecycle_selected_frame_ceiling_preserves_smaller_output_bounds() {
+    const CEILING: u64 = 16 * 1024 * 1024;
+    let default_maximum = iroha_data_model::parameter::Parameters::default()
+        .block()
+        .execution_output()
+        .max_output_bytes;
+    for (maximum, expected) in [
+        (0, 0),
+        (1, 1),
+        (default_maximum, default_maximum),
+        (CEILING - 1, CEILING - 1),
+        (CEILING, CEILING),
+        (CEILING + 1, CEILING),
+        (u64::MAX, CEILING),
+    ] {
+        assert_eq!(
+            LifecycleJournalLimits::selected(maximum).total_frame_bytes,
+            usize::try_from(expected).unwrap(),
+            "selected lifecycle frame limit for {maximum} bytes"
+        );
+    }
+}
+
 fn insert(
     tx: &mut SetTransaction<'_>,
     name: &str,
@@ -1191,6 +1215,57 @@ fn lifecycle_large_ivm_action_retains_constant_size_invoke_and_repeat_evidence()
         tx.lifecycle_journal.as_ref().unwrap().frame_bytes,
         3 * iroha_data_model::block::execution_output::LIFECYCLE_HASH_FRAME_BYTES
     );
+}
+
+#[test]
+fn lifecycle_frame_budget_accepts_exact_retained_bytes_and_rejects_one_over() {
+    const FRAME_BYTES: usize =
+        iroha_data_model::block::execution_output::LIFECYCLE_HASH_FRAME_BYTES;
+    let exact = 3 * FRAME_BYTES;
+    for maximum in [exact, exact - 1] {
+        let set = Set::default();
+        let mut block = set.block();
+        let mut tx = block.transaction();
+        let id: TriggerId = "aggregate_frame_bound".parse().unwrap();
+        let action = SpecializedAction::new(
+            Executable::Ivm(IvmBytecode::from_compiled(vec![1; 350_000])),
+            Repeats::Exactly(2),
+            ALICE_ID.clone(),
+            ExecuteTriggerEventFilter::new(),
+        )
+        .unwrap();
+        assert!(
+            tx.add_by_call_trigger(SpecializedTrigger::new(id.clone(), action))
+                .unwrap()
+        );
+        let pool = AllocationBudget::new(32 * 1024 * 1024);
+        tx.enable_lifecycle_journal(
+            pool.clone(),
+            LifecycleJournalLimits::selected(u64::try_from(maximum).unwrap()),
+        )
+        .unwrap();
+        tx.lifecycle_invoke(&id, 0);
+        tx.mod_repeats(&id, |count| Ok(count - 1)).unwrap();
+        if maximum == exact {
+            assert!(tx.lifecycle_allows_apply(), "{:?}", tx.lifecycle_failure());
+            assert_eq!(tx.lifecycle_effects().len(), 2);
+            assert_eq!(tx.lifecycle_journal.as_ref().unwrap().frame_bytes, exact);
+        } else {
+            let refusal =
+                LifecycleJournalFailure::OutputLimit("lifecycle aggregate frame limit exceeded");
+            assert_eq!(tx.lifecycle_failure(), Some(refusal));
+            assert!(!tx.lifecycle_allows_apply());
+            assert_eq!(tx.lifecycle_effects().len(), 1);
+            assert_eq!(
+                tx.lifecycle_journal.as_ref().unwrap().frame_bytes,
+                2 * FRAME_BYTES
+            );
+            assert_eq!(tx.take_lifecycle_journal().err(), Some(refusal));
+        }
+        drop(tx);
+        assert_eq!(pool.reserved_bytes(), 0);
+        assert!(block.ids().is_empty());
+    }
 }
 
 #[test]
