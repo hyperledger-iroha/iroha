@@ -9982,7 +9982,35 @@ fn anonymous_ballot_tags_hash_records_without_an_authoritative_state_owner() {
             .iter()
             .map(|(path, text)| (path.as_str(), text.as_str())),
     );
-    assert!(scan.unlisted_domains.is_empty());
+    assert!(
+        scan.unlisted_domains.is_empty(),
+        "{:?}",
+        scan.unlisted_domains
+    );
+    let registration_path = format!("{MODULE}/registration_input.rs");
+    let registration_wire =
+        iroha_data_model::governance::anonymous_ballot::RegisterParliamentCredentialV1::WIRE_ID;
+    assert_eq!(
+        domain_owners().get(registration_wire),
+        Some(&DomainOwner::Other(Use::Name)),
+        "the opaque candidate input names a layout, not authoritative ballot State"
+    );
+    assert_eq!(
+        scan.literal_uses.get(registration_wire),
+        Some(&BTreeMap::from([(registration_path.clone(), 1)])),
+        "the reserved wire name retains its exact defining source and occurrence"
+    );
+    let registration_source = source(&registration_path);
+    let shadow_wire = "iroha.governance.parliament.credential.register.shadow.v1";
+    let changed = format!("{registration_source}\nconst SHADOW: &str = \"{shadow_wire}\";\n");
+    assert_eq!(
+        scan_sources([(registration_path.as_str(), changed.as_str())])
+            .unlisted_domains
+            .into_iter()
+            .collect::<Vec<_>>(),
+        [format!("{shadow_wire} in {registration_path}")],
+        "classifying one opaque wire name cannot exempt another under its prefix"
+    );
     for (tag, _) in &tags {
         assert!(
             scan.literal_uses.contains_key(tag),

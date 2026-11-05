@@ -217,6 +217,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Name,
+        reason: "Exact reserved credential-registration input wire name, carried by an opaque envelope and not registered as an executable instruction. It identifies one candidate input layout; it computes no State digest, creates no authoritative ballot State and grants no ballot qualification or execution authority",
+        literals: &[r"iroha.governance.parliament.credential.register.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
         reason: "JSON schema names emitted by the test-only SCCP forgery-evidence, governance and liability reference generators. These label fixture records rather than hashing their bytes; retaining exact classification does not exempt fixture sources from scanning",
         literals: &[
             r"iroha.sccp.forgery_evidence.v1",
