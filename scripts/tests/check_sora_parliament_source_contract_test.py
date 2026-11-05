@@ -313,6 +313,17 @@ def test_queue_signed_proposal_gas_admission_prefix_preserves_literal_spaces() -
 
 
 @pytest.mark.parametrize("original,replacement,message", (
+    ("return Err(Self::refused(error, checked));", "let _ = error;",
+     "signed proposal gas admission prefix changed"),
+    ("                    authority,\n                    state_access.runtime_selection(),",
+     "                    authority,\n                    &foreign_selection,",
+     "signed proposal gas admission prefix changed"),
+    ("                        instructions,\n                        state_access.runtime_selection(),",
+     "                        instructions,\n                        &foreign_selection,",
+     "signed proposal gas admission prefix changed"),
+    ("                    &checked,\n                    state_access.runtime_selection(),",
+     "                    &checked,\n                    &foreign_selection,",
+     "signed proposal gas admission prefix changed"),
     ("return Err(Self::refused(Error::RuntimeRejected(rejection), checked));", "let _ = rejection;",
      "signed proposal gas admission prefix changed"),
     ("Err(original) => return Err(Self::refused(Error::Deferred(original), checked)),",
@@ -3703,6 +3714,11 @@ def test_block_start_due_execution_keeps_original_local_deferral(replacement: st
      "live_proposal_instructions_for_approval(state_transaction, approve)", "Ok(None)"),
     (FEE_BOUNDARY_PATHS[1], "pub fn reject_opaque_instruction_authority<'a>(",
      "error.map_rejection(|error|", "Attempt::Rejected(|error|"),
+    (FEE_BOUNDARY_PATHS[1], "pub fn reject_opaque_instruction_authority<'a>(",
+     "state_transaction.world.runtime_selection.get()", "&foreign_selection"),
+    (FEE_BOUNDARY_PATHS[1], "fn reject_opaque_committee_operations_with<'a, F>(",
+     "multisig_instruction(instruction, selection)",
+     "multisig_instruction(instruction, &foreign_selection)"),
     (FEE_BOUNDARY_PATHS[1], "fn reject_opaque_committee_operations_with<'a, F>(",
      "Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason))",
      "Attempt::Deferred(_) => None"),
@@ -3723,6 +3739,37 @@ def test_signed_staking_authority_retains_original_deferred_live_reads(
     sources[path] += "\n/* " + original + " */\n"
     with pytest.raises(RuntimeError):
         _check_fee_boundary(sources)
+
+
+@pytest.mark.parametrize("instructions", (
+    "proposal.instructions.iter()", "instructions.iter()", "nested.iter()",
+    "proved.overlay.iter()", "std::slice::from_ref(instruction)",
+))
+def test_recursive_opaque_authority_retains_the_committed_selection(instructions: str) -> None:
+    """Every recursive edge keeps the original selection and propagates refusal."""
+    sources = _fee_boundary_sources()
+    _check_fee_boundary(sources)
+    path = FEE_BOUNDARY_PATHS[1]
+    body = guard.rust_item(
+        sources[path], "fn reject_opaque_committee_operations_with<'a, F>(", path
+    )
+    pattern = (
+        r"reject_opaque_committee_operations_with\(\s*" + re.escape(instructions)
+        + r",\s*visited,\s*depth\s*\+\s*1,\s*resolve,\s*selection,\s*\)\?;"
+    )
+    matches = list(re.finditer(pattern, body))
+    assert len(matches) == 1
+    original = matches[0].group()
+    for replacement in (
+        original.replace("selection,", "&foreign_selection,"),
+        original.replace(")?;", ");"),
+    ):
+        mutated = dict(sources)
+        mutated[path] = sources[path].replace(
+            body, body.replace(original, replacement, 1), 1
+        )
+        with pytest.raises(RuntimeError):
+            _check_fee_boundary(mutated)
 
 
 def test_signed_staking_authority_precedes_optional_fee_policy_resolution() -> None:
