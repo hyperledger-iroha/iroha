@@ -51,7 +51,7 @@ use iroha_torii::{
 use norito::{decode_from_bytes, json::Value as JsonValue};
 use reqwest::StatusCode as HttpStatusCode;
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     num::NonZeroU32,
     thread,
     time::{Duration, Instant},
@@ -499,6 +499,70 @@ fn lane_validator_snapshot(
         }
     }
     Ok((usize::try_from(total).unwrap_or(usize::MAX), active))
+}
+fn genesis_active_lane_bindings<'a>(
+    instructions: impl IntoIterator<Item = &'a InstructionBox>,
+    lane_id: LaneId,
+) -> Result<BTreeSet<ExpectedLaneValidatorBinding>> {
+    let mut registered = BTreeMap::new();
+    let mut activated = BTreeSet::new();
+    for instruction in instructions {
+        if let Some(registration) = instruction
+            .as_any()
+            .downcast_ref::<RegisterPublicLaneValidator>()
+            && registration.lane_id == lane_id
+        {
+            ensure!(
+                registered
+                    .insert(
+                        registration.validator.to_string(),
+                        registration.peer_id.to_string(),
+                    )
+                    .is_none(),
+                "duplicate signed genesis validator registration on lane {lane_id}"
+            );
+        }
+        if let Some(activation) = instruction
+            .as_any()
+            .downcast_ref::<ActivatePublicLaneValidator>()
+            && activation.lane_id == lane_id
+        {
+            ensure!(
+                registered.contains_key(&activation.validator.to_string()),
+                "signed genesis activation precedes registration on lane {lane_id}"
+            );
+            ensure!(
+                activated.insert(activation.validator.to_string()),
+                "duplicate signed genesis validator activation on lane {lane_id}"
+            );
+        }
+    }
+    ensure!(
+        !registered.is_empty() && activated == registered.keys().cloned().collect(),
+        "signed genesis must activate every registered validator on lane {lane_id}"
+    );
+    Ok(registered
+        .into_iter()
+        .map(|(validator, peer_id)| ExpectedLaneValidatorBinding { validator, peer_id })
+        .collect())
+}
+fn expect_restricted_lane_hidden(response: &RoutedJsonResponse) -> Result<()> {
+    ensure!(
+        response.status == HttpStatusCode::NOT_FOUND,
+        "restricted lane validators must be hidden by the public endpoint"
+    );
+    let body = response
+        .body
+        .as_object()
+        .ok_or_else(|| eyre!("restricted lane response must contain the query error envelope"))?;
+    ensure!(
+        body.len() == 2
+            && body.get("code").and_then(JsonValue::as_str) == Some("query_validation_failed")
+            && body.get("message").and_then(JsonValue::as_str)
+                == Some("Query not found in the live query store."),
+        "restricted lane response must contain only the canonical not-found error"
+    );
+    Ok(())
 }
 fn wait_for_active_lane_validators(
     client: &Client,
@@ -1214,18 +1278,43 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
         &expected_nexus_validators,
         "nexus lane validator activation",
     )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS1_LANE_INDEX),
-        &expected_ds1_validators,
-        "ds1 lane validator activation",
-    )?;
-    wait_for_active_lane_validators(
-        &alice,
-        LaneId::new(DS2_LANE_INDEX),
-        &expected_ds2_validators,
-        "ds2 lane validator activation",
-    )?;
+    // Restricted membership is deliberately absent from the public endpoint.
+    // Check its exact registration/activation in the accepted signed genesis;
+    // the transactions and queries below prove live routing and isolation.
+    let genesis = network.genesis();
+    let mut signed_instructions = Vec::new();
+    for transaction in genesis.0.external_transactions() {
+        let iroha_data_model::transaction::Executable::Instructions(instructions) =
+            transaction.instructions()
+        else {
+            return Err(eyre!(
+                "routing genesis must contain instruction transactions"
+            ));
+        };
+        signed_instructions.extend(instructions.iter());
+    }
+    for (lane, expected) in [
+        (DS1_LANE_INDEX, &expected_ds1_validators),
+        (DS2_LANE_INDEX, &expected_ds2_validators),
+    ] {
+        ensure!(
+            genesis_active_lane_bindings(signed_instructions.iter().copied(), LaneId::new(lane))?
+                == *expected,
+            "restricted lane {lane} must carry its exact signed validator bindings"
+        );
+        let response = rt.block_on(torii_json_get(
+            &alice,
+            &[
+                "v1".to_owned(),
+                "nexus".to_owned(),
+                "public-lanes".to_owned(),
+                lane.to_string(),
+                "validators".to_owned(),
+            ],
+            &[],
+        ))?;
+        expect_restricted_lane_hidden(&response)?;
+    }
     let lane_sync_height = alice
         .client()
         .get_sumeragi_status()
@@ -1760,6 +1849,96 @@ mod tests {
         let reversed_hash = DaProofPolicyBundle::new(reversed_policies).policy_hash();
         assert_eq!(bundle, multilane_da_proof_policy_bundle());
         assert_ne!(bundle.policy_hash(), reversed_hash);
+    }
+    #[test]
+    fn restricted_lane_public_snapshot_requires_the_exact_hidden_response() {
+        let hidden = norito::json!({
+            "code": "query_validation_failed",
+            "message": "Query not found in the live query store."
+        });
+        let response = |status, body| RoutedJsonResponse {
+            status,
+            body,
+            body_text: String::new(),
+            routed_by: None,
+            route_lane_id: None,
+            route_dataspace_id: None,
+        };
+        assert!(
+            super::expect_restricted_lane_hidden(&response(
+                HttpStatusCode::NOT_FOUND,
+                hidden.clone()
+            ))
+            .is_ok()
+        );
+        for (status, body) in [
+            (HttpStatusCode::OK, hidden.clone()),
+            (HttpStatusCode::SERVICE_UNAVAILABLE, hidden),
+            (
+                HttpStatusCode::NOT_FOUND,
+                norito::json!({"code": "route_unavailable"}),
+            ),
+            (
+                HttpStatusCode::NOT_FOUND,
+                norito::json!({
+                    "code": "query_validation_failed",
+                    "message": "Query not found in the live query store.",
+                    "items": []
+                }),
+            ),
+        ] {
+            assert!(super::expect_restricted_lane_hidden(&response(status, body)).is_err());
+        }
+    }
+    #[test]
+    fn genesis_lane_bindings_require_exact_ordered_registration_and_activation() {
+        let (topology, entries) = deterministic_genesis_topology(TOTAL_PEERS);
+        let transactions = npos_multilane_genesis_post_topology_transactions(&topology, &entries);
+        for (lane, offset) in [
+            (NEXUS_LANE_INDEX, 0),
+            (DS1_LANE_INDEX, 4),
+            (DS2_LANE_INDEX, 8),
+        ] {
+            let expected = topology
+                .iter()
+                .enumerate()
+                .skip(offset)
+                .take(VALIDATORS_PER_LANE)
+                .map(|(index, peer)| expected_lane_binding_for_peer(index, peer))
+                .collect();
+            assert_eq!(
+                super::genesis_active_lane_bindings(
+                    transactions.iter().flatten(),
+                    LaneId::new(lane)
+                )
+                .unwrap(),
+                expected
+            );
+        }
+        let lane = LaneId::new(DS1_LANE_INDEX);
+        let activation_index = transactions[0]
+            .iter()
+            .position(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<super::ActivatePublicLaneValidator>()
+                    .is_some_and(|activation| activation.lane_id == lane)
+            })
+            .unwrap();
+        let mut missing = transactions[0].clone();
+        let activation = missing.remove(activation_index);
+        assert!(super::genesis_active_lane_bindings(&missing, lane).is_err());
+        let mut duplicate = transactions[0].clone();
+        duplicate.push(activation.clone());
+        assert!(super::genesis_active_lane_bindings(&duplicate, lane).is_err());
+        let mut early = transactions[0].clone();
+        early.remove(activation_index);
+        early.insert(0, activation);
+        assert!(super::genesis_active_lane_bindings(&early, lane).is_err());
+        assert!(
+            super::genesis_active_lane_bindings(transactions.iter().flatten(), LaneId::new(99))
+                .is_err()
+        );
     }
     #[test]
     fn genesis_post_topology_builder_requires_full_wrong_ingress_roster() {
