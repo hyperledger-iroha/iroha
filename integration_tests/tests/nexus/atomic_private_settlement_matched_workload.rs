@@ -619,7 +619,7 @@ fn collect_coherent_control_balances(
         "coherent balance checkpoint differs from the original network or omits genesis"
     );
     let mut values = BTreeMap::new();
-    for definition in ids.iter().map(AssetId::definition).collect::<BTreeSet<_>>() {
+    for definition in BTreeSet::from_iter(ids.iter().map(AssetId::definition)) {
         for row in holders(definition)? {
             let id: AssetId = integration_tests::collections::field(&row, "id")?;
             let asset: AssetDefinitionId = integration_tests::collections::field(&row, "asset")?;

@@ -114,7 +114,6 @@ use iroha_core_privacy::{
     privacy_profiles::compiled_privacy_profile_v1,
 };
 use iroha_crypto::{Algorithm, Hash, HashOf, HybridKeyPair, KeyPair, SignatureOf};
-use iroha_data_model::prelude::QueryBuilderExt;
 use iroha_executor_data_model::permission::{
     governance::CanEnactGovernance, settlement::CanExecuteSettlement,
 };
