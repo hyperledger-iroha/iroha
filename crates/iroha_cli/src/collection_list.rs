@@ -114,8 +114,6 @@ pub fn default_columns(collection: &Collection) -> &'static [&'static str] {
         Collection::Roles => &["id", "permissions"],
         Collection::AccountRoles(_) => &["id"],
         Collection::AccountPermissions(_) => &["name", "payload"],
-        Collection::Roles => &["id", "permissions"],
-        Collection::AccountRoles(_) => &["id"],
         Collection::AssetHolders(_) => &["account_id", "scope", "quantity"],
         Collection::Transactions | Collection::AccountTransactions(_) => {
             &["timestamp_ms", "entrypoint_hash", "result_ok", "authority"]
