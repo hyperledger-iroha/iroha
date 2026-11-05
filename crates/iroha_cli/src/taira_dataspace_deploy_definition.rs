@@ -1282,14 +1282,21 @@ mod tests {
             scale_in_permille: 300,
             cooldown: 64,
         });
-        let pair = KeyPair::from_seed(vec![91; 32], Algorithm::BlsNormal);
+        let mut committee = (91..=94)
+            .map(|seed| {
+                let pair = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                SumeragiLaneMember {
+                    peer: PeerId::new(pair.public_key().clone()),
+                    pop: iroha_crypto::bls_normal_pop_prove(pair.private_key())
+                        .expect("fixture PoP"),
+                }
+            })
+            .collect::<Vec<_>>();
+        committee.sort_by(|left, right| left.peer.cmp(&right.peer));
         policy.fixed.push(SumeragiFixedLane {
             lane: LaneId::new(16),
             dataspace: DataSpaceId::UNIVERSAL,
-            committee: vec![SumeragiLaneMember {
-                peer: PeerId::new(pair.public_key().clone()),
-                pop: Vec::new(),
-            }],
+            committee,
         });
         assert_eq!(
             select_lane(&baseline, &parameters(policy.clone())).unwrap(),

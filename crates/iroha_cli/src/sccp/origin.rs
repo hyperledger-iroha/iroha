@@ -59,7 +59,8 @@ pub(super) struct OriginArgs {
     /// Complete canonical `WorldStateSnapshotV1` frame exported at that native cut.
     #[arg(long)]
     pub world_snapshot: PathBuf,
-    /// Native registry schema hash independently selected with the release that produced the snapshot.
+    /// Independently selected installation schema anchor. Known native anchors qualify the
+    /// release's baseline/Ironwood family; foreign anchors remain exact. Finality binds the height.
     #[arg(long)]
     pub world_schema_hash: Hash,
 }
@@ -139,10 +140,11 @@ fn authenticated_world(
     tip: &VerifiedSumeragiBlock,
 ) -> Result<(VerifiedWorldStateSnapshotV1, usize)> {
     let snapshot = WorldStateSnapshotV1::decode_bounded_canonical(wire)?;
-    ensure!(
-        snapshot.schema_hash == schema_hash,
-        "snapshot uses a different independently selected native registry schema"
-    );
+    use iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1 as _;
+    iroha_core::state::State::native_world_schemas_for_anchor_v1(schema_hash)
+        .map_err(eyre::Report::msg)?
+        .as_slice()
+        .select_schema(snapshot.schema_hash)?;
     Ok((snapshot.authenticate(tip)?, snapshot.entries.len()))
 }
 
@@ -942,6 +944,29 @@ mod tests {
         assert!(selected_interval(Some(8), 7, 8).is_err());
         assert!(selected_interval(None, 0, 1).is_err());
         assert!(selected_interval(Some(1), u64::MAX, 100).is_err());
+    }
+    #[test]
+    fn ironwood_origin_schema_family_keeps_certified_height_binding() {
+        let (mut snapshot, _, _) = certified(&record());
+        let anchor = iroha_core::state::State::native_world_schema_hash_v1().unwrap();
+        for schema in iroha_core::state::State::native_world_schema_hashes_v1().unwrap() {
+            snapshot.schema_hash = schema;
+            let mut native = NativeFinalityFixture::new();
+            let block = native.block_with_submitted_work(native.next_header());
+            let certificate = native.certify_with_world_root(block, snapshot.root().unwrap());
+            let tip = native
+                .verifier()
+                .verify_retained_decision(&certificate)
+                .unwrap();
+            let wire = norito::encode_canonical(&snapshot).unwrap();
+            authenticated_world(&wire, anchor, &tip).unwrap();
+            assert!(authenticated_world(&wire, Hash::new(b"unqualified anchor"), &tip).is_err());
+            snapshot.schema_hash = Hash::new(b"substituted schema");
+            assert!(
+                authenticated_world(&norito::encode_canonical(&snapshot).unwrap(), anchor, &tip)
+                    .is_err()
+            );
+        }
     }
     #[test]
     fn registered_deployment_pin_requires_exact_authenticated_generation() {

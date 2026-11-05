@@ -36,9 +36,8 @@ tokio = { workspace = true, features = [
 futures = { workspace = true, features = ["alloc"] }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
-displaydoc = { workspace = true }
-derive_more = { workspace = true }
 bytes = { workspace = true }
+# The logger's `#[log]` attribute generates absolute `::tracing` paths.
 tracing = { workspace = true }
 base64 = { workspace = true }
 socket2 = "0.6.3"

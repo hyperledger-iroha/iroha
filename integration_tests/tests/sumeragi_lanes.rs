@@ -47,16 +47,20 @@ fn lane_policy(topology: &[GenesisTopologyEntry]) -> SumeragiLanePolicy {
         fixed: vec![SumeragiFixedLane {
             lane: LANE,
             dataspace: DataSpaceId::new(0),
-            committee: topology
-                .iter()
-                .map(|entry| SumeragiLaneMember {
-                    peer: entry.peer.clone(),
-                    pop: entry
-                        .pop_bytes()
-                        .expect("a well-formed PoP")
-                        .expect("every validator provides a PoP"),
-                })
-                .collect(),
+            committee: {
+                let mut committee = topology
+                    .iter()
+                    .map(|entry| SumeragiLaneMember {
+                        peer: entry.peer.clone(),
+                        pop: entry
+                            .pop_bytes()
+                            .expect("a well-formed PoP")
+                            .expect("every validator provides a PoP"),
+                    })
+                    .collect::<Vec<_>>();
+                committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+                committee
+            },
         }],
         routes: vec![SumeragiLaneRoute {
             lane: LANE,
@@ -252,4 +256,31 @@ fn a_fixed_lane_carries_transactions_over_p2p_across_a_restart() -> Result<()> {
     })();
     rt.block_on(async { network.shutdown().await });
     result
+}
+
+#[test]
+fn lane_policy_authors_canonical_members_from_permuted_topology() {
+    let mut topology = (1..=4)
+        .map(|seed| {
+            let key = iroha_crypto::KeyPair::from_seed(
+                vec![seed; 32],
+                iroha_crypto::Algorithm::BlsNormal,
+            );
+            GenesisTopologyEntry::new(
+                iroha_model_base::peer::PeerId::new(key.public_key().clone()),
+                iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    topology.sort_by(|left, right| left.peer.cmp(&right.peer));
+    let expected = topology.clone();
+    topology.reverse();
+    let policy = lane_policy(&topology);
+    policy.validate().unwrap();
+    assert_eq!(policy.fixed[0].committee.len(), expected.len());
+    for (actual, original) in policy.fixed[0].committee.iter().zip(&expected) {
+        assert_eq!(actual.peer, original.peer);
+        assert_eq!(actual.pop, original.pop_bytes().unwrap().unwrap());
+    }
+    assert_eq!(policy, lane_policy(&expected));
 }

@@ -4,16 +4,17 @@
 //! use signed transactions through the Initial executor. Rent coverage rejects premature charging;
 //! elapsed monthly rent settlement and hardware service qualification are separate scenarios.
 
+use iroha::query::QueryError;
+use iroha_data_model::query::error::{FindError, QueryExecutionFail};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use std::time::Duration;
 
-use super::sorafs_network::{prepare_transaction, submit_instruction};
+use super::sorafs_network::{prepare_transaction, submit_instruction, submit_transaction};
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
-    collections::{Collection, ListQuery, field},
     crypto::{Algorithm, HashOf, KeyPair},
     data_model::{
         events::data::sorafs::SorafsReserveLedgerEventKind,
@@ -172,16 +173,11 @@ async fn competing_decisions(network: &Network, instruction: InstructionBox) -> 
         tokio::join!(
             async {
                 barrier.wait().await;
-                left.account_client()
-                    .submit_transaction_and_wait(&left_transaction)
-                    .await
+                submit_transaction(&left, &left_transaction).await
             },
             async {
                 barrier.wait().await;
-                right
-                    .account_client()
-                    .submit_transaction_and_wait(&right_transaction)
-                    .await
+                submit_transaction(&right, &right_transaction).await
             },
         )
     })
@@ -304,15 +300,26 @@ fn observe(reader: &Client, policy: &ReserveAuthorityPolicyV1) -> Result<Observa
         .query_single(FindSorafsProviderOwner::new(PROVIDER))?;
     let ids = [&*BOB_ID, &policy.custody_account, &*ALICE_ID]
         .map(|account| AssetId::of(policy.asset_definition.clone(), account.clone()));
-    // A completed authenticated holder collection establishes zero for an absent asset;
-    // an arbitrary missing/failed singular query never becomes a zero balance.
-    let holders = reader
-        .list(
-            Collection::AssetHolders(policy.asset_definition.clone()),
-            ListQuery::new().filter(field("scope").eq("global")),
-        )
-        .collect::<iroha::Result<Vec<_>>>()?;
-    let balances = reserve_balances_from_rows(&holders, &ids)?;
+    let mut balances = std::array::from_fn(|_| Quantity::zero());
+    // Only an authenticated not-found result for this exact partition means zero.
+    for (index, asset_id) in ids.iter().enumerate() {
+        match reader
+            .client()
+            .query_single(FindAssetById::new(asset_id.clone()))
+        {
+            Ok(asset) => {
+                ensure!(
+                    asset.id() == asset_id,
+                    "reserve asset query changed identity"
+                );
+                balances[index] = asset.value().clone();
+            }
+            Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+                FindError::Asset(missing),
+            )))) if missing.as_ref() == asset_id => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
     let after = reader
         .client()
         .query_single(FindSorafsReserveEvents::new(None, None, 16))?;

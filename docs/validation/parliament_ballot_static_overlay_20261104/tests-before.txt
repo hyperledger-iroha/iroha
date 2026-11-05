@@ -1,0 +1,13 @@
+
+==================================== ERRORS ====================================
+___ ERROR collecting scripts/tests/parliament_ballot_static_overlay_test.py ____
+scripts/tests/parliament_ballot_static_overlay_test.py:20: in <module>
+    FRAMING = MODEL.load_reviewed(ROOT, MODEL.FRAMING)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+scripts/parliament_ballot_static_overlay.py:43: in load_reviewed
+    raise ValueError("reviewed helper changed; do not repin automatically")
+E   ValueError: reviewed helper changed; do not repin automatically
+=========================== short test summary info ============================
+ERROR scripts/tests/parliament_ballot_static_overlay_test.py - ValueError: re...
+!!!!!!!!!!!!!!!!!!!! Interrupted: 1 error during collection !!!!!!!!!!!!!!!!!!!!
+1 error in 0.49s

@@ -34,10 +34,8 @@ iroha_macro = { workspace = true }
 iroha_schema = { workspace = true }
 blake3 = { workspace = true }
 
-derive_more = { workspace = true, features = ["display", "debug", "from", "as_ref", "deref", "constructor", "into_iterator"] }
 smallvec = { version = "1.15.1", default-features = false, features = ["union"] }
 thiserror = { workspace = true }
-displaydoc = { workspace = true, features = ["std"] }
 parking_lot = { workspace = true }
 # Quantity's bounded JSON decoder accounts for num-bigint 0.5.1's native-digit allocation.
 num-bigint = { version = "=0.5.1", default-features = false, features = ["std"] }

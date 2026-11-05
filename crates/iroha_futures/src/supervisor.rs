@@ -506,17 +506,36 @@ impl From<JoinHandle<()>> for Child {
     }
 }
 /// Supervisor errors.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 pub enum Error {
     /// One or more supervised tasks panicked.
-    #[error("Some of the supervisor children panicked")]
     ChildPanicked,
     /// One or more supervised tasks exited unexpectedly.
-    #[error("Some of the supervisor children exited unexpectedly")]
     UnexpectedExit,
     /// I/O error propagated from child tasks.
-    #[error("IO error")]
-    IO(#[from] std::io::Error),
+    IO(std::io::Error),
+}
+impl core::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::ChildPanicked => "Some of the supervisor children panicked",
+            Self::UnexpectedExit => "Some of the supervisor children exited unexpectedly",
+            Self::IO(_) => "IO error",
+        })
+    }
+}
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::IO(error) => Some(error),
+            Self::ChildPanicked | Self::UnexpectedExit => None,
+        }
+    }
+}
+impl From<std::io::Error> for Error {
+    fn from(error: std::io::Error) -> Self {
+        Self::IO(error)
+    }
 }
 /// Result type returned by supervisor methods.
 pub type Result<T> = core::result::Result<T, Report<[Error]>>;
@@ -553,6 +572,86 @@ mod tests {
     /// than just [`TICK_TIMEOUT`]
     const OS_THREAD_SPAWN_TICK: Duration = Duration::from_millis(500);
     const SHUTDOWN_WITHIN_TICK: OnShutdown = OnShutdown::Wait(TICK_TIMEOUT);
+    #[test]
+    fn supervisor_error_display_preserves_messages_flags_and_writer_failures() {
+        use core::fmt::Write as _;
+
+        struct Refuse;
+        impl core::fmt::Write for Refuse {
+            fn write_str(&mut self, _: &str) -> core::fmt::Result {
+                Err(core::fmt::Error)
+            }
+        }
+
+        for (error, expected) in [
+            (
+                Error::ChildPanicked,
+                "Some of the supervisor children panicked",
+            ),
+            (
+                Error::UnexpectedExit,
+                "Some of the supervisor children exited unexpectedly",
+            ),
+            (
+                Error::IO(std::io::Error::other("private detail 🦀\n\0")),
+                "IO error",
+            ),
+        ] {
+            assert_eq!(error.to_string(), expected);
+            assert_eq!(format!("{error:*^80.3}"), expected);
+            assert_eq!(format!("{error:+#080}"), expected);
+            assert!(write!(Refuse, "{error}").is_err());
+        }
+    }
+
+    #[test]
+    fn supervisor_error_io_conversion_retains_the_original_source_and_payload() {
+        use std::error::Error as _;
+
+        #[derive(Debug)]
+        struct Original(Box<str>);
+        impl core::fmt::Display for Original {
+            fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+                formatter.write_str(&self.0)
+            }
+        }
+        impl std::error::Error for Original {}
+
+        fn assert_error_bounds<T: std::error::Error + Send + Sync + 'static>() {}
+        assert_error_bounds::<Error>();
+        assert!(Error::ChildPanicked.source().is_none());
+        assert!(Error::UnexpectedExit.source().is_none());
+
+        let original = Original("retained I/O cause 🦀\n\0".into());
+        let original_text = original.0.as_ptr();
+        let error = Error::from(std::io::Error::other(original));
+        let Error::IO(io) = &error else {
+            panic!("I/O conversion changed the variant");
+        };
+        let source = error
+            .source()
+            .expect("original I/O source")
+            .downcast_ref::<std::io::Error>()
+            .expect("I/O source type");
+        assert!(core::ptr::eq(source, io));
+        let original = source
+            .get_ref()
+            .expect("custom I/O payload")
+            .downcast_ref::<Original>()
+            .expect("original payload type");
+        assert_eq!(original.0.as_ptr(), original_text);
+        assert_eq!(source.to_string(), "retained I/O cause 🦀\n\0");
+        assert_eq!(source.kind(), std::io::ErrorKind::Other);
+
+        let error = Error::from(std::io::Error::from_raw_os_error(2));
+        let source = error
+            .source()
+            .expect("OS I/O source")
+            .downcast_ref::<std::io::Error>()
+            .expect("OS I/O source type");
+        assert_eq!(source.raw_os_error(), Some(2));
+    }
+
     #[tokio::test]
     async fn notify_once_wakes_existing_and_future_waiters() {
         let notification = NotifyOnce::new();

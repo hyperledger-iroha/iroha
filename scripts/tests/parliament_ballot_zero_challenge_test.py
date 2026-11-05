@@ -100,6 +100,23 @@ def test_certificate_binds_both_roles_exact_counts_references_and_work():
         assert report[claim] is False
 
 
+def test_current_row_scopes_and_references_match_the_compiled_source():
+    report = check.certificate()
+    assert report["rows"]["candidate"]["build_scope"] == "production and diagnostic builds"
+    assert report["rows"]["comparator"]["build_scope"] == "tests and diagnostic builds only"
+    references = {row["meaning"]: row for row in report["source_references"]}
+    for meaning, anchors in {
+        "candidate and diagnostic comparator build scope": ('feature = "diagnostics"', "Comparator,"),
+        "both roles": ("pub enum Role", "Registration,", "Vote,"),
+        "row geometry and compiled row sets": ("pub const ALL: [Self; 1]", "FAEST_256F", "FAEST_256S"),
+        "role-independent extended context geometry": ("pub fn context", "self.row.vole()"),
+    }.items():
+        reference = references[meaning]
+        lines = (check.ROOT / reference["path"]).read_text().splitlines()
+        excerpt = "\n".join(lines[reference["start_line"] - 1:reference["end_line"]])
+        assert all(anchor in excerpt for anchor in anchors)
+
+
 def test_source_semantic_drift_is_refused_without_repinning(tmp_path):
     for name in check.PINNED:
         destination = tmp_path / name

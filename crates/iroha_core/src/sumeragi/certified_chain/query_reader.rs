@@ -574,9 +574,10 @@ impl QueryCertifiedChain<'_> {
             })?;
             workspace.stage(|| {
                 let header = next.frame.reconstruct_header()?;
+                let source = next.source(header.as_ref());
                 let prepared = context.prepare_advance_source(
                     &mut prefix.borrowed(),
-                    next.source(header.as_ref()),
+                    CertificateSource::Projected(&source),
                     None,
                     (true, self.query_cache.lock().as_mut()),
                     None,
@@ -594,6 +595,7 @@ impl QueryCertifiedChain<'_> {
         workspace.stage(|| {
             let header = staged.frame.reconstruct_header()?;
             let source = staged.source(header.as_ref());
+            let source = CertificateSource::Projected(&source);
             let prepared;
             let certificate = if height == GENESIS_HEIGHT {
                 let frame = staged.frame.parent();
@@ -696,12 +698,13 @@ impl StagedQueryFrame {
             wire,
         })
     }
-    fn source<'a>(&'a self, header: Option<&'a PrefixHeader>) -> CertificateSource<'a> {
-        CertificateSource::Projected {
+    fn source<'a>(&'a self, header: Option<&'a PrefixHeader>) -> ProjectedCertificateSource<'a> {
+        ProjectedCertificateSource {
             frame: &self.frame,
             header,
             payload: self.payload.as_ref(),
             wire: self.wire,
+            admit_payload: false,
         }
     }
 }

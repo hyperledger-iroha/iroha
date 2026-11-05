@@ -942,3 +942,45 @@ fn typed_direct_home_absence_rejects_incompatible_certified_field_kind() {
             .is_err()
     );
 }
+
+#[test]
+fn ironwood_schema_policy_selects_only_qualified_candidates_and_does_not_replace_finality() {
+    let (old, asset, incarnation, _) = snapshot();
+    let mut new = old.clone();
+    new.schema_hash = Hash::new(b"synthetic successor registry schema");
+    let qualified = [old.schema_hash, new.schema_hash];
+    for snapshot in [&old, &new] {
+        let chosen = qualified
+            .as_slice()
+            .select_schema(snapshot.schema_hash)
+            .unwrap();
+        assert_eq!(chosen, snapshot.schema_hash);
+        snapshot
+            .authenticate(&certify(snapshot))
+            .unwrap()
+            .verify_table_value("world.axt_asset_incarnations", &asset, &incarnation)
+            .unwrap();
+    }
+    assert!(old.schema_hash.select_schema(new.schema_hash).is_err());
+    let foreign = Hash::new(b"unqualified registry schema");
+    assert!(qualified.as_slice().select_schema(foreign).is_err());
+    assert!(new.authenticate(&certify(&old)).is_err());
+    assert!(old.authenticate(&certify(&new)).is_err());
+    let mut tampered = new.clone();
+    tampered.schema_hash = old.schema_hash;
+    assert!(tampered.authenticate(&certify(&new)).is_err());
+}
+
+#[test]
+fn ironwood_native_schema_policy_expands_only_qualified_installation_anchors() {
+    let family = super::native_world_schema_family_v1();
+    assert_eq!(family.len(), 2);
+    for anchor in &family {
+        assert_eq!(super::native_world_schemas_for_anchor_v1(*anchor), family);
+    }
+    let foreign = iroha_crypto::Hash::new(b"foreign-exact-schema");
+    assert_eq!(
+        super::native_world_schemas_for_anchor_v1(foreign),
+        vec![foreign]
+    );
+}

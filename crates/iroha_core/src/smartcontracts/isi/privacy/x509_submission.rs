@@ -23,7 +23,7 @@ pub fn execute_x509_submission(
     binding.require_original_execution(request, proof, authority, state_transaction)?;
     let admitted = resolve_admitted_privacy_protocol_v1(
         &state_transaction.world.privacy_protocol_policies,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         state_transaction.block_height(),
     )
     .map_err(|error| invalid_privacy_parameter(error.to_string()))?;
@@ -48,7 +48,7 @@ pub(super) fn execute_x509_after_admission(
     authority: &AccountId,
     state_transaction: &mut StateTransaction<'_, '_>,
     profile: PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: PrivacyProtocolLimitsV1,
+    protocol_limits: PrivacyRuntimeProtocolLimitsV1,
 ) -> Result<(), Error> {
     binding.require_original_execution(request, proof, authority, state_transaction)?;
     let statement = binding.statement();
@@ -114,7 +114,7 @@ pub(super) fn execute_x509_after_admission(
         state_transaction.attempt_error_to_instruction_error(privacy_verification_error(error))
     })?;
     if effects.role() != PrivacyActionRoleV1::ZkX509CertificatePresentation
-        || effects.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        || effects.protocol_id() != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
         || effects.statement_digest() != statement_digest
         || effects.action_index() != expected_action_index
         || effects.encoded_action_bytes() != encoded_action_bytes

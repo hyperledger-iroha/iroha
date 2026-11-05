@@ -923,3 +923,187 @@ async fn authenticated_rotation_expiry_has_its_dedicated_gone_response() {
         Some("sccp_rotation_pruned")
     );
 }
+
+#[tokio::test]
+async fn original_state_busy_survives_the_canonical_http_error_contract() {
+    use axum::{Router, body::Body, http::Request, routing::get};
+    use iroha_allocation::release::ReleaseNotification;
+    use iroha_core::state::StateViewError;
+    use iroha_torii_shared::ErrorEnvelope;
+    use tower::ServiceExt as _;
+
+    fn permanent_error(kind: &str) -> (SccpNativeReadError, &'static str) {
+        match kind {
+            "changed" => (
+                SccpNativeReadError::View(StateViewError::Changed),
+                "sccp_unavailable",
+            ),
+            "poisoned" => (
+                SccpNativeReadError::View(StateViewError::Poisoned),
+                "sccp_unavailable",
+            ),
+            "source" => (
+                SccpNativeReadError::Unavailable("private original source marker"),
+                "sccp_unavailable",
+            ),
+            "capacity" => (SccpNativeReadError::PhysicalAllocation, "sccp_capacity"),
+            _ => panic!("unexpected static refusal case"),
+        }
+    }
+    let router = Router::new()
+        .route(
+            "/busy",
+            get(|| async {
+                let original = ReleaseNotification::new_charged(());
+                source_error(&SccpNativeReadError::View(StateViewError::Busy(
+                    original.observe(),
+                )))
+            }),
+        )
+        .route(
+            "/actual/{kind}",
+            get(
+                |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                    source_error(&permanent_error(&kind).0)
+                },
+            ),
+        )
+        .route(
+            "/original/{kind}",
+            get(
+                |axum::extract::Path(kind): axum::extract::Path<String>| async move {
+                    let (error, code) = permanent_error(&kind);
+                    let mut response = super::super::error(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        code,
+                        error.to_string(),
+                    );
+                    response.headers_mut().insert(
+                        header::CACHE_CONTROL,
+                        HeaderValue::from_static("private, no-store"),
+                    );
+                    response
+                },
+            ),
+        )
+        .layer(axum::middleware::from_fn(crate::capture_response_format))
+        .layer(axum::middleware::from_fn(
+            crate::enforce_typed_error_contract,
+        ));
+    for accept in ["application/json", crate::utils::NORITO_MIME_TYPE] {
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/busy")
+                    .header(header::ACCEPT, accept)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let content_type = if accept == "application/json" {
+            "application/json; charset=utf-8"
+        } else {
+            accept
+        };
+        assert_eq!(response.headers()[header::CONTENT_TYPE], content_type);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            "private, no-store"
+        );
+        assert_eq!(response.headers()[header::RETRY_AFTER], "1");
+        let bytes = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let envelope: ErrorEnvelope = if accept == "application/json" {
+            norito::json::from_slice(&bytes).unwrap()
+        } else {
+            norito::decode_from_bytes(&bytes).unwrap()
+        };
+        assert_eq!(envelope.code(), "sccp_state_busy");
+        assert_eq!(
+            envelope.message(),
+            "The SCCP committed state is temporarily busy."
+        );
+        assert_eq!(envelope.details.unwrap().retry_after_seconds, Some(1));
+
+        for kind in ["changed", "poisoned", "source", "capacity"] {
+            let mut responses = Vec::new();
+            for prefix in ["actual", "original"] {
+                responses.push(
+                    router
+                        .clone()
+                        .oneshot(
+                            Request::builder()
+                                .uri(format!("/{prefix}/{kind}"))
+                                .header(header::ACCEPT, accept)
+                                .body(Body::empty())
+                                .unwrap(),
+                        )
+                        .await
+                        .unwrap(),
+                );
+            }
+            let expected = responses.pop().unwrap();
+            let actual = responses.pop().unwrap();
+            assert_eq!(actual.status(), expected.status());
+            assert_eq!(actual.headers(), expected.headers());
+            assert_eq!(
+                axum::body::to_bytes(actual.into_body(), 4096)
+                    .await
+                    .unwrap(),
+                axum::body::to_bytes(expected.into_body(), 4096)
+                    .await
+                    .unwrap(),
+                "existing HTTP refusal changed for {kind} with {accept}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn permanent_state_and_source_refusals_retain_their_original_mapping() {
+    use iroha_core::{
+        state::StateViewError, sumeragi::finality::NativeCommitCertificateReadErrorV1,
+    };
+
+    for (error, code) in [
+        (
+            SccpNativeReadError::View(StateViewError::Changed),
+            "sccp_unavailable",
+        ),
+        (
+            SccpNativeReadError::View(StateViewError::Poisoned),
+            "sccp_unavailable",
+        ),
+        (
+            SccpNativeReadError::Unavailable("source"),
+            "sccp_unavailable",
+        ),
+        (SccpNativeReadError::PhysicalAllocation, "sccp_capacity"),
+        (
+            SccpNativeReadError::Source(NativeCommitCertificateReadErrorV1::Allocation),
+            "sccp_capacity",
+        ),
+    ] {
+        let actual = source_error(&error);
+        let expected =
+            super::super::error(StatusCode::SERVICE_UNAVAILABLE, code, error.to_string());
+        assert_eq!(actual.status(), expected.status());
+        assert_eq!(
+            actual.headers()[header::CONTENT_TYPE],
+            expected.headers()[header::CONTENT_TYPE]
+        );
+        assert_eq!(actual.headers()[header::CACHE_CONTROL], "private, no-store");
+        assert_eq!(
+            axum::body::to_bytes(actual.into_body(), 4096)
+                .await
+                .unwrap(),
+            axum::body::to_bytes(expected.into_body(), 4096)
+                .await
+                .unwrap()
+        );
+    }
+}

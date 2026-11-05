@@ -628,3 +628,118 @@ fn independent_custody_projection_proves_absence_then_exact_native_configuration
             .is_none()
     );
 }
+
+#[test]
+fn ironwood_stream_token_proofs_keep_exact_custody_across_schema_activation() {
+    use crate::query::signer_check::fixture::{commit, sign};
+    use iroha_allocation::AllocationBudget;
+    use iroha_data_model::{
+        sorafs::stream_token_custody::proof::{
+            StreamTokenCustodyProofRefV1, StreamTokenCustodyProofV1,
+        },
+        sumeragi_finality::{
+            FinalityValidator, SumeragiFinalityVerifier, WorldStateSchemaPolicyV1 as _,
+        },
+    };
+    let (mut chain, policy, provider) = certified_fixture();
+    let state = Arc::clone(chain.state());
+    let owner = AccountId::new(key(1).public_key().clone());
+    let configure = MutateSorafsStreamTokenCustody {
+        provider_id: provider,
+        expected_revision: 0,
+        expected_digest: [0; 32],
+        action: Action::Configure(encode(&policy).unwrap()),
+    };
+    assert_eq!(
+        commit(
+            &mut chain,
+            1_000,
+            vec![sign(&state, configure.into(), 1, 1_000)]
+        ),
+        [true]
+    );
+    let validators = chain
+        .validators()
+        .iter()
+        .map(|(peer, pop)| FinalityValidator {
+            public_key: peer.public_key().clone(),
+            proof_of_possession: pop.clone(),
+        })
+        .collect();
+    let mut verifier =
+        SumeragiFinalityVerifier::new(chain.genesis(), &policy.binding.chain_id, validators)
+            .unwrap();
+    for height in 1..=chain.height() {
+        verifier
+            .verify(&crate::sumeragi::finality::build_proof(&state.view(), height).unwrap())
+            .unwrap();
+    }
+    let activation = crate::runtime::ironwood::test_activation::schedule(&chain, 1_500);
+    let baseline = State::native_world_schema_hash_v1().unwrap();
+    let schemas = State::native_world_schema_hashes_v1().unwrap();
+    let budget = AllocationBudget::new(64 * 1024 * 1024);
+    let mut retained = Vec::new();
+    for (time, expected_height) in [(1_500, activation - 1), (2_000, activation)] {
+        commit(&mut chain, time, Vec::new());
+        assert_eq!(chain.height(), expected_height);
+        let bytes = state
+            .with_native_stream_token_custody_snapshot_v1(
+                &chain.committed(chain.height()),
+                provider,
+                &budget,
+                |world, owner, current| {
+                    norito::encode_canonical(&StreamTokenCustodyProofRefV1::new(
+                        world, owner, current,
+                    ))
+                    .map_err(|e| e.to_string())
+                },
+            )
+            .unwrap();
+        let proof = StreamTokenCustodyProofV1::decode_frame(&bytes).unwrap();
+        let block = verifier
+            .verify(&crate::sumeragi::finality::build_proof(&state.view(), chain.height()).unwrap())
+            .unwrap();
+        let schema = schemas
+            .as_slice()
+            .select_schema(proof.world.schema_hash)
+            .unwrap();
+        let verify = |schema| {
+            proof.verify(
+                *state.network_id_ref(),
+                provider,
+                &owner,
+                &policy.binding,
+                schema,
+                &block,
+            )
+        };
+        let verified = verify(schema).unwrap();
+        assert_eq!(verified.current().unwrap().control().policy, policy);
+        assert_eq!(verified.current().unwrap().record().execution_height, 2);
+        assert_eq!(verify(baseline).is_ok(), expected_height < activation);
+        retained.push((proof, block));
+    }
+    assert_ne!(
+        retained[0].0.world.schema_hash,
+        retained[1].0.world.schema_hash
+    );
+    for (proof, block) in &retained {
+        let schema = schemas
+            .as_slice()
+            .select_schema(proof.world.schema_hash)
+            .unwrap();
+        proof
+            .verify(
+                *state.network_id_ref(),
+                provider,
+                &owner,
+                &policy.binding,
+                schema,
+                block,
+            )
+            .unwrap();
+    }
+    assert!(retained[0].0.world.authenticate(&retained[1].1).is_err());
+    assert!(retained[1].0.world.authenticate(&retained[0].1).is_err());
+    assert_eq!(budget.reserved_bytes(), 0);
+}

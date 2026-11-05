@@ -154,7 +154,11 @@ macro_rules! app_routed_read_endpoint {
     };
 }
 #[cfg(feature = "app_api")]
-const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 49] = [
+const APP_ROUTED_READ_HTTP_ENDPOINTS_V1: [AppRoutedReadHttpEndpoint; 53] = [
+    app_routed_read_endpoint!(RolesList, route_catalog::application_api::ROLES_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(RolesQuery, route_catalog::application_api::ROLES_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
+    app_routed_read_endpoint!(AccountRolesGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET, AppRoutedReadHttpDecoder::Query("ListQuery")),
+    app_routed_read_endpoint!(AccountRolesQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(AccountPermissionsQuery, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_PERMISSIONS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(UaidManifestsQuery, route_catalog::application_api::SPACE_DIRECTORY_UAIDS_BY_UAID_MANIFESTS_QUERY_POST, AppRoutedReadHttpDecoder::Json("ListQuery")),
     app_routed_read_endpoint!(AccountGet, route_catalog::application_api::ACCOUNTS_BY_ACCOUNT_ID_GET, AppRoutedReadHttpDecoder::None),

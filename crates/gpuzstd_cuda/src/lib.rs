@@ -11,8 +11,8 @@ use std::{io::Cursor, ptr, slice};
 /// Deterministic zstd sequence emitted by CUDA match-finding kernels.
 ///
 /// This is the shared `#[repr(C)]` layout consumed by the frame encoder.
-pub use gpuzstd_metal::GpuZstdSequence;
-use gpuzstd_metal::zstd_frame;
+pub use gpuzstd_codec::GpuZstdSequence;
+use gpuzstd_codec::zstd_frame;
 const RC_OK: i32 = 0;
 const RC_INVALID: i32 = 1;
 const RC_NO_SPACE: i32 = 2;
@@ -347,6 +347,28 @@ mod tests {
         let rc =
             unsafe { gpuzstd_cuda_decompress(std::ptr::null(), 0, out.as_mut_ptr(), &mut out_len) };
         assert_eq!(rc, RC_INVALID);
+    }
+    #[cfg(not(gpuzstd_cuda_available))]
+    #[test]
+    fn cuda_export_reports_unavailable_without_compiled_cuda_kernels() {
+        // In a workspace build Metal's default C exports used to enter this
+        // link through the shared codec dependency. The CUDA entry point must
+        // never resolve to another backend, even when that backend is available.
+        let payload = b"CUDA backend identity";
+        let mut out = [0xA5; 128];
+        let mut out_len = out.len();
+        let rc = unsafe {
+            gpuzstd_cuda_compress(
+                payload.as_ptr(),
+                payload.len(),
+                1,
+                out.as_mut_ptr(),
+                &mut out_len,
+            )
+        };
+        assert_eq!(rc, RC_GPU_UNAVAILABLE);
+        assert_eq!(out_len, out.len());
+        assert_eq!(out, [0xA5; 128]);
     }
     #[test]
     fn ffi_reports_no_space_before_cuda_work_for_zero_capacity() {

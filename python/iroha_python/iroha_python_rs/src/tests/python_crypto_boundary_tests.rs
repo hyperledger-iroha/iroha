@@ -179,18 +179,18 @@ fn privacy_compiled_profile_catalog_is_the_exact_closed_registry() {
     catalog
         .validate()
         .expect("canonical compiled-profile catalog");
-    assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(catalog.protocols.len(), PrivacyRuntimeProtocolIdV1::COUNT);
     assert!(
         catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
-            .eq(PrivacyProtocolIdV1::ALL)
+            .eq(PrivacyRuntimeProtocolIdV1::ALL)
     );
 }
 fn bind_test_network_privacy_capability(
     builder: &mut TransactionBuilder,
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
 ) {
     builder.privacy_capability_manifest = Some(
         crate::privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
@@ -213,7 +213,7 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
     };
     let missing = new_builder()
         .require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
         .expect_err("local catalog must not invent network availability");
@@ -225,11 +225,11 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
     let mut wrong_protocol = new_builder();
     bind_test_network_privacy_capability(
         &mut wrong_protocol,
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
     );
     let mismatch = wrong_protocol
         .require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
         .expect_err("an available PGC relation must not manufacture the unavailable Vega relation");
@@ -240,17 +240,17 @@ fn privacy_transaction_construction_requires_the_matching_network_manifest_tuple
         "{mismatch}"
     );
     wrong_protocol
-        .require_empty_privacy_action_builder_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1, "PGC")
+        .require_empty_privacy_action_builder_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1, "PGC")
         .expect("available selected native PGC uses defaults without registration");
     let mut wrong_network = new_builder();
     wrong_network.privacy_capability_manifest = Some(
         crate::privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             crate::PyNetworkId::from_exact_bytes(&[0xA7; 32]).unwrap().inner,
         ),
     );
     let mismatch = wrong_network
-        .require_empty_privacy_action_builder_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1, "PGC")
+        .require_empty_privacy_action_builder_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1, "PGC")
         .expect_err("selected native availability cannot cross the transaction network");
     assert!(
         mismatch
@@ -680,7 +680,7 @@ fn component_python_nonzero_digest_boundary_rejects_ambiguous_encodings() {
 fn exported_vega_python_device_digest_fails_closed_with_unavailable_profile() {
     use iroha_core_privacy::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
 
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
     assert!(matches!(
         compiled_privacy_profile_v1(protocol_id),
         Err(
@@ -731,7 +731,7 @@ fn vega_python_profile_is_unavailable_while_low_level_device_digest_binds_intent
     use iroha_core_privacy::privacy_engines::verange::{VeRangeBitLengthV1, VeRangeParametersV1};
     assert!(
         python_compiled_privacy_profile_v1(
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
             "Vega",
         )
         .is_err(),

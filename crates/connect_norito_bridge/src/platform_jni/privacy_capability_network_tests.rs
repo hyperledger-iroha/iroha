@@ -32,7 +32,7 @@ fn manifest_genesis_identity_must_match_the_exact_expected_network() {
     let archive = manifest
         .canonical_bytes()
         .expect("canonical runtime manifest");
-    let index = PrivacyProtocolIdV1::VeRangeTransparentRangeV1 as i32;
+    let index = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 as i32;
     assert!(java_privacy_exact12_capability_tuple_admitted(
         &archive, index, &expected
     ));
@@ -41,7 +41,7 @@ fn manifest_genesis_identity_must_match_the_exact_expected_network() {
     ));
     assert!(!java_privacy_exact12_capability_tuple_admitted(
         &archive,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 as i32,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 as i32,
         &expected
     ));
     let mut substituted = manifest;
@@ -77,11 +77,11 @@ fn tuple_and_construction_reject_malformed_archives_before_admission() {
 #[test]
 fn absent_policy_uses_canonical_limits_and_policy_cannot_enable_unavailable_implementation() {
     use iroha_data_model::privacy::{
-        PrivacyCompiledProfileResultV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
+        PrivacyCompiledProfileResultV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolLimitsV1,
     };
     let network = [0xA5; 32];
     let mut manifest = canonical_manifest(network);
-    let available = PrivacyProtocolIdV1::VeRangeTransparentRangeV1 as usize;
+    let available = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 as usize;
     assert!(manifest.protocols[available].policy.is_none());
     let archive = manifest.canonical_bytes().unwrap();
     assert!(java_privacy_exact12_capability_tuple_admitted(
@@ -99,10 +99,10 @@ fn absent_policy_uses_canonical_limits_and_policy_cannot_enable_unavailable_impl
         current_limits: profile.protocol_limits,
         pending_update: None,
     });
-    let unavailable = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 as usize;
+    let unavailable = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 as usize;
     manifest.protocols[unavailable].policy = Some(PrivacyProtocolPolicyV1 {
-        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-        current_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+        protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
+        current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1,
         pending_update: None,
     });
     manifest.manifest_digest = manifest.computed_manifest_digest().unwrap();
@@ -122,11 +122,11 @@ fn absent_policy_uses_canonical_limits_and_policy_cannot_enable_unavailable_impl
 #[test]
 fn generic_construction_without_policy_preserves_committed_protocol_limits() {
     use iroha_data_model::privacy::{
-        PrivacyCompiledProfileResultV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
-        PrivacyStatementV1, VeRangeLimitsV1, privacy_action_role_samples_v1,
+        PrivacyCompiledProfileResultV1, PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolLimitsV1,
+        PrivacyRuntimeStatementV1, VeRangeLimitsV1, privacy_action_role_samples_v1,
     };
     let network = [0xA5; 32];
-    let protocol = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+    let protocol = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
     let mut manifest = canonical_manifest(network);
     let index = protocol as usize;
     let PrivacyCompiledProfileResultV1::Available(profile) =
@@ -142,7 +142,8 @@ fn generic_construction_without_policy_preserves_committed_protocol_limits() {
         .find(|sample| sample.envelope.protocol_id == protocol)
         .unwrap()
         .envelope;
-    let PrivacyStatementV1::VeRangeTransparentRangeV1(statement) = &mut envelope.statement else {
+    let PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement) = &mut envelope.statement
+    else {
         unreachable!();
     };
     statement.context.network_id = network_id_from_raw_bytes(&network).unwrap();
@@ -168,9 +169,11 @@ fn generic_construction_without_policy_preserves_committed_protocol_limits() {
     ));
     manifest.protocols[index].policy = Some(PrivacyProtocolPolicyV1 {
         protocol_id: protocol,
-        current_limits: PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
-            max_aggregation_count: 1,
-        }),
+        current_limits: PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(
+            VeRangeLimitsV1 {
+                max_aggregation_count: 1,
+            },
+        ),
         pending_update: None,
     });
     manifest.manifest_digest = manifest.computed_manifest_digest().unwrap();

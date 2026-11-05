@@ -1,8 +1,11 @@
 //! Miscellaneous integration coverage for status endpoints and helpers.
-use eyre::Result;
+use eyre::{Result, ensure};
 use integration_tests::sandbox;
 use integration_tests::sync::spawn_blocking;
-use iroha::blocking;
+use iroha::{
+    blocking,
+    client::{AccountTransactionDraft, FeeQuoteRequest},
+};
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
 use iroha_torii_shared::status::Status;
@@ -53,17 +56,28 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
     network.ensure_blocks(1).await?;
     // json_and_norito_statuses_equality
     check(&client, 1).await?;
-    {
-        let client = client.clone();
-        spawn_blocking(move || {
-            let domain: DomainId = DomainId::try_new("lookingglass", "universal")?;
-            client.submit(
-                domain_setup_instruction(&domain, client.client().account())?,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-            )
-        })
-    }
-    .await??;
+    let domain: DomainId = DomainId::try_new("lookingglass", "universal")?;
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(AccountTransactionDraft::new(
+        [domain_setup_instruction(
+            &domain,
+            client.client().account(),
+        )?],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        iroha_model_base::metadata::Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "domain setup fee quote must preserve the selected payer and gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    let transaction = account.sign_transaction(payload)?;
+    account.submit_transaction_and_wait(&transaction).await?;
     if sandbox::handle_result(
         network.ensure_blocks(2).await,
         stringify!(misc_status_endpoints_smoke),

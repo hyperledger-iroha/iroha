@@ -27,7 +27,7 @@ use crate::privacy_engines::{
 };
 use iroha_data_model::{
     nexus::{PrivateSettlementProofIntentV1, PrivateSettlementProofStatementV1},
-    privacy::{IrohaIvmPrivateNoteStarkStatementV1, PrivacyProtocolIdV1},
+    privacy::{IrohaIvmPrivateNoteStarkStatementV1, PrivacyRuntimeProtocolIdV1},
 };
 use rand::TryRng;
 
@@ -58,7 +58,7 @@ const SETTLEMENT_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
 const SETTLEMENT_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
     aggregate::AggregateStarkDomainsV1 {
         digest_context: TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"atomic-private-settlement-stark-profile-v1",
         ),
         base_leaf: b"atomic-private-settlement-stark-base-leaf-v1",

@@ -14,6 +14,10 @@ fn limits() -> LeafLimits {
 fn fixture() -> Set {
     let mut set = Set::default();
     let action = LoadedAction {
+        lifecycle_executable_digest:
+            crate::smartcontracts::isi::triggers::set::invocation_identity::inline_executable_digest(
+                &ExecutableRef::Instructions(Vec::<InstructionBox>::new().into()),
+            ),
         executable: ExecutableRef::Instructions(Vec::<InstructionBox>::new().into()),
         repeats: Repeats::Indefinitely,
         authority: ALICE_ID.clone(),

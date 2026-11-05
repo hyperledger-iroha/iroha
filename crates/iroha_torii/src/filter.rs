@@ -31,11 +31,13 @@ fn membership_values_are_unique(values: &[Value]) -> bool {
         .all(|(index, value)| !values[index + 1..].contains(value))
 }
 /// Errors produced during filter validation.
-#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error, displaydoc::Display)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ValidateError {
     /// unsupported field path: {0}
+    #[error("unsupported field path: {0}")]
     UnsupportedField(String),
     /// type mismatch at field: {0}
+    #[error("type mismatch at field: {0}")]
     TypeMismatch(String),
 }
 /// The set of allowed field prefixes: top-level and `metadata.<key>`.

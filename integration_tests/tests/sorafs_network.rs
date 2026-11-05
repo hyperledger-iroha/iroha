@@ -84,8 +84,44 @@ pub async fn submit_instruction(
     instruction: impl Into<InstructionBox>,
 ) -> Result<iroha::crypto::HashOf<SignedTransaction>> {
     let transaction = prepare_transaction(client, [instruction], Metadata::default()).await?;
-    client
+    submit_transaction(client, &transaction).await
+}
+
+/// Require Applied finality, retaining the authenticated native reason for a
+/// Rejected transaction so negative scenarios cannot pass on a transport error.
+pub async fn submit_transaction(
+    client: &Client,
+    transaction: &SignedTransaction,
+) -> Result<iroha::crypto::HashOf<SignedTransaction>> {
+    let error = match client
         .account_client()
-        .submit_transaction_and_wait(&transaction)
+        .submit_transaction_and_wait(transaction)
         .await
+    {
+        Ok(hash) => return Ok(hash),
+        Err(error) => error,
+    };
+    let Some(failure) = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<iroha::client::TransactionFinalityFailure>())
+        .filter(|failure| failure.response().status.kind == "Rejected")
+        .cloned()
+    else {
+        return Err(error);
+    };
+    failure.validate_for_hash(transaction.hash())?;
+    let observer = client.clone();
+    let transaction = transaction.clone();
+    match iroha_test_network::read_on_dedicated_thread(move || {
+        Ok(observer
+            .client()
+            .get_transaction_rejection_reason(&transaction)?)
+    })
+    .await
+    {
+        Ok(reason) => Err(eyre::Report::new(reason).wrap_err(failure)),
+        Err(lookup) => Err(error.wrap_err(format!(
+            "authenticated native rejection lookup failed: {lookup:?}"
+        ))),
+    }
 }

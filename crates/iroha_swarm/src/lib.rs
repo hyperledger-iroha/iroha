@@ -1,5 +1,7 @@
 //! Docker Compose configuration generator for Iroha.
 mod base64_standard;
+#[cfg(test)]
+mod error_tests;
 mod path;
 mod peer;
 mod schema;
@@ -8,7 +10,7 @@ const CHAIN_ID: &str = "00000000-0000-0000-0000-000000000000";
 const BASE_PORT_P2P: u16 = 1337;
 const BASE_PORT_API: u16 = 8080;
 /// Swarm error.
-#[derive(displaydoc::Display, Debug)]
+#[derive(Debug)]
 pub enum Error {
     /// Peer count ({actual}) must form an exact Sumeragi `3f + 1` committee (4..=31).
     InvalidPeerCount {
@@ -44,22 +46,14 @@ pub enum Error {
         /// Cryptographic verification error.
         reason: String,
     },
-    /// Prepared validator {index} has an invalid SoraNet transport identity: {reason}.
-    #[expect(
-        clippy::doc_markdown,
-        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
-    )]
+    /// Prepared validator {index} has an invalid `SoraNet` transport identity: {reason}.
     InvalidPreparedTransportIdentity {
         /// Zero-based validator index.
         index: usize,
         /// Failed transport identity invariant.
         reason: String,
     },
-    /// Prepared validator {index} repeats another validator's SoraNet transport identity.
-    #[expect(
-        clippy::doc_markdown,
-        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
-    )]
+    /// Prepared validator {index} repeats another validator's `SoraNet` transport identity.
     DuplicatePreparedTransportIdentity {
         /// Zero-based validator index.
         index: usize,
@@ -101,11 +95,7 @@ pub enum Error {
         /// Duplicated secret target.
         target: String,
     },
-    /// Peer {index} must use distinct non-zero P2P/API ports, got {p2p_port}/{api_port}.
-    #[expect(
-        clippy::doc_markdown,
-        reason = "displaydoc uses this text verbatim; Markdown markup would alter the error"
-    )]
+    /// Peer {index} must use distinct non-zero `P2P/API` ports, got {p2p_port}/{api_port}.
     InvalidPeerPorts {
         /// Zero-based validator index.
         index: usize,
@@ -133,8 +123,101 @@ pub enum Error {
         /// Duplicated service name.
         name: String,
     },
-    /// {0}
+    /// Filesystem path conversion failed.
     PathConversion(path::Error),
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPeerCount { actual } => write!(
+                formatter,
+                "Peer count ({actual}) must form an exact Sumeragi `3f + 1` committee (4..=31)."
+            ),
+            Self::TargetFileIsADirectory => {
+                formatter.write_str("Target file path points to a directory.")
+            }
+            Self::NoTargetDirectory => formatter.write_str("Target directory not found."),
+            Self::InvalidPeerOverrideCount { expected, actual } => write!(
+                formatter,
+                "Peer overrides count ({actual}) does not match the requested peer count ({expected})."
+            ),
+            Self::KeyGeneration(reason) => {
+                write!(
+                    formatter,
+                    "Failed to generate cryptographic swarm material: {reason}"
+                )
+            }
+            Self::EmptyDevelopmentSeed => {
+                formatter.write_str("Deterministic development mode requires a non-empty seed.")
+            }
+            Self::EmptyPreparedValidators => formatter
+                .write_str("A prepared validator bundle must contain at least one validator."),
+            Self::PreparedValidatorCountOverflow { actual } => write!(
+                formatter,
+                "Prepared validator count ({actual}) exceeds the supported u16 range."
+            ),
+            Self::InvalidPreparedValidatorPop { index, reason } => write!(
+                formatter,
+                "Prepared validator {index} has an invalid BLS proof of possession: {reason}"
+            ),
+            Self::InvalidPreparedTransportIdentity { index, reason } => write!(
+                formatter,
+                "Prepared validator {index} has an invalid SoraNet transport identity: {reason}."
+            ),
+            Self::DuplicatePreparedTransportIdentity { index } => write!(
+                formatter,
+                "Prepared validator {index} repeats another validator's SoraNet transport identity."
+            ),
+            Self::InvalidPreparedRuntimeTarget { index, target } => write!(
+                formatter,
+                "Prepared validator {index} runtime file target `{target}` must be a normalized path below `/config/runtime`."
+            ),
+            Self::DuplicatePreparedRuntimeTarget { index, target } => write!(
+                formatter,
+                "Prepared validator {index} repeats runtime file target `{target}`."
+            ),
+            Self::OverlappingPreparedRuntimeTarget {
+                index,
+                target,
+                other,
+            } => write!(
+                formatter,
+                "Prepared validator {index} runtime file target `{target}` overlaps `{other}`."
+            ),
+            Self::InvalidPreparedSecretTarget { index, target } => write!(
+                formatter,
+                "Prepared validator {index} secret target `{target}` must be one portable file below `/run/secrets`."
+            ),
+            Self::DuplicatePreparedSecretTarget { index, target } => write!(
+                formatter,
+                "Prepared validator {index} repeats secret target `{target}`."
+            ),
+            Self::InvalidPeerPorts {
+                index,
+                p2p_port,
+                api_port,
+            } => write!(
+                formatter,
+                "Peer {index} must use distinct non-zero P2P/API ports, got {p2p_port}/{api_port}."
+            ),
+            Self::DuplicateHostPort { index, port } => {
+                write!(formatter, "Peer {index} reuses host port {port}.")
+            }
+            Self::InvalidPeerServiceName { index, name } => {
+                write!(
+                    formatter,
+                    "Peer {index} has invalid Compose service name `{name}`."
+                )
+            }
+            Self::DuplicatePeerServiceName { name } => {
+                write!(
+                    formatter,
+                    "Compose service name `{name}` is used by more than one peer."
+                )
+            }
+            Self::PathConversion(error) => write!(formatter, "{error}"),
+        }
+    }
 }
 impl std::error::Error for Error {}
 /// Swarm settings.

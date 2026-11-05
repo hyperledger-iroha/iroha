@@ -43,10 +43,18 @@ fn unregistered_instruction_refuses_typed_decode_and_preserves_its_envelope() {
 
     set_instruction_registry(iroha_data_model::instruction_registry_with_ids![Log]);
     let name = "dummy".to_string();
-    for frame in [Vec::new(), vec![0, 0xff, 0x37, 0x80]] {
+    for frame in [
+        Vec::new(),
+        vec![0, 0xff, 0x37, 0x80],
+        vec![0xa5, 0x00, 0xff],
+    ] {
         let error = decode_instruction_from_pair(&name, &frame)
             .expect_err("the strict typed decoder must reject an unregistered instruction");
         assert_eq!(error.to_string(), "unknown instruction wire identifier");
+        assert!(matches!(
+            error,
+            norito::Error::Message(message) if message == "unknown instruction wire identifier"
+        ));
         let pair = (name.clone(), frame.clone());
         let bytes = norito::core::to_bytes(&pair).expect("serialize");
         let archived_tuple =
@@ -58,5 +66,6 @@ fn unregistered_instruction_refuses_typed_decode_and_preserves_its_envelope() {
         assert_eq!(opaque.wire_id(), name);
         assert_eq!(opaque.frame(), frame);
         assert_eq!(decoded.encode(), pair.encode());
+        assert_eq!(norito::core::to_bytes(&decoded).expect("re-encode"), bytes);
     }
 }

@@ -15,4 +15,3 @@ workspace = true
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 
 iroha_macro = { workspace = true }
-thiserror = { workspace = true }

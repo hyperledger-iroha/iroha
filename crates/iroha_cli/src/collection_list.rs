@@ -111,6 +111,8 @@ pub fn default_columns(collection: &Collection) -> &'static [&'static str] {
         Collection::AssetDefinitions => &["id", "name", "alias", "owned_by"],
         Collection::Rwas | Collection::ExplorerRwas => &["id", "owned_by", "quantity", "status"],
         Collection::AccountAssets(_) => &["asset", "asset_alias", "scope", "quantity"],
+        Collection::Roles => &["id", "permissions"],
+        Collection::AccountRoles(_) => &["id"],
         Collection::AccountPermissions(_) => &["name", "payload"],
         Collection::Roles => &["id", "permissions"],
         Collection::AccountRoles(_) => &["id"],
@@ -350,15 +352,48 @@ mod tests {
     }
 
     #[test]
-    fn role_collections_show_objects_and_exact_assignments() {
-        let account = iroha::data_model::account::AccountId::new(
-            iroha_crypto::KeyPair::try_random()
-                .expect("role column fixture key")
-                .public_key()
-                .clone(),
-        );
-        assert_eq!(default_columns(&Collection::Roles), &["id", "permissions"]);
-        assert_eq!(default_columns(&Collection::AccountRoles(account)), &["id"]);
+    fn role_collections_use_exact_routes_and_distinct_stored_and_assignment_columns() {
+        let account = iroha_test_samples::ALICE_ID.clone();
+        let discriminant = iroha_torii_shared::TAIRA_CHAIN_DISCRIMINANT;
+        let literal = iroha::account_address::encode_account_id_to_i105(&account, discriminant)
+            .expect("fixture canonical account literal");
+        for (collection, path, expected_columns) in [
+            (
+                Collection::Roles,
+                "/v1/roles".to_owned(),
+                vec!["id", "permissions"],
+            ),
+            (
+                Collection::AccountRoles(account),
+                format!("/v1/accounts/{literal}/roles"),
+                vec!["id"],
+            ),
+        ] {
+            assert_eq!(collection.path(discriminant).unwrap(), path);
+            assert_eq!(
+                collection.query_path(discriminant).unwrap(),
+                format!("{path}/query")
+            );
+            assert_eq!(default_columns(&collection), expected_columns);
+            let query = ListArgs {
+                filter: Some("id = \"auditor\"".to_owned()),
+                limit: Some("2".to_owned()),
+                ..args()
+            }
+            .to_query()
+            .unwrap();
+            collection
+                .validate_query(&query)
+                .expect("bounded exact role filter");
+            assert_eq!(query.limit, Some(2));
+        }
+        let columns = default_columns(&Collection::Roles)
+            .iter()
+            .map(|column| (*column).to_owned())
+            .collect::<Vec<_>>();
+        let rows = [norito::json!({"id": "auditor", "permissions": [{"name": "CanManageRoles"}]})];
+        let rendered = render_table(&rows, &columns);
+        assert!(rendered.contains("PERMISSIONS") && rendered.contains("CanManageRoles"));
     }
 
     #[test]

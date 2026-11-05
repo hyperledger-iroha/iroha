@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Ordered requested-allocation grammar for the standalone ballot verifier.
 
-Requires Python 3.11+, the reviewed repository sources and Rust 1.93.1 allocation
+Requires Python 3.11+, the reviewed repository sources and Rust 1.99.1 allocation
 semantics. No environment variables, external packages, builds or mutations are
 used. The JSON CLI is read-only. These traces cover Rust heap requests, including
 allocator-default allocate/copy/free reallocation; they are not a native-memory,
@@ -19,27 +19,27 @@ import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-RUST_REVISION = "01f6ddf7588f42ae2d7eb0a2f21d44e8e96674cf"
+RUST_REVISION = "58cf8f9c35b355199727627d07ae34a4e2846d67"
 ROWS = {"candidate": (33, 8, 704), "comparator": (22, 6, 696)}
 WITNESS_BITS = {"registration": 35840, "vote": 53504}
 ZKP = "crates/iroha_zkp_vole/src/"
 BALLOT = "crates/iroha_parliament_ballot_proof/src/"
 SOURCE_DIRECTORIES = (ZKP, BALLOT, "vendor/aes/src/")
 # A changed pin requires reviewing the trace against the changed implementation.
-REVIEWED_SOURCE_SHA256 = "fd573560f8ae178ffe060e2d17fdc4d095d1069b72667bc03c5af5d9a5de031a"
+REVIEWED_SOURCE_SHA256 = "d163a919743012dd9bc26fad6d4d104b96e0f9454db2647da18c41124f230d77"
 RUST_SOURCE_SHA256: dict[str, str] = {
-    "alloc/alloc.rs": "cd8a5946b4c44338c451d1bb4c47e3109ea08ae7e3c58397e0879e4fe099572b",
-    "alloc/raw_vec/mod.rs": "7f94665b803a970d83f99d3a451a92af6b210baaa8c9685b1f50d265c836f38b",
-    "alloc/slice.rs": "333415aa9dd7759e04319e4519b3039ba6cf537613662d13a5e754159c004cce",
-    "alloc/vec/mod.rs": "98ed44ed3e17e41c6048b2057cdf44443ddb5f7462fbf9c48e7e62fc7ace286e",
-    "alloc/vec/spec_extend.rs": "5673f04327502716ba5774e2067f9c1a179290e0cde92fe72ddfc5475ab34396",
+    "alloc/alloc.rs": "3949baaebc3310d1a88a097d3b31b02445bfcad74b196ea4f6ea776de368ab97",
+    "alloc/raw_vec/mod.rs": "cda0e96514e65a55b8ed559b02b7bc5f2dcb7854695a501ac0b03b0eeab0361c",
+    "alloc/slice.rs": "67228d05babee451c4f29b12fb6e922d1b7be19cf8bdc7efb21edd02c8a69a3e",
+    "alloc/vec/mod.rs": "e0c798ff16cf1770ef3266d28440d93dd65402b3afe1df4e184f15af17fb1e3e",
+    "alloc/vec/spec_extend.rs": "a0816ad0f39b947889771bf06930bf8e0c4ce794846d83863349697ec7c415ec",
     "alloc/vec/spec_from_elem.rs": "062e397b30aa43082d2f8abf3b8ec9869de2efd6ca573e1113a2ac5f4729489c",
-    "alloc/vec/spec_from_iter.rs": "584c9018149f930b5cd56ca3ba7a7d70f48583b2dfc32b243926a6ae4cb10566",
+    "alloc/vec/spec_from_iter.rs": "393d1f28cfc8d28d80e142cef6b612aae9b484160969cfa0c9f97bb894534807",
     "alloc/vec/spec_from_iter_nested.rs": "f3c1a06f43734a65e102b6a107e2fd5adadd7d94d9a226d6ffe1610d1e7e1466",
-    "core/alloc/global.rs": "6f9e29875f4234ede97ec74c68f0e19f23c65fde43a1f86c99fd21b534ea75b4",
-    "core/iter/adapters/flatten.rs": "2a2184f32ef8e80ce07da324abc07d2c0d0386161f3cba5c60faa2d872905367",
-    "core/iter/adapters/map.rs": "2a9cb86b5110b292f271ec1cd8904a9bad27f8d553af0141837f41e753fe83d3",
-    "core/slice/iter.rs": "8b57ffe7146466eaf135ed218a8ac47bcab2a84d6954e1be32089e222854c5e5"
+    "core/alloc/global.rs": "d5eb650234e55742cec9bdff8dad0afe187c71b19dce914e7cd1285649dd78c3",
+    "core/iter/adapters/flatten.rs": "78ab8b2f86c7e58288d70aad1b3bdec0df5fa838a1b4543c0b165630866b235e",
+    "core/iter/adapters/map.rs": "f1e47647ac44777030c282423e3aefb810629dfedca161cef56cff8ef74a03ad",
+    "core/slice/iter.rs": "8f169b9da7f4226497e894409a0535a907a0f0f9660c916fb6b7732cd450345f"
 }
 
 
@@ -249,7 +249,7 @@ def backend_trace(row: str, role: str, seats: int = 3, accel: bool = False,
 def trace_assumptions() -> dict:
     """State the allocation-policy, source, layout and coverage obligations."""
     return {
-        "scope": "normal cold standalone verification, both fixed extended rows; allocation failure is a separate worker resource failure",
+        "scope": "normal cold standalone verification, candidate plus diagnostics-only comparator; allocation failure is a separate worker resource failure",
         "source_revision": RUST_REVISION,
         "rust_allocation_policy": [
             "64-bit usize; non-ZST Vec<T> explicit capacity and vec![T;n] request n*sizeof(T)",
@@ -263,7 +263,8 @@ def trace_assumptions() -> dict:
                     "Gf256": [32, 8], "Key_Gf256": [40, 8], "Tree": [24, 8],
                     "aes256_portable_provider": [960, 8], "aes256_accel_provider": [960, 16]},
         "layout_obligation": "Target/compiler-specific sizes and alignments are premises, not Rust ABI promises; provider receipt separately pins eight compiled target/mode observations",
-        "provider_receipt": "docs/validation/parliament_ballot_b6/provider-layout.json",
+        "provider_receipt": "docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout.json",
+        "provider_receipt_sha256": "3483a68bc29109f62a05dd266d10db36e026f63c258bb02ebfca72b55d4ec42c",
         "all_input_classes": [
             "Proof length/counter/padding/grinding/opening rejection follows a prefix of decode events and allocation-free cleanup",
             "Admitted proof codec shape fixes all retained buffer sizes; field byte values are always representable",
@@ -337,7 +338,7 @@ def main() -> int:
     parser.add_argument("--role", choices=WITNESS_BITS, default="vote")
     parser.add_argument("--seats", type=int, default=1000)
     parser.add_argument("--accel", action="store_true")
-    parser.add_argument("--rustdoc-root", type=Path, help="optional Rust1.93.1 html/src directory to verify")
+    parser.add_argument("--rustdoc-root", type=Path, help="optional Rust1.99.1 html/src directory to verify")
     args = parser.parse_args()
     data = {"assumptions": trace_assumptions(), "sources": source_inventory(),
             "profile": profile_trace(args.row),

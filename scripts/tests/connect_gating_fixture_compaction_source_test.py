@@ -15,7 +15,26 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/tests/connect_gating.rs"
-GROUP_SOURCE_PATH = ROOT / "crates/iroha_torii/tests/grouped/protocols.rs"
+# The grouped protocol test binary is the sole owner of the shared fixture modules.
+OWNER_PATH = ROOT / "crates/iroha_torii/tests/grouped/protocols.rs"
+OWNER_MODULES = {
+    "build_identity_test_fixture": "../../src/build_identity_test_fixture.rs",
+    "fixtures": "../fixtures.rs",
+    "connect_gating": "../connect_gating.rs",
+}
+# Retired synthetic genesis trust anchor and fixed network: every Torii now runs over
+# an applied signed genesis whose hash and network bind each Connect session.
+RETIRED_GENESIS_FRAGMENTS = (
+    "from_untyped_unchecked",
+    "Connect gating test genesis trust anchor",
+    "signed_query_network_id",
+)
+GENESIS_ANCHORS = (
+    "let native_chain = fixtures::commit_signed_genesis(cfg, World::default(), Vec::new());",
+    "native_chain.network_id(),",
+    "native_chain.kura().clone(),",
+    "native_chain.state().clone(),",
+)
 EXPECTED_TESTS = (('connect_config_fixture_uses_checked_key_generation', ('#[test]',)),
  ('connect_endpoints_report_typed_unavailability_when_disabled', ('#[tokio::test]',)),
  ('connect_status_present_when_enabled', ('#[tokio::test]',)),
@@ -50,6 +69,7 @@ EXPECTED_PINGS = ('1', '41', '42', '7', '8', '9', '10')
 ASSERTION_SURFACE_SHA256 = '10e8692fffe350e6341c7e7402d7a0f231d7b274b41db5ee04dc1138db470f0f'
 CONNECT_URI_SURFACE_SHA256 = '8ae0493017455d5c7d6480e491828760e68aa4ed9bfe3fb2d0d7da7de68ee1f0'
 EXPECTED_HELPERS = (
+    "connect_network_id",
     "request_with_loopback_connect_info",
     "connect_aggregate_status",
     "connect_aggregate_status_json",
@@ -119,6 +139,7 @@ DIRECT_FUNCTION = re.compile(
     r"^(?:async\s+)?fn\s+(?P<name>[a-z_][a-z0-9_]*)\s*\(",
     re.MULTILINE,
 )
+# Each session derives its id from the network of the test's own applied genesis (`&cfg`).
 SESSION_SEED = re.compile(
     r"connect_session_request_body\(\s*&cfg,\s*(?P<direct>0x[0-9A-Fa-f]+)\s*\)|"
     r"create_connect_(?:session_payload|app_session)\("
@@ -261,17 +282,26 @@ def _uri_surface(source: str) -> tuple[str, ...]:
     return tuple(re.findall(r'"(/v1/connect[^"]*)"', source))
 
 
-def _validate(source: str, group_source: str | None = None) -> None:
+def _validate_owner(owner: str) -> None:
+    modules = re.findall(r'^#\[path\s*=\s*"([^"]+)"\]\nmod ([a-z_]+);$', owner, re.MULTILINE)
+    for name, path in OWNER_MODULES.items():
+        if [declared for declared, module in modules if module == name] != [path]:
+            raise GuardError(f"grouped protocol test root no longer owns shared module: {name}")
+
+
+def _validate(source: str) -> None:
     if FORBIDDEN.search(source):
         raise GuardError("forbidden callback, body DSL, source relocation, or macro found")
-    if re.search(r'#\[path\s*=', source) or source.count("use crate::build_identity_test_fixture;") != 1:
+    if re.search(r"#\[path\s*=", source) or tuple(
+        re.findall(r"^use crate::([a-z_]+);$", source, re.MULTILINE)
+    ) != ("fixtures", "build_identity_test_fixture"):
         raise GuardError("shared build-identity fixture ownership changed")
-    if group_source is None:
-        group_source = GROUP_SOURCE_PATH.read_text(encoding="utf-8")
-    for path, module in (("../../src/build_identity_test_fixture.rs", "build_identity_test_fixture"),
-                         ("../connect_gating.rs", "connect_gating")):
-        if group_source.count(f'#[path = "{path}"]\nmod {module};') != 1:
-            raise GuardError("grouped Connect fixture ownership changed")
+    if any(fragment in source for fragment in RETIRED_GENESIS_FRAGMENTS):
+        raise GuardError("retired synthetic genesis trust anchor or fixed network found")
+    build = _function(source, "build_torii")
+    for anchor in GENESIS_ANCHORS:
+        if build.count(anchor) != 1:
+            raise GuardError(f"applied signed genesis binding changed: {anchor}")
     if tuple(re.findall(r'include!\("([^"]+)"\);', source)) != (
         "connect_gating_disabled_ws_test.rs",
     ):
@@ -314,9 +344,51 @@ class ConnectGatingFixtureCompactionSourceTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.source = SOURCE_PATH.read_text(encoding="utf-8")
+        cls.owner = OWNER_PATH.read_text(encoding="utf-8")
 
     def test_compacted_source_contract(self) -> None:
         _validate(self.source)
+        _validate_owner(self.owner)
+
+    def test_fixture_owner_relocation_is_rejected(self) -> None:
+        with self.assertRaises(GuardError):
+            _validate_owner(
+                self.owner.replace(
+                    '"../../src/build_identity_test_fixture.rs"',
+                    '"local_build_identity_fixture.rs"',
+                    1,
+                )
+            )
+
+    def test_module_local_fixture_copy_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            self.source.replace(
+                "use crate::build_identity_test_fixture;",
+                '#[path = "../src/build_identity_test_fixture.rs"]\n'
+                "mod build_identity_test_fixture;",
+                1,
+            )
+        )
+
+    def test_synthetic_genesis_anchor_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            self.source.replace(
+                "cfg.network.lane_profile = A::LaneProfile::Core;",
+                "cfg.network.lane_profile = A::LaneProfile::Core;\n"
+                "    cfg.genesis.expected_hash = HashOf::<BlockHeader>::from_untyped_unchecked("
+                'Hash::new(b"Connect gating test genesis trust anchor"));',
+                1,
+            )
+        )
+
+    def test_unbound_session_network_is_rejected(self) -> None:
+        self.assert_mutation_rejected(
+            self.source.replace(
+                "connect_session_request_body(&cfg, 0x44)",
+                "connect_session_request_body(&other_cfg, 0x44)",
+                1,
+            )
+        )
 
     def assert_mutation_rejected(self, source: str) -> None:
         with self.assertRaises(GuardError):
@@ -338,9 +410,9 @@ class ConnectGatingFixtureCompactionSourceTest(unittest.TestCase):
         self.assert_mutation_rejected(self.source.replace("&app2, &cfg, 0xB4", "&app2, 0xB4", 1))
 
     def test_grouped_fixture_relocation_is_rejected(self) -> None:
-        group_source = GROUP_SOURCE_PATH.read_text(encoding="utf-8")
-        with self.assertRaisesRegex(GuardError, "grouped Connect fixture ownership"):
-            _validate(self.source, group_source.replace("../../src/build_identity_test_fixture.rs", "other.rs"))
+        group_source = OWNER_PATH.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(GuardError, "grouped protocol test root no longer owns shared module"):
+            _validate_owner(group_source.replace("../../src/build_identity_test_fixture.rs", "other.rs"))
 
     def test_signed_genesis_state_substitution_is_rejected(self) -> None:
         self.assert_mutation_rejected(self.source.replace("native_chain.state().clone()", "unbound_state"))

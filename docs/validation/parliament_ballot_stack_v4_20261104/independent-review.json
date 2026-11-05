@@ -1,0 +1,21 @@
+{
+  "analyzer_sha256": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+  "complete_stack_certificate": false,
+  "conclusion": "Reviewed register widths, arrangement and lane bounds match the reference; integer FP clobbers remain invalidating; SP/base/writeback and malformed forms fail closed.",
+  "findings": [],
+  "profile_qualified": false,
+  "reference_pdf_sha256": "b7baa6869789722df70da60170d999a62810409aaabbb6db1ef729ed68686bdf",
+  "reference_printed_pages": [
+    1110,
+    1130,
+    1131,
+    2069,
+    2070
+  ],
+  "reviewer": "independent agent /root/state_runner_finish",
+  "reviewer_changed_files": false,
+  "reviewer_executed_tests": false,
+  "schema": "parliament-stack-v4-independent-operand-review-v1",
+  "scope": "Read-only review of BCAX/BIT/UMOV analyzer additions and operand/SP/FP regression tests against the retained Arm primary reference.",
+  "tests_sha256": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf"
+}

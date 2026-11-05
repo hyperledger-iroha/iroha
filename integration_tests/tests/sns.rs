@@ -81,6 +81,10 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     let baseline = read_metric_sample(&http, &metrics_endpoint, "domains", &metric_labels)
         .await?
         .ok_or_else(|| eyre!("the domains gauge must be present before registration"))?;
+    let alias_labels = [("type", "ensure_alias"), ("success_status", "success")];
+    let alias_before = read_metric_sample(&http, &metrics_endpoint, "isi", &alias_labels)
+        .await?
+        .unwrap_or(0.0);
     let label = unique_label("telemetry");
     let literal = domain_literal(&label);
     setup_domain(&client, &label).await?;
@@ -88,7 +92,12 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     for _ in 0..METRIC_READY_RETRIES {
         let current =
             read_metric_sample(&http, &metrics_endpoint, "domains", &metric_labels).await?;
-        if let Some(value) = current.filter(|value| *value == baseline + 1.0) {
+        let alias_current = read_metric_sample(&http, &metrics_endpoint, "isi", &alias_labels)
+            .await?
+            .unwrap_or(0.0);
+        if let Some(value) =
+            current.filter(|value| *value == baseline + 1.0 && alias_current >= alias_before + 1.0)
+        {
             observed_after = Some(value);
             break;
         }
@@ -133,6 +142,8 @@ async fn sns_renewal_uses_expiry_cas() -> Result<()> {
     let label = unique_label("renew-cas");
     let literal = domain_literal(&label);
     let record = setup_domain(&client, &label).await?;
+    let policy = get_sns_policy(&client, record.selector.suffix_id).await?;
+    assert_eq!(policy.suffix_key(), "domain");
     let original_expiry = record.expires_at_ms;
     let target_expiry = original_expiry
         .checked_add(ALIAS_LEASE_YEAR_MS)

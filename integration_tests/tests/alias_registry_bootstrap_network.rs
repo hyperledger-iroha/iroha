@@ -61,7 +61,7 @@ use iroha_data_model::{
         AliasQuoteGuardV1, AliasSetupPlanRequestV1, ResolvedDomainV1,
     },
     asset::AssetDefinitionId,
-    block::{SignedBlock, decode_framed_signed_block},
+    block::{SignedBlock, consensus::PublicLaneStakingPolicy, decode_framed_signed_block},
     isi::{
         Grant,
         alias_setup::EnsureAlias,
@@ -159,6 +159,11 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
     );
     assert_eq!(definition.to_string(), TAIRA_XOR_ASSET_DEFINITION_ID);
     definition
+}
+
+fn genesis_staking_policy() -> PublicLaneStakingPolicy {
+    let custody = staking_custody_account();
+    iroha_genesis::default_staking_policy(stake_asset_definition_id(), custody.clone(), custody)
 }
 
 #[test]
@@ -271,7 +276,7 @@ fn custom_genesis_post_topology(
                     AssetId::new(stake_asset_definition_id(), staking_custody_account()),
                     registration.initial_stake.clone(),
                 ),
-                "fixture registration must agree with its original signed staking policy"
+                "fixture registration must agree with its explicitly authored staking policy"
             );
         }
     }
@@ -2719,6 +2724,7 @@ async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> 
                 custom_genesis_post_topology(topology.as_ref(), &topology_entries),
                 topology,
                 topology_entries,
+                genesis_staking_policy(),
             )
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Custom(
@@ -2726,7 +2732,7 @@ async fn run_bpng_retained_kura_scenario(test_name: &'static str) -> Result<()> 
         )))
         .with_block_cadence(Duration::from_secs(1))
         .with_config_layer(|layer| {
-            // The original signed genesis fixes fees across restarts.
+            // The original signed genesis fixes fees and staking custody across restarts.
             // Keep one fluent borrow of the configuration writer.
             layer
                 .write(["snapshot", "mode"], "disabled")
@@ -3520,7 +3526,7 @@ async fn run_bpng_retained_kura_lifecycle(network: sandbox::SerializedNetwork) -
 }
 
 #[test]
-fn genesis_staking_plans_bind_funded_validators_to_original_signed_custody() {
+fn genesis_staking_plans_bind_funded_validators_to_signed_custody() {
     iroha_test_network::init_instruction_registry();
     let entries = (0..4)
         .map(|index| {
@@ -3541,41 +3547,38 @@ fn genesis_staking_plans_bind_funded_validators_to_original_signed_custody() {
         .map(|entry| entry.peer.clone())
         .collect::<Vec<_>>();
     let transactions = custom_genesis_post_topology(&topology, &entries);
+    let staking_policy = genesis_staking_policy();
     let genesis = unexecuted_genesis_factory_with_post_topology(
         Vec::new(),
         transactions.clone(),
         topology.iter().cloned().collect(),
         entries,
+        staking_policy.clone(),
     );
-    let policies = genesis
-        .0
-        .external_transactions()
-        .filter_map(|transaction| match transaction.instructions() {
-            Executable::Instructions(instructions) => Some(instructions.iter()),
-            _ => None,
-        })
-        .flatten()
-        .filter_map(|instruction| instruction.as_any().downcast_ref::<SetParameter>())
-        .filter_map(|set| match set.inner() {
-            Parameter::Custom(custom)
-                if custom.id()
-                    == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id() =>
-            {
-                Some(
-                    iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(
-                        custom,
-                    )
-                    .expect("original signed staking policy"),
-                )
+    iroha_data_model::sumeragi_finality::authenticated_genesis(&genesis.0)
+        .expect("the original genesis authenticates its exact fixture instructions");
+    let mut signed_staking_policies = Vec::new();
+    for transaction in genesis.0.external_transactions() {
+        for instruction in transaction.instructions().explicit_instructions() {
+            let Some(parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
+                continue;
+            };
+            let Parameter::Custom(custom) = parameter.inner() else {
+                continue;
+            };
+            if custom.id() == &PublicLaneStakingPolicy::parameter_id() {
+                signed_staking_policies.push(
+                    PublicLaneStakingPolicy::from_custom_parameter(custom)
+                        .expect("canonical signed fixture staking policy"),
+                );
             }
-            _ => None,
-        })
-        .collect::<Vec<_>>();
-    assert_eq!(policies.len(), 1, "one original signed staking policy");
-    let policy = &policies[0];
-    assert_eq!(policy.stake_asset_id, stake_asset_definition_id());
-    assert_eq!(policy.stake_escrow_account_id, staking_custody_account());
-    assert_eq!(policy.slash_sink_account_id, staking_custody_account());
+        }
+    }
+    assert_eq!(
+        signed_staking_policies,
+        vec![staking_policy],
+        "the original genesis must contain exactly the fixture's authored staking policy"
+    );
     let payer_asset = AssetId::new(stake_asset_definition_id(), BOB_ID.clone());
     let payer_mints = transactions
         .iter()
@@ -3588,6 +3591,18 @@ fn genesis_staking_plans_bind_funded_validators_to_original_signed_custody() {
         .collect::<Vec<_>>();
     assert_eq!(payer_mints, vec![&Quantity::from(LEASE_PAYER_FUNDING)]);
     assert_eq!(LEASE_PAYER_FUNDING, 300);
+    let fees = iroha_genesis::signed_genesis_root_fee_policy(&genesis.0)
+        .expect("the original genesis contains one authenticated fee policy");
+    assert_eq!(fees.fee_asset_id, stake_asset_definition_id());
+    assert_eq!(fees.fee_sink_account_id, staking_custody_account());
+    for rate in [
+        fees.base_fee,
+        fees.per_byte_fee,
+        fees.per_instruction_fee,
+        fees.per_gas_unit_fee,
+    ] {
+        assert!(rate.is_zero(), "fixture transaction fee rates remain zero");
+    }
     let committee_registrations = transactions
         .iter()
         .flatten()

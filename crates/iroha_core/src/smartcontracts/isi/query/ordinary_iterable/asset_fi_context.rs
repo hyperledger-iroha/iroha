@@ -115,8 +115,11 @@ pub(super) fn collect(
         .into());
     }
     let (_, maximum, work) = trigger_source_limits(params, mode, limits)?;
-    let (mut graph, slots) =
-        RetainedDecodeBudget::new::<AssetFiContextSnapshotV1>(1, limits.max_source_item_bytes())?;
+    // Each selected native row stays within one source item. The snapshot that
+    // composes them, the key scratch and its frame share one FI row envelope.
+    let row_bytes = composite_row_bytes(limits)?;
+    let row_maximum = usize::try_from(row_bytes).map_err(|_| Error::CapacityLimit)?;
+    let (mut graph, slots) = RetainedDecodeBudget::new::<AssetFiContextSnapshotV1>(1, row_bytes)?;
     let mut execution_stats = QueryExecutionStats::default();
     // Admission precedes target work and every definition/account/incarnation lookup.
     for _ in 0..4 {
@@ -296,7 +299,7 @@ pub(super) fn collect(
         .map_err(native_error)
     })?;
     execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
-    if canonical(|| norito::canonical_frame_len(&snapshot))? > maximum {
+    if canonical(|| norito::canonical_frame_len(&snapshot))? > row_maximum {
         return Err(Error::CapacityLimit.into());
     }
     let mut rows = ExactOwnedRows::new(1, slots)?;

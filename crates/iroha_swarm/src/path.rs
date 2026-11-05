@@ -10,12 +10,23 @@ pub struct AbsolutePath(std::path::PathBuf);
 /// Relative filesystem path.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct RelativePath(std::path::PathBuf);
-#[derive(displaydoc::Display, Debug)]
+/// Filesystem path conversion error.
+#[derive(Debug)]
 pub enum Error {
     /// Failed to construct an absolute path: {0}
     AbsolutePath(std::io::Error),
     /// Failed to construct a relative path.
     RelativePath,
+}
+impl std::fmt::Display for Error {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::AbsolutePath(error) => {
+                write!(formatter, "Failed to construct an absolute path: {error}")
+            }
+            Self::RelativePath => formatter.write_str("Failed to construct a relative path."),
+        }
+    }
 }
 impl std::error::Error for Error {}
 impl AbsolutePath {

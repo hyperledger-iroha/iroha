@@ -25,8 +25,8 @@ use iroha_data_model::{
     prelude::{AccountId, NetworkId},
     privacy::{
         PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyP256PointV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1,
-        PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1, PrivacyStatementV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeStatementV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
         PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
         PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
         VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -1011,14 +1011,18 @@ fn vega_statement_v1(
 }
 fn vega_transaction_payload_v1(
     context: &VegaPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<TransactionPayload, VegaPrivacyActionBuildErrorV1> {
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_instructions([SubmitPrivacyProofV1::new(
+        envelope
+            .try_into()
+            .map_err(|_| VegaPrivacyActionBuildErrorV1::InvalidTransactionContext)?,
+    )])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
@@ -1037,9 +1041,9 @@ fn derive_vega_transaction_intent_digest_v1(
 ) -> Result<PrivacyTransactionIntentDigestV1, VegaPrivacyActionBuildErrorV1> {
     // The proof-empty projection exists only on this stack frame. It cannot be
     // returned, signed, or submitted through the sealed prepared-action API.
-    let normalized_projection_envelope = PrivacyProofEnvelopeV1::bind_v1(
-        PrivacyStatementV1::VegaExistingCredentialZkV1(statement),
-        PrivacyProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(Vec::new())),
+    let normalized_projection_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
+        PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement),
+        PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(Vec::new())),
     )
     .map_err(|_| VegaPrivacyActionBuildErrorV1::StatementDigest)?;
     vega_transaction_payload_v1(context, normalized_projection_envelope)?
@@ -1100,19 +1104,21 @@ fn validate_vega_payload_integrity_v1(
         .privacy_transaction_intent_binding_if_present_v1()
         .map_err(|_| ())?
         .ok_or(())?;
+    let submission_envelope = submission.runtime_envelope();
     if intent.as_bytes() != &expected.transaction_intent_digest {
         return Err(());
     }
-    let envelope = &submission.envelope;
+    let envelope = &submission_envelope;
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ())?;
-    if envelope.protocol_id != PrivacyProtocolIdV1::VegaExistingCredentialZkV1
+    if envelope.protocol_id != PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1
         || envelope.statement_digest.as_bytes() != &expected.statement_digest
     {
         return Err(());
     }
-    let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement) = &envelope.statement
+    else {
         return Err(());
     };
     if statement.context.action_index != VEGA_PRIVACY_ACTION_INDEX_V1
@@ -1121,17 +1127,20 @@ fn validate_vega_payload_integrity_v1(
     {
         return Err(());
     }
-    let PrivacyProofV1::VegaExistingCredentialZkV1(proof) = &envelope.proof else {
+    let PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(proof) = &envelope.proof else {
         return Err(());
     };
     if u32::try_from(proof.as_bytes().len()).map_err(|_| ())? != expected.proof_bytes {
         return Err(());
     }
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| ())?;
+    let statement_encoding = envelope
+        .statement
+        .canonical_wire_bytes_v1()
+        .map_err(|_| ())?;
     if u32::try_from(statement_encoding.len()).map_err(|_| ())? != expected.statement_bytes {
         return Err(());
     }
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| ())?;
+    let envelope_encoding = envelope.canonical_wire_bytes_v1().map_err(|_| ())?;
     if u32::try_from(envelope_encoding.len()).map_err(|_| ())?
         != expected.encoded_proof_envelope_bytes
         || *Hash::new(&envelope_encoding).as_ref() != expected.proof_envelope_hash
@@ -1174,7 +1183,7 @@ where
     validate_vega_transaction_context_v1(context)?;
     validate_vega_public_input_v1(input)?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
     )
     .map_err(|_| VegaPrivacyActionBuildErrorV1::CompiledProfileUnavailable)?;
     prepare_vega_privacy_action_with_profile_and_rng_v1(
@@ -1234,7 +1243,8 @@ where
     let witness = witness_material
         .witness_with_device_signature(device_signature)
         .map_err(VegaPrivacyActionBuildErrorV1::from)?;
-    let typed_statement = PrivacyStatementV1::VegaExistingCredentialZkV1(final_statement.clone());
+    let typed_statement =
+        PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(final_statement.clone());
     typed_statement
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::StatementValidation)?;
@@ -1242,7 +1252,8 @@ where
         .digest()
         .map_err(|_| VegaPrivacyActionBuildErrorV1::StatementDigest)?;
     let statement_bytes = u32::try_from(
-        norito::to_bytes(&typed_statement)
+        typed_statement
+            .canonical_wire_bytes_v1()
             .map_err(|_| VegaPrivacyActionBuildErrorV1::StatementEncoding)?
             .len(),
     )
@@ -1261,9 +1272,9 @@ where
     )?;
     let proof_bytes = u32::try_from(proof.len())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
-    let final_envelope = PrivacyProofEnvelopeV1::bind_v1(
+    let final_envelope = PrivacyRuntimeProofEnvelopeV1::bind_v1(
         typed_statement,
-        PrivacyProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(proof)),
+        PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(PrivacyProofBytesV1::new(proof)),
     )
     .map_err(|_| VegaPrivacyActionBuildErrorV1::EnvelopeValidation)?;
     if !profile.matches_envelope_v1(&final_envelope) {
@@ -1272,7 +1283,8 @@ where
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::EnvelopeValidation)?;
-    let envelope_encoding = norito::to_bytes(&final_envelope)
+    let envelope_encoding = final_envelope
+        .canonical_wire_bytes_v1()
         .map_err(|_| VegaPrivacyActionBuildErrorV1::EnvelopeEncoding)?;
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| VegaPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;

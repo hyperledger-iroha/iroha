@@ -28,6 +28,16 @@ impl<'role> RoleIdByAccountBounds<'role> {
             },
         }
     }
+    /// Restrict this account's role range to identities strictly after `role`.
+    pub fn after(mut self, role: &'role RoleId) -> Self {
+        self.start.role_id = MinMaxExt::Value(role);
+        self
+    }
+    /// Restrict this account's role range to identities strictly before `role`.
+    pub fn before(mut self, role: &'role RoleId) -> Self {
+        self.end.role_id = MinMaxExt::Value(role);
+        self
+    }
 }
 impl<'role> RangeBounds<dyn AsRoleIdByAccount + 'role> for RoleIdByAccountBounds<'role> {
     fn start_bound(&self) -> Bound<&(dyn AsRoleIdByAccount + 'role)> {

@@ -28,7 +28,7 @@ use super::{
 use iroha_data_model::privacy::PrivacyX509ExtendedKeyUsageV1;
 use iroha_data_model::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyAttributeDigestV1, PrivacyCertificateKeyDigestV1,
-    PrivacyNullifierV1, PrivacyStatementV1, PrivacyX509CrlDerDigestV1,
+    PrivacyNullifierV1, PrivacyRuntimeStatementV1, PrivacyX509CrlDerDigestV1,
     PrivacyX509CrlIssuerSpkiDigestV1, PrivacyX509KeyUsageV1,
     PrivacyZkX509CertificatePolicyRecordV1, PrivacyZkX509CrlRecordV1,
     PrivacyZkX509RecordLifecycleV1, PrivacyZkX509TrustAnchorRecordV1,
@@ -378,7 +378,7 @@ pub(super) fn derive_ownership_challenge_digest_v1(
 pub(super) fn derive_ownership_signing_message_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<Vec<u8>, ZkX509RelationErrorV1> {
-    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+    let statement_digest = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509RelationErrorV1::StatementEncoding)?;
     let account = norito::to_bytes(&statement.wallet_account)

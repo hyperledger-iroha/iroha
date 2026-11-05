@@ -1755,18 +1755,61 @@ fn independent_custody_state_decodes_authenticated_absence_on_the_selected_globa
     assert_eq!(state.owner(), &owner);
     assert_eq!(state.context_id(), verified.context_id());
 
+    let alternate_schema = Hash::new(b"another independently qualified sdk custody schema");
+    let schemas = [schema, alternate_schema];
     let source_bytes = norito::encode_canonical(&proof).unwrap();
     let response = mk_response(StatusCode::OK, source_bytes.clone(), Some(APPLICATION_NORITO));
     let (retained, _) = capture_request(response, |transport| {
         let client = client.clone().with_test_http_transport(transport);
         mark_data_model_compatible(&client);
-        client.get_stream_token_custody_state_with_source(provider, &owner, &binding, schema, &verified)
+        client.get_stream_token_custody_state_with_source(
+            provider,
+            &owner,
+            &binding,
+            schemas.as_slice(),
+            &verified,
+        )
     });
     let (source, state) = retained.unwrap();
     assert_eq!(norito::encode_canonical(&source).unwrap(), source_bytes);
     let reverified = source.verify(client.network_id, provider, &owner, &binding, schema, &verified).unwrap();
     assert_eq!(reverified.context_id(), state.context_id());
     assert!(reverified.current().is_none());
+
+    let response = mk_response(StatusCode::OK, source_bytes, Some(APPLICATION_NORITO));
+    let (unqualified, _) = capture_request(response, |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_stream_token_custody_state_with_source(
+            provider,
+            &owner,
+            &binding,
+            [alternate_schema].as_slice(),
+            &verified,
+        )
+    });
+    assert!(unqualified.is_err());
+
+    // Qualification does not let another known schema replace this certified cut's schema.
+    let mut substituted = proof;
+    substituted.world.schema_hash = alternate_schema;
+    let response = mk_response(
+        StatusCode::OK,
+        norito::encode_canonical(&substituted).unwrap(),
+        Some(APPLICATION_NORITO),
+    );
+    let (substituted, _) = capture_request(response, |transport| {
+        let client = client.clone().with_test_http_transport(transport);
+        mark_data_model_compatible(&client);
+        client.get_stream_token_custody_state_with_source(
+            provider,
+            &owner,
+            &binding,
+            schemas.as_slice(),
+            &verified,
+        )
+    });
+    assert!(substituted.is_err());
 }
 
 #[test]

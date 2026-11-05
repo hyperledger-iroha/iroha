@@ -17,7 +17,7 @@ fn fixture(
         fri_commitment_layout: fri_layout,
         ..PARAMETERS
     };
-    let (_, mut proof, _, _) = fixture_with_parameters(parameters);
+    let (_, mut proof) = fixture_with_parameters(parameters);
     let layout = AggregateProofLayoutV1::new_with_trace_layout_v1(
         parameters,
         vec![

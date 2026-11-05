@@ -31,7 +31,7 @@ fn fixture_v1(rows: usize) -> Vec<ZeroizingFieldColumnV1> {
 
 fn context_v1() -> TransparentStarkDigestContextV1 {
     TransparentStarkDigestContextV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         b"initial-preflighted-complete-cost-v1",
     )
 }

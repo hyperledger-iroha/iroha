@@ -11,6 +11,7 @@ use super::{
     OwnedExecutionSources, StateBlock, StateTransaction,
 };
 use crate::execution_attempt::ExecutionAttemptError;
+use crate::state::StateReadOnly;
 use crate::state::callback_journal::DrainedCallbacks;
 use iroha_crypto::{Hash, HashOf, MerkleTree};
 use iroha_data_model::{
@@ -29,6 +30,11 @@ use iroha_data_model::{
 /// Neither a clone nor an output-only setter can authorize its publication.
 pub(in crate::state) struct RetainedExecutionOutputs {
     rows: Vec<ExecutionOutputV1>,
+    lifecycle_custody: Option<
+        iroha_allocation::ChargedBuffer<
+            iroha_allocation::ChargedBuffer<iroha_allocation::AllocationCharge>,
+        >,
+    >,
     row_bytes: u64,
     proposal: iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>,
     input_root: Option<Hash>,
@@ -78,12 +84,18 @@ struct ExecutionOutputProducer<'owner, 'state, 'source> {
     source: ExecutionSource<'source>,
     amx_legs: Option<&'owner mut crate::sumeragi::amx::NativeAmxLegPreparations>,
     budget: Option<ExecutionOutputBudget>,
+    lifecycle: bool,
     unused_time: u32,
     // Allocate the complete row vector before work. Network placeholders are
     // private fallback values, never evidence of execution. The separate bit
     // for each source must be resolved before finish can expose the collection.
     // This also preserves source order when reveals execute out of input order.
     rows: Vec<ExecutionOutputV1>,
+    lifecycle_custody: Option<
+        iroha_allocation::ChargedBuffer<
+            iroha_allocation::ChargedBuffer<iroha_allocation::AllocationCharge>,
+        >,
+    >,
     network_resolved: Vec<bool>,
     network_sources: Option<network::FrozenNetworkSources<'source>>,
     source_entries: Vec<OwnedExecutionSource>,
@@ -255,11 +267,25 @@ impl<'owner, 'state, 'source> ExecutionOutputProducer<'owner, 'state, 'source> {
         else {
             return Err("execution output ownership changed before transfer".into());
         };
+        let lifecycle = state.lifecycle_output_enabled()?;
+        let lifecycle_custody = if lifecycle {
+            Some(
+                iroha_allocation::ChargedBuffer::new(
+                    plan.maximum_rows as usize,
+                    &state.execution_budget(),
+                )
+                .map_err(lifecycle::allocation)?,
+            )
+        } else {
+            None
+        };
         let mut producer = ExecutionOutputProducer {
             state,
             source,
             amx_legs,
             budget: Some(plan.budget),
+            lifecycle,
+            lifecycle_custody,
             unused_time: 0,
             rows: Vec::new(),
             network_resolved: Vec::new(),
@@ -419,8 +445,15 @@ impl CompletedOutputWork {
 mod seal;
 pub use seal::{ExecutionOutputSealError, ExecutionOutputSealMetadata};
 
+#[path = "output_lifecycle.rs"]
+mod lifecycle;
+
 #[path = "output_internal.rs"]
 mod internal;
+
+#[cfg(test)]
+#[path = "output_time_test_support.rs"]
+mod time_test_support;
 
 #[path = "output_pipeline.rs"]
 mod pipeline;
@@ -641,6 +674,15 @@ impl ExecutionOutputProducer<'_, '_, '_> {
         if self.failed || self.network_resolved.iter().any(|resolved| !resolved) {
             return Err("output producer retains failed or unresolved Network work".into());
         }
+        if self
+            .rows
+            .iter()
+            .any(|row| row.trigger_lifecycle().is_some() != self.lifecycle)
+        {
+            return Err(
+                "execution output coverage differs from its committed services selection".into(),
+            );
+        }
         validate_execution_outputs_v1(
             &self.rows,
             self.source.hash(),
@@ -741,6 +783,7 @@ impl ExecutionOutputProducer<'_, '_, '_> {
             .execution_output_plan = Some(ExecutionOutputPlanState::Retained(
             RetainedExecutionOutputs {
                 rows: core::mem::take(&mut self.rows),
+                lifecycle_custody: self.lifecycle_custody.take(),
                 row_bytes,
                 proposal: self.source.hash(),
                 input_root: MerkleTree::root_from_typed_leaves(

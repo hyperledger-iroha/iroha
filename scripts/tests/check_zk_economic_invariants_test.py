@@ -28,7 +28,7 @@ _SPEC.loader.exec_module(C)
 
 MATRIX = C.load()
 REAL = C.readers.Tree()
-PRIVACY_MODEL = "crates/iroha_data_model/src/privacy.rs"
+PRIVACY_MODEL = "crates/iroha_data_model/src/privacy/exact12_wire.rs"
 PROTOCOL_MODEL = "crates/iroha_data_model/src/privacy/protocol.rs"
 STATEMENTS = "crates/iroha_data_model/src/privacy/statements.rs"
 HANDLERS = "crates/iroha_core/src/smartcontracts/isi/privacy.rs"
@@ -406,8 +406,8 @@ class ClosedLists(Base):
 
     def test_protocol_added_to_the_reserve_list_fails(self) -> None:
         overrides = replaced(PRIVACY_STATE,
-                             "    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,\n];",
-                             "    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,\n    PrivacyProtocolIdV1::PqMaspStarkV1,\n];")
+                             "    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,\n];",
+                             "    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,\n    PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,\n];")
         errors = run("check_closed_lists", overrides=overrides)
         self.assert_fails(errors, "closed_lists.reserve_owners.protocol_list: source has ['PqMaspStarkV1'] unrecorded")
         self.assert_fails(errors, "the source lets")
@@ -435,7 +435,7 @@ class ClosedLists(Base):
             role = next(r for r in matrix["closed_lists"]["root_roles"]["roles"] if r["variant"] == "NoteCommitmentAnchor")
             role["protocols"] = ["orchard"]
         self.assert_fails(run("check_closed_lists", edited(edit)),
-                          "closed_lists.root_roles.NoteCommitmentAnchor: the source makes it a root of ['orchard', 'pq_masp']")
+                          "closed_lists.root_roles.NoteCommitmentAnchor: the source makes it a root of ['ironwood', 'orchard', 'pq_masp']")
 
     def test_new_committed_pool_map_must_be_recorded(self) -> None:
         overrides = replaced(WORLD_STATE, "    pub(crate) zk_assets: Storage<AssetDefinitionId, ZkAssetState>,",

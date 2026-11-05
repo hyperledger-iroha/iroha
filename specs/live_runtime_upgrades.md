@@ -867,3 +867,261 @@ Recommended by review and written in as committed defaults, for the owner to con
 emergency panel and its leases (7.1), the notice values (section 6), the checkpoint policy (7.3),
 and the client contract (8.4). Every value is a committed parameter, so changing one
 later is itself a governed change.
+
+### Native trigger-lifecycle successor
+
+`iroha_core::runtime::catalog::ReleaseCatalog::lifecycle` identifies the successor
+services profile and `iroha.trigger-lifecycle.v1` native bundle. They are separate
+immutable definitions published after the pinned baseline; founding a World does
+not install or select them. The existing governed change-set mechanism publishes
+the definitions and selects the successor closure. Its normal notice, committee
+support, provenance and closure checks remain mandatory.
+
+The baseline-derived catalog member is only a reference selection.
+`runtime::lifecycle_activation::prepare_lifecycle_change_set` derives the actual
+successor from the **current committed selection**, preserving installed storage
+owners, unrelated services, interfaces and restrictions. The release catalog
+compiles lifecycle variants of its known native bundles; arbitrary published
+descriptors cannot invent executable support. An Ironwood-style twelve-owner
+cutover (including triggers and smart-contract State) therefore survives either
+activation order. Composition still requires each feature's native code and
+qualification in the same release.
+
+Node-side support attestation additionally checks that the successor's complete
+terminal envelope, at the committed maximum Pipeline and Time growth, covers the
+entire candidate count allowed by the immutable FASTPQ source and output profiles.
+Having room for just one V2 input does not suffice when unchanged candidate
+assembly admits more. This support check preserves candidate feasibility across
+the effective-height boundary without changing the predecessor's admission or
+activation rules. A release refuses to sign support for an infeasible successor;
+the existing all-validator attestation requirement still decides activation.
+
+The selected service emits complete `NetworkWithLifecycle`,
+`PipelineWithLifecycle` and `TimeWithLifecycle` rows, including explicit empty
+coverage. Block construction freezes this choice from committed State. Historical
+baseline selections continue to execute and emit V1 rows. A received output's
+variant never selects execution behavior.
+
+The successor reference closure fixes per-root capture to at most 4,096 effects,
+4 MiB prepaid codec scratch, depth 128 and 16 MiB per borrowed source frame.
+All roots in one block share a nonrefunded allowance of 1 GiB codec byte visits
+and 16,777,216 codec operations, using u64 counters. A root may consume only the
+remaining block allowance (and no more than the same per-root ceiling). Callback
+and transaction rollback do not refund this work. Each depleted-entry sweep permits
+16,777,216 visits. Exceeding the block budget deterministically rejects subsequent
+business capture while preserving reserved failure-policy evidence.
+
+Inline Instructions, ContractCall and Batch executable digests are derived once
+when a LoadedAction is registered or restored. An immutable artifact owner seals
+the actual blob hash, deployable-code hash and length at registration/restore;
+its private bytes have no mutable access. These derived bindings are excluded
+from persisted DTOs, World projections and wire schemas. A restored owner derives
+them again from its original bytes. Snapshots check the authoritative artifact
+lookup and hash only the mutable Action fields plus the executable digest. Thus
+rekeying existing entries and repeated metadata/repetition updates do not stream
+large executable bodies. A charged transaction-local sorted tuple index preserves
+entry consistency; last-reference removal invalidates it. Failed callback/root
+overlays discard their index. There is no per-root executable table or dependence
+on allocation addresses, node-local warmth, or CPU timing.
+Retained-evidence bytes are bounded by the smaller of the committed row ceiling
+and 16 MiB. These are deterministic execution limits, not node configuration.
+Exhaustion rejects disposable business output; physical allocation failures remain
+local deferrals. A genuine failed callback prepares its retry/exhaustion/quarantine
+transaction independently, fits the entire policy trace before applying it, and
+preserves that trace when shortening diagnostics. Each internal terminal reservation
+includes the maximum one-effect native policy Update (or smaller Remove), with two
+fixed-size state commitments and the maximum trigger name. Output limits can shorten
+diagnostics but cannot discard policy.
+
+The selected compact service binds every Action field and retry tuple with
+`H("iroha:trigger-lifecycle:action:v1\0" || kind || canonical(authority) ||
+canonical(filter) || canonical(repeats) || canonical(metadata) ||
+canonical(retry_policy) || canonical(retry_tuple) || canonical(executable_digest))`.
+The executable digest is `H("iroha:trigger-lifecycle:executable:v1\0" || tag ||
+canonical(body))`, with Instructions=0, ContractCall=1, IVM=2, Batch=3. For IVM,
+body is the concatenation of canonical original-blob hash, deployable-code hash
+and u64 byte length. Kind is Pipeline=0, Time=1, Data=2, ByCall=3. The predecessor's
+original full-body invocation preimage is unchanged. The selected native source,
+lifecycle journal and Python verifier all use this new service-bound recipe.
+No-op native retry clearing adds no effect. The original `NoritoCanonicalV1` carrier holds a canonical Hash
+frame (72 bytes) or u8 unavailable-reason frame (41 bytes). The explicit Norito
+header schema identifies the layout; the selected service requires compact frames.
+No new codec discriminant or covered wire type is introduced.
+
+Deterministic invalid/missing sources carry explicit unavailable-state markers
+with no height, action hash or retry identity. This allows operator removal and
+depleted-store repairs to publish complete ordered coverage. A policy whose source
+exceeds deterministic hashing work also carries an unavailable marker and still
+applies. Such a marker never proves an Action or invocation: an invoked unavailable
+source deterministically rejects its disposable root. A registry-mismatch repair
+requires native depleted-sweep origin. It removes only the desynchronized typed
+entry, preserving any authoritative live entry of a different kind, its registry,
+generation and permissions. If the registry points to a missing typed row, the
+sweep first records its unavailable registry removal and then the stray typed
+repair, returning one permission-cleanup ID. Validator continuity likewise
+preserves a known live entry of another kind. Same-kind contradictions and repeated repair of the same
+typed store remain invalid; the journal never represents a repair as removal of
+the live incarnation. Allocation and
+linear-custody failures remain local deferrals. The cached-executable/block-work closure has a distinct content identity from
+the previous unactivated milestone definitions.
+
+Original allocation custody follows locally produced lifecycle rows into their
+immutable block graph through a non-wire field. Complete output-row budgets and
+canonical executed-wire admission still apply before StateBlock publication.
+The selected successor additionally commits one native-only runtime anchor through
+the existing charged ordinary execution-write witness. Its 104-byte value binds
+network, height and the selection IDs frozen before execution and after execution.
+The fixed binary key cannot be a guest UTF-8 StatePath; cached witness revalidation
+checks the actual State selections. The predecessor neither emits the anchor nor
+changes its ordinary-witness assembly allocation demand.
+
+The Python scheduled verifier requires a sparse branch for this anchor against the
+certified ordinary-write root at registration and every later block through the tip.
+It hashes the shared selection and both definition descriptors once and requires
+the exact supported selection at both ends of every cut. Complete ordered V2 traces
+reconstruct the selected trigger from its authenticated direct Register. No World
+snapshot or opaque LtHash remainder is accepted. Each branch contains at most 256
+nonempty siblings; a proof window has at most 4,096 cuts and bounded JSON bytes,
+nesting, strings and elements. Proof size depends on the window and per-block writes,
+not World cardinality. A preactivation registration is explicitly refused when its
+window enters V2; V1-only windows retain their existing verification rules.
+
+#### Finality-reader activation prerequisite
+
+Every finality reader that will advance beyond activation MUST be rebuilt with
+this successor's data-model validation, even though `wire_schema_hash` remains
+`8c6e5380` and the IVM ABI remains `7531b45d`. Wire compatibility does not imply
+support for selected output semantics. In particular, the predecessor decoder's
+`validate_output_merkle_cache` → lifecycle `validate_state` rejects unavailable
+Time/Pipeline markers, certain typed-store repairs, and rejection-policy traces
+whose source is unavailable. Such readers stop at that certified height; they must
+be upgraded, not told to bypass structure or certificate validation. This release
+does not make these successor blocks decodable under predecessor rules.
+
+The rebuild inventory includes:
+
+- Validator/archive/recovery binaries (`irohad`, Core, Kura/Kagami), their native
+  finality, AMX relayer, fee-evidence, validation-fee, SoraFS and Musubi readers.
+- Torii's canonical history, pipeline completion, Explorer, contract-event,
+  fee-evidence and validation-fee proof routes, including streamed collections.
+- The Rust `iroha` client, CLI, Mochi (`mochi-core`), `iroha_deploy`/hosted
+  runtimes and `iroha_contract_deploy`, including finality pages, block summaries
+  and selective transaction proofs.
+- Python's `iroha_python_rs`, JavaScript's `iroha_js_host`, and
+  `connect_norito_bridge` artifacts used by Swift and Kotlin/JNI consumers,
+  including committed-transaction inclusion and Kagemusha ledger finality.
+- Every external/BOI service, SDK or offline verifier statically linking or
+  vendoring those decoders, plus fee, AMX and validation-fee proof consumers that
+  authenticate a full certified carrier before extracting their record.
+
+Deployment qualification must inventory these consumers and their rebuilt native
+artifacts before governance activates the selection. A matching `/status` wire
+hash is insufficient evidence. Kagemusha's ledger envelope and the shared
+`SignedBlock::network_output_at`/committed-inclusion joins authenticate the whole
+V2 output leaf, not a reconstructed V1 projection. Reader migrations use the
+common borrowed Network view only after preserving that commitment.
+
+`trigger_lifecycle_preflight PARAMETERS.json TRIGGERS.json CUTS ORDINARY_WRITES_PER_BLOCK [--rekey-to CANONICAL_ACCOUNT_ID]`
+is a read-only developer binary (build with `cargo build -p iroha_core --features dev-tools,json --bin trigger_lifecycle_preflight`) taking Torii-exported Parameters and a complete JSON array
+of canonical registered Trigger frames (base64 JSON strings) from one authenticated
+committed cut. It requires exact canonical Trigger frame identity through decoding; changed/refused exports
+are errors, not silently normalized sources. This cannot detect an upstream
+exporter that already changed or omitted an entry. The caller authenticates the
+source and completeness.
+
+The underlying `runtime::lifecycle_preflight::lifecycle_preflight` helper reports
+per-authority and global source inventories: trigger counts, distinct artifact
+bytes and canonical inline executable bytes. These are exact source sizes, not
+CPU-work estimates. Without a rekey destination, capture fit is unknown. With an
+explicit destination it restores the complete supplied registry once, then invokes
+production `replace_account_id` for each Action authority in a fresh disposable
+block/root, including foreign filter and metadata references. No root is applied.
+Actual byte visits, operations, effects, frame bytes, unavailable states and
+failures are reported against the production root/block/effect/frame ceilings.
+The private allocation pool is bounded; allocation refusal stays visible.
+Reference-only source accounts are not enumerated as Action authorities; the
+all-source inventory covers their possible affected entries, without claiming a
+work bound from source bytes.
+
+Torii Action exports omit internal Time retry state. Disposable Time entries
+therefore receive the maximum structurally admissible retry encoding
+`Some { retries_used: u32::MAX, next_retry_at_ms: u64::MAX }`, including entries
+whose policy could never produce it. This is a conservative capture envelope for
+the supplied destination, not an exact persisted-state replay, arbitrary future
+metadata, previous roots' block work, or transaction/gas/fee/full-row admission.
+Immutable bindings are prepared before capture, as at registration/restore;
+large old executable bodies are not rehashed during the measured rekey.
+
+The command also runs the same `lifecycle_output_support` check used by node
+attestation, reports the twenty largest canonical Action frames, and estimates
+sparse-witness JSON for up to 4,096 consecutive cuts from per-block write
+cardinality. It reports the 256-sibling worst case and SDK's 32 MiB cap. These
+witness estimates and capture measurements grant no activation authority.
+
+Four-peer activation qualification, certified restart and rollout remain required;
+catalog support and a read-only preflight do not activate a root.
+
+
+The read-only `GET /v1/triggers/lifecycle-witness?start_height=H&end_height=T`
+returns the SDK's compact witness from original certified native-write archives.
+It requires the same currently committed selection at every cut, preserves query
+admission and bounds the response at 4,096 cuts / 32 MiB. It cannot reconstruct an
+absent archive, manufacture an anchor or authorize registration. The SDK checks
+every branch against its independently authenticated certified result.
+
+**BOI registration policy:** LOCK-03 and FUT-01/02/03 must register their Time
+triggers only after lifecycle activation has committed. A trigger registered under
+the predecessor remains executable, but the SDK explicitly refuses a proof window
+that starts with V1 registration and later enters V2. It does not infer an old
+Action from current State. Existing such triggers must finish under their original
+verification conditions or be removed and freshly registered through real signed
+transactions after activation; callers must not reinterpret their old receipts.
+
+#### Committed lifecycle activation readiness
+
+Lifecycle selection changes only through the ordinary committed runtime change-set
+path: Parliament approval, frozen notice, every current validator's authenticated
+release-support attestation, then activation at the committed effective height.
+Node files and environment variables cannot select protocol activation. The
+`lifecycle_trace` configuration table is rejected. Readiness neither schedules nor
+applies a transition.
+
+`GET /v1/triggers/lifecycle-activation` is read-only and returns exactly
+`network_id`, nullable `v2_activation_height`, `committed_height`, `active`, and
+`consensus_config_fingerprint`. All values derive from one acquired committed
+State view. The runtime's activated change-set lineage must reach its founded
+selection, with original identities, network, heights and activation ordering
+intact. Pending, lapsed and cancelled proposals never supply an activation
+boundary. Missing or inconsistent provenance refuses the response.
+
+The nullable height identifies the governed activation that began the currently
+active uninterrupted lifecycle interval. It is absent until activation commits.
+The rollout fingerprint binds the original signed-genesis configuration,
+current selected runtime identity, and original activation change-set identity
+and height. Ordinary committed tip advancement leaves it unchanged. It is
+separate from the native `/status` signed-genesis fingerprint; no covered
+status/wire type or IVM ABI changes.
+
+Rebuild every finality reader and run the read-only capacity preflight against
+authenticated committed Parameters and the complete trigger export before
+proposing activation. After genuine governance and activation commit, run
+`python3 scripts/check_lifecycle_roll.py --height H TORII_ROOT_1 ... TORII_ROOT_N`
+for every validator. It requires the same network, boundary and fingerprint,
+and every seat must have committed that active boundary. Register the BOI Time
+triggers only after this check and retain the exact original policy response
+alongside their registration and certified witnesses. Restart and replay derive
+the selection and boundary from original committed history.
+
+The Python SDK's optional `lifecycle_activation_policy_json` accepts that exact
+bounded endpoint object. The BOI app supplies it and pins network, height and
+fingerprint before registration, refusing drift before signing or observation.
+The SDK independently checks every certified row: V2 below H and V1-only at or
+above H refuse, and an explicit null H refuses V2. Endpoint metadata is a
+readiness constraint, not finality authority; service closure, selected runtime,
+proof continuity, selected trigger and outcome checks remain mandatory.
+
+Binding-governance qualification must follow the current anonymous-ballot
+[owner decision](parliament_private_ballot_design.md). The retired timed-OVN/TLE
+corridor cannot be revived as a fallback to activate this runtime. Component
+change-set tests establish admission and activation behavior only; they do not
+establish a qualified live Parliament ballot or all-seat rollout.

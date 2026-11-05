@@ -13,7 +13,7 @@ impl Client {
         &self,
         alias: &str,
         owner: &iroha_data_model::account::AccountId,
-        native_schema: iroha_crypto::Hash,
+        native_schema: impl iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1,
         block: &iroha_data_model::sumeragi_finality::VerifiedSumeragiBlock,
         now_unix_ms: u64,
     ) -> Result<iroha_data_model::sns::lease::VerifiedSnsLeaseV1> {
@@ -55,7 +55,7 @@ impl Client {
             self.network_id,
             &selector,
             owner,
-            native_schema,
+            native_schema.select_schema(proof.world.schema_hash)?,
             block,
             now_unix_ms,
         )?;

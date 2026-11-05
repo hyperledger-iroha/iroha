@@ -2,13 +2,18 @@
 
 #[cfg(feature = "app_api")]
 #[tokio::test]
-async fn role_collections_require_signed_global_reader_and_preserve_assignments() {
-    use axum::{Extension, Router, routing::post};
+async fn role_collections_require_signed_authorized_reader_and_preserve_assignments() {
+    use axum::{Extension, middleware::from_fn_with_state};
+    use iroha_torii_shared::route_catalog::{RouteCatalog, application_api};
     use iroha_data_model::{Identifiable as _, role::Role};
     use tower::ServiceExt as _;
 
     let key = checked_torii_test_ed25519_keypair(0xDB, "role collection reader");
     let account = AccountId::new(key.public_key().clone());
+    let target = AccountId::new(
+        checked_torii_test_ed25519_keypair(0xDC, "role assignment target")
+            .public_key().clone(),
+    );
     let role = Role::new("auditor".parse().unwrap(), account.clone())
         .add_permission(CanReadAllLedgerData)
         .build(&account);
@@ -17,50 +22,68 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
     let empty_role = Role::new("member".parse().unwrap(), account.clone()).build(&account);
     let mut world = World::with_assets_and_roles(
         [],
-        [Account::new(account.clone()).build(&account)],
+        [
+            Account::new(account.clone()).build(&account),
+            Account::new(target.clone()).build(&account),
+        ],
         [],
         [],
         [],
         [role.clone(), empty_role.clone()],
     );
-    world.grant_role_for_tests(account.clone(), empty_role.id().clone());
+    // A different target preserves the pre-grant denial under the current
+    // self/exact-account authorization model.
+    world.grant_role_for_tests(target.clone(), empty_role.id().clone());
     let app = mk_native_app_state_for_tests_with_world(world);
-    let router = Router::new()
-        .route("/v1/roles/query", post(crate::role_collections::roles))
-        .route(
-            "/v1/accounts/{account}/roles/query",
-            post(crate::role_collections::account_roles),
-        )
+    let mut builder = RouterBuilder::new(
+        app.clone(),
+        RouteCatalog::new(&[
+            application_api::ROLES_GET,
+            application_api::ROLES_QUERY_POST,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET,
+            application_api::ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST,
+        ]),
+        compiled_route_features(),
+    ).expect("unique current role descriptors");
+    crate::role_collection_routes::mount(&mut builder, app.clone(), 1024);
+    let (router, manifest) = builder.finish().expect("actual role handlers match their catalog");
+    let router = router
         .with_state(app.clone())
-        .layer(Extension(crate::loopback_connect_info()))
-        .layer(axum::middleware::from_fn_with_state(
-            CanonicalAccountBodyAuthState {
-                app: app.clone(),
-                max_body_bytes: 1024,
-                missing_auth_code: "canonical_authentication_required",
-                missing_auth_message: "canonical account request authentication is required",
-            },
-            enforce_canonical_account_body_authentication,
-        ));
+        .layer(from_fn_with_state(
+            app.clone(),
+            enforce_app_routed_read_http_admission,
+        ))
+        .layer(from_fn_with_state(
+            manifest.route_index(),
+            attach_matched_route_metadata,
+        ))
+        .layer(Extension(crate::loopback_connect_info()));
     let paths = [
         "/v1/roles/query".to_owned(),
-        format!("/v1/accounts/{account}/roles/query"),
+        format!("/v1/accounts/{target}/roles/query"),
     ];
     for path in &paths {
-        let response = router
-            .clone()
-            .oneshot(
+        for body in ["{}", "{"] {
+            let response = router.clone().oneshot(
                 axum::http::Request::builder()
                     .method(Method::POST)
                     .uri(path)
                     .header("content-type", "application/json")
-                    .body(Body::from("{"))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+                    .body(Body::from(body)).unwrap(),
+            ).await.unwrap();
+            assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        }
         let uri: Uri = path.parse().unwrap();
+        let mut malformed = axum::http::Request::builder()
+            .method(Method::POST)
+            .uri(uri.clone())
+            .body(Body::from("{")).unwrap();
+        *malformed.headers_mut() = signed_network_app_headers(
+            app.state.network_id_ref(), &account, &key, &Method::POST, &uri, b"{",
+        );
+        malformed.headers_mut().insert("content-type", HeaderValue::from_static("application/json"));
+        let malformed = router.clone().oneshot(malformed).await.unwrap();
+        assert_eq!(malformed.status(), StatusCode::BAD_REQUEST);
         let mut request = axum::http::Request::builder()
             .method(Method::POST)
             .uri(uri.clone())
@@ -128,10 +151,12 @@ async fn role_collections_require_signed_global_reader_and_preserve_assignments(
 
 #[cfg(feature = "app_api")]
 #[test]
-fn role_collection_catalog_declares_mandatory_read_authentication() {
+fn role_collection_catalog_declares_canonical_read_authentication() {
     use iroha_torii_shared::route_catalog::{AuthenticationPolicy, RouteEffect, application_api};
     for route in [
+        application_api::ROLES_GET,
         application_api::ROLES_QUERY_POST,
+        application_api::ACCOUNTS_BY_ACCOUNT_ID_ROLES_GET,
         application_api::ACCOUNTS_BY_ACCOUNT_ID_ROLES_QUERY_POST,
     ] {
         assert_eq!(

@@ -38,7 +38,7 @@ use iroha::{
             IrohaZkX509StarkP256StatementV1, PrivacyCapabilityReadinessV1,
             PrivacyCompiledProfileResultV1, PrivacyCompiledProfileSnapshotV1,
             PrivacyExact12CapabilityManifestV1, PrivacyExecutionModeV1, PrivacyOperationSchemaV1,
-            PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementV1,
+            PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1,
         },
         query::{
             CommittedTransaction, block::prelude::FindBlocks,
@@ -73,7 +73,8 @@ use tokio::time::{Instant, sleep, timeout};
 const RELEASE_TEST_NAME: &str =
     "canonical_zk_x509_action_survives_four_peer_activation_replay_and_restart";
 const REQUIRED_DAEMON_FEATURE: &str = "zk-stark";
-const ZK_X509_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+const ZK_X509_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const RESTART_TIMEOUT: Duration = Duration::from_secs(120);
@@ -253,10 +254,11 @@ fn single_zk_x509_proof_bytes<'a>(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("inspect native ZK-X509 proof transaction binding")?
         .ok_or_else(|| eyre!("native ZK-X509 transaction omitted its direct privacy action"))?;
-    match (&submission.envelope.statement, &submission.envelope.proof) {
+    let submission_envelope = submission.runtime_envelope();
+    match (&submission_envelope.statement, &submission_envelope.proof) {
         (
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(statement),
-            PrivacyProofV1::IrohaZkX509StarkP256V1(proof),
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement),
+            PrivacyRuntimeProofV1::IrohaZkX509StarkP256V1(proof),
         ) => {
             ensure!(
                 statement == expected_statement && statement.context.action_index == 0,

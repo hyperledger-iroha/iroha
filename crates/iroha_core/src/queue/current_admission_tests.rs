@@ -569,7 +569,7 @@ fn governed_lane_commitment_keeps_original_input_and_required_approval_refusals(
     let checked = CheckedTransaction::new_unchecked(accepted);
     assert!(
         matches!(
-            Queue::enforce_manifest_quorum("default", &rules, &checked),
+            Queue::enforce_manifest_quorum("default", &rules, &checked, &crate::runtime::release_catalog().unwrap().baseline),
             Err(Error::GovernanceNotPermitted { reason, .. })
                 if reason == "lane manifest quorum requires 2 validator approvals but 1 were provided"
         ),

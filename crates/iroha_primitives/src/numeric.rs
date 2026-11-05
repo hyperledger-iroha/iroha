@@ -139,11 +139,16 @@ impl<'a> norito::core::DecodeFromSlice<'a> for Numeric {
             <scale_::NumericScaleHelper as norito::core::DecodeFromSlice>::decode_from_slice(
                 bytes,
             )?;
-        let value = Self::try_new_raw(helper.mantissa, helper.scale)
-            .map_err(|error| norito::core::Error::Message(format!("invalid numeric: {error}")))?;
-        value
-            .validate_decimal()
-            .map_err(|error| norito::core::Error::Message(format!("invalid numeric: {error}")))?;
+        let value = Self::try_new_raw(helper.mantissa, helper.scale).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(format!("invalid numeric: {error}"))
+            })
+        })?;
+        value.validate_decimal().map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(format!("invalid numeric: {error}"))
+            })
+        })?;
         Ok((value, used))
     }
 }
@@ -155,8 +160,11 @@ impl<'a> DeserializePayload<'a> for NumericSpec {
     fn try_deserialize(archived: &'a Archived<NumericSpec>) -> Result<Self, Error> {
         let scale_arch: &Archived<Option<u32>> = archived.cast();
         let scale = <Option<u32> as DeserializePayload>::try_deserialize(scale_arch)?;
-        Self::try_from_scale(scale)
-            .map_err(|error| Error::Message(format!("invalid numeric specification: {error}")))
+        Self::try_from_scale(scale).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                Error::Message(format!("invalid numeric specification: {error}"))
+            })
+        })
     }
 }
 impl FastJsonWrite for NumericSpec {
@@ -218,39 +226,53 @@ impl JsonDeserialize for NumericSpec {
     }
 }
 /// Error occurred during creation of [`Numeric`]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NumericError {
     /// Mantissa exceeds allowed range
+    #[error("Mantissa exceeds allowed range")]
     MantissaTooLarge,
     /// Scale exceeds allowed range
+    #[error("Scale exceeds allowed range")]
     ScaleTooLarge,
     /// Malformed: expecting number with optional decimal point (10, 10.02)
+    #[error("Malformed: expecting number with optional decimal point (10, 10.02)")]
     Malformed,
 }
 /// Consensus-visible failures produced by exact decimal and quantity operations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum NumericOperationError {
     /// Canonical result mantissa is outside `-2^511..=2^511-1`
+    #[error("Canonical result mantissa is outside `-2^511..=2^511-1`")]
     MantissaOverflow,
     /// Canonical exact result needs a scale greater than 28
+    #[error("Canonical exact result needs a scale greater than 28")]
     ScaleOverflow,
     /// Divisor is zero
+    #[error("Divisor is zero")]
     DivisionByZero,
     /// Exact quotient is a repeating decimal
+    #[error("Exact quotient is a repeating decimal")]
     RepeatingDecimal,
     /// Exact terminating quotient needs more than 28 fractional digits
+    #[error("Exact terminating quotient needs more than 28 fractional digits")]
     ExactDivisionScaleOverflow,
     /// Requested output scale is outside `0..=28`
+    #[error("Requested output scale is outside `0..=28`")]
     InvalidScale,
     /// Conversion would discard a nonzero fractional part
+    #[error("Conversion would discard a nonzero fractional part")]
     InexactConversion,
     /// Decimal is not in its unique canonical representation
+    #[error("Decimal is not in its unique canonical representation")]
     NonCanonical,
     /// Quantity cannot be negative
+    #[error("Quantity cannot be negative")]
     NegativeQuantity,
     /// Quantity subtraction would produce a negative result
+    #[error("Quantity subtraction would produce a negative result")]
     QuantityUnderflow,
     /// Integer square root received a negative operand
+    #[error("Integer square root received a negative operand")]
     NegativeSquareRoot,
 }
 /// Failures produced while multiplying a quantity by aggregate decimal factors.
@@ -434,22 +456,27 @@ pub enum ExactDivisionClass {
     ScaleOverflow,
 }
 /// The error type returned when a numeric conversion fails.
-#[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("The error type returned when a numeric conversion fails.")]
 pub struct TryFromNumericError;
 /// Error occurred while checking if number satisfy given spec
-#[derive(Clone, Copy, Debug, displaydoc::Display, thiserror::Error)]
+#[derive(Clone, Copy, Debug, thiserror::Error)]
 pub enum NumericSpecError {
     /// Given number has scale higher than allowed by spec.
+    #[error("Given number has scale higher than allowed by spec.")]
     ScaleTooHigh,
 }
 /// Error occurred while checking if number satisfy given spec
-#[derive(Clone, Debug, displaydoc::Display, thiserror::Error)]
+#[derive(Clone, Debug, thiserror::Error)]
 pub enum NumericSpecParseError {
     /// String representation should start with Numeric
+    #[error("String representation should start with Numeric")]
     StartWithNumeric,
     /// Numeric should be followed by optional scale wrapped in braces
+    #[error("Numeric should be followed by optional scale wrapped in braces")]
     WrappedInBraces,
     /// Scale should be valid integer value: {_0}
+    #[error("Scale should be valid integer value: {0}")]
     InvalidScale(#[source] <u32 as FromStr>::Err),
 }
 impl Numeric {
@@ -2072,15 +2099,21 @@ impl<'a> DeserializePayload<'a> for Quantity {
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let numeric = Numeric::try_deserialize(archived.cast::<Numeric>())?;
-        Self::from_canonical_numeric(numeric)
-            .map_err(|error| Error::Message(format!("invalid quantity: {error}")))
+        Self::from_canonical_numeric(numeric).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                Error::Message(format!("invalid quantity: {error}"))
+            })
+        })
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for Quantity {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (numeric, used) = <Numeric as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        let quantity = Self::from_canonical_numeric(numeric)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        let quantity = Self::from_canonical_numeric(numeric).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(error.to_string())
+            })
+        })?;
         Ok((quantity, used))
     }
 }
@@ -2384,16 +2417,22 @@ impl<'a> DeserializePayload<'a> for XorQuantity {
     }
     fn try_deserialize(archived: &'a Archived<Self>) -> Result<Self, Error> {
         let quantity = Quantity::try_deserialize(archived.cast::<Quantity>())?;
-        Self::try_from_quantity(quantity)
-            .map_err(|error| Error::Message(format!("invalid XOR quantity: {error}")))
+        Self::try_from_quantity(quantity).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                Error::Message(format!("invalid XOR quantity: {error}"))
+            })
+        })
     }
 }
 impl<'a> norito::core::DecodeFromSlice<'a> for XorQuantity {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
         let (quantity, used) =
             <Quantity as norito::core::DecodeFromSlice>::decode_from_slice(bytes)?;
-        let value = Self::try_from_quantity(quantity)
-            .map_err(|error| norito::core::Error::Message(error.to_string()))?;
+        let value = Self::try_from_quantity(quantity).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid numeric value", || {
+                norito::core::Error::Message(error.to_string())
+            })
+        })?;
         Ok((value, used))
     }
 }
@@ -3012,11 +3051,16 @@ impl<'a> DeserializePayload<'a> for Numeric {
         if aligned {
             let helper_arch: &Archived<scale_::NumericScaleHelper> = archived.cast();
             let helper = scale_::NumericScaleHelper::try_deserialize(helper_arch)?;
-            let value = Numeric::try_new_raw(helper.mantissa, helper.scale)
-                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))?;
-            value
-                .validate_decimal()
-                .map_err(|err| Error::Message(format!("invalid numeric: {err}")))?;
+            let value = Numeric::try_new_raw(helper.mantissa, helper.scale).map_err(|err| {
+                norito::core::prepaid_validation_error("invalid numeric value", || {
+                    Error::Message(format!("invalid numeric: {err}"))
+                })
+            })?;
+            value.validate_decimal().map_err(|err| {
+                norito::core::prepaid_validation_error("invalid numeric value", || {
+                    Error::Message(format!("invalid numeric: {err}"))
+                })
+            })?;
             Ok(value)
         } else {
             let slice = norito::core::payload_slice_from_ptr(ptr)?;

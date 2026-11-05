@@ -715,10 +715,15 @@ fn scoped_artifact_openapi_binds_network_full_dataspace_and_content() {
 }
 
 #[test]
-fn generated_spec_role_queries_require_canonical_global_readers() {
+fn generated_spec_role_reads_require_canonical_authorized_callers() {
     let document = generate_spec();
-    for path in ["/v1/roles/query", "/v1/accounts/{account_id}/roles/query"] {
-        let operation = openapi_operation(&document, path, "post");
+    for (path, method, account_scoped) in [
+        ("/v1/roles", "get", false),
+        ("/v1/roles/query", "post", false),
+        ("/v1/accounts/{account_id}/roles", "get", true),
+        ("/v1/accounts/{account_id}/roles/query", "post", true),
+    ] {
+        let operation = openapi_operation(&document, path, method);
         let security = operation.get("security").and_then(Value::as_array).unwrap();
         assert!(!security.is_empty());
         assert!(
@@ -733,6 +738,32 @@ fn generated_spec_role_queries_require_canonical_global_readers() {
                 .unwrap()
                 .contains("CanReadAllLedgerData")
         );
+        let description = operation.get("description").and_then(Value::as_str).unwrap();
+        if account_scoped {
+            assert!(description.contains("CanReadAccountData"));
+            assert!(description.contains("target account"));
+        }
+        let responses = operation.get("responses").unwrap();
+        assert!(responses.get("401").is_some());
+        assert!(responses.get("403").is_some());
+        let expected_page = if account_scoped {
+            "#/components/schemas/AccountRolePage"
+        } else {
+            "#/components/schemas/RolePage"
+        };
+        assert_eq!(operation_response_schema_ref(operation, "200", path), expected_page);
+        if method == "post" {
+            assert_eq!(
+                operation_request_schema_ref(operation, path),
+                "#/components/schemas/CollectionQuery"
+            );
+        } else {
+            for name in ["filter", "sort", "select", "limit", "cursor", "include_total"] {
+                assert!(operation_parameters(operation).iter().any(|parameter| {
+                    parameter.get("name").and_then(Value::as_str) == Some(name)
+                }), "{path} is missing {name}");
+            }
+        }
     }
     let schemas = component_schemas(&document);
     assert_eq!(

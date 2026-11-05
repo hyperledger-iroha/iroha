@@ -54,9 +54,8 @@ pub(crate) fn validate_transaction_details_bindings(
     details: &PipelineTransactionDetailsResponse,
     entrypoint_hash: HashOf<TransactionEntrypoint>,
 ) -> Result<()> {
-    use iroha_data_model::block::execution_output::ExecutionOutputV1;
     let transaction = &details.transaction;
-    let ExecutionOutputV1::Network(output) = transaction.output() else {
+    let Some(output) = transaction.output().network() else {
         return Err(eyre!(
             "transaction-details response carries an internal execution output"
         ));
@@ -1874,6 +1873,36 @@ pub(crate) mod query_errors_handling {
             transaction_details_fixture(TransactionResult::new(Err(reason.clone())));
         (entrypoint_hash, details, reason)
     }
+    #[test]
+    fn lifecycle_transaction_details_bindings_preserve_the_full_output_commitment() {
+        use iroha_data_model::block::execution_output::{
+            ExecutionOutputV1, NetworkExecutionOutputV2, TriggerLifecycleEffectsV1,
+        };
+        for (hash, mut details) in [successful_transaction_details_fixture(), {
+            let (hash, details, _) = rejected_transaction_details_fixture();
+            (hash, details)
+        }] {
+            validate_transaction_details_bindings(&details, hash).unwrap();
+            let ExecutionOutputV1::Network(execution) = details.transaction.output.clone() else {
+                unreachable!()
+            };
+            details.transaction.output =
+                ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                    execution,
+                    trigger_lifecycle: TriggerLifecycleEffectsV1::Complete { effects: vec![] },
+                });
+            assert!(
+                validate_transaction_details_bindings(&details, hash).is_err(),
+                "the V1 digest cannot authenticate the V2 wrapper"
+            );
+            details.transaction.output_hash = HashOf::new(&details.transaction.output);
+            validate_transaction_details_bindings(&details, hash).unwrap();
+            details.transaction.output_proof =
+                crate::crypto::MerkleProof::from_audit_path(1, vec![]);
+            assert!(validate_transaction_details_bindings(&details, hash).is_err());
+        }
+    }
+
     fn assert_exact_transaction_details_query(
         query: &QueryWithParams,
         entrypoint_hash: HashOf<TransactionEntrypoint>,

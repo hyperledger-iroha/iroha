@@ -37,14 +37,12 @@ iroha_config.workspace = true
 iroha_swarm = { path = "../iroha_swarm" }
 
 clap = { workspace = true, features = ["derive"] }
-clap-markdown = "0.1.5"
+iroha_cli_docs = { workspace = true }
 color-eyre.workspace = true
-derive_more.workspace = true
 toml = { workspace = true }
 
 blake3.workspace = true
 hex = { workspace = true }
-base64.workspace = true
 rand = { workspace = true }
 tempfile = { workspace = true }
 zeroize = { version = "1.8.2", default-features = false, features = ["alloc", "std"] }

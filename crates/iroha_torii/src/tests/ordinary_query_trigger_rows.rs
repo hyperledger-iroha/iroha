@@ -89,10 +89,14 @@ fn trigger_query(
     policy: OrdinaryQueryServerPolicy,
     pool: &ByteWeightedMemoryPool,
 ) -> Result<iroha_core::query::snapshot::ServerOwnedQueryResponse, SnapshotQueryError> {
+    let limits = policy.trigger_limits.expect("complete trigger profile admitted");
     let permit = if matches!(request, QueryRequest::Start(_)) {
-        pool.try_acquire_parts(policy.start_reservation_parts())
+        pool.try_acquire_parts([
+            limits.execution_headroom_bytes(),
+            limits.max_cursor_retained_bytes(),
+        ])
     } else {
-        pool.try_acquire_parts(policy.execution_reservation_parts())
+        pool.try_acquire_parts([limits.execution_headroom_bytes()])
     }
     .expect("admit original policy weight");
     let memory = OrdinaryQueryMemoryLease::new(ToriiOrdinaryQueryMemoryReservation {
@@ -108,7 +112,7 @@ fn trigger_query(
         CursorMode::Stored,
         QueryLimits::new(policy.max_fetch_size).with_count_mode(QueryCountMode::Bounded),
         Some(u64::MAX),
-        policy.limits,
+        limits,
         memory,
     )
 }
@@ -190,7 +194,7 @@ fn ordinary_trigger_rows_preserve_nonempty_executables_and_cursor_charges() {
         if index == 0 {
             assert_eq!(
                 pool.available_bytes(),
-                capacity - policy.limits.max_cursor_retained_bytes()
+                capacity - policy.trigger_limits.unwrap().max_cursor_retained_bytes()
             );
             let mut cursor = cursor.expect("second original row is retained");
             cursor.gas_budget = Some(u64::MAX);
@@ -218,7 +222,7 @@ fn ordinary_trigger_rows_refuse_oversize_source_and_refund_admission() {
     let authority = AccountId::new(key.public_key().clone());
     let log = iroha_data_model::isi::Log::new(
         iroha_logger::Level::INFO,
-        "x".repeat(usize::try_from(policy.limits.max_source_item_bytes()).unwrap()),
+        "x".repeat(usize::try_from(policy.trigger_limits.unwrap().max_source_item_bytes()).unwrap()),
     );
     let row = trigger_row(
         "oversize_instruction",
@@ -227,7 +231,7 @@ fn ordinary_trigger_rows_refuse_oversize_source_and_refund_admission() {
     );
     assert!(
         norito::encode_canonical(&row).unwrap().len()
-            > usize::try_from(policy.limits.max_source_item_bytes()).unwrap()
+            > usize::try_from(policy.trigger_limits.unwrap().max_source_item_bytes()).unwrap()
     );
     let chain = trigger_chain(&[row], &authority);
     let capacity = pool.available_bytes();
@@ -245,38 +249,40 @@ fn ordinary_trigger_rows_refuse_oversize_source_and_refund_admission() {
 }
 
 #[test]
-fn ordinary_source_rows_divide_the_admitted_phase_and_refuse_too_small_geometry() {
+fn ordinary_source_profiles_fit_the_admitted_phase_and_refuse_too_small_geometry() {
     let (geometry, pool) = default_geometry();
     let policy = default_policy(geometry, &pool);
     let envelope =
         QueryFanoutMemoryEnvelope::for_body_admission(geometry.fanout_working_set_bytes).unwrap();
+    let trigger = policy.trigger_limits.expect("complete trigger profile admitted");
     assert_eq!(
         policy.limits.max_source_item_bytes(),
-        u64::try_from(envelope.candidate_allocation_bytes).unwrap() / (policy.max_fetch_size + 1)
+        iroha_core::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES
     );
-    assert!(
-        policy.limits.max_source_item_bytes()
-            > iroha_core::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES
-    );
-    assert!(
-        policy.limits.execution_headroom_bytes()
-            <= u64::try_from(geometry.fanout_working_set_bytes).unwrap()
-    );
-    let mut too_small = envelope;
-    too_small.candidate_allocation_bytes = usize::try_from(
-        (policy.max_fetch_size + 1)
-            * iroha_core::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES
-            - 1,
-    )
-    .unwrap();
-    assert!(
-        OrdinaryQueryServerPolicy::new(
-            routing::AppQueryLimits::default(),
-            geometry.ingress,
-            too_small
+    assert_eq!(trigger.max_source_item_bytes(), 4 * 1024);
+    assert_eq!(
+        trigger.max_page_items(),
+        policy.max_fetch_size.min(
+            iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE.get()
         )
-        .is_none()
     );
+    assert!(trigger.max_source_item_bytes() > policy.limits.max_source_item_bytes());
+    assert!(
+        trigger.max_source_item_bytes() * (trigger.max_page_items() + 1)
+            <= u64::try_from(envelope.candidate_allocation_bytes).unwrap()
+    );
+    let required = trigger.execution_headroom_bytes()
+        .checked_add(trigger.max_cursor_retained_bytes()).unwrap();
+    assert!(required <= u64::try_from(geometry.fanout_working_set_bytes).unwrap());
+    let mut too_small = envelope;
+    too_small.working_set_bytes = usize::try_from(required - 1).unwrap();
+    let restricted = OrdinaryQueryServerPolicy::new(
+        routing::AppQueryLimits::default(),
+        geometry.ingress,
+        too_small,
+    ).expect("name/id profile remains separately admitted");
+    assert!(restricted.trigger_limits.is_none());
+    assert_eq!(restricted.limits.max_source_item_bytes(), policy.limits.max_source_item_bytes());
     let overflow = routing::AppQueryLimits {
         max_fetch_size: u64::MAX,
         ..routing::AppQueryLimits::default()

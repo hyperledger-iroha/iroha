@@ -37,10 +37,21 @@ pub fn encode_mirrored_header_value(value: &str) -> String {
     {
         return value.to_owned();
     }
-    format!(
-        "{BASE64_SENTINEL_PREFIX}{}{BASE64_SENTINEL_SUFFIX}",
-        BASE64_STANDARD.encode(bytes)
-    )
+    let capacity = base64::encoded_len(bytes.len(), true)
+        .and_then(|length| length.checked_add(BASE64_SENTINEL_PREFIX.len()))
+        .and_then(|length| length.checked_add(BASE64_SENTINEL_SUFFIX.len()))
+        .expect("encoded MCP header length must fit usize");
+    let mut encoded = vec![0; capacity];
+    let payload_end = capacity - BASE64_SENTINEL_SUFFIX.len();
+    encoded[..BASE64_SENTINEL_PREFIX.len()].copy_from_slice(BASE64_SENTINEL_PREFIX.as_bytes());
+    BASE64_STANDARD
+        .encode_slice(
+            bytes,
+            &mut encoded[BASE64_SENTINEL_PREFIX.len()..payload_end],
+        )
+        .expect("MCP header buffer fits the calculated Base64 length");
+    encoded[payload_end..].copy_from_slice(BASE64_SENTINEL_SUFFIX.as_bytes());
+    String::from_utf8(encoded).expect("Base64 MCP header contains only ASCII")
 }
 
 /// Decode and validate a mirrored MCP HTTP routing header value.
@@ -75,6 +86,72 @@ fn plain_header_value_is_safe(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mirrored_header_encoding_keeps_exact_padding_utf8_and_sentinels() {
+        for (value, expected) in [
+            ("", "=?base64??="),
+            ("\0", "=?base64?AA==?="),
+            ("\0\0", "=?base64?AAA=?="),
+            ("\0\0\0", "=?base64?AAAA?="),
+            ("µ", "=?base64?wrU=?="),
+            ("火", "=?base64?54Gr?="),
+            ("🔥", "=?base64?8J+UpQ==?="),
+            (" name", "=?base64?IG5hbWU=?="),
+            ("name ", "=?base64?bmFtZSA=?="),
+            ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
+            ("=?base64??=", "=?base64?PT9iYXNlNjQ/Pz0=?="),
+            ("iroha.health", "iroha.health"),
+            ("iroha.\thealth", "iroha.\thealth"),
+            ("=?base64?prefix", "=?base64?prefix"),
+            ("suffix?=", "suffix?="),
+        ] {
+            assert_eq!(encode_mirrored_header_value(value), expected);
+            assert_eq!(
+                decode_mirrored_header_value(expected).as_deref(),
+                Some(value)
+            );
+        }
+    }
+
+    #[test]
+    fn mirrored_header_encoding_preserves_ascii_positions_and_large_unicode_values() {
+        for byte in 0..=127_u8 {
+            let character = char::from(byte);
+            for value in [
+                character.to_string(),
+                format!("{character}name"),
+                format!("name{character}"),
+                format!("na{character}me"),
+            ] {
+                let encoded = encode_mirrored_header_value(&value);
+                assert_eq!(
+                    decode_mirrored_header_value(&encoded).as_deref(),
+                    Some(value.as_str())
+                );
+                if plain_header_value_is_safe(value.as_bytes()) {
+                    assert_eq!(encoded, value);
+                } else {
+                    assert!(encoded.starts_with(BASE64_SENTINEL_PREFIX));
+                    assert!(encoded.ends_with(BASE64_SENTINEL_SUFFIX));
+                }
+            }
+        }
+        for length in [0, 1, 2, 3, 7, 8, 9, 767, 768, 769, 4095, 4096, 4097] {
+            let value = "\0µ火🔥".repeat(length);
+            let encoded = encode_mirrored_header_value(&value);
+            assert_eq!(
+                decode_mirrored_header_value(&encoded).as_deref(),
+                Some(value.as_str())
+            );
+            assert_eq!(
+                encoded.len(),
+                BASE64_SENTINEL_PREFIX.len()
+                    + base64::encoded_len(value.len(), true).unwrap()
+                    + BASE64_SENTINEL_SUFFIX.len()
+            );
+        }
+    }
 
     #[test]
     fn mirrored_header_values_roundtrip_plain_and_encoded_text() {

@@ -155,9 +155,14 @@ impl Json {
 
     fn ensure_size(value: &str) -> Result<(), norito::Error> {
         if value.len() > MAX_JSON_BYTES {
-            return Err(norito::Error::from(format!(
-                "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
-            )));
+            return Err(norito::core::prepaid_validation_error(
+                "Json exceeds its UTF-8 limit",
+                || {
+                    norito::Error::from(format!(
+                        "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
+                    ))
+                },
+            ));
         }
         Ok(())
     }
@@ -184,9 +189,14 @@ impl Json {
         let (field, used) = Self::take_wire_text_field(bytes)?;
         let (len, header_len) = norito::core::inspect_len_from_slice(field)?;
         if len > MAX_JSON_BYTES {
-            return Err(norito::core::Error::Message(format!(
-                "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
-            )));
+            return Err(norito::core::prepaid_validation_error(
+                "Json exceeds its UTF-8 limit",
+                || {
+                    norito::core::Error::Message(format!(
+                        "Json payload exceeds the {MAX_JSON_BYTES}-byte UTF-8 limit"
+                    ))
+                },
+            ));
         }
         let end = header_len
             .checked_add(len)

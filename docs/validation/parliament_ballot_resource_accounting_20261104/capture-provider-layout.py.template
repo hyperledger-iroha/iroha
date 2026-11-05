@@ -1,0 +1,45 @@
+"""Compile actual provider layouts; retain inputs, commands and outputs without claiming runtime qualification."""
+from pathlib import Path
+import hashlib,json,os,shutil,subprocess,time
+root=Path('/Users/takemiyamakoto/dev/iroha');base=Path('/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/provider-layout');work=base/'producer';out=base/'capture';target=root/'target/cargo-fast/script-triage'
+assert target.is_dir()
+assert not out.exists(),'retain previous attempt before another capture'
+(work/'src').mkdir(parents=True,exist_ok=True);out.mkdir(parents=True)
+(work/'src/lib.rs').write_bytes((root/'docs/validation/parliament_ballot_b6/provider-layout.rs').read_bytes())
+(work/'Cargo.toml').write_text((root/'docs/validation/parliament_ballot_b6/provider-layout-Cargo.toml.template').read_text().replace('@IROHA_REPO@',str(root)))
+(work/'Cargo.lock').write_bytes((root/'Cargo.lock').read_bytes())
+def sha(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+def save(n,v):(out/n).write_text(json.dumps(v,indent=2)+'\n')
+env=os.environ.copy()
+for k in ('RUSTFLAGS','CARGO_ENCODED_RUSTFLAGS','CARGO_BUILD_TARGET','CARGO_BUILD_JOBS'):env.pop(k,None)
+cmd=['cargo','metadata','--offline','--format-version=1','--manifest-path',str(work/'Cargo.toml')]
+p=subprocess.run(cmd,cwd=root,env=env,text=True,capture_output=True);(out/'resolve.stderr').write_text(p.stderr);assert p.returncode==0,p.stderr
+metadata=json.loads(p.stdout);(out/'metadata.json').write_text(p.stdout)
+paths={Path(__file__),work/'Cargo.toml',work/'Cargo.lock',work/'src/lib.rs',root/'Cargo.toml',root/'Cargo.lock',root/'rust-toolchain.toml'}
+for pkg in metadata['packages']:
+ d=Path(pkg['manifest_path']).parent;paths.add(d/'Cargo.toml');paths.update(d.rglob('*.rs'))
+ for f in ('Cargo.toml.orig','.cargo-checksum.json'):
+  if (d/f).exists():paths.add(d/f)
+sysroot=Path(subprocess.check_output(['rustc','--print','sysroot'],cwd=root,text=True).strip())
+paths.update([sysroot/'bin/rustc',sysroot/'bin/cargo']);paths.update((sysroot/'lib').glob('librustc_driver*'))
+targets=['aarch64-apple-darwin','aarch64-apple-ios','aarch64-linux-android','x86_64-unknown-linux-musl']
+for t in targets:
+ std=sysroot/'lib/rustlib'/t/'lib';assert std.is_dir(),t;paths.update(std.glob('*.rlib'))
+inputs={str(p):sha(p) for p in sorted(paths)}
+receipt={'schema':'parliament-provider-layout-current-v1','rustc':subprocess.check_output(['rustc','-Vv'],text=True,cwd=root),'source_inputs':inputs,'dependency_metadata_sha256':sha(out/'metadata.json'),'commands':[],'compile_only':True,'profile_qualified':False,'source_stable':True,'target_cache':str(target),'flags':'No inherited RUSTFLAGS/CARGO_ENCODED_RUSTFLAGS/build-target/jobs overrides; native Cargo jobserver; release rustc emit LLVM IR without linker; explicit target/mode only.'}
+save('receipt.json',receipt)
+for t in targets:
+ for mode in ('portable','accel'):
+  ir=out/(t+'-'+mode+'.ll.txt');log=out/(t+'-'+mode+'.log')
+  command=['cargo','rustc','--offline','--locked','--lib','--release','--manifest-path',str(work/'Cargo.toml'),'--target',t,'--target-dir',str(target)]
+  if mode=='accel':command+=['--features','accel']
+  command+=['--','--emit=llvm-ir='+str(ir)]
+  start=time.monotonic()
+  with log.open('w') as stream:p=subprocess.run(command,cwd=root,env=env,stdout=stream,stderr=subprocess.STDOUT)
+  changed={name:sha(name) if Path(name).exists() else None for name,h in inputs.items() if not Path(name).exists() or sha(name)!=h}
+  row={'target':t,'mode':mode,'command':command,'exit_code':p.returncode,'elapsed_seconds':time.monotonic()-start,'log_sha256':sha(log),'source_changes':changed}
+  if ir.exists():row['ir_sha256']=sha(ir)
+  receipt['commands'].append(row);receipt['source_stable'] &= not bool(changed);save('receipt.json',receipt)
+  print(t,mode,p.returncode,'changes',len(changed),flush=True)
+  if p.returncode or changed:raise SystemExit('capture failed; retained logs')
+print('All eight compile-only provider measurements completed',flush=True)

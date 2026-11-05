@@ -4,6 +4,7 @@ use iroha_data_model::{
     Registrable,
     account::{Account, AccountId},
     isi::InstructionBox,
+    runtime::definition::RootSelectionV1,
     transaction::Executable,
 };
 use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
@@ -63,6 +64,22 @@ pub fn executable_self_registers_authority(executable: &Executable, authority: &
 /// advance or sole forgery-evidence submission from any authority (`specs/sccp.md` §4.19).
 #[must_use]
 pub fn allows_unregistered_authority(executable: &Executable, authority: &AccountId) -> bool {
+    allows_unregistered_authority_with_selection(
+        executable,
+        authority,
+        &crate::runtime::release_catalog()
+            .expect("compiled release catalog")
+            .baseline,
+    )
+}
+
+/// Apply authority-shape exceptions using the committed runtime's payload grammar.
+#[must_use]
+pub fn allows_unregistered_authority_with_selection(
+    executable: &Executable,
+    authority: &AccountId,
+    selection: &RootSelectionV1,
+) -> bool {
     executable_self_registers_authority(executable, authority)
         || (crate::smartcontracts::isi::sccp::keepalive::is_standalone(executable)
             && authority
@@ -71,16 +88,31 @@ pub fn allows_unregistered_authority(executable: &Executable, authority: &Accoun
         || matches!(
             executable,
             Executable::Instructions(instructions)
-                if instructions_allow_multisig_envelope_authority(instructions)
+                if instructions_allow_multisig_envelope_authority_with_selection(instructions, selection)
         )
         || crate::smartcontracts::isi::sccp::admission::allows_unregistered_authority(executable)
 }
 
+/// Recognize the frozen baseline grammar when no committed State is available.
+#[cfg(test)]
 pub fn instructions_allow_multisig_envelope_authority(instructions: &[InstructionBox]) -> bool {
+    instructions_allow_multisig_envelope_authority_with_selection(
+        instructions,
+        &crate::runtime::release_catalog()
+            .expect("compiled release catalog")
+            .baseline,
+    )
+}
+
+/// Recognize multisig envelopes under the committed selection, including successor proposals.
+pub fn instructions_allow_multisig_envelope_authority_with_selection(
+    instructions: &[InstructionBox],
+    selection: &RootSelectionV1,
+) -> bool {
     !instructions.is_empty()
         && instructions.iter().all(|instruction| {
             matches!(
-                MultisigInstructionBox::try_from(instruction),
+                crate::runtime::ironwood::admission::multisig_instruction(instruction, selection),
                 Ok(MultisigInstructionBox::Propose(_)
                     | MultisigInstructionBox::Approve(_)
                     | MultisigInstructionBox::Cancel(_))
@@ -92,6 +124,40 @@ pub fn instructions_allow_multisig_envelope_authority(instructions: &[Instructio
 mod tests {
     use super::*;
     use iroha_crypto::{Algorithm, KeyPair};
+
+    #[test]
+    fn ironwood_opaque_proposal_authority_uses_the_selected_decoder() {
+        use iroha_executor_data_model::isi::multisig::{MultisigProposalNonce, MultisigPropose};
+        let catalog = crate::runtime::release_catalog().unwrap();
+        let (old, new, _) = crate::runtime::catalog::tests::privacy_resolution_instructions();
+        for (instruction, baseline_accepts) in [(old, true), (new, false)] {
+            let proposal: InstructionBox = MultisigPropose::new(
+                iroha_test_samples::ALICE_ID.clone(),
+                MultisigProposalNonce::new([0x93; 32]).unwrap(),
+                vec![instruction],
+                None,
+            )
+            .into();
+            let values = vec![proposal];
+            assert_eq!(
+                instructions_allow_multisig_envelope_authority(&values),
+                baseline_accepts
+            );
+            assert_eq!(
+                instructions_allow_multisig_envelope_authority_with_selection(
+                    &values,
+                    &catalog.baseline
+                ),
+                baseline_accepts
+            );
+            assert!(
+                instructions_allow_multisig_envelope_authority_with_selection(
+                    &values,
+                    &catalog.ironwood.as_ref().unwrap().selection
+                )
+            );
+        }
+    }
 
     fn account(seed: u8) -> AccountId {
         let key_pair =

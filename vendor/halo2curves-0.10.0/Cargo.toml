@@ -43,7 +43,6 @@ print-trace = ["ark-std/print-trace"]
 std = [
     "rayon",
     "halo2derive/std",
-    "plonky2_maybe_rayon/parallel",
 ]
 
 [lib]
@@ -135,10 +134,6 @@ default-features = false
 [dependencies.paste]
 package = "pastey"
 version = "0.2.3"
-default-features = false
-
-[dependencies.plonky2_maybe_rayon]
-version = "1.0.0"
 default-features = false
 
 [dependencies.rand_core]

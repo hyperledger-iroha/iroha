@@ -19,9 +19,10 @@ pub use receipt::{
 };
 pub use signed::{
     AuthorityFeePayment, DEFAULT_TRANSACTION_TIME_TO_LIVE, ExecutionStep, FeeChargeKind,
-    FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, SignedTransaction, SponsorFeePayment,
-    TransactionBuilder, TransactionDomain, TransactionEntrypoint, TransactionPayload,
-    TransactionResult, TransactionResultInner, TransactionSignature,
+    FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError, PrivacySubmissionRefV1,
+    SignedTransaction, SponsorFeePayment, TransactionBuilder, TransactionDomain,
+    TransactionEntrypoint, TransactionPayload, TransactionResult, TransactionResultInner,
+    TransactionSignature,
 };
 pub use signed_attachments::{
     ActionAuthorityBindingV1, ActionIntentV1, ActionInvocationBindingV1, ActionOperationV1,
@@ -44,11 +45,11 @@ pub mod prelude {
     pub use super::{
         AuthorityFeePayment, DataTriggerSequence, DataTriggerStep, Executable, ExecutableBatchItem,
         ExecutionStep, FeeChargeKind, FeeChargeLimit, FeePaymentIntent, FeePaymentIntentError,
-        IvmBytecode, IvmProved, SignedTransaction, SponsorFeePayment, TX_SUBMISSION_RECEIPT_DOMAIN,
-        TransactionBuilder, TransactionDomain, TransactionEntrypoint, TransactionGasLimitError,
-        TransactionPayload, TransactionResult, TransactionResultInner, TransactionSignature,
-        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
-        parse_transaction_gas_limit, require_transaction_gas_limit,
+        IvmBytecode, IvmProved, PrivacySubmissionRefV1, SignedTransaction, SponsorFeePayment,
+        TX_SUBMISSION_RECEIPT_DOMAIN, TransactionBuilder, TransactionDomain, TransactionEntrypoint,
+        TransactionGasLimitError, TransactionPayload, TransactionResult, TransactionResultInner,
+        TransactionSignature, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        error::prelude::*, parse_transaction_gas_limit, require_transaction_gas_limit,
     };
 }
 

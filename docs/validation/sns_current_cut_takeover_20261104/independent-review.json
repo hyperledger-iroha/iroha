@@ -1,0 +1,25 @@
+{
+  "observed_utc": "2026-11-04T05:28:10.310666+00:00",
+  "reviewer": "root, independent follow-up to sns_decode implementation and test receipts",
+  "scope": "Targeted source review of current-cut construction, source/frame/graph ownership, inherited logical charge preservation, certified snapshot rebinding and corresponding focused tests. This is not a complete security audit, transitive build custody or whole-node qualification.",
+  "evidence_receipt_sha256": "c460747083b0bd4f18a9cfb7601e5547b19c95cef42632bd3eeddf60418daea7",
+  "read_source_sha256": {
+    "crates/iroha_core/src/sumeragi/certified_chain/current_cut.rs": "3cb8e27beaff424cde88b51f7e4deecd9741ddcbda556ebec629617f6a20d4f6",
+    "crates/iroha_core/src/sumeragi/certified_chain/current_cut/tests.rs": "b35b7735b5962a7b1e5b539712daeee9778dcc6ccad023fd1f4b29ea6bbfb994",
+    "crates/iroha_core/src/sumeragi/finality/interval_budget.rs": "426e3a256e82f9e5fe5a09054d829fad81187aed084548bfabebc00542c1e48b",
+    "crates/iroha_core/src/state/world_state_snapshot.rs": "8cb35d41fcf8db679d9b58095677c16027dd7efe4bd050989e19af16045f1227",
+    "crates/iroha_torii/src/sns_lease.rs": "839bf8a402f0edf8711fec769d304b53bddad0d54006663e68b4f70ec643cdd9",
+    "crates/iroha_torii/src/sns_lease/recent_tip_tests.rs": "7303e2fd35b21e999b09c39c64ff352364017f7beb394eb50bd1f080b2e75f02"
+  },
+  "observations": [
+    "CurrentCertifiedCut is internally constructed from checked original committed metadata and returns only scalar fields; it has no external decoder/import constructor.",
+    "Source frame count, per-block bytes and cumulative journal bytes remain finite; original genesis authentication precedes the target certificate checks.",
+    "Retained header and payload custody is charged separately; stage-owned complete transaction graphs retire before later stages.",
+    "NativeFinalityProofBudget::stage reuses only prepaid physical-stage controls; outer decoder owners retain cumulative charges. Tests compare original logical totals and exact-limit/one-byte-below outcomes.",
+    "Snapshot publication rechecks the global root, canonical selector, current authenticated cut and exact committed record inclusion.",
+    "The retained focused test logs cover36 nonempty passing executions; resource census results describe the tested maximum-payment case, not every possible input."
+  ],
+  "findings": [],
+  "complete_transitive_build_custody": false,
+  "whole_node_qualified": false
+}

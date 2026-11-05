@@ -4,7 +4,6 @@ use crate::{
     data_model::{NetworkId, prelude::*},
 };
 use core::str::FromStr;
-use derive_more::Display;
 use error_stack::{AttachmentKind, FrameKind, Report, ResultExt};
 use eyre::Result;
 use iroha_config_base::{env::ReadEnv, read::ConfigReader, toml::TomlSource};
@@ -80,8 +79,13 @@ pub const DEFAULT_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(70);
 /// Whether to add a random transaction nonce by default.
 pub const DEFAULT_TRANSACTION_NONCE: bool = false;
 /// Valid web auth login string. See [`WebLogin::from_str`]
-#[derive(Debug, Display, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebLogin(SmallStr);
+impl fmt::Display for WebLogin {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, formatter)
+    }
+}
 impl FromStr for WebLogin {
     type Err = eyre::ErrReport;
     /// Validates that the string is a valid web login
@@ -633,6 +637,40 @@ mod tests {
             let invalid_json = json::to_json(&invalid).expect("invalid login JSON");
             assert!(json::from_json::<WebLogin>(&invalid_json).is_err());
         }
+    }
+
+    #[test]
+    fn web_login_display_preserves_small_string_formatting() {
+        for sample in [
+            String::new(),
+            "alice".into(),
+            "Δ🔥東京".into(),
+            "line\nquoted\"\\".into(),
+            "a".repeat(33),
+        ] {
+            let login: WebLogin = sample.parse().expect("login without a colon");
+            // SmallStr prints its complete contents without applying padding
+            // or precision; WebLogin preserves that formatting contract.
+            assert_eq!(format!("{login}"), sample);
+            assert_eq!(format!("{login:>32}"), sample);
+            assert_eq!(format!("{login:🦀^32.3}"), sample);
+            assert_eq!(format!("{login:+#032.3}"), sample);
+        }
+    }
+
+    #[test]
+    fn web_login_display_propagates_formatter_failure() {
+        use std::fmt::Write as _;
+
+        struct FailingWriter;
+        impl fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> fmt::Result {
+                Err(fmt::Error)
+            }
+        }
+
+        let login: WebLogin = "alice".parse().expect("valid login");
+        assert_eq!(write!(FailingWriter, "{login}"), Err(fmt::Error));
     }
 
     #[test]

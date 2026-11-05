@@ -11,6 +11,8 @@ mod contract_arguments;
 #[cfg(test)]
 mod crypto_admission_tests;
 mod identity_codec_v1;
+mod ironwood_inspection;
+mod ironwood_pool_cut;
 mod privacy_capability_manifest;
 pub mod privacy_native_actions;
 pub mod privacy_wallet_bundle;
@@ -109,13 +111,13 @@ use iroha_data_model::{
         IrohaZkAmsProofV1, IrohaZkAmsStatementV1, PRIVACY_BRIDGE_ABI_VERSION_V1,
         PRIVACY_COMPILED_PROFILE_CATALOG_ARCHIVE_MAX_BYTES_V1, PrivacyChallengeV1,
         PrivacyCompiledProfileCatalogV1, PrivacyConsensusLimitsV1, PrivacyCredentialDocumentTypeV1,
-        PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyProofEnvelopeV1, PrivacyProofV1,
-        PrivacyProtocolIdV1, PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyVegaDeviceAuthenticationDigestV1, PrivacyVegaIssuerRecordDigestV1,
-        PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
-        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyX509ExtendedKeyUsageV1, PrivacyZkAmsActionV1,
-        VegaExistingCredentialStatementV1,
+        PrivacyIssuerIdV1, PrivacyP256PointV1, PrivacyRuntimeProofEnvelopeV1,
+        PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeStatementV1,
+        PrivacySessionTranscriptDigestV1, PrivacyStatementContextV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVegaDeviceAuthenticationDigestV1,
+        PrivacyVegaIssuerRecordDigestV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
+        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
+        PrivacyX509ExtendedKeyUsageV1, PrivacyZkAmsActionV1, VegaExistingCredentialStatementV1,
     },
     proof::{
         ProofAttachment, ProofAttachmentList, ProofBox, VerifyingKeyId,
@@ -453,13 +455,35 @@ fn keypair_to_py(py: Python<'_>, key_pair: KeyPair) -> PyResult<(Py<PyBytes>, Py
     private_bytes.fill(0);
     Ok((private, public))
 }
+/// Rust-only validation failures crossing a detached native read boundary.
+#[derive(Debug)]
+enum NativeValidationError {
+    Value(String),
+    Runtime(&'static str),
+}
+impl NativeValidationError {
+    fn into_py(self) -> PyErr {
+        match self {
+            Self::Value(message) => PyValueError::new_err(message),
+            Self::Runtime(message) => PyRuntimeError::new_err(message),
+        }
+    }
+}
 fn require_non_blank_unpadded(value: &str, field: &str) -> PyResult<()> {
+    require_non_blank_unpadded_native(value, field).map_err(NativeValidationError::into_py)
+}
+fn require_non_blank_unpadded_native(
+    value: &str,
+    field: &str,
+) -> Result<(), NativeValidationError> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err(PyValueError::new_err(format!("{field} must not be blank")));
+        return Err(NativeValidationError::Value(format!(
+            "{field} must not be blank"
+        )));
     }
     if trimmed != value {
-        return Err(PyValueError::new_err(format!(
+        return Err(NativeValidationError::Value(format!(
             "{field} must not contain surrounding whitespace"
         )));
     }
@@ -477,12 +501,22 @@ fn exact_chain_discriminant(value: &Bound<'_, PyAny>) -> PyResult<u16> {
         .map_err(|_| PyValueError::new_err("chain_discriminant must be in 0..=65535"))
 }
 fn parse_selected_account_id(value: &str, field: &str, discriminant: u16) -> PyResult<AccountId> {
-    let account = parse_exact_i105_account_id(value, field)?;
+    parse_selected_account_id_native(value, field, discriminant)
+        .map_err(NativeValidationError::into_py)
+}
+fn parse_selected_account_id_native(
+    value: &str,
+    field: &str,
+    discriminant: u16,
+) -> Result<AccountId, NativeValidationError> {
+    let account = parse_exact_i105_account_id_native(value, field)?;
     let selected = account
         .to_i105_for_discriminant(discriminant)
-        .map_err(|error| PyValueError::new_err(format!("failed to render {field}: {error}")))?;
+        .map_err(|error| {
+            NativeValidationError::Value(format!("failed to render {field}: {error}"))
+        })?;
     if selected != value {
-        return Err(PyValueError::new_err(format!(
+        return Err(NativeValidationError::Value(format!(
             "{field} must use the selected chain_discriminant"
         )));
     }
@@ -492,23 +526,29 @@ fn parse_account_id(value: &str) -> PyResult<AccountId> {
     parse_exact_i105_account_id(value, "account_id")
 }
 fn parse_exact_i105_account_id(value: &str, field: &str) -> PyResult<AccountId> {
-    require_non_blank_unpadded(value, field)?;
+    parse_exact_i105_account_id_native(value, field).map_err(NativeValidationError::into_py)
+}
+fn parse_exact_i105_account_id_native(
+    value: &str,
+    field: &str,
+) -> Result<AccountId, NativeValidationError> {
+    require_non_blank_unpadded_native(value, field)?;
     if value.chars().any(char::is_whitespace)
         || value.contains('@')
         || value.contains('#')
         || value.contains('$')
     {
-        return Err(PyValueError::new_err(format!(
+        return Err(NativeValidationError::Value(format!(
             "{field} must be an exact canonical I105 account id"
         )));
     }
     let address = AccountAddress::parse_encoded(value, None).map_err(|err| {
-        PyValueError::new_err(format!(
+        NativeValidationError::Value(format!(
             "{field} must be an exact canonical I105 account id: {err}"
         ))
     })?;
     address.to_account_id().map_err(|err| {
-        PyValueError::new_err(format!(
+        NativeValidationError::Value(format!(
             "{field} must be an exact canonical I105 account id: {err}"
         ))
     })
@@ -5338,7 +5378,7 @@ mod tests {
         )
         .expect("ordinary transaction builder");
         let inspected = privacy_capability_manifest::PyPrivacyExact12CapabilityManifestV1::test_binding_for_protocol(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
         );
         Python::attach(|py| {
             let manifest = Py::new(py, inspected).expect("native inspection object");
@@ -11085,7 +11125,7 @@ impl Instruction {
     }
 }
 fn python_compiled_privacy_profile_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     protocol_label: &str,
 ) -> PyResult<CompiledPrivacyProfileV1> {
     compiled_privacy_profile_v1(protocol_id).map_err(|error| {
@@ -11204,7 +11244,7 @@ impl TransactionBuilder {
     }
     fn require_empty_privacy_action_builder_v1(
         &self,
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         protocol_label: &str,
     ) -> PyResult<()> {
         if self.explicit_batch
@@ -12548,8 +12588,7 @@ fn project_selected_execution_context(
     block: &iroha_data_model::block::SignedBlock,
     committed: &CommittedTransaction,
 ) -> PyResult<json::Value> {
-    use iroha_data_model::block::execution_output::ExecutionOutputV1;
-    let ExecutionOutputV1::Network(output) = &committed.output else {
+    let Some(output) = committed.output.network() else {
         return Err(PyValueError::new_err(
             "verified route requires a Network output",
         ));
@@ -13096,32 +13135,46 @@ fn hash_blake2b_32_py(py: Python<'_>, payload: &[u8]) -> PyResult<Py<PyBytes>> {
     let bytes: [u8; Hash::LENGTH] = hash.into();
     Ok(Py::from(PyBytes::new(py, &bytes)))
 }
+#[cfg(test)]
 fn require_canonical_signed_transaction_wire_size_v1(bytes: &[u8]) -> PyResult<()> {
+    require_canonical_signed_transaction_wire_size_v1_native(bytes)
+        .map_err(NativeValidationError::into_py)
+}
+fn require_canonical_signed_transaction_wire_size_v1_native(
+    bytes: &[u8],
+) -> Result<(), NativeValidationError> {
     let maximum = usize::try_from(
         iroha_data_model::parameter::system::TransactionParameters::default()
             .max_tx_bytes()
             .get(),
     )
     .map_err(|_| {
-        PyRuntimeError::new_err("canonical transaction byte limit does not fit this platform")
+        NativeValidationError::Runtime(
+            "canonical transaction byte limit does not fit this platform",
+        )
     })?;
     if bytes.is_empty() || bytes.len() > maximum {
-        return Err(PyValueError::new_err(format!(
+        return Err(NativeValidationError::Value(format!(
             "signed_transaction_versioned must contain between 1 and {maximum} bytes"
         )));
     }
     Ok(())
 }
 fn decode_canonical_signed_transaction_v1(bytes: &[u8]) -> PyResult<SignedTransaction> {
-    require_canonical_signed_transaction_wire_size_v1(bytes)?;
+    decode_canonical_signed_transaction_v1_native(bytes).map_err(NativeValidationError::into_py)
+}
+fn decode_canonical_signed_transaction_v1_native(
+    bytes: &[u8],
+) -> Result<SignedTransaction, NativeValidationError> {
+    require_canonical_signed_transaction_wire_size_v1_native(bytes)?;
     let signed = SignedTransaction::decode_all_versioned(bytes).map_err(|_| {
-        PyValueError::new_err(
-            "signed_transaction_versioned is not a valid current signed transaction",
+        NativeValidationError::Value(
+            "signed_transaction_versioned is not a valid current signed transaction".into(),
         )
     })?;
     if signed.encode_versioned() != bytes {
-        return Err(PyValueError::new_err(
-            "signed_transaction_versioned is not the exact canonical wire",
+        return Err(NativeValidationError::Value(
+            "signed_transaction_versioned is not the exact canonical wire".into(),
         ));
     }
     Ok(signed)
@@ -13983,7 +14036,8 @@ fn inspect_privacy_exact12_action_driver_transaction_context_v1_py(
             )
         })?
         .ok_or_else(|| PyValueError::new_err("signed transaction has no direct privacy action"))?;
-    let statement_context = submission.envelope.statement.context();
+    let submission_envelope = submission.runtime_envelope();
+    let statement_context = submission_envelope.statement.context();
     if statement_context.network_id != expected_network_id.inner
         || statement_context.action_index != 0
         || statement_context.transaction_intent_digest != intent
@@ -14059,7 +14113,7 @@ fn privacy_vega_device_authentication_digest_v1_py(
     let session_transcript_digest =
         python_nonzero_privacy_digest_v1(session_transcript_digest, "session_transcript_digest")?;
     let profile = python_compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
         "Vega",
     )?;
     let statement = python_vega_statement_v1(
@@ -14090,34 +14144,56 @@ fn privacy_vega_device_authentication_digest_v1_py(
         statement.device_authentication_digest.as_bytes(),
     )))
 }
-fn python_authenticated_privacy_action_envelope_v1<'a>(
-    signed: &'a SignedTransaction,
-    expected_protocol_id: PrivacyProtocolIdV1,
+fn python_authenticated_privacy_action_envelope_v1(
+    signed: &SignedTransaction,
+    expected_protocol_id: PrivacyRuntimeProtocolIdV1,
     protocol_label: &str,
-) -> PyResult<(PrivacyTransactionIntentDigestV1, &'a PrivacyProofEnvelopeV1)> {
+) -> PyResult<(
+    PrivacyTransactionIntentDigestV1,
+    PrivacyRuntimeProofEnvelopeV1,
+)> {
+    authenticated_privacy_action_envelope_v1_native(signed, expected_protocol_id, protocol_label)
+        .map_err(NativeValidationError::into_py)
+}
+fn authenticated_privacy_action_envelope_v1_native(
+    signed: &SignedTransaction,
+    expected_protocol_id: PrivacyRuntimeProtocolIdV1,
+    protocol_label: &str,
+) -> Result<
+    (
+        PrivacyTransactionIntentDigestV1,
+        PrivacyRuntimeProofEnvelopeV1,
+    ),
+    NativeValidationError,
+> {
     signed.verify_signature().map_err(|_| {
-        PyValueError::new_err("signed_transaction_versioned has an invalid authority signature")
+        NativeValidationError::Value(
+            "signed_transaction_versioned has an invalid authority signature".into(),
+        )
     })?;
     let (transaction_intent_digest, submission) = signed
         .privacy_transaction_intent_binding_if_present_v1()
         .map_err(|_| {
-            PyValueError::new_err(
-                "signed_transaction_versioned has an invalid privacy intent binding",
+            NativeValidationError::Value(
+                "signed_transaction_versioned has an invalid privacy intent binding".into(),
             )
         })?
         .ok_or_else(|| {
-            PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
+            NativeValidationError::Value(
+                "signed_transaction_versioned contains no direct privacy action".into(),
+            )
         })?;
-    let envelope = &submission.envelope;
+    let submission_envelope = submission.runtime_envelope();
+    let envelope = submission_envelope;
     if envelope.protocol_id != expected_protocol_id {
-        return Err(PyValueError::new_err(format!(
+        return Err(NativeValidationError::Value(format!(
             "signed_transaction_versioned is not a {protocol_label} action"
         )));
     }
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| {
-            PyValueError::new_err(format!(
+            NativeValidationError::Value(format!(
                 "signed_transaction_versioned has an invalid {protocol_label} proof envelope"
             ))
         })?;
@@ -14128,14 +14204,14 @@ fn python_privacy_action_inspection_result_v1<'py>(
     signed: &SignedTransaction,
     signed_transaction_versioned: &[u8],
     transaction_intent_digest: PrivacyTransactionIntentDigestV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     execution_classification: &str,
     ledger_effect: Option<&str>,
 ) -> PyResult<Bound<'py, PyDict>> {
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| {
+    let statement_encoding = envelope.statement.canonical_wire_bytes_v1().map_err(|_| {
         PyValueError::new_err("signed_transaction_versioned privacy statement could not be encoded")
     })?;
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| {
+    let envelope_encoding = envelope.canonical_wire_bytes_v1().map_err(|_| {
         PyValueError::new_err("signed_transaction_versioned privacy envelope could not be encoded")
     })?;
     let statement_bytes = u32::try_from(statement_encoding.len())
@@ -14198,15 +14274,18 @@ fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
         "ZK-ACE",
     )?;
-    let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-ACE statement",
         ));
     };
-    if !matches!(&envelope.proof, PrivacyProofV1::ZkAcePqAuthorizationV1(_)) {
+    if !matches!(
+        &envelope.proof,
+        PrivacyRuntimeProofV1::ZkAcePqAuthorizationV1(_)
+    ) {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-ACE proof variant",
         ));
@@ -14216,7 +14295,7 @@ fn inspect_signed_privacy_zk_ace_transfer_action_v1_py(
         &signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         ZK_ACE_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(ZK_ACE_TRANSFER_LEDGER_EFFECT_V1),
     )?;
@@ -14272,8 +14351,9 @@ fn inspect_signed_privacy_jindo_action_v1_py(
         .ok_or_else(|| {
             PyValueError::new_err("signed_transaction_versioned contains no direct privacy action")
         })?;
-    let envelope = &submission.envelope;
-    if envelope.protocol_id != PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 {
+    let submission_envelope = submission.runtime_envelope();
+    let envelope = &submission_envelope;
+    if envelope.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned is not a Jindo action",
         ));
@@ -14285,16 +14365,17 @@ fn inspect_signed_privacy_jindo_action_v1_py(
                 "signed_transaction_versioned has an invalid Jindo proof envelope",
             )
         })?;
-    let PrivacyStatementV1::IrohaJindoPolynomialCommitmentV1(statement) = &envelope.statement
+    let PrivacyRuntimeStatementV1::IrohaJindoPolynomialCommitmentV1(statement) =
+        &envelope.statement
     else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Jindo statement",
         ));
     };
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| {
+    let statement_encoding = envelope.statement.canonical_wire_bytes_v1().map_err(|_| {
         PyValueError::new_err("signed_transaction_versioned Jindo statement could not be encoded")
     })?;
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| {
+    let envelope_encoding = envelope.canonical_wire_bytes_v1().map_err(|_| {
         PyValueError::new_err("signed_transaction_versioned Jindo envelope could not be encoded")
     })?;
     let statement_bytes = u32::try_from(statement_encoding.len())
@@ -14359,10 +14440,11 @@ fn inspect_signed_privacy_verange_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
         "VeRange",
     )?;
-    let PrivacyStatementV1::VeRangeTransparentRangeV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::VeRangeTransparentRangeV1(statement) = &envelope.statement
+    else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched VeRange statement",
         ));
@@ -14372,7 +14454,7 @@ fn inspect_signed_privacy_verange_action_v1_py(
         &signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         VERANGE_ACTION_EXECUTION_CLASSIFICATION_V1,
         None,
     )?;
@@ -14403,10 +14485,11 @@ fn inspect_signed_privacy_vega_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
         "Vega",
     )?;
-    let PrivacyStatementV1::VegaExistingCredentialZkV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement) = &envelope.statement
+    else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Vega statement",
         ));
@@ -14416,7 +14499,7 @@ fn inspect_signed_privacy_vega_action_v1_py(
         &signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         VEGA_ACTION_EXECUTION_CLASSIFICATION_V1,
         None,
     )?;
@@ -14470,7 +14553,7 @@ fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
     let result = PyDict::new(py);
     result.set_item(
         "protocol_id",
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1.canonical_label(),
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1.canonical_label(),
     )?;
     result.set_item("network_id", PyBytes::new(py, network_id.inner.as_bytes()))?;
     result.set_item("transaction_hash", PyBytes::new(py, signed.hash().as_ref()))?;
@@ -14483,10 +14566,7 @@ fn inspect_signed_privacy_zk_x509_identity_presentation_action_v1_py(
         "materialized_statement_norito",
         PyBytes::new(
             py,
-            &norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
-                statement.clone(),
-            ))
-            .map_err(|error| PyValueError::new_err(error.to_string()))?,
+            &privacy_x509_transaction::materialized_statement_wire(&statement)?,
         ),
     )?;
     result.set_item("proof_bytes", proof_bytes)?;
@@ -14604,7 +14684,7 @@ fn python_zk_ams_action_inspection_result_v1<'py>(
     signed: &SignedTransaction,
     signed_transaction_versioned: &[u8],
     transaction_intent_digest: PrivacyTransactionIntentDigestV1,
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     statement: &IrohaZkAmsStatementV1,
     ledger_effect: &'static str,
 ) -> PyResult<Bound<'py, PyDict>> {
@@ -14613,7 +14693,7 @@ fn python_zk_ams_action_inspection_result_v1<'py>(
         signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         ZK_AMS_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(ledger_effect),
     )?;
@@ -14657,10 +14737,10 @@ fn inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::IrohaZkAmsV1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
         "ZK-AMS",
     )?;
-    let PrivacyStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-AMS statement",
         ));
@@ -14672,7 +14752,9 @@ fn inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(
     };
     if !matches!(
         &envelope.proof,
-        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(_))
+        PrivacyRuntimeProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
+            _
+        ))
     ) {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-AMS batch-admission proof variant",
@@ -14683,7 +14765,7 @@ fn inspect_signed_privacy_zk_ams_batch_admission_action_v1_py(
         &signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         statement,
         ZK_AMS_BATCH_ADMISSION_LEDGER_EFFECT_V1,
     )?;
@@ -14729,10 +14811,10 @@ fn inspect_signed_privacy_zk_ams_provision_account_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::IrohaZkAmsV1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
         "ZK-AMS",
     )?;
-    let PrivacyStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-AMS statement",
         ));
@@ -14744,7 +14826,7 @@ fn inspect_signed_privacy_zk_ams_provision_account_action_v1_py(
     };
     if !matches!(
         &envelope.proof,
-        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(_))
+        PrivacyRuntimeProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(_))
     ) {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched ZK-AMS account-provisioning proof variant",
@@ -14755,7 +14837,7 @@ fn inspect_signed_privacy_zk_ams_provision_account_action_v1_py(
         &signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         statement,
         ZK_AMS_PROVISION_ACCOUNT_LEDGER_EFFECT_V1,
     )?;
@@ -14795,17 +14877,18 @@ fn inspect_signed_privacy_bootle_lantern_presentation_action_v1_py(
     let signed = decode_canonical_signed_transaction_v1(signed_transaction_versioned)?;
     let (transaction_intent_digest, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
         "Bootle/Lantern",
     )?;
-    let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) = &envelope.statement
+    else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Bootle/Lantern statement",
         ));
     };
     if !matches!(
         &envelope.proof,
-        PrivacyProofV1::IrohaBootleLanternAnoncredV1(_)
+        PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(_)
     ) {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Bootle/Lantern proof variant",
@@ -14816,7 +14899,7 @@ fn inspect_signed_privacy_bootle_lantern_presentation_action_v1_py(
         &signed,
         signed_transaction_versioned,
         transaction_intent_digest,
-        envelope,
+        &envelope,
         BOOTLE_LANTERN_ACTION_EXECUTION_CLASSIFICATION_V1,
         None,
     )?;
@@ -14874,10 +14957,10 @@ fn inspect_signed_privacy_anonymous_pgc_payment_action_v1_py(
         })?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
         "Anonymous-PGC",
     )?;
-    let PrivacyStatementV1::AnonymousPgcKOutOfNV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::AnonymousPgcKOutOfNV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Anonymous-PGC statement",
         ));
@@ -14887,7 +14970,7 @@ fn inspect_signed_privacy_anonymous_pgc_payment_action_v1_py(
         &signed,
         signed_transaction_versioned,
         intent,
-        envelope,
+        &envelope,
         ANONYMOUS_PGC_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(ANONYMOUS_PGC_LEDGER_EFFECT_V1),
     )?;
@@ -14939,10 +15022,10 @@ fn inspect_signed_privacy_orchard_note_action_v1_py(
     )?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
         "Orchard",
     )?;
-    let PrivacyStatementV1::OrchardHalo2ActionsV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::OrchardHalo2ActionsV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched Orchard statement",
         ));
@@ -14952,7 +15035,7 @@ fn inspect_signed_privacy_orchard_note_action_v1_py(
         &signed,
         signed_transaction_versioned,
         intent,
-        envelope,
+        &envelope,
         ORCHARD_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(ORCHARD_LEDGER_EFFECT_V1),
     )?;
@@ -14992,10 +15075,10 @@ fn inspect_signed_privacy_fcmp_membership_payment_action_v1_py(
     })?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+        PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
         "FCMP++",
     )?;
-    let PrivacyStatementV1::MoneroFcmpPlusPlusV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::MoneroFcmpPlusPlusV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched FCMP++ statement",
         ));
@@ -15005,7 +15088,7 @@ fn inspect_signed_privacy_fcmp_membership_payment_action_v1_py(
         &signed,
         signed_transaction_versioned,
         intent,
-        envelope,
+        &envelope,
         FCMP_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(FCMP_LEDGER_EFFECT_V1),
     )?;
@@ -15045,10 +15128,11 @@ fn inspect_signed_privacy_ivm_private_note_action_v1_py(
         })?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         "private-IVM note",
     )?;
-    let PrivacyStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaIvmPrivateNoteStarkV1(statement) = &envelope.statement
+    else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched private-IVM statement",
         ));
@@ -15058,7 +15142,7 @@ fn inspect_signed_privacy_ivm_private_note_action_v1_py(
         &signed,
         signed_transaction_versioned,
         intent,
-        envelope,
+        &envelope,
         IVM_PRIVATE_NOTE_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(IVM_PRIVATE_NOTE_LEDGER_EFFECT_V1),
     )?;
@@ -15116,10 +15200,10 @@ fn inspect_signed_privacy_pq_masp_note_action_v1_py(
     )?;
     let (intent, envelope) = python_authenticated_privacy_action_envelope_v1(
         &signed,
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         "PQ-MASP",
     )?;
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &envelope.statement else {
         return Err(PyValueError::new_err(
             "signed_transaction_versioned has a mismatched PQ-MASP statement",
         ));
@@ -15129,7 +15213,7 @@ fn inspect_signed_privacy_pq_masp_note_action_v1_py(
         &signed,
         signed_transaction_versioned,
         intent,
-        envelope,
+        &envelope,
         PQ_MASP_ACTION_EXECUTION_CLASSIFICATION_V1,
         Some(PQ_MASP_LEDGER_EFFECT_V1),
     )?;
@@ -15328,13 +15412,16 @@ fn privacy_compiled_profile_catalog() -> PyResult<PrivacyCompiledProfileCatalogV
             "build local privacy compiled-profile catalog: {error}"
         ))
     })?;
-    debug_assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::ALL.len());
+    debug_assert_eq!(
+        catalog.protocols.len(),
+        PrivacyRuntimeProtocolIdV1::ALL.len()
+    );
     debug_assert!(
         catalog
             .protocols
             .iter()
             .map(|row| row.protocol_id)
-            .eq(PrivacyProtocolIdV1::ALL)
+            .eq(PrivacyRuntimeProtocolIdV1::ALL)
     );
     Ok(catalog)
 }
@@ -15561,6 +15648,19 @@ fn canonical_genesis_header_hash_v1_py(
 }
 #[pymodule]
 fn _crypto(_py: Python<'_>, module: &Bound<'_, PyModule>) -> PyResult<()> {
+    ironwood_inspection::register(module)?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_pool_cut::verify_ironwood_pool_cut_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_pool_cut::verify_ironwood_payment_effect_v1_py,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        ironwood_pool_cut::ironwood_pool_bootstrap_instruction_json_v1_py,
+        module
+    )?)?;
     public_finality_checkpoint::register(module)?;
     transaction_details::register(module)?;
     confidential_wallet::register(module)?;

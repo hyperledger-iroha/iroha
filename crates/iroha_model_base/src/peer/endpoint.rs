@@ -11,23 +11,21 @@ use std::str::FromStr;
 #[model]
 mod model {
     use super::*;
-    use getset::Getters;
     use iroha_schema::IntoSchema;
     use norito::codec::{Decode, Encode};
     /// Representation of other Iroha Peer instances running in separate processes.
-    #[derive(
-        derive_more::Debug, derive_more::Display, Clone, Decode, Encode, IntoSchema, Getters,
-    )]
-    #[display("{id}@{address}")]
-    #[derive(norito::NoritoSchema)]
+    #[derive(Debug, Clone, Decode, Encode, IntoSchema, norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::peer::model::Peer")]
     pub struct Peer {
         /// Address of the [`Peer`]'s entrypoint.
-        #[getset(get = "pub")]
         pub address: SocketAddr,
         /// Peer Identification.
-        #[getset(get = "pub")]
         pub id: PeerId,
+    }
+}
+impl core::fmt::Display for Peer {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{}@{}", self.id, self.address)
     }
 }
 // A peer's endpoint may change without changing its registered identity.
@@ -58,6 +56,18 @@ impl core::borrow::Borrow<PeerId> for Peer {
     }
 }
 impl Peer {
+    /// Address of the peer's entrypoint.
+    #[inline]
+    pub fn address(&self) -> &SocketAddr {
+        &self.address
+    }
+
+    /// Peer identification.
+    #[inline]
+    pub fn id(&self) -> &PeerId {
+        &self.id
+    }
+
     /// Construct `Peer` given `id` and `address`.
     #[inline]
     pub fn new(address: SocketAddr, id: impl Into<PeerId>) -> Self {
@@ -233,6 +243,21 @@ mod tests {
     use super::*;
     use iroha_primitives::addr::SocketAddr;
     use norito::json::{self, FastJsonWrite};
+    #[test]
+    fn peer_getters_borrow_the_stored_endpoint_and_identity() {
+        let key = "ed01201C61FAF8FE94E253B93114240394F79A607B7FA55F9E5A41EBEC74B88055768B";
+        let peer = Peer::new(
+            "127.0.0.1:1337".parse().expect("valid address"),
+            key.parse::<PublicKey>().expect("valid key"),
+        );
+        let address: &SocketAddr = peer.address();
+        let id: &PeerId = peer.id();
+        assert!(std::ptr::eq(address, &peer.address));
+        assert!(std::ptr::eq(id, &peer.id));
+        assert_eq!(address.to_string(), "127.0.0.1:1337");
+        assert_eq!(id.public_key().to_string(), key);
+    }
+
     #[test]
     fn endpoint_identity_order_hash_and_borrow_ignore_address() {
         use core::{

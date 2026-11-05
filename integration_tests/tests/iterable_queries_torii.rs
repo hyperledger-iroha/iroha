@@ -8,10 +8,9 @@ use iroha::{
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::name::Name;
-use std::{thread::sleep, time::Duration};
-// use iroha_data_model::query::builder::QueryBuilderExt as _; // trait extension not needed in this test
 use iroha_test_network::NetworkBuilder;
 use sandbox::start_network_blocking_or_skip as start_network_or_skip;
+use std::{thread::sleep, time::Duration};
 fn is_permission_grant_repetition(
     err: &eyre::Report,
     expected: &iroha::data_model::permission::Permission,
@@ -42,9 +41,7 @@ fn is_permission_grant_repetition(
 #[test]
 fn blocks_iterable_start_and_continue() -> Result<()> {
     let Some((network, rt)) = start_network_or_skip(
-        NetworkBuilder::new().with_config_layer(|layer| {
-            layer.write(["pipeline", "query_default_cursor_mode"], "stored");
-        }),
+        NetworkBuilder::new(),
         stringify!(blocks_iterable_start_and_continue),
     )?
     else {
@@ -76,22 +73,23 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         headers.len() >= 2,
         "expected at least two block headers before testing cursor continuation"
     );
+    // The native block collection binds continuation to one committed snapshot.
     let query = ListQuery::new().limit(1);
     let first = client.list_page(&Collection::ExplorerBlocks, &query)?;
-    assert_eq!(first.items.len(), 1, "expected one block in the first page");
+    assert_eq!(first.items.len(), 1, "expected single header in first page");
     let next = query
         .next_page(&first)
         .expect("expected continuation cursor");
     let second = client.list_page(&Collection::ExplorerBlocks, &next)?;
     assert!(
         !second.items.is_empty(),
-        "expected another block in the second page"
+        "expected another header in second page"
     );
-    let first_height = first.items[0]["height"].as_u64().expect("block height");
-    let second_height = second.items[0]["height"].as_u64().expect("block height");
+    let first_height = block_height(&first.items[0])?;
+    let second_height = block_height(&second.items[0])?;
     assert!(
         first_height > second_height,
-        "cursor must advance to an older block"
+        "continuation must advance in descending height order"
     );
     Ok(())
 }
@@ -114,10 +112,10 @@ fn transactions_iterable_non_empty() -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let snapshot = client
-            .list(Collection::Transactions, ListQuery::new())
-            .collect::<iroha::Result<Vec<_>>>()
-            .expect("query transactions");
-        if !snapshot.is_empty() {
+            .list(Collection::Transactions, ListQuery::new().limit(1))
+            .next()
+            .transpose()?;
+        if snapshot.is_some() {
             break;
         }
         assert!(
@@ -173,24 +171,26 @@ fn find_block_headers_descending() -> Result<()> {
     rt.block_on(async { network.ensure_blocks(3).await })?;
     let headers = retry_block_headers(&client)?;
     assert!(headers.len() >= 2, "expected multiple block headers");
-    assert!(headers.windows(2).all(|w| {
-        // Compare block heights explicitly; derived ordering for `BlockHeader`
-        // includes additional fields that do not mirror ledger height.
-        let left_height = w[0]["height"].as_u64().expect("block height");
-        let right_height = w[1]["height"].as_u64().expect("block height");
-        left_height >= right_height
-    }));
+    assert!(headers.windows(2).all(|w| w[0] >= w[1]));
     Ok(())
 }
-fn retry_block_headers(client: &iroha::blocking::Client) -> Result<Vec<norito::json::Value>> {
+fn block_height(row: &norito::json::Value) -> Result<u64> {
+    row.get("height")
+        .and_then(norito::json::Value::as_u64)
+        .ok_or_else(|| eyre::eyre!("block collection row is missing its numeric height"))
+}
+fn retry_block_headers(client: &iroha::blocking::Client) -> Result<Vec<u64>> {
     const RETRIES: usize = 5;
     const DELAY: Duration = Duration::from_millis(200);
     for attempt in 0..RETRIES {
-        match client
-            .list(Collection::ExplorerBlocks, ListQuery::new())
-            .collect::<iroha::Result<Vec<_>>>()
-        {
-            Ok(headers) => return Ok(headers),
+        match client.list_page(&Collection::ExplorerBlocks, &ListQuery::new().limit(8)) {
+            Ok(page) => {
+                eyre::ensure!(
+                    page.next_cursor.is_none(),
+                    "bounded fixture block set exceeds eight rows"
+                );
+                return page.items.iter().map(block_height).collect();
+            }
             Err(_err) if attempt + 1 < RETRIES => sleep(DELAY),
             Err(err) => return Err(err.into()),
         }
@@ -444,13 +444,15 @@ fn burn_then_execute_trigger_is_rejected() -> Result<()> {
         );
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
-    // Attempt to execute; expect rejection referencing FindError::Trigger(trig_id)
+    // Attempt to execute; expect rejection naming the depleted trigger.
     let err = client
         .submit(
             Instruction::into_instruction_box(Box::new(ExecuteTrigger::new(trig_id.clone()))),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )
         .expect_err("execute should be rejected for depleted trigger");
+    // Admission resolves trigger permissions before execution and rejects the
+    // exact absent trigger without allowing a different validation failure.
     let expected = format!("permission references unknown trigger `{trig_id}`");
     assert!(
         err.chain().any(|cause| matches!(

@@ -2295,6 +2295,34 @@ fn network_inputs_are_distinct_from_internal_outputs() {
     assert_eq!(block.network_output_at(0).unwrap().1.input_index, 0);
     assert!(block.network_output_at(1).is_none());
 }
+
+#[cfg(feature = "transparent_api")]
+#[test]
+fn lifecycle_network_projection_keeps_the_complete_output_as_commitment_owner() {
+    use super::execution_output::{NetworkExecutionOutputV2, TriggerLifecycleEffectsV1};
+    let mut block = fixture::proposal(1);
+    let original = network(0, Ok(Vec::new()));
+    let ExecutionOutputV1::Network(execution) = original.clone() else {
+        unreachable!()
+    };
+    let row = ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+        execution,
+        trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+            effects: Vec::new(),
+        },
+    });
+    assert_eq!(row.network(), original.network());
+    assert_ne!(HashOf::new(&row), HashOf::new(&original));
+    assert!(simple_time(&block, 0).network().is_none());
+    fixture::install(&mut block, vec![row.clone()], 1).unwrap();
+    assert_eq!(
+        block.network_output_at(0).unwrap().1,
+        row.network().unwrap()
+    );
+    assert!(block.network_output_at(1).is_none());
+    assert_eq!(block.execution_outputs(), &[row]);
+    block.validate_output_merkle_cache().unwrap();
+}
 #[cfg(feature = "transparent_api")]
 #[test]
 fn set_transaction_results_rejects_too_short_external_hash_prefix() {

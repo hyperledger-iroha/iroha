@@ -1,0 +1,30 @@
+[package]
+name = "iroha_execution_stark"
+edition.workspace = true
+version.workspace = true
+authors.workspace = true
+description = "Bounded-integer execution STARK: transparent proofs of state-transition traces under verifier-reconstructed public inputs (circuit builder, Goldilocks/BLAKE2b-384 DEEP-FRI prover and verifier), with the SORA CARS RaceV1 circuit"
+repository.workspace = true
+homepage.workspace = true
+documentation.workspace = true
+license.workspace = true
+keywords.workspace = true
+categories = ["cryptography"]
+
+[lints]
+workspace = true
+
+# A deliberately small, std-only dependency set so clients, provers and validators
+# can link the engine without the node, data model or privacy stacks.
+[dependencies]
+# Native 384-bit Merkle commitments, transcript and proof of work.
+blake2 = { workspace = true }
+# Column- and row-parallel proving.
+rayon = { workspace = true }
+thiserror = { workspace = true }
+# Process CPU time for the optional per-phase timing report, without `unsafe`.
+rustix = { version = "1.1.4", features = ["time"] }
+
+[dev-dependencies]
+# Benchmark artifact checksums only; never used by the proof protocol.
+blake3 = { workspace = true }

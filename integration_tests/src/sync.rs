@@ -120,6 +120,19 @@ pub async fn status_until(client: &iroha::client::Client, deadline: Instant) -> 
     .wrap_err("status observation exceeded its original deadline")?
 }
 
+/// Run a synchronous fixture operation without inheriting a Tokio runtime.
+///
+/// Keep operation results nested so a test can distinguish an expected SDK
+/// rejection from a worker failure, just as it does with a task join result.
+///
+/// # Errors
+/// Returns a thread-spawn failure or a reported worker panic.
+pub async fn run_on_dedicated_thread<T: Send + 'static>(
+    operation: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
+    iroha_test_network::read_on_dedicated_thread(move || Ok(operation())).await
+}
+
 /// Check one complete observation of the peers a Sumeragi progress wait selected.
 ///
 /// Failed queries remain pending; callers must keep querying the original peers so a
@@ -422,6 +435,27 @@ mod tests {
         collections::HashMap,
         sync::{Mutex, MutexGuard, OnceLock},
     };
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dedicated_operation_preserves_rejection_and_worker_failure() -> Result<()> {
+        assert_eq!(
+            run_on_dedicated_thread(|| {
+                assert!(tokio::runtime::Handle::try_current().is_err());
+                7u8
+            })
+            .await?,
+            7
+        );
+        let rejected = run_on_dedicated_thread(|| Err::<(), _>(eyre::eyre!("expected rejection")))
+            .await?
+            .expect_err("operation rejection must remain the inner result");
+        assert_eq!(rejected.to_string(), "expected rejection");
+        let worker = run_on_dedicated_thread(|| -> Result<()> { panic!("worker failed") })
+            .await
+            .expect_err("worker panic must remain an outer failure");
+        assert!(worker.to_string().contains("worker failed"));
+        Ok(())
+    }
 
     fn native_status(height: u64) -> SumeragiStatus {
         SumeragiStatus {

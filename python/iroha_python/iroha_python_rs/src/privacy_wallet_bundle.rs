@@ -43,8 +43,8 @@ use iroha_data_model::{
         BootleLanternIssuerPolicyV1, PrivacyAuthorizationKeyDigestV1, PrivacyChallengeV1,
         PrivacyIssuerIdV1, PrivacyJindoFieldElementV1, PrivacyP256PointV1,
         PrivacyPgcAccountBootstrapDigestV1, PrivacyPgcAccountV1, PrivacyPgcBootstrapProofDigestV1,
-        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyProtocolIdV1,
-        PrivacyRecipientIdV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
+        PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyPoolIdV1, PrivacyRecipientIdV1,
+        PrivacyRootV1, PrivacyRuntimeProtocolIdV1, PrivacySessionTranscriptDigestV1,
         PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyZkAcePolicyRecordV1,
         PrivacyZkAmsIssuerPolicyRecordDigestV1, PrivacyZkAmsPersonhoodCredentialV1,
         PrivacyZkAmsRegistryIdV1, PrivacyZkAmsRegistryRecordDigestV1, PrivacyZkAmsSeedPublicKeyV1,
@@ -73,7 +73,7 @@ pub struct PrivacyWalletExecutionBundleManifestV1 {
     /// Public key derived from the bundle-owned transaction signer seed.
     pub public_key: PublicKey,
     /// Exact consensus protocol.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact operation schema selected by the native dispatcher.
     pub operation_schema: &'static str,
 }
@@ -124,7 +124,7 @@ impl std::error::Error for PrivacyWalletBundleErrorV1 {}
 struct BundleParts<'a> {
     wallet_id: &'a str,
     authority: &'a str,
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     public_action: &'a [u8],
     signer_seed: &'a [u8; 32],
     protocol_witness: &'a [u8],
@@ -260,7 +260,7 @@ fn parse_parts(bytes: &[u8]) -> Result<BundleParts<'_>, PrivacyWalletBundleError
     validate_wallet_id(wallet_id)?;
     let authority = cursor.text(MAX_AUTHORITY_BYTES, "authority")?;
     let protocol_label = cursor.text(MAX_PROTOCOL_BYTES, "protocol-id")?;
-    let protocol_id = PrivacyProtocolIdV1::from_canonical_label(protocol_label)
+    let protocol_id = PrivacyRuntimeProtocolIdV1::from_canonical_label(protocol_label)
         .ok_or_else(|| PrivacyWalletBundleErrorV1::at("protocol-id"))?;
     let operation_schema = cursor.text(MAX_OPERATION_SCHEMA_BYTES, "operation-schema")?;
     let public_action = cursor.bytes_u32(MAX_PUBLIC_ACTION_BYTES, "public-action")?;
@@ -1567,6 +1567,7 @@ fn decode_orchard_request_v1(
         },
     ))
 }
+include!("privacy_wallet_bundle_ironwood.rs");
 fn decode_fcmp_tuple_v1(
     value: String,
     stage: &'static str,
@@ -2136,42 +2137,45 @@ fn decode_jindo_request_v1(
     ))
 }
 fn decode_protocol_request_v1(
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     public_action: &[u8],
     protocol_witness: &[u8],
 ) -> Result<PrivacyNativeActionRequestV1, PrivacyWalletBundleErrorV1> {
     match protocol_id {
-        PrivacyProtocolIdV1::ZkAcePqAuthorizationV1 => {
+        PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1 => {
             decode_zk_ace_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1 => {
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1 => {
             decode_anonymous_pgc_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::VeRangeTransparentRangeV1 => {
+        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1 => {
             decode_verange_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::IrohaZkAmsV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1 => {
             decode_zk_ams_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::VegaExistingCredentialZkV1 => {
+        PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1 => {
             decode_vega_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1 => {
             decode_jindo_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1 => {
             decode_bootle_lantern_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::OrchardHalo2ActionsV1 => {
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1 => {
             decode_orchard_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1 => {
+        PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1 => {
+            decode_ironwood_request_v1(public_action, protocol_witness)
+        }
+        PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1 => {
             decode_fcmp_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => {
             decode_ivm_request_v1(public_action, protocol_witness)
         }
-        PrivacyProtocolIdV1::PqMaspStarkV1 => {
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => {
             decode_pq_masp_request_v1(public_action, protocol_witness)
         }
         _ => Err(PrivacyWalletBundleErrorV1::at("unsupported-protocol")),
@@ -2270,7 +2274,7 @@ mod tests {
         );
         assert_eq!(
             inspected.manifest.protocol_id,
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
         assert_eq!(inspected.manifest.operation_schema, OPERATION_SCHEMA);
         assert_eq!(
@@ -2282,7 +2286,7 @@ mod tests {
                 .expect("decode bundle");
         assert_eq!(
             decoded.request.protocol_id(),
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1
         );
     }
     #[test]

@@ -45,7 +45,7 @@ fn pgc_reference_payload(
 }
 fn pgc_reference_request() -> BootstrapPrivacyPgcAccountsV1 {
     BootstrapPrivacyPgcAccountsV1::new(
-        pgc_bootstrap(),
+        (pgc_bootstrap()).try_into().expect("frozen Exact12 test input"),
         ActionAttachmentRefV1 {
             action_index: 0,
             slot_index: 0,
@@ -84,7 +84,7 @@ fn pgc_reference_requires_exact_declared_direct_action_and_slot() {
     ));
     for (action_index, slot_index) in [(1, 0), (0, 1)] {
         let request = BootstrapPrivacyPgcAccountsV1::new(
-            pgc_bootstrap(),
+            (pgc_bootstrap()).try_into().expect("frozen Exact12 test input"),
             ActionAttachmentRefV1 {
                 action_index,
                 slot_index,

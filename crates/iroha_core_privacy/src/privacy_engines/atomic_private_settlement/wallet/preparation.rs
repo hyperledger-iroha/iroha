@@ -27,8 +27,8 @@ use iroha_data_model::{
         PrivateSettlementProofProfileV1, VerifiedPrivateSettlementOpeningsV1,
     },
     privacy::{
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyPoolProgramNamespaceV1,
-        PrivacyProtocolIdV1, PrivacyRootV1,
+        PrivacyNamespaceScopeV1, PrivacyPoolProgramNamespaceV1, PrivacyRootV1,
+        PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
     },
 };
 
@@ -172,8 +172,8 @@ pub fn prepare_atomic_private_settlement_leg_v1(
         return Err(E::Binding);
     }
     let program_id = atomic_private_settlement_program_id_v1()?;
-    let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id: pool.pool_id,
             program_id,

@@ -47,14 +47,15 @@ use iroha_data_model::{
         PrivacyCredentialDocumentTypeV1, PrivacyExact12CapabilityManifestV1,
         PrivacyExact12CapabilityRowV1, PrivacyIssuerIdV1, PrivacyP256PointV1,
         PrivacyParameterDigestV1, PrivacyPolicyDigestV1, PrivacyPolicyIdV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-        PrivacyProtocolPolicyV1, PrivacyRootV1, PrivacySessionTranscriptDigestV1,
-        PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyVegaIssuerRecordDigestV1, PrivacyVegaIssuerRecordLifecycleV1,
-        PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1, PrivacyVegaMdlDigestAlgorithmV1,
-        PrivacyVegaMdlNamespaceV1, PrivacyVegaMdlSignatureAlgorithmV1,
-        PrivacyZkAmsAdmissionAnchorV1, PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1,
-        PrivacyZkAmsKeyImageV1, PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
+        PrivacyProtocolPolicyV1, PrivacyRootV1, PrivacyRuntimeProofEnvelopeV1,
+        PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
+        PrivacyRuntimeStatementV1, PrivacySessionTranscriptDigestV1, PrivacyStatementDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVegaIssuerRecordDigestV1,
+        PrivacyVegaIssuerRecordLifecycleV1, PrivacyVegaIssuerRecordV1, PrivacyVegaMdlDateV1,
+        PrivacyVegaMdlDigestAlgorithmV1, PrivacyVegaMdlNamespaceV1,
+        PrivacyVegaMdlSignatureAlgorithmV1, PrivacyZkAmsAdmissionAnchorV1,
+        PrivacyZkAmsBatchAdmissionV1, PrivacyZkAmsCredentialNonceV1, PrivacyZkAmsKeyImageV1,
+        PrivacyZkAmsPersonhoodCredentialV1, PrivacyZkAmsProvisionAccountV1,
         PrivacyZkAmsRegistryBootstrapV1, PrivacyZkAmsRegistryRecordDigestV1,
         PrivacyZkAmsSeedPublicKeyV1, PrivacyZkAmsSubjectCommitmentV1,
         VEGA_MDL_BIRTH_DATE_ISSUER_SIGNED_ITEM_BYTES_V1,
@@ -81,8 +82,9 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::time::{Instant, sleep, timeout};
-const ZK_AMS_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkAmsV1;
-const VEGA_PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+const ZK_AMS_PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1;
+const VEGA_PROTOCOL: PrivacyRuntimeProtocolIdV1 =
+    PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
 const TEST_NEXUS_LOCAL_STORAGE_BUDGET_BYTES: i64 = 1024 * 1024 * 1024;
 const SUBMISSION_TIMEOUT: Duration = Duration::from_secs(120);
 const PEER_CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -230,7 +232,7 @@ fn is_exact_replay_error(error: &eyre::Report) -> bool {
 }
 fn protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
 ) -> Result<PrivacyExact12CapabilityRowV1> {
     snapshot
         .protocols
@@ -241,7 +243,7 @@ fn protocol_row(
 }
 fn assert_exact_protocol_row(
     snapshot: &PrivacyExact12CapabilityManifestV1,
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
     compiled: PrivacyCompiledProfileSnapshotV1,
     policy: Option<PrivacyProtocolPolicyV1>,
     context: &str,
@@ -340,7 +342,7 @@ async fn wait_for_all_peer_policies(
     network: &sandbox::SerializedNetwork,
     minimum_height: u64,
     rows: &[(
-        PrivacyProtocolIdV1,
+        PrivacyRuntimeProtocolIdV1,
         PrivacyCompiledProfileSnapshotV1,
         Option<PrivacyProtocolPolicyV1>,
     )],
@@ -671,7 +673,7 @@ fn zk_ams_transaction_context(
 }
 fn build_transaction_from_envelope(
     context: &ZkAmsPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
     client: &Client,
 ) -> Result<SignedTransaction> {
     let mut builder = TransactionBuilder::new(
@@ -679,7 +681,9 @@ fn build_transaction_from_envelope(
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_instructions([SubmitPrivacyProofV1::new(
+        (envelope).try_into().expect("frozen Exact12 test input"),
+    )])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
@@ -707,7 +711,7 @@ fn zk_ams_binding_v1<'a>(
     statement: &'a IrohaZkAmsStatementV1,
     canonical_genesis_hash: [u8; 32],
 ) -> Result<TranscriptBindingV1<'a>> {
-    let statement_digest = PrivacyStatementV1::IrohaZkAmsV1(statement.clone())
+    let statement_digest = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone())
         .digest()
         .wrap_err("derive canonical ZK-AMS statement digest")?;
     Ok(TranscriptBindingV1 {
@@ -789,7 +793,7 @@ fn build_zk_ams_batch_action(
         intent == statement.context.transaction_intent_digest,
         "ZK-AMS prepared intent differs from the statement"
     );
-    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .wrap_err("derive canonical ZK-AMS statement digest")?;
@@ -835,7 +839,7 @@ fn build_zk_ams_batch_action(
     );
     let profile = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
         .wrap_err("load canonical compiled ZK-AMS profile for envelope")?;
-    let envelope = PrivacyProofEnvelopeV1 {
+    let envelope = PrivacyRuntimeProofEnvelopeV1 {
         wire_magic: Default::default(),
         catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
@@ -848,9 +852,9 @@ fn build_zk_ams_batch_action(
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(
-            PrivacyProofBytesV1::new(proof),
-        )),
+        proof: PrivacyRuntimeProofV1::IrohaZkAmsV1(
+            IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(PrivacyProofBytesV1::new(proof)),
+        ),
     };
     let transaction = build_transaction_from_envelope(&context, envelope, client)?;
     let next_state = ZkAmsRegistryStateV1 {
@@ -932,7 +936,7 @@ fn build_zk_ams_provision_action(
         intent == statement.context.transaction_intent_digest,
         "ZK-AMS provisioning intent differs from the statement"
     );
-    let typed_statement = PrivacyStatementV1::IrohaZkAmsV1(statement.clone());
+    let typed_statement = PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement.clone());
     let statement_digest = typed_statement
         .digest()
         .wrap_err("derive canonical ZK-AMS provisioning statement digest")?;
@@ -959,7 +963,7 @@ fn build_zk_ams_provision_action(
     );
     let profile = compiled_privacy_profile_v1(ZK_AMS_PROTOCOL)
         .wrap_err("load canonical compiled ZK-AMS profile for provisioning envelope")?;
-    let envelope = PrivacyProofEnvelopeV1 {
+    let envelope = PrivacyRuntimeProofEnvelopeV1 {
         wire_magic: Default::default(),
         catalog_commitment: Default::default(),
         protocol_id: profile.protocol_id,
@@ -972,9 +976,9 @@ fn build_zk_ams_provision_action(
         engine_manifest_digest: profile.engine_manifest_digest,
         statement_digest,
         statement: typed_statement,
-        proof: PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(
-            PrivacyProofBytesV1::new(proof),
-        )),
+        proof: PrivacyRuntimeProofV1::IrohaZkAmsV1(
+            IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(PrivacyProofBytesV1::new(proof)),
+        ),
     };
     let transaction = build_transaction_from_envelope(&context, envelope, client)?;
     Ok(ZkAmsProvisionActionV1 {
@@ -1284,8 +1288,13 @@ enum GovernanceTamper {
     ZkAmsRegistryRecord,
     VegaIssuerRecord,
 }
-fn direct_submission_executable(envelope: PrivacyProofEnvelopeV1) -> Executable {
-    Executable::Instructions(vec![InstructionBox::from(SubmitPrivacyProofV1::new(envelope))].into())
+fn direct_submission_executable(envelope: PrivacyRuntimeProofEnvelopeV1) -> Executable {
+    Executable::Instructions(
+        vec![InstructionBox::from(SubmitPrivacyProofV1::new(
+            (envelope).try_into().expect("frozen Exact12 test input"),
+        ))]
+        .into(),
+    )
 }
 fn independently_resigned_governance_tamper(
     transaction: &SignedTransaction,
@@ -1296,8 +1305,9 @@ fn independently_resigned_governance_tamper(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan canonical transaction before governance mutation")?
         .ok_or_else(|| eyre!("canonical privacy transaction omitted its direct submission"))?;
-    let original_proof = submission.envelope.proof.clone();
-    let mut envelope = submission.envelope.clone();
+    let submission_envelope = submission.runtime_envelope();
+    let original_proof = submission_envelope.proof.clone();
+    let mut envelope = submission_envelope.clone();
     if matches!(tamper, GovernanceTamper::ParameterDigest) {
         let mut digest = *envelope.parameter_digest.as_bytes();
         digest[0] ^= 0x80;
@@ -1307,14 +1317,17 @@ fn independently_resigned_governance_tamper(
     match (tamper, &mut envelope.statement) {
         (GovernanceTamper::ParameterDigest, _) => {}
 
-        (GovernanceTamper::ZkAmsRegistryRecord, PrivacyStatementV1::IrohaZkAmsV1(statement)) => {
+        (
+            GovernanceTamper::ZkAmsRegistryRecord,
+            PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement),
+        ) => {
             let mut digest = *statement.registry_record_digest.as_bytes();
             digest[0] ^= 0x80;
             statement.registry_record_digest = PrivacyZkAmsRegistryRecordDigestV1::new(digest);
         }
         (
             GovernanceTamper::VegaIssuerRecord,
-            PrivacyStatementV1::VegaExistingCredentialZkV1(statement),
+            PrivacyRuntimeStatementV1::VegaExistingCredentialZkV1(statement),
         ) => {
             let mut digest = *statement.issuer_record_digest.as_bytes();
             digest[0] ^= 0x80;
@@ -1368,8 +1381,9 @@ fn independently_resigned_vega_proof_corruption(
         .privacy_transaction_intent_binding_if_present_v1()
         .wrap_err("scan canonical Vega transaction before proof corruption")?
         .ok_or_else(|| eyre!("canonical Vega transaction omitted its direct submission"))?;
-    let mut envelope = submission.envelope.clone();
-    let PrivacyProofV1::VegaExistingCredentialZkV1(proof) = &mut envelope.proof else {
+    let submission_envelope = submission.runtime_envelope();
+    let mut envelope = submission_envelope.clone();
+    let PrivacyRuntimeProofV1::VegaExistingCredentialZkV1(proof) = &mut envelope.proof else {
         return Err(eyre!(
             "Vega proof corruption reached a different proof suite"
         ));
@@ -1489,11 +1503,13 @@ async fn canonical_zk_ams_and_vega_actions_survive_four_validator_activation_rep
             let error = submit_instruction(
                 &client,
                 SchedulePrivacyProtocolLimitsUpdateV1::new(
-                    protocol,
+                    (protocol).try_into().expect("frozen Exact12 test input"),
                     incoming
                         .checked_add(1)
                         .ok_or_else(|| eyre!("policy height overflowed"))?,
-                    PrivacyProtocolLimitsV1::canonical_default_v1(protocol),
+                    (PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(protocol))
+                        .try_into()
+                        .expect("frozen Exact12 test input"),
                 ),
                 "unchanged protocol-limit update must reject",
             )
@@ -2022,9 +2038,9 @@ async fn canonical_vega_action_survives_four_validator_activation_replay_and_res
         .await?;
         let policy_height = next_execution_height(&client).await?;
         let policy_error = submit_instruction(&client,
-            SchedulePrivacyProtocolLimitsUpdateV1::new(VEGA_PROTOCOL,
+            SchedulePrivacyProtocolLimitsUpdateV1::new((VEGA_PROTOCOL).try_into().expect("frozen Exact12 test input"),
                 policy_height.checked_add(1).ok_or_else(|| eyre!("policy height overflowed"))?,
-                PrivacyProtocolLimitsV1::canonical_default_v1(VEGA_PROTOCOL)),
+                (PrivacyRuntimeProtocolLimitsV1::canonical_default_v1(VEGA_PROTOCOL)).try_into().expect("frozen Exact12 test input")),
             "unchanged Vega policy must reject").await
             .expect_err("no-op Vega policy update was accepted");
         ensure!(error_chain_contains(&policy_error, "privacy protocol-limit update is a no-op"),

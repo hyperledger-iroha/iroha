@@ -1721,13 +1721,12 @@ impl<'s> Worker<'s> {
 
     /// The callback receives the sole completed original, before any proof scratch allocation.
     ///
-    /// The attempt runs in one block-start credit scope of the State pool: the worker
-    /// thread's refunds to that pool stay with the attempt and pay for its later
-    /// reservations. A refusal that waits on that pool keeps them with its job, and the
-    /// job's next attempt starts from them, so its own rollback cannot satisfy the
-    /// refusal's release wait; only another owner's release can. Other outcomes return
-    /// them to the pool. Superseded jobs retire before this scope so their
-    /// external releases cannot become the replacement job's private credits.
+    /// Superseded owners retire first and return their credits to the pool. The attempt
+    /// then runs in one block-start credit scope of the State pool: the worker thread's
+    /// refunds to that pool stay with the attempt and pay for its later reservations. A
+    /// refusal that waits on that pool keeps them with its job, and the job's next attempt
+    /// starts from them, so its own rollback cannot satisfy the refusal's release wait;
+    /// only another owner's release can. Other outcomes return them to the pool.
     #[expect(
         clippy::result_large_err,
         reason = "Resource refusals retain their original typed cause and custody without allocating an error box."
@@ -1833,6 +1832,7 @@ impl<'s> Worker<'s> {
         certified: bool,
         finish: impl FnOnce(&mut Self) -> Result<Option<Hash32>, PublicationError>,
     ) -> Result<Option<Hash32>, PublicationError> {
+        // `run_execution_with_finisher` already retired every superseded owner.
         if let Some(original) = &self.finishing
             && original.block_hash == block_hash
         {

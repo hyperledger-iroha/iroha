@@ -3,7 +3,10 @@ use super::*;
 use iroha_data_model::{
     isi::sorafs::AssertSorafsPublicationV1,
     sorafs::{
-        pin_registry::{ReplicationOrderStatus, derive_sorafs_auto_replication_order_id_v1},
+        pin_registry::{
+            ReplicationOrderStatus, SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1,
+            derive_sorafs_auto_replication_order_id_v1,
+        },
         publication::{
             PUBLICATION_PROOF_MAX_BYTES_V1, SorafsPublicationPreparationV1,
             SorafsPublicationProofRequestV1, SorafsPublicationProofV1,
@@ -25,6 +28,21 @@ use std::time::Instant;
 
 const PUBLICATION_TIMEOUT: Duration = Duration::from_secs(600);
 const PREPARATION_MAX_BYTES: usize = 2 * 1024 * 1024;
+
+// Public status DTOs are small; retain the SDK's bounded response envelope.
+const REGISTRATION_STATUS_MAX_BYTES: usize = 64 * 1024;
+
+/// Generated deploy manifests retain two canonical ingest windows: one window
+/// of submission headroom followed by the full automatic-replication SLA.
+/// Explicit manifests and the server's strict deadline/retention ceiling remain
+/// unchanged. This default is not permission to extend publication timeouts.
+pub(super) fn default_deploy_retention_epoch(created_epoch: u64) -> Result<u64, String> {
+    let ingest_window = u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+    created_epoch
+        .checked_add(ingest_window)
+        .and_then(|epoch| epoch.checked_add(ingest_window))
+        .ok_or_else(|| "retention deadline overflow".to_owned())
+}
 
 pub(super) fn load_checkpoint(
     path: &Path,
@@ -240,11 +258,121 @@ fn read_response(
     Ok(bytes)
 }
 
+// Status may stop a rejected publication, but can never establish successful
+// publication. Success still requires the unchanged challenged native proof.
+fn check_registration_status(
+    expected: iroha_crypto::HashOf<SignedTransaction>,
+    row: &iroha_torii_shared::PipelineTransactionStatusResponse,
+) -> Result<(), String> {
+    if row.hash != expected.to_string() || row.scope != "global" {
+        return Err(
+            "pin registration status substituted the exact signed hash or global scope".to_owned(),
+        );
+    }
+    if !matches!(row.resolved_from.as_str(), "cache" | "queue" | "state") {
+        return Err("pin registration status has an unsupported resolution source".to_owned());
+    }
+    if !matches!(
+        row.status.kind.as_str(),
+        "Queued" | "Approved" | "Committed" | "Applied" | "Rejected" | "Expired"
+    ) {
+        return Err("pin registration status has an unsupported status kind".to_owned());
+    }
+    if row.resolved_from == "state" && matches!(row.status.kind.as_str(), "Rejected" | "Expired") {
+        return Err(format!(
+            "pin registration {expected} reached global state-resolved {}",
+            row.status.kind
+        ));
+    }
+    Ok(())
+}
+
+fn check_registration_response(
+    response: reqwest::blocking::Response,
+    expected: iroha_crypto::HashOf<SignedTransaction>,
+) -> Result<(), String> {
+    let status = response.status();
+    if !matches!(status, StatusCode::OK | StatusCode::NOT_FOUND) {
+        return Err(format!(
+            "pin registration status read rejected with {status}"
+        ));
+    }
+    if response.headers().get_all(CONTENT_TYPE).iter().count() != 1
+        || response
+            .headers()
+            .get(CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            != Some("application/json")
+    {
+        return Err(
+            "pin registration status requires one application/json content type".to_owned(),
+        );
+    }
+    let maximum = if status == StatusCode::NOT_FOUND {
+        iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_MAX_BYTES
+    } else {
+        REGISTRATION_STATUS_MAX_BYTES
+    };
+    let bytes = read_response(response, maximum)?;
+    if status == StatusCode::NOT_FOUND {
+        let envelope: iroha_torii_shared::ErrorEnvelope = norito::json::from_slice(&bytes)
+            .map_err(|_| "pin registration status absence is malformed".to_owned())?;
+        if envelope.code() != iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE
+            || !envelope
+                .details
+                .as_ref()
+                .and_then(|details| details.pipeline_transaction_status_not_found.as_ref())
+                .is_some_and(|absence| absence.matches(&expected, "global"))
+        {
+            return Err(
+                "pin registration status absence substituted the exact signed hash or global scope"
+                    .to_owned(),
+            );
+        }
+        return Ok(());
+    }
+    let row: iroha_torii_shared::PipelineTransactionStatusResponse =
+        norito::json::from_slice(&bytes)
+            .map_err(|_| "pin registration status is malformed".to_owned())?;
+    check_registration_status(expected, &row)
+}
+
+fn refuse_terminal_registration(
+    client: &HttpClient,
+    base: &Url,
+    expected: iroha_crypto::HashOf<SignedTransaction>,
+    started: Instant,
+) -> Result<(), String> {
+    ensure_live(started)?;
+    let remaining = PUBLICATION_TIMEOUT.saturating_sub(started.elapsed());
+    if remaining.is_zero() {
+        return Err("publication did not finalize before its ten-minute deadline".to_owned());
+    }
+    let mut status_url = endpoint(base, "v1/pipeline/transactions/status")?;
+    status_url
+        .query_pairs_mut()
+        .append_pair("hash", &expected.to_string())
+        .append_pair("scope", "global");
+    let response = client
+        .get(status_url)
+        .header("Accept", "application/json")
+        .header(ACCEPT_ENCODING, "identity")
+        .timeout(remaining.min(Duration::from_secs(30)))
+        .send()
+        .map_err(|_| "pin registration status transport unavailable".to_owned())?;
+    let result = check_registration_response(response, expected);
+    ensure_live(started)?;
+    result
+}
+
 fn preparation(
     client: &HttpClient,
     base: &Url,
     config: &DeployClientConfig,
     digest: ManifestDigest,
+    registration_hash: iroha_crypto::HashOf<SignedTransaction>,
     started: Instant,
     completed: bool,
 ) -> Result<SorafsPublicationPreparationV1, String> {
@@ -259,6 +387,7 @@ fn preparation(
         )?;
         let status = response.status();
         if status == StatusCode::ACCEPTED || status == StatusCode::NOT_FOUND {
+            refuse_terminal_registration(client, base, registration_hash, started)?;
             std::thread::sleep(Duration::from_millis(500));
             continue;
         }
@@ -403,6 +532,7 @@ pub(super) fn qualify(
     base: &Url,
     config: &DeployClientConfig,
     artifacts: &DeployPackArtifacts,
+    registration_hash: iroha_crypto::HashOf<SignedTransaction>,
     checkpoint: SumeragiFinalityCheckpoint,
     provider_urls: &[String],
     out_dir: &Path,
@@ -418,7 +548,15 @@ pub(super) fn qualify(
             .map_err(|_| "manifest digest failed".to_owned())?
             .as_bytes(),
     );
-    let assigned = preparation(client, base, config, digest, started, false)?;
+    let assigned = preparation(
+        client,
+        base,
+        config,
+        digest,
+        registration_hash,
+        started,
+        false,
+    )?;
     let order: ReplicationOrderV1 = decode(&assigned.order.canonical_order, 256 * 1024)?;
     order
         .validate()
@@ -517,7 +655,15 @@ pub(super) fn qualify(
             }
         }
     }
-    let complete = preparation(client, base, config, digest, started, true)?;
+    let complete = preparation(
+        client,
+        base,
+        config,
+        digest,
+        registration_hash,
+        started,
+        true,
+    )?;
     if complete.order.assignment_revision != assigned.order.assignment_revision
         || complete.order.canonical_order != assigned.order.canonical_order
     {
@@ -581,6 +727,374 @@ mod tests {
             iroha_crypto::Hash::new([seed]),
         ))
     }
+    fn registration_hash(seed: u8) -> iroha_crypto::HashOf<SignedTransaction> {
+        iroha_crypto::HashOf::from_untyped_unchecked(iroha_crypto::Hash::new([seed]))
+    }
+
+    fn status_row(
+        kind: &str,
+        source: &str,
+    ) -> iroha_torii_shared::PipelineTransactionStatusResponse {
+        iroha_torii_shared::PipelineTransactionStatusResponse::new(
+            registration_hash(1).to_string(),
+            iroha_torii_shared::PipelineTransactionStatus {
+                kind: kind.into(),
+                block_height: None,
+            },
+            "global".into(),
+            source.into(),
+        )
+    }
+
+    fn absent_status(hash: iroha_crypto::HashOf<SignedTransaction>, scope: &str) -> Vec<u8> {
+        use iroha_torii_shared::{
+            ErrorDetails, ErrorEnvelope, PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE,
+            PipelineTransactionStatusNotFoundV1,
+        };
+        norito::json::to_vec(
+            &ErrorEnvelope::new(PIPELINE_TRANSACTION_STATUS_NOT_FOUND_CODE, "No status")
+                .with_details(ErrorDetails {
+                    pipeline_transaction_status_not_found: Some(
+                        PipelineTransactionStatusNotFoundV1::new(&hash, scope),
+                    ),
+                    ..ErrorDetails::default()
+                }),
+        )
+        .unwrap()
+    }
+
+    // Exercise real HTTP response parsing without a node or any signing material from disk.
+    fn status_server(
+        replies: Vec<(u16, &'static str, Vec<u8>)>,
+    ) -> (HttpClient, Url, thread::JoinHandle<Vec<String>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = Url::parse(&format!("http://{}/", listener.local_addr().unwrap())).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let server = thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            let mut requests = Vec::new();
+            for (status, headers, body) in replies {
+                let mut stream = loop {
+                    match listener.accept() {
+                        Ok((stream, _)) => break stream,
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            assert!(Instant::now() < deadline, "missing bounded test request");
+                            thread::sleep(Duration::from_millis(1));
+                        }
+                        Err(error) => panic!("test accept: {error}"),
+                    }
+                };
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                stream
+                    .set_write_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                while !request.ends_with(b"\r\n\r\n") {
+                    assert!(request.len() < 16 * 1024, "test request header bound");
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    request.push(byte[0]);
+                }
+                let request = String::from_utf8(request).unwrap();
+                let body_length = request
+                    .lines()
+                    .find_map(|line| {
+                        let (name, value) = line.split_once(':')?;
+                        name.eq_ignore_ascii_case("content-length")
+                            .then(|| value.trim().parse::<usize>().unwrap())
+                    })
+                    .unwrap_or(0);
+                assert!(body_length <= 16 * 1024, "test request body bound");
+                stream.read_exact(&mut vec![0; body_length]).unwrap();
+                requests.push(request);
+                let head = format!(
+                    "HTTP/1.1 {status} Test\r\nConnection: close\r\nContent-Length: {}\r\n{headers}\r\n",
+                    body.len()
+                );
+                if stream.write_all(head.as_bytes()).is_ok() {
+                    let _ = stream.write_all(&body);
+                }
+            }
+            requests
+        });
+        let client = HttpClient::builder()
+            .no_proxy()
+            .no_gzip()
+            .no_brotli()
+            .no_deflate()
+            .no_zstd()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
+        (client, base, server)
+    }
+
+    #[test]
+    fn deploy_default_retention_preserves_full_ingest_window_with_submission_headroom() {
+        let created = 1_800_000_000;
+        let window = u64::from(SORAFS_AUTO_REPLICATION_ORDER_INGEST_DEADLINE_SECS_V1);
+        let retention = default_deploy_retention_epoch(created).unwrap();
+        assert_eq!(retention, created + 2 * window);
+        for delay in [0, 1, 600, window - 1] {
+            assert!(created + delay + window < retention);
+        }
+        // At the exact edge there is no strict headroom: the server must still refuse.
+        assert_eq!(created + window + window, retention);
+        assert_eq!(
+            default_deploy_retention_epoch(u64::MAX - 2 * window).unwrap(),
+            u64::MAX
+        );
+        assert!(default_deploy_retention_epoch(u64::MAX - 2 * window + 1).is_err());
+        assert!(default_deploy_retention_epoch(u64::MAX).is_err());
+    }
+
+    #[test]
+    fn registration_status_only_refuses_exact_global_state_rejection_or_expiry() {
+        for source in ["cache", "queue", "state"] {
+            for kind in [
+                "Queued",
+                "Approved",
+                "Committed",
+                "Applied",
+                "Rejected",
+                "Expired",
+            ] {
+                let result =
+                    check_registration_status(registration_hash(1), &status_row(kind, source));
+                let terminal = source == "state" && matches!(kind, "Rejected" | "Expired");
+                assert_eq!(result.is_err(), terminal, "{source}/{kind}");
+                if terminal {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .contains(&format!("state-resolved {kind}"))
+                    );
+                }
+            }
+        }
+        for row in [
+            iroha_torii_shared::PipelineTransactionStatusResponse {
+                hash: registration_hash(2).to_string(),
+                ..status_row("Rejected", "state")
+            },
+            iroha_torii_shared::PipelineTransactionStatusResponse {
+                scope: "local".into(),
+                ..status_row("Rejected", "state")
+            },
+            status_row("Rejected", "untrusted"),
+            status_row("Unknown", "state"),
+        ] {
+            assert!(check_registration_status(registration_hash(1), &row).is_err());
+        }
+    }
+
+    #[test]
+    fn registration_http_reads_exact_hash_and_global_scope() {
+        let expected = registration_hash(1);
+        let replies = vec![
+            (
+                404,
+                "Content-Type: application/json\r\n",
+                absent_status(expected, "global"),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                norito::json::to_vec(&status_row("Approved", "state")).unwrap(),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                norito::json::to_vec(&status_row("Applied", "state")).unwrap(),
+            ),
+        ];
+        let (client, base, server) = status_server(replies);
+        for _ in 0..3 {
+            refuse_terminal_registration(&client, &base, expected, Instant::now()).unwrap();
+        }
+        let requests = server.join().unwrap();
+        assert_eq!(requests.len(), 3);
+        for request in requests {
+            assert!(
+                request.starts_with(&format!(
+                    "GET /v1/pipeline/transactions/status?hash={expected}&scope=global HTTP/1.1\r\n"
+                )),
+                "{request}"
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("accept: application/json\r\n")
+            );
+            assert!(
+                request
+                    .to_ascii_lowercase()
+                    .contains("accept-encoding: identity\r\n")
+            );
+        }
+    }
+
+    #[test]
+    fn registration_http_rejects_unbound_absence_and_permanent_response() {
+        let expected = registration_hash(1);
+        for (status, body) in [
+            (404, absent_status(registration_hash(2), "global")),
+            (404, absent_status(expected, "local")),
+            (404, b"{}".to_vec()),
+            (403, b"private upstream detail must not appear".to_vec()),
+            (503, b"private upstream detail must not appear".to_vec()),
+        ] {
+            let (client, base, server) =
+                status_server(vec![(status, "Content-Type: application/json\r\n", body)]);
+            let error =
+                refuse_terminal_registration(&client, &base, expected, Instant::now()).unwrap_err();
+            assert!(!error.contains("private upstream"));
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
+
+    #[test]
+    fn registration_http_rejects_wrong_media_encoding_and_oversize_envelopes() {
+        let valid = norito::json::to_vec(&status_row("Approved", "state")).unwrap();
+        for (status, headers, body) in [
+            (200, "Content-Type: text/plain\r\n", valid.clone()),
+            (
+                200,
+                "Content-Type: application/json\r\nContent-Type: application/json\r\n",
+                valid.clone(),
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\nContent-Encoding: gzip\r\n",
+                valid,
+            ),
+            (
+                200,
+                "Content-Type: application/json\r\n",
+                vec![b' '; REGISTRATION_STATUS_MAX_BYTES + 1],
+            ),
+            (
+                404,
+                "Content-Type: application/json\r\n",
+                vec![b' '; iroha_torii_shared::PIPELINE_TRANSACTION_STATUS_NOT_FOUND_MAX_BYTES + 1],
+            ),
+        ] {
+            let (client, base, server) = status_server(vec![(status, headers, body)]);
+            assert!(
+                refuse_terminal_registration(&client, &base, registration_hash(1), Instant::now())
+                    .is_err()
+            );
+            assert_eq!(server.join().unwrap().len(), 1);
+        }
+    }
+
+    fn publication_test_config() -> DeployClientConfig {
+        let key = KeyPair::try_from_seed(vec![4; 32], iroha_crypto::Algorithm::Ed25519).unwrap();
+        DeployClientConfig {
+            torii_url: None,
+            public_key: key.public_key().clone(),
+            private_key: key.private_key().clone(),
+            network_id: network(1),
+            chain_id: "publication-test".parse().unwrap(),
+            chain_discriminant: 777,
+        }
+    }
+
+    #[test]
+    fn pending_preparation_stops_on_bound_terminal_registration_without_polling_for_proof() {
+        let config = publication_test_config();
+        for pending in [202, 404] {
+            for terminal in ["Rejected", "Expired"] {
+                let (client, base, server) = status_server(vec![
+                    (
+                        pending,
+                        "Content-Type: application/json\r\n",
+                        b"{}".to_vec(),
+                    ),
+                    (
+                        200,
+                        "Content-Type: application/json\r\n",
+                        norito::json::to_vec(&status_row(terminal, "state")).unwrap(),
+                    ),
+                ]);
+                let error = preparation(
+                    &client,
+                    &base,
+                    &config,
+                    ManifestDigest::new([1; 32]),
+                    registration_hash(1),
+                    Instant::now(),
+                    false,
+                )
+                .unwrap_err();
+                assert!(
+                    error.contains(&format!("state-resolved {terminal}")),
+                    "{error}"
+                );
+                let requests = server.join().unwrap();
+                assert_eq!(requests.len(), 2);
+                assert!(requests[0].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
+                assert!(requests[1].starts_with("GET /v1/pipeline/transactions/status?"));
+            }
+        }
+    }
+
+    #[test]
+    fn approved_or_applied_status_cannot_substitute_native_publication_preparation() {
+        let config = publication_test_config();
+        for kind in ["Approved", "Applied"] {
+            let (client, base, server) = status_server(vec![
+                (404, "Content-Type: application/json\r\n", b"{}".to_vec()),
+                (
+                    200,
+                    "Content-Type: application/json\r\n",
+                    norito::json::to_vec(&status_row(kind, "state")).unwrap(),
+                ),
+                (
+                    200,
+                    "Content-Type: application/x-norito\r\n",
+                    b"ordinary status is not native publication preparation".to_vec(),
+                ),
+            ]);
+            let error = preparation(
+                &client,
+                &base,
+                &config,
+                ManifestDigest::new([1; 32]),
+                registration_hash(1),
+                Instant::now(),
+                false,
+            )
+            .unwrap_err();
+            assert!(error.contains("not canonical bounded Norito"), "{error}");
+            let requests = server.join().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert!(requests[0].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
+            assert!(requests[1].starts_with("GET /v1/pipeline/transactions/status?"));
+            assert!(requests[2].starts_with("POST /v1/sorafs/publish/prepare HTTP/1.1\r\n"));
+        }
+    }
+
+    #[test]
+    fn registration_status_deadline_refuses_before_starting_http() {
+        let client = HttpClient::builder().no_proxy().build().unwrap();
+        let base = Url::parse("http://127.0.0.1:1/").unwrap();
+        let error = refuse_terminal_registration(
+            &client,
+            &base,
+            registration_hash(1),
+            Instant::now() - PUBLICATION_TIMEOUT,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error,
+            "publication did not finalize before its ten-minute deadline"
+        );
+    }
+
     #[test]
     fn publication_request_signature_binds_network_target_body_and_freshness() {
         let url = Url::parse("https://node.example/v1/sorafs/publish/source").unwrap();

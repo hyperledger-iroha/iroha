@@ -90,7 +90,7 @@ pub struct PrivateSettlementPolicyUpdateV1 {
 #[norito_schema(name = "iroha_data_model::privacy::PrivateSettlementProtocolClosureDrainV1")]
 pub struct PrivateSettlementProtocolClosureDrainV1 {
     /// The native relation whose ordinary limit update closes admission.
-    pub protocol_id: PrivacyProtocolIdV1,
+    pub protocol_id: PrivacyRuntimeProtocolIdV1,
     /// Exact block which admitted that protocol schedule.
     pub scheduled_at_height: u64,
     /// Exact incoming block applying that protocol successor.
@@ -283,7 +283,7 @@ impl PrivateSettlementPolicyV1 {
                 .pending_update
                 .as_ref()
                 .filter(|pending| {
-                    policy.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1
+                    policy.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1
                         && private_settlement_protocol_closes_v1(
                             &policy.current_limits,
                             &pending.next_limits,
@@ -352,7 +352,7 @@ impl PrivateSettlementProtocolClosureDrainV1 {
     /// # Errors
     /// Wrong native protocol, invalid original drain or original canonical encoding refusal.
     pub fn capture(
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         pending: &PrivacyProtocolLimitsUpdateV1,
         original_max_expiry_blocks: u64,
     ) -> Result<Self, PrivateSettlementPolicyParameterErrorV1> {
@@ -377,7 +377,7 @@ impl PrivateSettlementProtocolClosureDrainV1 {
     /// # Errors
     /// Another relation or activation before every previously admissible expiry.
     pub fn validate(&self) -> Result<(), PrivateSettlementPolicyValidationErrorV1> {
-        if self.protocol_id != PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 {
+        if self.protocol_id != PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 {
             return Err(PrivateSettlementPolicyValidationErrorV1::ProtocolClosureMismatch);
         }
         validate_private_settlement_drain_v1(
@@ -672,10 +672,10 @@ impl Default for PrivateSettlementValidityLimitsV1 {
 /// pool policy and the exact signed payment still have their existing independent owners.
 #[must_use]
 pub const fn private_settlement_protocol_admission_open_v1(
-    limits: &PrivacyProtocolLimitsV1,
+    limits: &PrivacyRuntimeProtocolLimitsV1,
 ) -> bool {
     match limits {
-        PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) => {
+        PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) => {
             limits.max_input_count >= IVM_PRIVATE_NOTE_MAX_INPUTS_V1
                 && limits.max_output_count >= IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1
         }
@@ -686,8 +686,8 @@ pub const fn private_settlement_protocol_admission_open_v1(
 /// Whether a protocol update closes an already available native private-payment relation.
 #[must_use]
 pub const fn private_settlement_protocol_closes_v1(
-    current: &PrivacyProtocolLimitsV1,
-    next: &PrivacyProtocolLimitsV1,
+    current: &PrivacyRuntimeProtocolLimitsV1,
+    next: &PrivacyRuntimeProtocolLimitsV1,
 ) -> bool {
     private_settlement_protocol_admission_open_v1(current)
         && !private_settlement_protocol_admission_open_v1(next)
@@ -947,7 +947,7 @@ mod tests {
         let pending = PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height: 7,
             effective_at_height: 8,
-            next_limits: PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+            next_limits: PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1,
         };
         let pending_frame = hex::decode("4E5254300000F1E86538130DAD59DCBA9FF37F1B9F990017000000000000000C36AFF85B9286D9020807000000000000000808000000000000000400000000").unwrap();
         assert_eq!(norito::encode_canonical(&pending).unwrap(), pending_frame);
@@ -1163,15 +1163,15 @@ mod tests {
 
     #[test]
     fn later_private_policy_preserves_original_pending_protocol_drain() {
-        let protocol_id = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let mut protocol = PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id);
-        let PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(mut closed) =
+        let PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(mut closed) =
             protocol.current_limits
         else {
             unreachable!()
         };
         closed.max_input_count = IVM_PRIVATE_NOTE_MAX_INPUTS_V1 - 1;
-        let closed = PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(closed);
+        let closed = PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(closed);
         assert!(private_settlement_protocol_closes_v1(
             &protocol.current_limits,
             &closed
@@ -1235,7 +1235,7 @@ mod tests {
             let mut malformed = later;
             let drain = malformed.protocol_closure_drain.as_mut().unwrap();
             match mutation {
-                0 => drain.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+                0 => drain.protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
                 1 => drain.scheduled_at_height -= 1,
                 2 => drain.effective_at_height += 1,
                 _ => drain.next_limits_hash = iroha_crypto::Hash::new(b"substituted successor"),

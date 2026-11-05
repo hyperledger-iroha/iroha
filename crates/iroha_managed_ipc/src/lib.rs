@@ -82,7 +82,20 @@ fn decode<T: JsonDeserialize>(bytes: &[u8]) -> Result<T> {
 /// Create one fresh secret session token: 32 random bytes in lowercase hexadecimal.
 #[must_use]
 pub fn random_token() -> String {
-    hex::encode(rand::random::<[u8; 32]>())
+    // Erase this owned random-byte buffer after constructing the returned token.
+    let bytes = zeroize::Zeroizing::new(rand::random::<[u8; 32]>());
+    encode_token(&bytes)
+}
+
+// The control protocol uses exactly 32 bytes; reserve the final 64-byte string once.
+fn encode_token(bytes: &[u8; 32]) -> String {
+    const DIGITS: &[u8; 16] = b"0123456789abcdef";
+    let mut token = String::with_capacity(64);
+    for &byte in bytes {
+        token.push(char::from(DIGITS[usize::from(byte >> 4)]));
+        token.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+    }
+    token
 }
 
 /// Compare two session tokens without stopping at the first difference.

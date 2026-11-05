@@ -52,33 +52,46 @@ pub const MAX_DECIMAL_ENVELOPE_BYTES_V1: usize =
 pub const MAX_QUANTITY_ENVELOPE_BYTES_V1: usize =
     MAX_QUANTITY_FRAME_BYTES_V1 + NUMERIC_POINTER_ENVELOPE_OVERHEAD_V1;
 /// Failure while validating or decoding a canonical V1 numeric frame.
-#[derive(Debug, Clone, displaydoc::Display, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum NumericAbiError {
     /// Frame is shorter than the fixed Norito header
+    #[error("Frame is shorter than the fixed Norito header")]
     FrameTooShort,
     /// Frame exceeds the maximum size for its declared numeric type
+    #[error("Frame exceeds the maximum size for its declared numeric type")]
     FrameTooLarge,
     /// Frame does not use the canonical Norito V1 header
+    #[error("Frame does not use the canonical Norito V1 header")]
     InvalidHeader,
     /// Frame schema hash does not match the nominal numeric type
+    #[error("Frame schema hash does not match the nominal numeric type")]
     SchemaMismatch,
     /// Numeric frames must be uncompressed
+    #[error("Numeric frames must be uncompressed")]
     CompressionNotAllowed,
     /// Numeric frames must use layout flags zero
+    #[error("Numeric frames must use layout flags zero")]
     LayoutFlagsNotAllowed,
     /// Declared payload length is invalid or does not consume the frame exactly
+    #[error("Declared payload length is invalid or does not consume the frame exactly")]
     LengthMismatch,
     /// Mantissa encoding is outside the signed domain
+    #[error("Mantissa encoding is outside the signed domain")]
     MantissaOverflow,
     /// Mantissa encoding is not minimal
+    #[error("Mantissa encoding is not minimal")]
     NonCanonicalMantissa,
     /// Decimal scale is outside `0..=28`
+    #[error("Decimal scale is outside `0..=28`")]
     InvalidScale,
     /// Decimal representation contains removable trailing zeroes
+    #[error("Decimal representation contains removable trailing zeroes")]
     NonCanonicalDecimal,
     /// Quantity mantissa is negative
+    #[error("Quantity mantissa is negative")]
     NegativeQuantity,
     /// Norito frame validation failed: {_0}
+    #[error("Norito frame validation failed: {0}")]
     Norito(String),
 }
 impl PartialEq for NumericAbiError {

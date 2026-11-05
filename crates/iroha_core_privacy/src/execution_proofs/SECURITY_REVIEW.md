@@ -2,6 +2,10 @@
 
 The release target is at least **128 bits of classical computational soundness**. The compiled execution profile is not qualified. Genuine full-computation proofs, arithmetic parity, parameter calculations and codec tests establish useful implementation facts; they do not substitute for an independent cryptographer reviewing this exact construction. No post-quantum Fiat–Shamir claim is made.
 
+## RaceV1 on `iroha_execution_stark`
+
+Since 2026-11-03 stock RaceV1 proves with the bounded-integer execution STARK in `crates/iroha_execution_stark`. Its construction, parameters, security accounting and open review items are in [`specs/execution_stark_v1.md`](../../../../specs/execution_stark_v1.md). Its BLAKE2b-384 suite (48-byte digests, 512-bit chaining state) lifts the hash term above 128 bits, and query rounds are sized for 129 bits. Every Core proof and verification first checks the exact circuit's hash-limited budget against this record's 128-bit target and fails closed below it; the RaceV1 circuits reach about 129 bits. Passing that check is necessary but is not qualification: the profile stays unqualified until independent review and the release gates pass. The sections below describe the proof-managed-note execution engine that ClassedRaceV1 and the IVM step chips still use; their RaceV1 statements are historical.
+
 ## First-release construction
 
 The execution suite uses the canonical shared six-lane Goldilocks Poseidon-x7 construction, with six independently generated width-three permutations and canonical 48-byte outputs. Its owner, parameter identity and remaining qualification obligations are in [COMMITMENT_HASH.md](COMMITMENT_HASH.md). RaceV1 uses eligibility-first awards; a forfeited input key cannot earn a prize from an earlier finish. Obsolete draft suites are absent from the runtime catalog. Privacy proof formats and their implementation remain separate.
@@ -48,7 +52,7 @@ No GPU or cross-architecture proof benchmark has passed yet. Native target build
 
 ## Profile source and ledger commitments
 
-The catalog accepts only exact compiled descriptors, and the first release has one corrected stock relation. The profile binds the native reference, outcome derivation, whole-tick and staged arithmetic, environment catalogs, canonical six-lane parameters and proof driver. Registry and export code and separate proof tests are outside that commitment; changing them alone cannot replace a verifier. Native model schemas and canonical Norito decoding are also part of the deployment trust context and require shared SDK/native fixtures. There is no compatibility fallback for obsolete draft formats.
+The catalog accepts only exact compiled descriptors, and the first release has one corrected stock relation. The RaceV1 profile binds the native reference and adapter, outcome derivation, payload models, environment catalogs and every `iroha_execution_stark` source. Registry and export code and separate proof tests are outside that commitment; changing them alone cannot replace a verifier. Native model schemas and canonical Norito decoding are also part of the deployment trust context and require shared SDK/native fixtures. There is no compatibility fallback for obsolete draft formats.
 
 The rules descriptor explicitly includes all environment tables and branch parameters; its identity binds browser replay interpretation. The complete verifier/source profile is independently bound into every manifest and proof statement. Any source or specification change before release must regenerate the current profile, browser exports and qualification evidence.
 

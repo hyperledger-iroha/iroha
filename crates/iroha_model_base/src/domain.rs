@@ -1,6 +1,5 @@
 //! Canonical domain identities, normalization, bounded codecs and storage keys.
 
-use derive_more::Display;
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 #[cfg(test)]
@@ -19,7 +18,6 @@ use crate::{error::ParseError, name, name::Name};
 #[model]
 mod model {
     use super::*;
-    use getset::Getters;
     /// Canonical dataspace-qualified domain identity.
     ///
     /// Components can only be constructed through the validating public API,
@@ -45,11 +43,8 @@ mod model {
     /// id.dataspace = "b.c".parse().unwrap();
     /// ```
     #[derive(
-        Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Getters, Encode, IntoSchema,
+        Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Encode, IntoSchema, norito::NoritoSchema,
     )]
-    #[display("{name}.{dataspace}")]
-    #[getset(get = "pub")]
-    #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::domain::model::DomainId")]
     pub struct DomainId {
         /// Domain label unique only within its parent dataspace.
@@ -59,7 +54,25 @@ mod model {
     }
 }
 
+impl core::fmt::Display for DomainId {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(formatter, "{}.{}", self.name, self.dataspace)
+    }
+}
+
 impl DomainId {
+    /// Domain label unique only within its parent data space.
+    #[inline]
+    pub fn name(&self) -> &Name {
+        &self.name
+    }
+
+    /// Data space alias that owns the domain namespace.
+    #[inline]
+    pub fn dataspace(&self) -> &Name {
+        &self.dataspace
+    }
+
     fn parse_label(raw: &str) -> Result<Name, ParseError> {
         let canonical = name::canonicalize_domain_label(raw)?;
         if canonical.contains('.') {

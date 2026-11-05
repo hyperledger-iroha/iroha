@@ -1060,6 +1060,9 @@ fn node_key_admission_follows_the_allowlist_and_tunables() {
     }
     for rejected in [
         "chainx",
+        "lifecycle_trace.v2_activation_height",
+        "lifecycle_trace.enabled",
+        "lifecycle_trace.activation_height",
         "chain_discriminant",
         "sumeragi.role",
         "genesisx",

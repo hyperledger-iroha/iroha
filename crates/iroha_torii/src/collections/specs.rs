@@ -651,7 +651,7 @@ pub static ASSET_MOVEMENTS: CollectionSpec = CollectionSpec {
     ordered: false,
 };
 
-/// `/v1/roles/query`: complete role objects in the current root's World.
+/// `/v1/roles`: exact stored permissions, restricted to whole-ledger readers.
 pub static ROLES: CollectionSpec = CollectionSpec {
     id: "roles",
     tag: 21,
@@ -663,7 +663,7 @@ pub static ROLES: CollectionSpec = CollectionSpec {
     ordered: true,
 };
 
-/// `/v1/accounts/{account_id}/roles/query`: assigned role identifiers.
+/// `/v1/accounts/{account_id}/roles`: exact role assignments for one account.
 pub static ACCOUNT_ROLES: CollectionSpec = CollectionSpec {
     id: "account_roles",
     tag: 22,
@@ -672,7 +672,7 @@ pub static ACCOUNT_ROLES: CollectionSpec = CollectionSpec {
     default_sort: &[("id", Order::Asc)],
     identity: &["id"],
     positioned: 0,
-    ordered: false,
+    ordered: true,
 };
 
 /// Every collection, in cursor-tag order.

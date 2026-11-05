@@ -33,12 +33,12 @@ def test_current_dedicated_request_has_one_checked_effect_owner():
 
 
 @pytest.mark.parametrize("path,needle,replacement,reason", (
-    (GENERIC, "if instruction.envelope.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {", "if false {", "generic preparation must reject"),
+    (GENERIC, "if envelope.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {", "if false {", "generic preparation must reject"),
     (GENERIC, "VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(_) => Err(", "VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(_) => Ok(", "generic executor must reject"),
     (OWNER, "binding.require_original_execution(request, proof, authority, state_transaction)?;", "let _ = binding.require_original_execution(request, proof, authority, state_transaction);", "must reject a foreign original binding"),
     (OWNER, "let admitted = resolve_admitted_privacy_protocol_v1(", "let admitted = unchecked_protocol_v1(", "selected implementation and policy admission must reject"),
     (OWNER, "if effects.role() != PrivacyActionRoleV1::ZkX509CertificatePresentation", "if false && effects.role() != PrivacyActionRoleV1::ZkX509CertificatePresentation", "verified effect bindings and variant"),
-    (OWNER, "|| effects.protocol_id() != PrivacyProtocolIdV1::IrohaZkX509StarkP256V1", "|| false", "verified effect bindings and variant"),
+    (OWNER, "|| effects.protocol_id() != PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1", "|| false", "verified effect bindings and variant"),
     (OWNER, "|| effects.statement_digest() != statement_digest", "|| false", "verified effect bindings and variant"),
     (OWNER, "|| effects.action_index() != expected_action_index", "|| false", "verified effect bindings and variant"),
     (OWNER, "|| effects.encoded_action_bytes() != encoded_action_bytes", "|| false", "verified effect bindings and variant"),

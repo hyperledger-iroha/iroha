@@ -114,17 +114,23 @@ fn smart_contract_query_scenarios() -> Result<()> {
         .expect("build integration-test transaction");
         client.submit_transaction_and_wait(&transaction)?;
         let cursor_key: Name = "cursor".parse().unwrap();
-        let asset_cursor = super::collections::accounts(&client)? // lightweight DSL: filter/select on client
-            .into_iter()
-            .find(|account| account.id() == client.client().account())
-            .and_then(|account| account.metadata().get(&cursor_key).cloned())
+        let asset_cursor = client
+            .client()
+            .query_single(FindAccountById::new(client.client().account().clone()))?
+            .metadata()
+            .get(&cursor_key)
+            .cloned()
             .expect("account metadata must contain cursor")
             .try_into_any_norito()?;
         let err = client
             .client()
             .raw_continue_iterable_query(asset_cursor)
             .expect_err("a contract-supplied synthetic cursor must not resume a stored query");
-        assert!(matches!(err, QueryError::Other(_)));
+        assert!(
+            matches!(&err, QueryError::Http { status, code, .. }
+            if *status == reqwest::StatusCode::GONE && code == "query_validation_failed"),
+            "expected canonical stored-cursor absence, got {err:?}"
+        );
         assert!(
             err.to_string()
                 .starts_with("query failed; HTTP 410 Gone; query_validation_failed: "),

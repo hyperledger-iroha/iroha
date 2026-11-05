@@ -153,7 +153,7 @@ mod tests {
             .expect("complete canonical ordered catalog");
         assert_eq!(
             observed.protocols.len(),
-            iroha_data_model::privacy::PrivacyProtocolIdV1::COUNT
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::COUNT
         );
     }
     #[cfg(unix)]

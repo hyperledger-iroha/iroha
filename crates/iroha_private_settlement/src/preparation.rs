@@ -464,7 +464,7 @@ impl PreparationDriver {
             (|| -> std::result::Result<_, OneCallPrivateSettlementError> {
                 proof.verify(
                     request.intent().network_id,
-                    request.0.schema,
+                    request.0.schemas.as_slice(),
                     &selectors,
                     &original_block,
                 )?;
@@ -474,7 +474,7 @@ impl PreparationDriver {
                 for (index, member) in proof.contexts.iter().enumerate() {
                     let selected = member.verify(
                         request.intent().network_id,
-                        request.0.schema,
+                        request.0.schemas.as_slice(),
                         selectors.pools[index],
                         &original_block,
                     )?;
@@ -522,7 +522,7 @@ impl PreparationDriver {
             let (result,original_lease)=run_native_worker(permit,lease,move||{
                 (|| -> std::result::Result<Option<(Artifact,usize)>,OneCallPrivateSettlementError> {
                     let leg=&request.intent().legs[index];
-                    let context=contexts.contexts[index].verify(request.intent().network_id,request.0.schema,
+                    let context=contexts.contexts[index].verify(request.intent().network_id,request.0.schemas.as_slice(),
                         PrivateSettlementPoolKeyV1{route:leg.route,pool_id:leg.pool_id},&block)?;
                     if context.pool_cut().block_time_ms()<request.0.minimum_context_time_ms {
                         return Err(OneCallPrivateSettlementError::Binding);

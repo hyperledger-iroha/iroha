@@ -200,11 +200,14 @@ pub use crate::config::try_genesis as try_genesis_factory;
 /// normalizes and pre-executes the block under that fully merged configuration
 /// before publishing identical prepared bytes to every peer. The returned block
 /// is not prepared genesis on its own.
+/// `staking_policy` is the caller's complete original monetary policy; validator
+/// registration plans must use its asset and custody accounts.
 pub fn unexecuted_genesis_factory_with_post_topology(
     extra_transactions: Vec<Vec<InstructionBox>>,
     post_topology_transactions: Vec<Vec<InstructionBox>>,
     topology: UniqueVec<PeerId>,
     topology_entries: Vec<GenesisTopologyEntry>,
+    staking_policy: PublicLaneStakingPolicy,
 ) -> GenesisBlock {
     crate::config::genesis_unexecuted_with_keypair_and_post_topology(
         extra_transactions,
@@ -212,7 +215,7 @@ pub fn unexecuted_genesis_factory_with_post_topology(
         topology,
         topology_entries,
         SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone(),
-        config::default_test_network_staking_policy(),
+        staking_policy,
     )
 }
 
@@ -513,8 +516,10 @@ const LOCALNET_BLOCK_CADENCE: Duration = Duration::from_millis(333);
 // Sumeragi default, used only when the builder is explicitly told to keep it.
 const DEFAULT_BLOCK_CADENCE: Duration =
     Duration::from_millis(iroha_config::parameters::defaults::sumeragi::BLOCK_CADENCE_MS);
-// Allow generous shutdowns in multi-peer tests; peers may need to flush logs and close streams.
+// Leave time inside the outer join deadline to reap the child and finish its log tasks.
 const PEER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(30);
+const PEER_GRACEFUL_EXIT_TIMEOUT: Duration = Duration::from_secs(18);
+const PEER_FORCED_EXIT_TIMEOUT: Duration = Duration::from_secs(5);
 const LOG_FLUSH_TIMEOUT: Duration = Duration::from_secs(5);
 const STORAGE_LISTING_LIMIT: usize = 8;
 const SNAPSHOT_MESSAGE_SNIPPET_MAX_CHARS: usize = 512;
@@ -2873,6 +2878,29 @@ impl Network {
     pub fn env_dir(&self) -> &Path {
         &self.env.dir
     }
+    /// Bind a late peer's clients to this network's immutable genesis identity.
+    ///
+    /// The peer must have been built in this network's environment and must not
+    /// already be attached. This copies the original client deadline policy;
+    /// each peer retains its own endpoint and operator key. It does not register,
+    /// start, or add the peer to any validator roster.
+    ///
+    /// # Errors
+    /// Returns an error for a foreign environment or an already attached peer.
+    pub fn attach_peer_client_context(&self, peer: &NetworkPeer) -> Result<()> {
+        color_eyre::eyre::ensure!(
+            peer.dir.parent() == Some(self.env.dir.as_path()),
+            "late peer must belong to this network's environment"
+        );
+        let identity = self.peers[0]
+            .client_config
+            .get()
+            .expect("built network must have its signed genesis client identity")
+            .clone();
+        peer.client_config
+            .set(identity)
+            .map_err(|_| eyre!("late peer client context is already attached"))
+    }
     #[cfg(test)]
     fn consensus_bootstrap_profile(&self) -> ConsensusBootstrapProfile {
         self.consensus_profile.clone()
@@ -4461,7 +4489,8 @@ async fn drain_log_lines<R, F>(
         error!(?err, log = label, "flushing log file failed");
     }
     if let Some(notify) = ready_notify {
-        notify.notify_waiters();
+        // The sole exit monitor can start waiting after EOF; retain its completion permit.
+        notify.notify_one();
     }
 }
 /// Bounded recipe for adding signed, non-voting P2P observers to a test network.
@@ -8023,7 +8052,7 @@ pub enum PeerLifecycleEvent {
     ServerStarted,
     /// Process terminated
     Terminated { status: ExitStatus },
-    /// Process was killed
+    /// Forced termination was requested successfully on the original child.
     Killed,
     /// Caught a related pipeline event
     BlockApplied { height: u64 },
@@ -8451,7 +8480,7 @@ impl NetworkPeer {
                     Ok(file) => file,
                     Err(err) => {
                         error!(?err, ?log_path, "failed to create stderr log file");
-                        stderr_log_ready.notify_waiters();
+                        stderr_log_ready.notify_one();
                         return;
                     }
                 };
@@ -8896,24 +8925,8 @@ impl NetworkPeer {
         };
         if timeout(PEER_SHUTDOWN_TIMEOUT, join_all).await.is_err() {
             warn!("timed out waiting for peer tasks; aborting remaining tasks");
-            if let Some(pid) = run.pid.filter(|pid| *pid > 0) {
-                #[cfg(target_family = "unix")]
-                {
-                    use nix::{sys::signal, unistd::Pid};
-                    if let Err(err) =
-                        signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGKILL)
-                    {
-                        warn!(pid, error = %err, "failed to force-kill hung peer process");
-                    }
-                }
-                #[cfg(not(target_family = "unix"))]
-                {
-                    warn!(
-                        pid,
-                        "unable to force-kill hung peer process on this platform"
-                    );
-                }
-            }
+            // A log task can outlive a reaped child. Aborting the monitor drops the
+            // original kill-on-drop child and leaves any subsequently reused PID alone.
             run.tasks.abort_all();
             let drain_aborted = async {
                 while let Some(res) = run.tasks.join_next().await {
@@ -10169,9 +10182,6 @@ impl PeerExit {
     async fn shutdown_or_kill(&mut self) -> Result<ExitStatus> {
         #[cfg(unix)]
         use nix::{sys::signal, unistd::Pid};
-        const TIMEOUT: Duration = Duration::from_secs(5);
-        #[cfg(unix)]
-        const QUIT_GRACE: Duration = Duration::from_secs(1);
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
         if let Some(status) = self
@@ -10193,11 +10203,16 @@ impl PeerExit {
         #[cfg(unix)]
         {
             self.span.in_scope(|| info!("sending SIGTERM"));
-            signal::kill(
+            let sent = signal::kill(
                 Pid::from_raw(self.child.id().expect("checked child id above") as i32),
                 signal::Signal::SIGTERM,
-            )
-            .wrap_err("failed to send SIGTERM")?;
+            );
+            if let Some(status) = self
+                .observe_term_race(sent, PEER_GRACEFUL_EXIT_TIMEOUT)
+                .await?
+            {
+                return Ok(status);
+            }
         }
         #[cfg(windows)]
         {
@@ -10209,36 +10224,65 @@ impl PeerExit {
                 .in_scope(|| info!("closing original peer input for graceful shutdown"));
             drop(input);
         }
-        if let Ok(status) = timeout(TIMEOUT, self.child.wait()).await {
+        if let Ok(status) = timeout(PEER_GRACEFUL_EXIT_TIMEOUT, self.child.wait()).await {
             self.span.in_scope(|| info!("exited gracefully"));
             return status.wrap_err("wait failure");
         };
-        // If graceful shutdown stalls, attempt to capture a backtrace (where supported).
-        #[cfg(target_family = "unix")]
-        if let Some(pid) = self.child.id() {
-            if let Err(err) = signal::kill(Pid::from_raw(pid as i32), signal::Signal::SIGQUIT)
-                .map_err(Report::from)
-            {
-                self.span
-                    .in_scope(|| warn!(?err, pid, "failed to send SIGQUIT before killing"));
-            } else {
-                self.span
-                    .in_scope(|| debug!(pid, "sent SIGQUIT to peer for diagnostics"));
-                if let Ok(status) = timeout(QUIT_GRACE, self.child.wait()).await {
-                    self.span.in_scope(|| info!("exited after SIGQUIT"));
-                    return status.wrap_err("wait failure");
-                }
-            }
+        // A validator may hold signing material. Escalate on the original handle
+        // without requesting a diagnostic core dump.
+        if let Some(status) = self
+            .child
+            .try_wait()
+            .wrap_err("poll before forced shutdown")?
+        {
+            return Ok(status);
         }
         self.span
-            .in_scope(|| warn!("process didn't terminate after {TIMEOUT:?}, killing"));
-        timeout(TIMEOUT, async move {
-            self.child.kill().await.expect("not a recoverable failure");
-            self.child.wait().await
-        })
-        .await
-        .wrap_err("child did not terminate after forced shutdown")?
-        .wrap_err("wait failure")
+            .in_scope(|| warn!("peer exceeded its graceful shutdown deadline, killing"));
+        let sent = self.child.start_kill();
+        self.observe_forced_shutdown(sent).await
+    }
+
+    #[cfg(unix)]
+    async fn observe_term_race(
+        &mut self,
+        sent: nix::Result<()>,
+        deadline: Duration,
+    ) -> Result<Option<ExitStatus>> {
+        match sent {
+            // The original can exit between try_wait and TERM. Only its own
+            // bounded wait (including release revalidation) can supply a status.
+            Err(nix::errno::Errno::ESRCH) => timeout(deadline, self.child.wait())
+                .await
+                .wrap_err("original peer was not observed terminal after SIGTERM returned ESRCH")?
+                .wrap_err("wait after SIGTERM returned ESRCH")
+                .map(Some),
+            other => other.wrap_err("failed to send SIGTERM").map(|()| None),
+        }
+    }
+
+    async fn observe_forced_shutdown(&mut self, sent: std::io::Result<()>) -> Result<ExitStatus> {
+        match sent {
+            Ok(()) => {
+                // On Windows the root may already have exited successfully while
+                // another member of its Job needed forced termination.
+                let _ = self.events.send(PeerLifecycleEvent::Killed);
+            }
+            #[cfg(unix)]
+            Err(error) if error.raw_os_error() == Some(nix::libc::ESRCH) => {}
+            Err(error) => {
+                if let Some(status) = self.child.try_wait().wrap_err_with(|| {
+                    format!("failed to observe original peer after termination failed: {error}")
+                })? {
+                    return Ok(status);
+                }
+                return Err(error).wrap_err("failed to terminate original peer");
+            }
+        }
+        timeout(PEER_FORCED_EXIT_TIMEOUT, self.child.wait())
+            .await
+            .wrap_err("child did not terminate after forced shutdown")?
+            .wrap_err("wait failure")
     }
     fn dump_last_stderr(&self) {
         let guard = self
@@ -10423,6 +10467,36 @@ mod tests {
             eprintln!("skipping {test_name}: environment denies binding TCP sockets on 127.0.0.1");
             true
         }
+    }
+    #[tokio::test]
+    async fn stderr_completion_survives_exit_monitor_starting_after_eof() {
+        use futures::FutureExt as _;
+
+        let directory = tempdir().expect("temporary stderr directory");
+        let path = directory.path().join("stderr.log");
+        let file = File::create(&path).await.expect("stderr file");
+        let (mut writer, reader) = tokio::io::duplex(64);
+        writer
+            .write_all(b"startup rejected\n")
+            .await
+            .expect("stderr line");
+        drop(writer);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let ready = Arc::new(Notify::new());
+        drain_log_lines(
+            reader,
+            file,
+            fatal_rx,
+            Arc::new(AtomicBool::new(true)),
+            |_| {},
+            Some(Arc::clone(&ready)),
+            "stderr",
+        )
+        .await;
+        assert_eq!(tokio::fs::read(&path).await.unwrap(), b"startup rejected\n");
+        // Child exit may be observed after EOF: completion must already be ready
+        // when the sole exit monitor first polls, without waiting for its deadline.
+        assert!(ready.notified().now_or_never().is_some());
     }
     fn set_env_var<K, V>(key: K, value: V)
     where
@@ -16335,6 +16409,7 @@ mod tests {
                         Vec::new(),
                         topology,
                         pops,
+                        config::default_test_network_staking_policy(),
                     )
                 },
             ));
@@ -16358,6 +16433,7 @@ mod tests {
             Vec::new(),
             recorded,
             recorded_pops,
+            config::default_test_network_staking_policy(),
         );
         assert!(
             !expected.0.has_results(),
@@ -16399,6 +16475,7 @@ mod tests {
                     Vec::new(),
                     topology,
                     pops,
+                    config::default_test_network_staking_policy(),
                 )
             });
         let network = build_with_isolated_permit(builder);
@@ -16491,6 +16568,7 @@ mod tests {
                         vec![registrations],
                         topology,
                         pops,
+                        config::default_test_network_staking_policy(),
                     )
                 },
             );

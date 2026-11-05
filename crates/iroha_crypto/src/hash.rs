@@ -3,7 +3,6 @@ use blake2::{
     Blake2b,
     digest::{Digest, consts::U32},
 };
-use derive_more::{Debug, Deref, DerefMut, Display};
 use iroha_schema::{IntoSchema, TypeId};
 #[cfg(feature = "json")]
 use norito::json::JsonKeyCodec;
@@ -21,13 +20,21 @@ use zeroize::Zeroize;
 /// The marker is a logical invariant rather than a Rust validity invariant: the byte-array storage
 /// deliberately has no niche or invalid bit pattern. This lets untrusted archived bytes be
 /// inspected and rejected safely before an owned `Hash` is constructed.
-#[derive(Debug, Display, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TypeId)]
-#[display("{}", hex::encode(self.as_ref()))]
-#[debug("{}", hex::encode(self.as_ref()))]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TypeId)]
 #[repr(transparent)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_crypto::hash::Hash")]
 pub struct Hash([u8; Self::LENGTH]);
+impl core::fmt::Display for Hash {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        self.fmt_hex(f)
+    }
+}
+impl core::fmt::Debug for Hash {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
+    }
+}
 impl Zeroize for Hash {
     fn zeroize(&mut self) {
         self.0.zeroize();
@@ -36,6 +43,15 @@ impl Zeroize for Hash {
 impl Hash {
     /// Length of hash
     pub const LENGTH: usize = 32;
+
+    fn fmt_hex(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut encoded = [0; Self::LENGTH * 2];
+        hex::encode_to_slice(self.as_ref(), &mut encoded)
+            .expect("hash hex buffer has exactly twice the input length");
+        let text = core::str::from_utf8(&encoded).expect("hex encoding contains only ASCII");
+        f.pad(text)
+    }
+
     /// Wrap the given bytes; they must be prehashed with Blake2b-32.
     pub fn prehashed(mut hash: [u8; Self::LENGTH]) -> Self {
         hash[Self::LENGTH - 1] |= 1;
@@ -443,16 +459,33 @@ impl<T> From<HashOf<T>> for Hash {
     }
 }
 /// Represents hash of Iroha entities like `Block` or `Transaction`. Currently supports only blake2b-32.
-#[derive(Debug, Display, Deref, DerefMut, TypeId)]
-#[debug("{{ {} {_0} }}", core::any::type_name::<Self>())]
-#[display("{_0}")]
+#[derive(TypeId)]
 #[repr(transparent)]
-pub struct HashOf<T>(
-    #[deref]
-    #[deref_mut]
-    Hash,
-    PhantomData<T>,
-);
+pub struct HashOf<T>(Hash, PhantomData<T>);
+impl<T> core::fmt::Display for HashOf<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, f)
+    }
+}
+impl<T> core::fmt::Debug for HashOf<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{{ {} {} }}", core::any::type_name::<Self>(), self.0)
+    }
+}
+impl<T> core::ops::Deref for HashOf<T> {
+    type Target = Hash;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<T> core::ops::DerefMut for HashOf<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl<T> Clone for HashOf<T> {
     fn clone(&self) -> Self {
         *self

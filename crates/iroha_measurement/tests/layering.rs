@@ -141,6 +141,7 @@ fn workspace_dependency_closure_excludes_proof_core_and_model_crates() {
     let mut closure = BTreeSet::new();
     let mut pending = vec!["iroha_measurement".to_owned()];
     while let Some(name) = pending.pop() {
+        let is_norito = name == "norito";
         let Some(manifest) = manifest_of(&name) else {
             continue;
         };
@@ -149,12 +150,19 @@ fn workspace_dependency_closure_excludes_proof_core_and_model_crates() {
         }
         let tables = dependency_tables(&manifest);
         for kind in ["dependencies", "build-dependencies"] {
-            pending.extend(tables.get(kind).into_iter().flatten().cloned());
+            // Measurement selects Norito's base-codec without its optional
+            // Metal accelerator. Exclude that edge before walking its subtree;
+            // reaching the same packages through another owner must still fail.
+            pending.extend(
+                tables
+                    .get(kind)
+                    .into_iter()
+                    .flatten()
+                    .filter(|dependency| !(is_norito && dependency.as_str() == "gpuzstd_metal"))
+                    .cloned(),
+            );
         }
     }
-    // Optional platform accelerators of the codec are not enabled by this
-    // crate and are not workspace crates under `crates/<name>`.
-    closure.remove("gpuzstd_metal");
     assert_eq!(closure, names(PERMITTED_WORKSPACE_CLOSURE));
     for forbidden in [
         "iroha_data_model",

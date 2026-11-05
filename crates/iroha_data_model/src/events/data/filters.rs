@@ -1876,6 +1876,28 @@ impl Default for GovernanceEventFilter {
     }
 }
 impl DataEventFilter {
+    /// Whether replacing `account` would change one of this filter's exact selectors.
+    /// This borrows the selectors and performs no allocation or normalization.
+    #[must_use]
+    pub fn references_account_id(&self, account: &AccountId) -> bool {
+        match self {
+            Self::Account(filter) => filter.id_matcher.as_ref() == Some(account),
+            Self::Asset(filter) => {
+                filter
+                    .id_matcher
+                    .as_ref()
+                    .is_some_and(|id| id.account() == account)
+                    || filter.transfer_source_account_matcher.as_ref() == Some(account)
+                    || filter.transfer_destination_account_matcher.as_ref() == Some(account)
+            }
+            Self::Escrow(filter) => {
+                filter.seller_matcher.as_ref() == Some(account)
+                    || filter.buyer_matcher.as_ref() == Some(account)
+            }
+            _ => false,
+        }
+    }
+
     /// Replace every exact account selector that refers to `old` with `new`.
     ///
     /// Account controller changes replace the canonical [`AccountId`] while
@@ -3216,5 +3238,53 @@ mod sccp_filter_tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_rekey_reference_tests {
+    use super::*;
+
+    #[test]
+    fn lifecycle_rekey_reference_predicate_matches_every_mutated_selector() {
+        let old = AccountId::new(
+            iroha_crypto::KeyPair::try_random()
+                .unwrap()
+                .public_key()
+                .clone(),
+        );
+        let new = AccountId::new(
+            iroha_crypto::KeyPair::try_random()
+                .unwrap()
+                .public_key()
+                .clone(),
+        );
+        let definition = crate::asset::AssetDefinitionId::derive_from_components(
+            iroha_model_base::domain::DomainId::try_new("lifecycle_rekey", "universal").unwrap(),
+            "asset".parse().unwrap(),
+        );
+        let filters = [
+            DataEventFilter::Account(AccountEventFilter::new().for_account(old.clone())),
+            DataEventFilter::Asset(
+                AssetEventFilter::new()
+                    .for_asset(crate::asset::AssetId::new(definition, old.clone())),
+            ),
+            DataEventFilter::Asset(
+                AssetEventFilter::new().for_transfer_source_account(old.clone()),
+            ),
+            DataEventFilter::Asset(
+                AssetEventFilter::new().for_transfer_destination_account(old.clone()),
+            ),
+            DataEventFilter::Escrow(EscrowEventFilter::new().for_seller(old.clone())),
+            DataEventFilter::Escrow(EscrowEventFilter::new().for_buyer(old.clone())),
+        ];
+        for mut filter in filters {
+            assert!(filter.references_account_id(&old));
+            assert!(!filter.references_account_id(&new));
+            assert!(filter.replace_account_id(&old, &new));
+            assert!(!filter.references_account_id(&old));
+            assert!(filter.references_account_id(&new));
+        }
+        assert!(!DataEventFilter::Any.references_account_id(&old));
     }
 }

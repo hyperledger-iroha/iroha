@@ -264,3 +264,23 @@ def test_retired_wallet_service_and_enrollment_type_paths_are_absent(relative: s
     """Current issuance does not restore the retired service or enrollment wire types."""
     path = inventory.ROOT / relative
     assert not path.exists() and not path.is_symlink(), relative
+
+
+@pytest.mark.parametrize("route_id,method,path", [
+    ("application.roles_get", "GET", "/v1/roles"),
+    ("application.roles_query_post", "POST", "/v1/roles/query"),
+    ("application.accounts_by_account_id_roles_get", "GET", "/v1/accounts/{account_id}/roles"),
+    ("application.accounts_by_account_id_roles_query_post", "POST", "/v1/accounts/{account_id}/roles/query"),
+])
+def test_role_reads_require_signatures_and_preserve_dataspace_routing(
+    generated: bytes, route_id: str, method: str, path: str,
+) -> None:
+    """Require signatures without replacing the authoritative data space routing policy."""
+    rows = {row["route_id"]: row for row in csv.DictReader(
+        generated.decode().splitlines()[1:], delimiter="\t")}
+    row = rows[route_id]
+    assert (row["method"], row["path"]) == (method, path)
+    assert row["authentication"] == "canonical_account_signature"
+    assert row["admission"] == "dataspace_visible"
+    assert row["effect"] == "read"
+    assert row["sdk"] == row["openapi"] == row["private_no_store"] == "true"

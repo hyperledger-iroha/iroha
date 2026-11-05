@@ -172,7 +172,12 @@ pub(super) fn collect_asset_uid_policies(
     let source = world.smart_contract_state();
     let mut execution_stats = QueryExecutionStats::default();
     let mut selected = 0;
-    let single_graph = maximum
+    // A view composes the policy, its holdings and usage and an optional wallet
+    // product, so each row may grow to one composite row. Its stored policy and
+    // usage rows still stay within one source item.
+    let row_bytes = composite_row_bytes(limits)?;
+    let row_maximum = usize::try_from(row_bytes).map_err(|_| Error::CapacityLimit)?;
+    let single_graph = row_maximum
         .checked_sub(core::mem::size_of::<AssetUidPolicyViewV1>())
         .ok_or(Error::CapacityLimit)?;
     for (key, bytes) in source.range(start.clone()..=end.clone()).take(maximum_rows) {
@@ -190,7 +195,7 @@ pub(super) fn collect_asset_uid_policies(
             &mut execution_stats,
             limits,
         )?;
-        drop(encode_bounded_frame(&row, maximum)?);
+        drop(encode_bounded_frame(&row, row_maximum)?);
         selected += 1;
     }
     if query.wallet_account_id.is_some() && selected != 1 {
@@ -198,13 +203,47 @@ pub(super) fn collect_asset_uid_policies(
             "requested wallet UID policy is unavailable".into(),
         ));
     }
-    let (mut graph, slot_bytes) = RetainedDecodeBudget::new::<AssetUidPolicyViewV1>(
-        selected,
-        limits.max_source_item_bytes(),
+    // Rows on the page share the page envelope that every admitted policy
+    // reserves. Rows past the page stay resident only in a stored cursor, whose
+    // reservation covers `max_cursor_retained_items` source items. An ephemeral
+    // probe row shares the page envelope.
+    let fetch = params
+        .fetch_size
+        .fetch_size
+        .unwrap_or(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE)
+        .get();
+    let page_rows = match mode {
+        OrdinaryCursorMode::Ephemeral => selected,
+        OrdinaryCursorMode::Stored => {
+            selected.min(usize::try_from(fetch).map_err(|_| Error::CapacityLimit)?)
+        }
+    };
+    let page_bytes = limits
+        .max_page_items()
+        .checked_mul(limits.max_source_item_bytes())
+        .ok_or(Error::CapacityLimit)?;
+    let cursor_bytes = limits
+        .max_cursor_retained_items()
+        .checked_mul(limits.max_source_item_bytes())
+        .ok_or(Error::CapacityLimit)?;
+    let (mut page, page_slots) =
+        RetainedDecodeBudget::shared::<AssetUidPolicyViewV1>(page_rows, page_bytes, row_bytes)?;
+    let (mut cursor, cursor_slots) = RetainedDecodeBudget::shared::<AssetUidPolicyViewV1>(
+        selected - page_rows,
+        cursor_bytes,
+        row_bytes,
     )?;
+    let slot_bytes = page_slots
+        .checked_add(cursor_slots)
+        .ok_or(Error::CapacityLimit)?;
     let mut rows = ExactOwnedRows::new(selected, slot_bytes)?;
-    for (key, bytes) in source.range(start..=end).take(selected) {
+    for (index, (key, bytes)) in source.range(start..=end).take(selected).enumerate() {
         execution_stats.record_preflighted_item(work, Some(limits.execution_budget()))?;
+        let graph = if index < page_rows {
+            &mut page
+        } else {
+            &mut cursor
+        };
         let (row, allocated) = own_row(
             query,
             key,
@@ -218,7 +257,7 @@ pub(super) fn collect_asset_uid_policies(
             &mut execution_stats,
             limits,
         )?;
-        drop(encode_bounded_frame(&row, maximum)?);
+        drop(encode_bounded_frame(&row, row_maximum)?);
         graph.record_decoded(allocated)?;
         rows.push(row)?;
     }

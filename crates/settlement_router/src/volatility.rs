@@ -1,5 +1,4 @@
 //! Volatility bucketing derived from oracle signals.
-use derive_more::Display;
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
@@ -10,7 +9,6 @@ use norito::{
     Copy,
     Debug,
     Default,
-    Display,
     Eq,
     PartialEq,
     NoritoSerialize,
@@ -24,14 +22,20 @@ use norito::{
 pub enum VolatilityBucket {
     /// Normal trading conditions (no extra margin).
     #[default]
-    #[display("stable")]
     Stable,
     /// Elevated volatility (add one 25 bps step).
-    #[display("elevated")]
     Elevated,
     /// Dislocated markets (add two 25 bps steps).
-    #[display("dislocated")]
     Dislocated,
+}
+impl core::fmt::Display for VolatilityBucket {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Stable => "stable",
+            Self::Elevated => "elevated",
+            Self::Dislocated => "dislocated",
+        })
+    }
 }
 impl VolatilityBucket {
     /// Additional safety margin expressed in basis points (25 bps steps).

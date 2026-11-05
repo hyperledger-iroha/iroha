@@ -55,6 +55,31 @@ pub(super) struct OtherDomains {
 /// Every discovered domain literal that no commitment and no application accumulator owns.
 pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     OtherDomains {
+        usage: Use::Record,
+        reason: "Committed rollout identity over original signed genesis, selected runtime and governed activation change set/height; not a State root or certificate",
+        literals: &[r"iroha:governed:lifecycle-activation:v1\0"],
+    },
+    OtherDomains {
+        usage: Use::WitnessKey,
+        reason: "Fixed native-only execution-witness key for the selected lifecycle service; its 104-byte value binds network, height, frozen execution and final runtime selection identifiers through ordinary_writes_root",
+        literals: &[r"\0iroha:runtime:lifecycle-selection:v1"],
+    },
+    OtherDomains {
+        usage: Use::Record,
+        reason: "Content-addressed immutable native lifecycle implementation and service closure; selects compact complete capture, reserved failure policy and native runtime witness, not a State table digest",
+        literals: &[
+            r"iroha.trigger-lifecycle.v1",
+            r"iroha:runtime:trigger-lifecycle:v1:cached-executables-block-work-and-native-progress",
+            r"iroha:trigger-lifecycle:action:v1\0",
+            r"iroha:trigger-lifecycle:executable:v1\0",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Test,
+        reason: "Portable generic-proof namespace regression input; this hypothetical version-zero label is not a native protocol or a State commitment domain",
+        literals: &[r"ironwood-halo2-actions-v0"],
+    },
+    OtherDomains {
         usage: Use::Name,
         reason: "Exact first-release wire identities of privacy consensus-policy scheduling, protocol-limit scheduling and the proof-free X.509 request, including built-in dispatch entries. They select instruction layouts; these identifiers compute no State digest and confer no governance or proof authority",
         literals: &[
@@ -208,6 +233,11 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Name,
         reason: "Schema identity of the retained native KAGEMUSHA A/B/C exchange result read by the signed test-chain fixture; selects the exact result layout, not a hash domain or State-content root",
         literals: &[r"iroha.kagemusha.native-abc-result.v1"],
+    },
+    OtherDomains {
+        usage: Use::Name,
+        reason: "Format name of the tiered State backend's node-local snapshot manifest index, which lists the key-hash chunk files holding the snapshot's rows. It selects a local storage layout, not a hash domain; nothing in consensus or State reads the manifest",
+        literals: &[r"iroha.tiered_state.manifest.v2"],
     },
     OtherDomains {
         usage: Use::Name,
@@ -835,6 +865,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha-soranet-vpn-lease-v1",
             r"iroha-zk-ams-v1",
             r"iroha-zk-x509-stark-p256-v1",
+            r"ironwood-halo2-actions-v1",
             r"ivm-v1",
             r"kaigi-authorization-v1",
             r"kaigi-usage-v1",
@@ -1107,6 +1138,18 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
     },
     OtherDomains {
         usage: Use::Record,
+        reason: "Distinct Ironwood instruction and proof-envelope records plus internal widened privacy projections; these are record identities, not State roots or replacements for frozen exact-twelve wire records",
+        literals: &[
+            r"iroha.privacy.ironwood-proof-envelope.v1",
+            r"iroha.privacy.runtime-proof-envelope.v1",
+            r"iroha.privacy.runtime-proof.v1",
+            r"iroha.privacy.runtime-statement.v1",
+            r"iroha.privacy.schedule_ironwood_limits_update.v1",
+            r"iroha.privacy.submit_ironwood_proof.v1",
+        ],
+    },
+    OtherDomains {
+        usage: Use::Record,
         reason: "Privacy-engine instruction identifiers, statements, policy and issuer records, release evidence and signing preimages: each names or hashes one record, statement or message",
         literals: &[
             r"0\0zk-ace-pq-authorization-v1\0pq-qrom\0",
@@ -1121,6 +1164,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"7\0iroha-bootle-lantern-anoncred-v1\0pq-qrom\0",
             r"8\0orchard-halo2-actions-v1\0classical-rom\0",
             r"9\0monero-fcmp-plus-plus-v1\0classical-rom\0",
+            r"iroha.privacy.bootstrap_ironwood_pool.v1",
             r"iroha.privacy.bootstrap_orchard_pool.v1",
             r"iroha.privacy.bootstrap_pgc_accounts.v1",
             r"iroha.privacy.bootstrap_proof_managed_pool.v1",
@@ -1209,6 +1253,7 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
             r"iroha:privacy:exact12:release-artifact-set:v1",
             r"iroha:privacy:exact12:release-manifest:v1",
             r"iroha:privacy:exact12:release-signature:v1",
+            r"iroha:privacy:ironwood-pool-bootstrap:v1",
             r"iroha:privacy:ivm-private-note:action:v1",
             r"iroha:privacy:native-consensus-binding:v1",
             r"iroha:privacy:orchard-pool-bootstrap:v1",
@@ -1417,15 +1462,20 @@ pub(super) const OTHER_DOMAINS: &[OtherDomains] = &[
         usage: Use::Record,
         reason: "Content-addressed identities of live-upgrade definitions and root selections (specs/live_runtime_upgrades.md §3), the fixed labels of the reference closures and statements of the baseline and of each release addition after it, and the names of baseline definitions and release-addition modules, which are hashed only inside their canonical descriptors. Each hashes one canonical descriptor, selection record or baseline or addition subject; none commits to State content, and the State commitment remains the World root",
         literals: &[
+            r"iroha.events.data.ironwood.v1",
             r"iroha.events.data.v1",
             r"iroha.game_partition.v1",
+            r"iroha.ironwood.identity-cutover.v1",
+            r"iroha.ironwood.v1",
             r"iroha.kernel.v1",
             r"iroha.parameters.v1",
             r"iroha.runtime.endorsed_change_set_proposal.v1",
             r"iroha.world.lthash16.v1",
             r"iroha:runtime:addition:v1\0",
+            r"iroha:ironwood:qualification-evidence:v1\0",
             r"iroha:runtime:baseline:v1\0",
             r"iroha:runtime:definition:v1\0",
+            r"iroha:runtime:ironwood:v1\0",
             r"iroha:runtime:selection:v1\0",
         ],
     },

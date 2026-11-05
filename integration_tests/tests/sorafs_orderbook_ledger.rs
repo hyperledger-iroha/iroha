@@ -13,7 +13,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use super::sorafs_network::{prepare_transaction, submit_instruction};
+use super::sorafs_network::{prepare_transaction, submit_instruction, submit_transaction};
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
 use iroha::{
@@ -170,16 +170,11 @@ async fn race(
         tokio::join!(
             async {
                 barrier.wait().await;
-                left.account_client()
-                    .submit_transaction_and_wait(&left_transaction)
-                    .await
+                submit_transaction(&left, &left_transaction).await
             },
             async {
                 barrier.wait().await;
-                right
-                    .account_client()
-                    .submit_transaction_and_wait(&right_transaction)
-                    .await
+                submit_transaction(&right, &right_transaction).await
             },
         )
     })
@@ -240,6 +235,7 @@ impl Observation {
 
 fn observe(
     client: &Client,
+    auditor: &Client,
     definition: &AssetDefinitionId,
     manager: &AccountId,
     treasury: &AccountId,
@@ -276,7 +272,7 @@ fn observe(
             && !events.has_more,
         "bounded scenario must retain complete pages"
     );
-    let parent = client
+    let parent = auditor
         .client()
         .query_single(FindAssetEscrowById::new(orderbook_order_escrow_id(bid_id)))?;
     let child =
@@ -284,17 +280,17 @@ fn observe(
             .channels
             .first()
             .map(|channel| {
-                client.client().query_single(FindAssetEscrowById::new(
+                auditor.client().query_single(FindAssetEscrowById::new(
                     orderbook_settlement_escrow_id(channel.channel_id),
                 ))
             })
             .transpose()?;
     let mut balances = vec![];
     for account in [&*ALICE_ID, &*BOB_ID, treasury, manager, &parent.custody] {
-        balances.push(asset_balance(client, definition, account)?);
+        balances.push(asset_balance(auditor, definition, account)?);
     }
     balances.push(match child.as_ref() {
-        Some(child) => asset_balance(client, definition, &child.custody)?,
+        Some(child) => asset_balance(auditor, definition, &child.custody)?,
         None => Quantity::zero(),
     });
     let status = client.client().query_single(FindSorafsOrderbookStatus)?;
@@ -326,6 +322,7 @@ async fn converged(
     network: &Network,
     definition: &AssetDefinitionId,
     manager: &AccountId,
+    manager_keys: &KeyPair,
     treasury: &AccountId,
     bid_id: [u8; 32],
     counts: (usize, u64, u64, usize),
@@ -334,13 +331,14 @@ async fn converged(
     loop {
         let mut tasks = JoinSet::new();
         for peer in 0..4 {
-            let client = reader(network, peer, &ALICE_ID, &ALICE_KEYPAIR);
+            let client = reader(network, peer, manager, manager_keys);
+            let auditor = reader(network, peer, &ALICE_ID, &ALICE_KEYPAIR);
             let definition = definition.clone();
             let manager = manager.clone();
             let treasury = treasury.clone();
             tasks.spawn(async move {
                 read_on_dedicated_thread(move || {
-                    observe(&client, &definition, &manager, &treasury, bid_id)
+                    observe(&client, &auditor, &definition, &manager, &treasury, bid_id)
                 })
                 .await
             });
@@ -491,6 +489,18 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
     // deliberate cross-peer races begin only after all four query views agree.
     let buyer = reader(&network, 0, &ALICE_ID, &ALICE_KEYPAIR);
     let provider = reader(&network, 0, &BOB_ID, &BOB_KEYPAIR);
+    // Native transaction fees are separate from the 307 units of orderbook custody.
+    let native_fee_asset =
+        iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+    submit_instruction(
+        &buyer,
+        Transfer::asset_quantity(
+            AssetId::of(native_fee_asset, ALICE_ID.clone()),
+            100_u32,
+            manager.clone(),
+        ),
+    )
+    .await?;
     let reserve_policy = ReserveAuthorityPolicyV1 {
         version: RESERVE_AUTHORITY_POLICY_VERSION_V1,
         revision: 1,
@@ -552,7 +562,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         AdvanceSorafsReserveLifecycle::new(PROVIDER, 3, 0, reserve_digest),
     )
     .await?;
-    let reserve_reader = buyer.clone();
+    let reserve_reader = governor.clone();
     let reserve = read_on_dedicated_thread(move || {
         Ok(reserve_reader
             .client()
@@ -603,6 +613,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         &network,
         &definition,
         &manager,
+        &manager_keys,
         &treasury,
         bid.order_id,
         (1, 1, 0, 2),
@@ -628,6 +639,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         &network,
         &definition,
         &manager,
+        &manager_keys,
         &treasury,
         bid.order_id,
         (2, 2, 0, 3),
@@ -658,6 +670,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         &network,
         &definition,
         &manager,
+        &manager_keys,
         &treasury,
         bid.order_id,
         (2, 3, 0, 4),
@@ -766,6 +779,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         &network,
         &definition,
         &manager,
+        &manager_keys,
         &treasury,
         bid.order_id,
         (2, 3, 1, 5),
@@ -851,6 +865,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         &network,
         &definition,
         &manager,
+        &manager_keys,
         &treasury,
         bid.order_id,
         (2, 3, 1, 5),
@@ -877,6 +892,7 @@ async fn four_peer_orderbook_match_settlement_and_restart_are_authoritative_impl
         &network,
         &definition,
         &manager,
+        &manager_keys,
         &treasury,
         bid.order_id,
         (2, 3, 1, 5),

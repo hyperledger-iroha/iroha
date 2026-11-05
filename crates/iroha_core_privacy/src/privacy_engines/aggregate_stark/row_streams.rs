@@ -252,7 +252,7 @@ mod tests {
     #[test]
     fn paired_row_initialization_refuses_reuse_or_wrong_capacity_without_growth() {
         let context = TransparentStarkDigestContextV1::new(
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             b"paired-row-initialization",
         );
         let catalog = TransparentStarkDigestContextV1::catalog_v1();
@@ -295,7 +295,7 @@ mod tests {
     #[test]
     fn paired_initial_rows_preserve_roots_frontiers_partials_and_all_tile_boundaries() {
         let context = TransparentStarkDigestContextV1::new(
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             b"paired-row-reference",
         );
         for rows in [1, 2, 4, 4096, 8192] {

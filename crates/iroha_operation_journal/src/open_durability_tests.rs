@@ -69,10 +69,10 @@ fn fresh_journal_sync_failure_is_reported_and_releases_the_acquired_lock() {
     let directory = parent.create_private_child("journal").unwrap();
     let path = directory.path().to_owned();
     let sync_called = Cell::new(false);
-    let failure = Journal::lock_directory_with_sync(directory, true, |directory| {
+    let failure = Journal::lock_directory_with_sync(directory, true, |journal| {
         sync_called.set(true);
         // Exercise the real native boundary before injecting its reported failure.
-        directory.sync()?;
+        journal.directory.sync()?;
         Err(io::Error::other("injected new-journal durability failure"))
     })
     .unwrap_err();

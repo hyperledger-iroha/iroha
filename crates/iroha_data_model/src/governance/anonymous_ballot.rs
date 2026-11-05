@@ -48,6 +48,9 @@ mod output;
 mod policy;
 mod progress;
 mod qualification;
+mod registration_input;
+
+pub use self::registration_input::RegisterParliamentCredentialV1;
 
 pub(crate) use self::policy::check_body_size;
 pub use self::{

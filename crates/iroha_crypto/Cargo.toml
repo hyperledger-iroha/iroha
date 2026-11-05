@@ -59,13 +59,10 @@ iroha_fhe = { path = "../iroha_fhe", default-features = false }
 iroha_primitives = { workspace = true }
 iroha_schema = { workspace = true }
 
-derive_more = { workspace = true, features = ["deref", "deref_mut", "display", "debug"] }
 norito = { workspace = true, default-features = false, features = ["base-codec"] }
 hex = { workspace = true, features = ["alloc", "std"] }
 hex-literal = { workspace = true }
-getset = { workspace = true }
 thiserror = { version = "2.0.17" }
-displaydoc = { workspace = true, features = ["std"] }
 blake3 = { workspace = true, features = ["zeroize"] }
 base64 = { workspace = true }
 soranet_pq = { workspace = true, optional = true }

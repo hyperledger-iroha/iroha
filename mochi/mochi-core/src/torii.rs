@@ -4,7 +4,7 @@
 //! helpers for common HTTP interactions. Ledger streams use the account-bound
 //! Rust SDK; Mochi owns only summaries, fanout and local reconnect policy.
 use crate::compose::{InstructionPermission, SigningAuthority};
-use futures::future::join_all;
+use futures::{StreamExt, future::join_all};
 use iroha::client::AccountClient;
 use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
@@ -57,7 +57,6 @@ use tokio::{
     task::JoinHandle,
     time::{sleep, timeout},
 };
-use tokio_stream::StreamExt;
 use url::Url;
 mod operator_auth;
 pub use operator_auth::OperatorSigningContext;
@@ -2585,13 +2584,20 @@ impl BlockSummary {
         let time_trigger_count = block
             .execution_outputs()
             .iter()
-            .filter(|output| matches!(output, ExecutionOutputV1::Time(_)))
+            .filter(|output| {
+                matches!(
+                    output,
+                    ExecutionOutputV1::Time(_) | ExecutionOutputV1::TimeWithLifecycle(_)
+                )
+            })
             .count();
         let rejected_transaction_count = block
             .execution_outputs()
             .iter()
             .filter(|output| {
-                matches!(output, ExecutionOutputV1::Network(row) if row.result.as_ref().is_err())
+                output
+                    .network()
+                    .is_some_and(|row| row.result.as_ref().is_err())
             })
             .count();
         let signature_count = block.signatures().len();

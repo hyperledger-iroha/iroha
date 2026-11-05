@@ -17,6 +17,11 @@ keywords.workspace = true
 categories.workspace = true
 
 [[bin]]
+name = "trigger_lifecycle_preflight"
+path = "src/bin/trigger_lifecycle_preflight.rs"
+required-features = ["dev-tools", "json"]
+
+[[bin]]
 name = "fastpq_fixture_capture"
 path = "src/bin/fastpq_fixture_capture.rs"
 required-features = ["dev-tools"]
@@ -30,6 +35,11 @@ required-features = ["dev-tools"]
 name = "privacy_exact12_action_driver"
 path = "src/bin/privacy_exact12_action_driver.rs"
 required-features = ["privacy-release-evidence"]
+
+[[bin]]
+name = "ironwood_activation_preflight"
+path = "src/bin/ironwood_activation_preflight.rs"
+required-features = ["dev-tools", "node"]
 
 [[bin]]
 name = "kagemusha_enrollment_journal_init"
@@ -168,6 +178,8 @@ maintenance = { status = "actively-developed" }
 arrayvec = "0.7.6"
 iroha_core_privacy = { workspace = true, default-features = false }
 iroha_core_timed_ovn = { workspace = true }
+# Private E2 registration preparation; no executable ballot selection is enabled.
+iroha_parliament_ballot = { workspace = true }
 iroha_allocation = { workspace = true }
 iroha_model_base = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
@@ -219,7 +231,6 @@ crossbeam-queue = { workspace = true }
 thiserror = { workspace = true }
 displaydoc = { workspace = true }
 parking_lot = { workspace = true, features = ["deadlock_detection"] }
-derive_more = { workspace = true }
 hex = { workspace = true }
 tempfile = { workspace = true }
 blake3 = "1.8.2"

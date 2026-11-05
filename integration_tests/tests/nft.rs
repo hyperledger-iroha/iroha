@@ -1,6 +1,7 @@
 //! Integration tests for non-fungible token lifecycle operations.
-use eyre::Result;
+use eyre::{Result, ensure};
 use integration_tests::sandbox;
+use iroha::collections::{Collection, ListQuery, field};
 use iroha::{blocking::Client, data_model::prelude::*};
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -20,7 +21,7 @@ fn wait_for_nft(
     nft_id: &NftId,
     predicate: impl Fn(&Nft) -> bool,
     context: &str,
-) -> Nft {
+) -> Result<Nft> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
@@ -31,45 +32,60 @@ fn wait_for_nft(
             .query_single(FindNftById::new(nft_id.clone()))
         {
             Ok(nft) => {
-                assert_eq!(nft.id(), nft_id);
+                ensure!(nft.id() == nft_id, "singular NFT query changed identity");
                 last_observed = format!("owner={:?}, content={:?}", nft.owned_by(), nft.content());
                 if predicate(&nft) {
-                    return nft;
+                    return Ok(nft);
                 }
             }
-            Err(err) => {
-                last_observed = format!("query failed: {err}");
-            }
+            Err(error) => return Err(error.into()),
         }
         std::thread::sleep(POLL_INTERVAL);
     }
     panic!("timed out waiting for nft after {context}; id={nft_id}; last_observed={last_observed}");
 }
-fn wait_for_nft_owner(client: &Client, nft_id: &NftId, expected_owner: &AccountId, context: &str) {
+fn wait_for_nft_owner(
+    client: &Client,
+    nft_id: &NftId,
+    expected_owner: &AccountId,
+    context: &str,
+) -> Result<()> {
     wait_for_nft(
         client,
         nft_id,
         |nft| nft.owned_by() == expected_owner,
         context,
-    );
+    )?;
+    Ok(())
 }
-fn wait_for_nft_absent(client: &Client, nft_id: &NftId, context: &str) {
+fn wait_for_nft_absent(client: &Client, nft_id: &NftId, context: &str) -> Result<()> {
     const POLL_INTERVAL: Duration = Duration::from_millis(100);
     const TIMEOUT: Duration = Duration::from_secs(30);
     let deadline = Instant::now() + TIMEOUT;
     let mut last_observed = "nft was not queried".to_owned();
+    let literal = nft_id.to_string();
+    let query = ListQuery::new()
+        .filter(field("id").eq(literal.clone()))
+        .limit(1);
     while Instant::now() < deadline {
-        match integration_tests::collections::contains_exact_id(
-            client,
-            iroha::collections::Collection::Nfts,
-            &nft_id.to_string(),
-        ) {
-            Ok(false) => return,
-            Ok(true) => "nft still present".clone_into(&mut last_observed),
-            Err(err) => {
-                last_observed = format!("query failed: {err}");
-            }
+        // A successful complete, account-signed page establishes absence. A
+        // generic HTTP 404 (including a missing route) never counts as removal.
+        let page = client.list_page(&Collection::Nfts, &query)?;
+        ensure!(
+            page.next_cursor.is_none() && page.items.len() <= 1,
+            "exact NFT absence query returned an incomplete or non-unique page"
+        );
+        if page.items.is_empty() {
+            return Ok(());
         }
+        ensure!(
+            page.items[0]
+                .get("id")
+                .and_then(norito::json::Value::as_str)
+                == Some(literal.as_str()),
+            "exact NFT absence query changed identity"
+        );
+        "nft still present".clone_into(&mut last_observed);
         std::thread::sleep(POLL_INTERVAL);
     }
     panic!(
@@ -92,12 +108,12 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             Register::nft(Nft::new(nft_id.clone(), Metadata::default())),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        wait_for_nft_owner(&client, &nft_id, &alice_id, "nft registration");
+        wait_for_nft_owner(&client, &nft_id, &alice_id, "nft registration")?;
         client.submit(
             Transfer::nft(alice_id, nft_id.clone(), bob_id.clone()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        wait_for_nft_owner(&client, &nft_id, &bob_id, "nft transfer");
+        wait_for_nft_owner(&client, &nft_id, &bob_id, "nft transfer")?;
     }
     // client_register_nft_second_time_should_fail
     {
@@ -114,7 +130,7 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             &nft_id,
             |nft| nft.content() == &metadata,
             "nft duplicate registration seed",
-        );
+        )?;
         assert_eq!(*nft.content(), metadata);
         assert!(
             client
@@ -139,12 +155,12 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             &nft_id,
             |_| true,
             "nft unregister registration seed",
-        );
+        )?;
         client.submit(
             unregister_nft,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
-        wait_for_nft_absent(&client, &nft_id, "nft unregister");
+        wait_for_nft_absent(&client, &nft_id, "nft unregister")?;
     }
     // nft_owner_cant_modify_nft
     {
@@ -155,6 +171,16 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             create_account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
+        let fee_asset = AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?,
+            ALICE_ID.clone(),
+        );
+        client.submit(
+            Transfer::asset_quantity(fee_asset, 100_u32, account_id.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        let owner_client =
+            network.peers()[0].client_for(&account_id, account_keypair.private_key().clone());
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
         client.submit(
             register_nft,
@@ -172,16 +198,15 @@ fn nft_lifecycle_scenarios() -> Result<()> {
                 iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
             )
             .expect("Owner of `nft.domain` can modify NFT");
-        let modify_nft_tx = TransactionBuilder::new(
-            network.network_id(),
-            account_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([modify_nft])
-        .sign(account_keypair.private_key());
-        let _ = client
-            .submit_transaction_and_wait(&modify_nft_tx)
+        let error = owner_client
+            .submit(
+                modify_nft,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .expect_err("Owner of NFT can't modify NFT");
+        assert!(matches!(error.downcast_ref::<iroha_data_model::transaction::error::TransactionRejectionReason>(),
+            Some(iroha_data_model::transaction::error::TransactionRejectionReason::Validation(ValidationFail::NotPermitted(_)))),
+            "NFT modification must fail authorization after fee admission: {error:?}");
     }
     // nft_owner_can_transfer_nft
     {
@@ -192,6 +217,16 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             create_account,
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
+        let fee_asset = AssetId::new(
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?,
+            ALICE_ID.clone(),
+        );
+        client.submit(
+            Transfer::asset_quantity(fee_asset, 100_u32, account_id.clone()),
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        let owner_client =
+            network.peers()[0].client_for(&account_id, account_keypair.private_key().clone());
         let register_nft = Register::nft(Nft::new(nft_id.clone(), Metadata::default()));
         client.submit(
             register_nft,
@@ -203,16 +238,13 @@ fn nft_lifecycle_scenarios() -> Result<()> {
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         )?;
         let transfer_nft2 = Transfer::nft(account_id.clone(), nft_id.clone(), ALICE_ID.clone());
-        let transfer_nft2_tx = TransactionBuilder::new(
-            network.network_id(),
-            account_id.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-        )
-        .with_instructions([transfer_nft2])
-        .sign(account_keypair.private_key());
-        client
-            .submit_transaction_and_wait(&transfer_nft2_tx)
+        owner_client
+            .submit(
+                transfer_nft2,
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            )
             .expect("Owner of NFT can transfer NFT");
+        wait_for_nft_owner(&client, &nft_id, &ALICE_ID, "owner transfers NFT back")?;
     }
     Ok(())
 }

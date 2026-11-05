@@ -1,8 +1,11 @@
 //! Tests that a restarted peer restores its state.
-use eyre::{Result, ensure, eyre};
-use integration_tests::{sandbox, sync::spawn_blocking};
-use iroha::data_model::prelude::*;
-use iroha::{blocking::Client, crypto::KeyPair};
+use eyre::{Result, WrapErr, ensure, eyre};
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
+use iroha::data_model::{
+    prelude::*,
+    query::error::{FindError, QueryExecutionFail},
+};
+use iroha::{blocking::Client, crypto::KeyPair, query::QueryError};
 use iroha_config_base::toml::WriteExt as _;
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::*;
@@ -14,6 +17,22 @@ use std::{
 };
 use tokio::time::{sleep, timeout};
 use toml::Table;
+async fn find_asset(client: &Client, id: &AssetId) -> Result<Option<Asset>> {
+    match client
+        .account_client()
+        .query_single(FindAssetById::new(id.clone()))
+        .await
+    {
+        Ok(asset) => {
+            assert_eq!(asset.id(), id);
+            Ok(Some(asset))
+        }
+        Err(QueryError::Validation(ValidationFail::QueryFailed(QueryExecutionFail::Find(
+            FindError::Asset(missing),
+        )))) if missing.as_ref() == id => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn restarted_peer_should_restore_its_state() -> Result<()> {
@@ -46,7 +65,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let client_for_submit = client.clone();
     let asset_definition_clone = asset_definition_id.clone();
     let mint_quantity = quantity.clone();
-    let submit_res: eyre::Result<()> = spawn_blocking(move || {
+    let submit_res: eyre::Result<()> = run_on_dedicated_thread(move || {
         client_for_submit
             .submit_all::<InstructionBox>(
                 [
@@ -70,8 +89,7 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
             )
             .map(|_| ())
     })
-    .await
-    .map_err(eyre::Report::from)?;
+    .await?;
     if sandbox::handle_result(
         submit_res,
         stringify!(restarted_peer_should_restore_its_state),
@@ -90,21 +108,14 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     }
     // Ensure the mint made it into the chain before shutting down peers.
     let mint_deadline = Instant::now() + network.sync_timeout();
+    let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
     let minted = loop {
-        let assets = sandbox::handle_result(
-            spawn_blocking({
-                let client = client.clone();
-                let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-                move || super::find_asset(&client, &asset_id)
-            })
-            .await?,
+        let asset = sandbox::handle_result(
+            find_asset(&client, &asset_id).await,
             stringify!(restarted_peer_should_restore_its_state),
         )?;
-        let Some(assets) = assets else { return Ok(()) };
-        if assets
-            .as_ref()
-            .is_some_and(|asset| asset.value() == &quantity)
-        {
+        let Some(asset) = asset else { return Ok(()) };
+        if asset.is_some_and(|asset| asset.value() == &quantity) {
             break true;
         }
         if Instant::now() >= mint_deadline {
@@ -118,6 +129,8 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let snapshot_deadline = Instant::now() + network.sync_timeout();
     let expected_snapshot_height = 2_u64;
     let snapshot_ready = loop {
+        // Snapshots publish one immutable generation through `current`; flat
+        // files in the snapshot root are not a published snapshot.
         if published_snapshot_height(&snapshot_dir)?
             .is_some_and(|height| height >= expected_snapshot_height)
         {
@@ -166,19 +179,14 @@ async fn restarted_peer_should_restore_its_state() -> Result<()> {
     let client = peer_b.client();
     let deadline = Instant::now() + network.sync_timeout();
     let restored = loop {
-        let assets = match sandbox::handle_result(
-            spawn_blocking({
-                let client = client.clone();
-                let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-                move || super::find_asset(&client, &asset_id)
-            })
-            .await?,
+        let asset = match sandbox::handle_result(
+            find_asset(&client, &asset_id).await,
             stringify!(restarted_peer_should_restore_its_state),
         )? {
-            Some(assets) => assets,
+            Some(asset) => asset,
             None => return Ok(()),
         };
-        if let Some(asset) = assets {
+        if let Some(asset) = asset {
             break Some(asset.value().clone());
         }
         if Instant::now() >= deadline {
@@ -203,6 +211,16 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
                     iroha_model_base::topology::DataSpaceId::UNIVERSAL,
                 ),
         };
+    let resolve_alias_permission =
+        iroha_executor_data_model::permission::account::CanResolveAccountAlias {
+            scope:
+                iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(
+                    iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
+                        "merchant@universal".parse()?,
+                        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+                    ),
+                ),
+        };
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
             .with_peers(4)
@@ -211,16 +229,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
                 ALICE_ID.clone(),
             ))
             .with_genesis_instruction(Grant::account_permission(
-                Permission::from(
-                    iroha_executor_data_model::permission::account::CanResolveAccountAlias {
-                        scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Alias(
-                            iroha_data_model::alias_setup::ResolvedAccountAliasV1::new(
-                                "merchant@universal".parse()?,
-                                iroha_model_base::topology::DataSpaceId::UNIVERSAL,
-                            ),
-                        ),
-                    },
-                ),
+                Permission::from(resolve_alias_permission),
                 ALICE_ID.clone(),
             )),
         test_name,
@@ -253,7 +262,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
     let submit_asset = asset_id.clone();
     let submit_quantity = quantity.clone();
     let submit_domain = domain_id.clone();
-    let submit_res: eyre::Result<()> = spawn_blocking(move || {
+    let submit_res: eyre::Result<()> = run_on_dedicated_thread(move || {
         submit_client
             .submit_all::<InstructionBox>(
                 [
@@ -275,8 +284,7 @@ async fn restarted_four_peers_rebuild_route_sensitive_state_from_kura_blocks() -
             )
             .map(|_| ())
     })
-    .await
-    .map_err(eyre::Report::from)?;
+    .await?;
     if sandbox::handle_result(submit_res, test_name)?.is_none() {
         return Ok(());
     }
@@ -376,22 +384,27 @@ async fn route_sensitive_state_digest(
     asset_id: AssetId,
     quantity: Quantity,
 ) -> Result<blake3::Hash> {
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         let account = client
             .client()
-            .query_single(FindAccountById::new(account_id.clone()))?;
+            .query_single(FindAccountById::new(account_id.clone()))
+            .wrap_err("read route-sensitive account")?;
         let alias_account = client
             .client()
-            .query_single(FindAccountByAlias::new(alias.clone()))?;
+            .query_single(FindAccountByAlias::new(alias.clone()))
+            .wrap_err("read route-sensitive account alias")?;
         let domain = client
             .client()
-            .query_single(FindDomainById::new(domain_id.clone()))?;
+            .query_single(FindDomainById::new(domain_id.clone()))
+            .wrap_err("read route-sensitive domain")?;
         let definition = client
             .client()
-            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))?;
+            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
+            .wrap_err("read route-sensitive asset definition")?;
         let asset = client
             .client()
-            .query_single(FindAssetById::new(asset_id.clone()))?;
+            .query_single(FindAssetById::new(asset_id.clone()))
+            .wrap_err("read route-sensitive asset")?;
         if asset.value() != &quantity {
             return Err(eyre!(
                 "asset `{}` has value `{}`, expected `{}`",
@@ -400,11 +413,10 @@ async fn route_sensitive_state_digest(
                 quantity
             ));
         }
-        let mut aliases = client.client().query_single(FindAliasesByAccountId::new(
-            account_id.clone(),
-            None,
-            None,
-        ))?;
+        let mut aliases = client
+            .client()
+            .query_single(FindAliasesByAccountId::new(account_id.clone(), None, None))
+            .wrap_err("read route-sensitive aliases by account")?;
         aliases.sort_by(|left, right| format!("{left:?}").cmp(&format!("{right:?}")));
         let mut surface = Vec::new();
         surface.push(format!("account={}", account.id()));

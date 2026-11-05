@@ -4575,7 +4575,7 @@ mod tests {
     use super::*;
     use crate::ProgramMetadata;
     use crate::pointer_abi::PointerType;
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     use iroha_data_model::zk::BackendTag;
     use iroha_model_base::name::MAX_NAME_BYTES;
     #[test]
@@ -5242,7 +5242,9 @@ mod tests {
     #[test]
     fn default_host_rejects_every_reserved_privacy_circuit_label_before_dispatch() {
         let host = DefaultHost::new();
-        for label in PrivacyProtocolIdV1::ALL.map(PrivacyProtocolIdV1::canonical_label) {
+        for label in
+            PrivacyRuntimeProtocolIdV1::ALL.map(PrivacyRuntimeProtocolIdV1::canonical_label)
+        {
             for circuit_id in [
                 label.to_owned(),
                 format!("halo2/ipa::{label}"),

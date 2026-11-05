@@ -103,9 +103,9 @@ impl SseDecoder {
             let line = line.trim_end_matches('\r');
             if line.is_empty() {
                 if !self.data.is_empty() {
-                    let value = json::from_str(self.data.trim_end_matches('\n'))
+                    let value: JsonValue = json::from_str(self.data.trim_end_matches('\n'))
                         .wrap_err("SSE event contains malformed JSON")?;
-                    if self.event == "stream_error" {
+                    if self.event == "stream_error" || value.get("code").is_some() {
                         return Err(eyre!("SSE server refused the stream: {value:?}"));
                     }
                     tx.send(SseMessage::Event(value))
@@ -406,11 +406,15 @@ fn wait_for_sse<F>(reader: &SseReader, predicate: F) -> Result<JsonValue>
 where
     F: Fn(&JsonValue) -> bool,
 {
+    let mut last_payload = None;
     loop {
-        if let SseMessage::Event(value) = reader.receive()?
-            && predicate(&value)
-        {
-            return Ok(value);
+        if let SseMessage::Event(value) = reader.receive().map_err(|error| {
+            eyre!("SSE wait ended: {error}; last unmatched payload: {last_payload:?}")
+        })? {
+            if predicate(&value) {
+                return Ok(value);
+            }
+            last_payload = Some(value);
         }
     }
 }
@@ -700,6 +704,10 @@ fn sse_reader_refuses_http_errors_and_invalid_media_before_ready() -> Result<()>
             "HTTP 403",
         ),
         (
+            "HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
+            "HTTP 503",
+        ),
+        (
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}",
             "Content-Type",
         ),
@@ -739,5 +747,30 @@ fn sse_reader_honors_original_deadline_and_joins_on_drop() -> Result<()> {
     server
         .join()
         .map_err(|_| eyre!("SSE fixture server panicked"))??;
+    Ok(())
+}
+
+#[test]
+fn sse_wait_reports_stream_refusals_and_last_unmatched_payload() -> Result<()> {
+    let (tx, rx) = mpsc::channel();
+    let mut decoder = SseDecoder::default();
+    let error = decoder
+        .push(
+            b"data: {\"code\":\"stream_history_capacity\",\"message\":\"capacity\"}\n\n",
+            &tx,
+        )
+        .expect_err("terminal stream errors must be surfaced");
+    assert!(error.to_string().contains("stream_history_capacity"));
+    tx.send(SseMessage::Event(norito::json!({"event":"unmatched"})))?;
+    drop(tx);
+    let reader = SseReader {
+        rx,
+        deadline: Instant::now() + Duration::from_secs(1),
+        shutdown: None,
+        worker: None,
+    };
+    let error =
+        wait_for_sse(&reader, |_| false).expect_err("closed stream cannot satisfy the predicate");
+    assert!(error.to_string().contains("unmatched"));
     Ok(())
 }

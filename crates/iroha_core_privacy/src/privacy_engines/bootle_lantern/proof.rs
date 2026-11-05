@@ -57,8 +57,8 @@ use iroha_data_model::{
     privacy::{
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyLifecycleV1,
         IrohaBootleLanternAnoncredStatementV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1,
-        PrivacyProofEnvelopeV1, PrivacyProofV1, PrivacyProtocolIdV1, PrivacyStatementContextV1,
-        PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeStatementV1, PrivacyStatementContextV1, PrivacyTransactionIntentDigestV1,
     },
     transaction::{
         Executable, FeePaymentIntent, TransactionBuilder, signed::TransactionSignatureError,
@@ -1770,14 +1770,16 @@ fn bootle_lantern_presentation_statement_v1(
 #[cfg(test)]
 fn bootle_lantern_presentation_transaction_payload_v1(
     context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
-    envelope: PrivacyProofEnvelopeV1,
+    envelope: PrivacyRuntimeProofEnvelopeV1,
 ) -> Result<TransactionPayload, BootleLanternPresentationPrivacyActionIntentErrorV1> {
     let mut builder = TransactionBuilder::new(
         context.network_id,
         context.authority.clone(),
         context.fee_payment.clone(),
     )
-    .with_instructions([SubmitPrivacyProofV1::new(envelope)])
+    .with_instructions([SubmitPrivacyProofV1::new(envelope.try_into().map_err(
+        |_| BootleLanternPresentationPrivacyActionIntentErrorV1::InvalidTransactionContext,
+    )?)])
     .with_metadata(context.metadata.clone());
     builder.set_creation_time(context.creation_time);
     if let Some(ttl) = context.time_to_live {
@@ -1794,10 +1796,10 @@ fn bootle_lantern_presentation_transaction_payload_v1(
 fn bootle_lantern_presentation_envelope_v1(
     statement: IrohaBootleLanternAnoncredStatementV1,
     proof: Vec<u8>,
-) -> PrivacyProofEnvelopeV1 {
-    PrivacyProofEnvelopeV1::bind_v1(
-        PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement),
-        PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
+) -> PrivacyRuntimeProofEnvelopeV1 {
+    PrivacyRuntimeProofEnvelopeV1::bind_v1(
+        PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement),
+        PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(proof)),
     )
     .expect("a Bootle/Lantern statement binds its own proof variant")
 }
@@ -1836,7 +1838,7 @@ pub fn prepare_bootle_lantern_presentation_transaction_intent_v1(
     validate_bootle_lantern_presentation_transaction_context_v1(context)?;
     validate_bootle_lantern_active_issuer_policy_v1(policy)?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
     )
     .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     let mut statement = bootle_lantern_presentation_statement_v1(
@@ -1876,7 +1878,7 @@ pub fn validate_bootle_lantern_presentation_transaction_intent_v1(
     validate_bootle_lantern_presentation_transaction_context_v1(context)?;
     validate_bootle_lantern_active_issuer_policy_v1(policy)?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
     )
     .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
     let expected_context = bootle_lantern_presentation_statement_context_v1(
@@ -1889,7 +1891,8 @@ pub fn validate_bootle_lantern_presentation_transaction_intent_v1(
     {
         return Err(BootleLanternPresentationPrivacyActionIntentErrorV1::StatementValidation);
     }
-    let typed_statement = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+    let typed_statement =
+        PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
     typed_statement
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::StatementValidation)?;
@@ -1989,15 +1992,16 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
         .privacy_transaction_intent_binding_if_present_v1()
         .map_err(|_| ())?
         .ok_or(())?;
+    let submission_envelope = submission.runtime_envelope();
     if intent.as_bytes() != &expected.transaction_intent_digest {
         return Err(());
     }
-    let envelope = &submission.envelope;
+    let envelope = &submission_envelope;
     envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| ())?;
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
     )
     .map_err(|_| ())?;
     if envelope.protocol_id != profile.protocol_id
@@ -2012,7 +2016,8 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
     {
         return Err(());
     }
-    let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) = &envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) = &envelope.statement
+    else {
         return Err(());
     };
     if statement.context.action_index != BOOTLE_LANTERN_PRESENTATION_PRIVACY_ACTION_INDEX_V1
@@ -2026,11 +2031,14 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
     if statement_digest.as_bytes() != &expected.statement_digest {
         return Err(());
     }
-    let statement_encoding = norito::to_bytes(&envelope.statement).map_err(|_| ())?;
+    let statement_encoding = envelope
+        .statement
+        .canonical_wire_bytes_v1()
+        .map_err(|_| ())?;
     if u32::try_from(statement_encoding.len()).map_err(|_| ())? != expected.statement_bytes {
         return Err(());
     }
-    let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
+    let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
         return Err(());
     };
     let fixed_proof_bytes = u32::try_from(super::codec::PROOF_BYTES_V1).map_err(|_| ())?;
@@ -2049,7 +2057,7 @@ fn validate_bootle_lantern_presentation_payload_integrity_v1(
         &decoded,
     )
     .map_err(|_| ())?;
-    let envelope_encoding = norito::to_bytes(envelope).map_err(|_| ())?;
+    let envelope_encoding = envelope.canonical_wire_bytes_v1().map_err(|_| ())?;
     if u32::try_from(envelope_encoding.len()).map_err(|_| ())?
         != expected.encoded_proof_envelope_bytes
         || *Hash::new(&envelope_encoding).as_ref() != expected.proof_envelope_hash
@@ -2070,10 +2078,11 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     BootleLanternPresentationPrivacyActionBuildErrorV1,
 > {
     let profile = crate::privacy_profiles::compiled_privacy_profile_v1(
-        PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+        PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
     )
     .map_err(|_| BootleLanternPresentationPrivacyActionIntentErrorV1::CompiledProfileUnavailable)?;
-    let typed_statement = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
+    let typed_statement =
+        PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement.clone());
     typed_statement
         .validate(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EnvelopeValidation)?;
@@ -2081,7 +2090,8 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
         .digest()
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::StatementDigest)?;
     let statement_bytes = u32::try_from(
-        norito::to_bytes(&typed_statement)
+        typed_statement
+            .canonical_wire_bytes_v1()
             .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::StatementEncoding)?
             .len(),
     )
@@ -2099,7 +2109,8 @@ fn finalize_bootle_lantern_prepared_presentation_privacy_action_v1(
     final_envelope
         .validate_with_limits(&PrivacyConsensusLimitsV1::taira_default())
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EnvelopeValidation)?;
-    let envelope_encoding = norito::to_bytes(&final_envelope)
+    let envelope_encoding = final_envelope
+        .canonical_wire_bytes_v1()
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EnvelopeEncoding)?;
     let encoded_proof_envelope_bytes = u32::try_from(envelope_encoding.len())
         .map_err(|_| BootleLanternPresentationPrivacyActionBuildErrorV1::EncodedLengthOverflow)?;
@@ -2328,9 +2339,9 @@ mod tests {
         BootleLanternDisclosedAttributeV1, BootleLanternIssuerPolicyV1,
         IrohaBootleLanternAnoncredStatementV1, PrivacyBootleLanternIssuerPolicyDigestV1,
         PrivacyEngineManifestDigestV1, PrivacyIssuerIdV1, PrivacyParameterDigestV1,
-        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyStatementContextV1,
-        PrivacyStatementSchemaDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
-        PrivacyVerifierDigestV1,
+        PrivacyParameterIdV1, PrivacyPolicyIdV1, PrivacyRuntimeStatementV1,
+        PrivacyStatementContextV1, PrivacyStatementSchemaDigestV1,
+        PrivacyTransactionIntentDigestV1, PrivacyVerifierDigestV1,
     };
     use sha3::{Digest, Sha3_256};
     use std::io::Error as RngError;
@@ -2456,7 +2467,7 @@ mod tests {
     }
     fn compiled_bootle_lantern_profile() -> crate::privacy_profiles::CompiledPrivacyProfileV1 {
         crate::privacy_profiles::compiled_privacy_profile_v1(
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
         )
         .expect("compiled Bootle/Lantern profile")
     }
@@ -2722,9 +2733,10 @@ mod tests {
                 .expect("compiled application relation");
         let witness = issued.witness.clone();
         validate_presentation_witness_v1(&relation, &witness).expect("valid presentation witness");
-        let statement_digest = PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement.clone())
-            .digest()
-            .expect("canonical typed statement digest");
+        let statement_digest =
+            PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement.clone())
+                .digest()
+                .expect("canonical typed statement digest");
         let transcript = PresentationTranscriptV1::new(
             PresentationChallengeBindingV1 {
                 parameter_digest: *statement.context.parameter_digest.as_bytes(),
@@ -2809,7 +2821,7 @@ mod tests {
     fn replace_prepared_envelope_for_adversary(
         prepared: &mut BootleLanternPreparedPresentationPrivacyActionV1,
         context: &BootleLanternPresentationPrivacyActionTransactionContextV1,
-        mutate: impl FnOnce(&mut PrivacyProofEnvelopeV1),
+        mutate: impl FnOnce(&mut PrivacyRuntimeProofEnvelopeV1),
     ) {
         let mut envelope = prepared
             .payload
@@ -2817,8 +2829,7 @@ mod tests {
             .expect("canonical prepared privacy scan")
             .expect("one prepared Bootle/Lantern presentation")
             .1
-            .envelope
-            .clone();
+            .runtime_envelope();
         mutate(&mut envelope);
         prepared.payload = bootle_lantern_presentation_transaction_payload_v1(context, envelope)
             .expect("adversarial payload remains structurally constructible");
@@ -3020,7 +3031,7 @@ mod tests {
             &mut statement_substitution,
             &context,
             |envelope| {
-                let PrivacyStatementV1::IrohaBootleLanternAnoncredV1(statement) =
+                let PrivacyRuntimeStatementV1::IrohaBootleLanternAnoncredV1(statement) =
                     &mut envelope.statement
                 else {
                     unreachable!()
@@ -3039,13 +3050,14 @@ mod tests {
         assert_drift(envelope_substitution);
         let mut proof_substitution = clone_prepared_for_adversary(&prepared);
         replace_prepared_envelope_for_adversary(&mut proof_substitution, &context, |envelope| {
-            let PrivacyProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
+            let PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(proof) = &envelope.proof else {
                 unreachable!()
             };
             let mut bytes = proof.as_bytes().to_vec();
             bytes[PROOF_HEADER_BYTES_V1] ^= 1;
-            envelope.proof =
-                PrivacyProofV1::IrohaBootleLanternAnoncredV1(PrivacyProofBytesV1::new(bytes));
+            envelope.proof = PrivacyRuntimeProofV1::IrohaBootleLanternAnoncredV1(
+                PrivacyProofBytesV1::new(bytes),
+            );
         });
         assert_drift(proof_substitution);
         let mut policy_substitution = clone_prepared_for_adversary(&prepared);

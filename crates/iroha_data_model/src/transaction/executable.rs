@@ -12,6 +12,28 @@ use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 use norito::{DeserializePayload, core as ncore};
 use std::{fmt, iter::IntoIterator, ops::Deref, vec::Vec};
+thread_local! {
+    static CANONICAL_ARGUMENT_RECORD_VALIDATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Scope the optional lifecycle scanner's additional inner-record wire policy.
+/// The ordinary model codec keeps its bounded opaque-vector contract.
+pub(crate) fn with_canonical_argument_record_validation<T>(
+    enabled: bool,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CANONICAL_ARGUMENT_RECORD_VALIDATION.set(self.0);
+        }
+    }
+    let previous = CANONICAL_ARGUMENT_RECORD_VALIDATION.get();
+    CANONICAL_ARGUMENT_RECORD_VALIDATION.set(previous || enabled);
+    let _restore = Restore(previous);
+    operation()
+}
+
 #[model]
 mod model {
     use super::*;
@@ -248,6 +270,32 @@ impl<'de> ncore::DecodeFromSlice<'de> for ContractArgumentRecord {
             .checked_add(len)
             .ok_or(ncore::Error::LengthMismatch)?;
         let payload = bytes.get(offset..end).ok_or(ncore::Error::LengthMismatch)?;
+        if ncore::prepaid_validation_active() {
+            if CANONICAL_ARGUMENT_RECORD_VALIDATION.get() {
+                use crate::smart_contract::entrypoint::EntrypointArgumentRecordV1;
+                crate::block::execution_output::charge_typed_nested_frame(payload.len(), false)?;
+                let inner = norito::canonical_frame_payload::<EntrypointArgumentRecordV1>(
+                    payload,
+                    ncore::default_encode_flags(),
+                )?;
+                let (record, used) =
+                    ncore::decode_field_canonical::<EntrypointArgumentRecordV1>(inner)?;
+                if used != inner.len() {
+                    return Err(ncore::Error::LengthMismatch);
+                }
+                norito::codec::verify_exact_payload(&record, inner)?;
+            }
+            // read_seq_len_slice already charged each raw byte before allocation.
+            // Keep the scoped validator's copy fallible and exactly sized.
+            let mut retained = Vec::new();
+            retained
+                .try_reserve_exact(len)
+                .map_err(|_| ncore::Error::AllocationFailed {
+                    bytes: u64::try_from(len).unwrap_or(u64::MAX),
+                })?;
+            retained.extend_from_slice(payload);
+            return Ok((Self(retained), end));
+        }
         Ok((Self(payload.to_vec()), end))
     }
 }

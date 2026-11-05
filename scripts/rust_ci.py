@@ -1065,11 +1065,13 @@ def commands_for_checks(
         feature_args = _supported_feature_args(packages, inventory)
     # Preserve the original grouped node test graph when Core runs alone:
     # Torii/daemon dev-dependencies supplied these two non-default features.
+    # Explicit developer binaries retain their unit tests in this test-only graph.
     # The same graph owns doctests; shipping builds remain unchanged.
     selected_features = [
         feature for package, feature in (
             ("iroha_core", "iroha_core/iroha-core-tests"),
             ("iroha_core", "iroha_core/expensive-telemetry"),
+            ("iroha_core", "iroha_core/dev-tools"),
             ("iroha_torii", "iroha_torii/test-fixtures"),
             ("iroha_release_bundle", "iroha_release_bundle/dev-tools"),
             ("iroha_native_source_delivery", "iroha_native_source_delivery/dev-tools"),

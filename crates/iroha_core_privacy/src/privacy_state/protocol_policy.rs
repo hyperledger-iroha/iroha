@@ -1,9 +1,9 @@
 //! Ordinary per-protocol limits and direct canonical native admission.
 
 use iroha_data_model::privacy::{
-    PrivacyCompiledProfileSnapshotV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-    PrivacyProtocolLimitsValidationError, PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1,
-    PrivacyProtocolPolicyValidationErrorV1,
+    PrivacyCompiledProfileSnapshotV1, PrivacyProtocolLimitsValidationError,
+    PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1, PrivacyProtocolPolicyValidationErrorV1,
+    PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
@@ -26,7 +26,7 @@ use crate::privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_pr
 )]
 pub struct AdmittedPrivacyProtocolV1 {
     profile: PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: PrivacyProtocolLimitsV1,
+    protocol_limits: PrivacyRuntimeProtocolLimitsV1,
 }
 impl AdmittedPrivacyProtocolV1 {
     /// Canonical profile selected from the actual native implementation.
@@ -36,7 +36,7 @@ impl AdmittedPrivacyProtocolV1 {
     }
     /// Effective limits selected from committed policy or canonical defaults.
     #[must_use]
-    pub const fn protocol_limits(&self) -> &PrivacyProtocolLimitsV1 {
+    pub const fn protocol_limits(&self) -> &PrivacyRuntimeProtocolLimitsV1 {
         &self.protocol_limits
     }
 }
@@ -51,9 +51,9 @@ pub enum PrivacyAdmissionErrorV1 {
     #[error("privacy policy key {selected:?} differs from record {record:?}")]
     PolicyProtocolMismatch {
         /// Selected protocol.
-        selected: PrivacyProtocolIdV1,
+        selected: PrivacyRuntimeProtocolIdV1,
         /// Stored policy protocol.
-        record: PrivacyProtocolIdV1,
+        record: PrivacyRuntimeProtocolIdV1,
     },
     /// The selected committed policy is malformed or has a missed schedule.
     #[error("privacy protocol policy is invalid: {0}")]
@@ -71,7 +71,7 @@ pub enum PrivacyAdmissionErrorV1 {
 /// Returns the original typed implementation failure or the selected policy/limit failure.
 pub fn resolve_admitted_privacy_protocol_v1(
     policies: &impl StorageReadOnly<PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1>,
-    protocol_id: PrivacyProtocolIdV1,
+    protocol_id: PrivacyRuntimeProtocolIdV1,
     committed_height: u64,
 ) -> Result<AdmittedPrivacyProtocolV1, PrivacyAdmissionErrorV1> {
     let compiled = compiled_privacy_profile_v1(protocol_id)
@@ -114,15 +114,15 @@ pub enum PrivacyProtocolLimitsPlanErrorV1 {
     #[error("privacy policy key {key_protocol:?} differs from record {record_protocol:?}")]
     KeyProtocolMismatch {
         /// Storage key identity.
-        key_protocol: PrivacyProtocolIdV1,
+        key_protocol: PrivacyRuntimeProtocolIdV1,
         /// Stored record identity.
-        record_protocol: PrivacyProtocolIdV1,
+        record_protocol: PrivacyRuntimeProtocolIdV1,
     },
     /// A policy violates canonical bounds or exact scheduling.
     #[error("privacy policy {protocol_id:?} is invalid: {source}")]
     InvalidPolicy {
         /// Invalid policy identity.
-        protocol_id: PrivacyProtocolIdV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1,
         /// Original structured failure.
         source: PrivacyProtocolPolicyValidationErrorV1,
     },
@@ -223,15 +223,15 @@ mod tests {
     use iroha_data_model::privacy::{PrivacyProtocolLimitsUpdateV1, VeRangeLimitsV1};
     use mv::storage::Storage;
 
-    fn ve_range(count: u32) -> PrivacyProtocolLimitsV1 {
-        PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+    fn ve_range(count: u32) -> PrivacyRuntimeProtocolLimitsV1 {
+        PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
             max_aggregation_count: count,
         })
     }
 
     fn scheduled_policy(current: u32, next: u32) -> PrivacyProtocolPolicyV1 {
         PrivacyProtocolPolicyV1 {
-            protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            protocol_id: PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
             current_limits: ve_range(current),
             pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
                 scheduled_at_height: 100,
@@ -244,7 +244,7 @@ mod tests {
     #[test]
     fn admission_uses_compiled_defaults_without_registration_at_any_height() {
         let policies = Storage::new();
-        let protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
         let compiled = compiled_privacy_profile_v1(protocol_id).unwrap();
         for height in [0, 1, 100, u64::MAX] {
             let admitted =
@@ -257,7 +257,7 @@ mod tests {
 
     #[test]
     fn admission_selects_only_its_ordinary_policy_and_keeps_snapshot_immutable() {
-        let protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
         let compiled = compiled_privacy_profile_v1(protocol_id).unwrap();
         let mut policies = Storage::new();
         let mut policy = PrivacyProtocolPolicyV1::canonical_default_v1(protocol_id);
@@ -265,7 +265,7 @@ mod tests {
         policies.insert(PrivacyProtocolPolicyKeyV1::new(protocol_id), policy);
         // A malformed unrelated policy is a restoration error, but cannot gate this selection.
         policies.insert(
-            PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1),
+            PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1),
             policy,
         );
         let admitted =
@@ -273,7 +273,7 @@ mod tests {
         assert_eq!(admitted.profile(), &compiled.snapshot());
         assert_eq!(admitted.protocol_limits(), &ve_range(1));
         assert!(validate_privacy_protocol_policies_v1(&policies.view()).is_err());
-        policy.protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
+        policy.protocol_id = PrivacyRuntimeProtocolIdV1::PqMaspStarkV1;
         policies.insert(PrivacyProtocolPolicyKeyV1::new(protocol_id), policy);
         assert!(matches!(
             resolve_admitted_privacy_protocol_v1(&policies.view(), protocol_id, 10),
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn x509_policy_cannot_replace_missing_joint_security_construction() {
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         let key = PrivacyProtocolPolicyKeyV1::new(protocol_id);
         let mut policies = Storage::new();
         policies.insert(
@@ -370,7 +370,7 @@ mod tests {
         );
         assert_eq!(policies.view().get(&key), Some(&policy));
         policies.insert(
-            PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::PqMaspStarkV1),
+            PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1),
             policy,
         );
         assert!(matches!(

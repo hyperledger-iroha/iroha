@@ -250,8 +250,8 @@ use crate::privacy_engines::{
     },
 };
 #[cfg(test)]
-use iroha_data_model::privacy::PrivacyStatementV1;
-use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyProtocolIdV1};
+use iroha_data_model::privacy::PrivacyRuntimeStatementV1;
+use iroha_data_model::privacy::{IrohaZkX509StarkP256StatementV1, PrivacyRuntimeProtocolIdV1};
 pub use main_aggregate::commit_zk_x509_main_base_phase_v1_with_rng;
 pub use main_aggregate::main_joint::finish_joint_main_ca_v1;
 pub use main_aggregate::main_joint::{
@@ -443,7 +443,7 @@ const PUBLIC_DIGEST_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:io-public:v1";
 const QUERY_SEED_DOMAIN: &[u8] = b"iroha:privacy:zk-x509:stark:query-seed:v1";
 pub const ZK_X509_FIXED_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
     TransparentStarkDigestContextV1::new(
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
         b"iroha-zk-x509-stark-p256-release-profile-v1",
     );
 #[cfg(test)]
@@ -3480,7 +3480,7 @@ fn der_public_digest_v1(
 fn projection_public_digest_v1(
     statement: &IrohaZkX509StarkP256StatementV1,
 ) -> Result<PrivacyOuterDigestV1, ZkX509StarkErrorV1> {
-    let statement_digest = PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone())
+    let statement_digest = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone())
         .digest()
         .map_err(|_| ZkX509StarkErrorV1::InvalidStatement)?;
     privacy_outer_digest_frame_v1(

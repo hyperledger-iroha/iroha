@@ -1,6 +1,5 @@
 //! Module with telemetry layer for tracing
 use crate::layer::{EventInspectorTrait, EventSubscriber};
-use derive_more::{Deref, DerefMut};
 use iroha_model_base::{topology::DataSpaceId, topology::LaneId};
 use norito::json::{Value, native::Map as JsonMap};
 use std::{borrow::Cow, error::Error, fmt::Debug};
@@ -54,8 +53,22 @@ const SENSITIVE_FIELD_KEYWORDS: &[&str] = &[
 // Prefixes that explicitly mark a field as sensitive.
 const EXPLICIT_REDACTION_PREFIXES: &[&str] = &["redact", "sensitive", "secret", "pii"];
 /// Fields for telemetry (type for efficient saving)
-#[derive(Clone, Debug, PartialEq, Eq, Default, Deref, DerefMut)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub struct Fields(pub Vec<(&'static str, Value)>);
+impl std::ops::Deref for Fields {
+    type Target = Vec<(&'static str, Value)>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for Fields {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl Fields {
     #[inline]
     fn push_sanitized(&mut self, name: &'static str, value: Value) {
@@ -320,6 +333,26 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    #[test]
+    fn fields_deref_borrows_the_original_vec_for_reading_and_mutation() {
+        let mut fields = Fields(vec![("first", Value::from(1_u64))]);
+        let original = std::ptr::from_ref(&fields.0);
+        let borrowed: &Vec<(&'static str, Value)> = &fields;
+        assert!(std::ptr::eq(borrowed, original));
+        assert_eq!(borrowed[0], ("first", Value::from(1_u64)));
+
+        let borrowed: &mut Vec<(&'static str, Value)> = &mut fields;
+        assert!(std::ptr::eq(borrowed, original));
+        borrowed.push(("second", Value::from(2_u64)));
+        borrowed[0].1 = Value::from(3_u64);
+        assert_eq!(
+            fields.0,
+            vec![
+                ("first", Value::from(3_u64)),
+                ("second", Value::from(2_u64))
+            ]
+        );
+    }
     #[test]
     fn redacts_sensitive_fields_by_default() {
         let value = sanitize_value("password", Value::from("super-secret"));

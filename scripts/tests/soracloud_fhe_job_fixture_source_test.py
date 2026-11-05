@@ -16,11 +16,11 @@ INITIAL_FIXTURE_INCLUDE = 'include!("soracloud_initial_fixture_tests.rs");'
 
 HELPER_START = 'fn deploy_diagnostic_job_test_service('
 HELPER_END = 'const SORACLOUD_BFV_OPERATION_VECTOR_SET'
-HELPER_SHA256 = "884bfcac5f87f392ba0ef2da08cb59459b58373562b8e26c7ee17ee23007cb36"
+HELPER_SHA256 = "bacabfc329adf2bb6c5ca08765c6d4733e00fe8cdcb27f0009af8cb09a44b948"
 
 PROTECTED_FUNCTION_SHA256 = {
-    'diagnose_fhe_job_preflight': 'bc68b9ba98e38416d2cec77cccc3dfb476173df5c02779ae13c6ca885b1962c4',
-    'diagnose_fhe_input_preflight': '3d435c757e169d1e946d81902462ea20ec93a0821ce21ccdaf7c2f48b2e2a908',
+    'diagnose_fhe_job_preflight': 'c896e056a4e1f958ae164811f450fda7f9afd341a2681b657fb62ab792a66f70',
+    'diagnose_fhe_input_preflight': 'ea1582b9f3d5c88232efc566e96d43dc92e18a10832102d6525af29468fa54d3',
     'native_stark_test_digest': 'e6ec9288e3475cafacb4b50bf4ffdd6119d16672449f62ea37669150158088b7',
     'mutate_native_stark_digest': 'c9eb54e4251c4130ea6c930d3ddfe31d013594b7a58a74787c41b83f2d698268',
     "checkpoint_soracloud_training_job_updates_authoritative_state":
@@ -28,49 +28,49 @@ PROTECTED_FUNCTION_SHA256 = {
     "deploy_uploaded_model_service":
         "71d348dedc8b2d537a51d470149bd32150d50468a18d05de61bf925a13144188",
     "load_soracloud_fhe_inputs_rejects_bounded_noise_public_key_digest_mismatch":
-        "16dad0e126951b8e2a2733c75802c8b0b29208b1d8f0017d3f0e88b985199e2a",
+        "615cfb578dc85bd898bf65ca907b89c36423a776977f6a22caae4a20da3eb4ed",
     "model_weight_lifecycle_updates_authoritative_registry_state":
         "3ba1b0fbba0b10fbff02539efe0085e4fa0d35257f27a2d451909421bb5d13d4",
     "mutate_soracloud_state_rejects_registered_bounded_noise_binding_only_fhe_input_admission_proof":
-        "0aaa3f85863cdc9ad6013251eba144ffffab1923d8e73818a1457aa7cba342f3",
+        "6a5853affd7bc8dbd2dfdc76bd01c987cbe1ca116c73fa3d81a81a30bf58221a",
     "mutate_soracloud_state_rejects_registered_binding_only_fhe_input_admission_proof":
-        "2be6e9831317d668ee36da57fd995cf2727ed95d06190b4bf971878169e3b3d3",
+        "1aa36219405259627840d75406bf8a60c6de8c562725c7dc0bb2af7f3868e656",
     "mutate_soracloud_state_rejects_malformed_fhe_payload_without_optional_proof":
-        "0220d563651d448d16042fb042a26938e654b90b5346601095614380c53fc38c",
+        "bff679396223e16702fef7d5ee651d859b1a359f3c1b3b6729e4b64f4a656a43",
     "register_soracloud_model_artifact_records_authoritative_state":
         "d1e73c76b9c3cf9fb9802d863c910a9c92073cd453f1ffc794284799f9ee8c24",
     "retry_soracloud_training_job_records_retry_pending_state":
         "512f9fd350de0a48b59e67d1c7992868dce3d00084d373de805c1225e682141a",
     "run_fhe_input_admission_rejection_cases":
-        "876ce1e27e115775d3f6ea2a2f8ad4307ba731a3b6ef3318390f770d547b61bc",
+        "2346ac5f40cafabcc4c8ee1af58d2e9fb78d56ba55341b2f07a272fb3eb3b1c3",
     "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_bounded_add_output":
-        "5288fca1ff5a2d0361eb6352441c0f91cad356d1ae9ecaa6c11dd980d8fa6efa",
+        "3a6105fad9be86b824a33d3986db367963c99d3d59c526767e3fca834500d865",
     "run_soracloud_fhe_job_rejects_binding_only_key_proofs_without_bounded_non_add_outputs":
-        "c953c127ec17d096a59f4a0d79c9e1002dee45918ea798c3ac5608ee8d182669",
+        "93af869f30829337edb6dddd35968b0562bfa01b0cc355e2b0214c588399ccaa",
     "run_soracloud_fhe_job_rejects_binding_only_public_key_proof_without_exact_output":
-        "4299687082094ea49c7c116f49b15150ec02866cc3a29152b4a16e0a00fc48db",
+        "2f7f592c531ced51571ed6c631c8345119cddbfef139cebec2f3e9b9bff2656e",
     "run_soracloud_fhe_job_rejects_all_zero_persisted_fhe_input":
-        "cb856df218418f803baab74b248dc3bac48fe7a2a888b64a069a61ce126e17df",
+        "0a7a500f816c38e7b02b7079783b77e300678ab945498df9198a1b187fb6b10d",
     "run_soracloud_fhe_job_rejects_bounded_noise_persisted_fhe_input":
-        "b0a197154c7627401ea267490f491399e24dbe90046b43c858cdf6e32d619b43",
+        "2f727badcf56a97035b70e26fdb14568e765ad41172d2531e8254bfa2383a38e",
     "run_soracloud_fhe_job_rejects_client_mutated_fhe_input_without_residual_metadata":
-        "f5ed07833997f76c84f475ffbcd7c57a4db3406964944e260bd4f95b82eea67e",
+        "c698c2845bd9d941047fdec0d750947cb132e828f6882c4c540452312486abc0",
     "run_soracloud_fhe_job_rejects_input_public_key_digest_mismatch":
-        "62ba9723cfb57a5474b6abe8c9d1d11a15e070baab7b79450e27ac64070e78d2",
+        "48e4e2da70ba033deadbb8468f05e5e81f3832182bf2386bbf47b18b812d12db",
     "run_soracloud_fhe_job_rejects_missing_policy_bound_public_key_proof":
-        "b7a908d6377193a2b1d0643dbbf28048d5205217d88d8389101edd3fae2842a9",
+        "f5416298a77ab76faac37f611e4e6c1d3977ed9122c255ba4db97c301a6bd426",
     "run_soracloud_fhe_job_rejects_oversized_persisted_fhe_input_envelope":
-        "31369117478f193d0e5e8d71a82fcc03f17f4c0676efad4d8f05ea99ebe041a4",
+        "7cbe757c794c6849ab4bc5e03a74dc7fee95190d49e770ce44a8f2828a7b921f",
     "run_soracloud_fhe_job_rejects_persisted_fhe_input_without_bound_mode":
-        "ed5d92bda94a56bccb50647e839ce2768fdd8604854e7fc98fa4c2f456252dc0",
+        "e528abb205f2f7b1ad89289cfc85f81effcf24fbc6163a40ef62b82334623d9d",
     "start_soracloud_training_job_records_authoritative_job_state":
         "352aefb253823874cf903232ca1849871b010ee9db4ad56a5d514ed21a679318",
 }
 
 PROTECTED_INITIAL_FUNCTION_SHA256 = {
-    'state_with_initial_soracloud_permission': '5fc77a55a18d1b9b5beb86f03105f1a5d44e6fe77880f23810a41f806c778963',
+    'state_with_initial_soracloud_permission': '6c71b4c5a5eb806d5c554217df414098f0713b47c890a8231faf283cdcead5d7',
     'initial_soracloud_header': '16fe1749ae84ccd93c527fcf764e560a6a4c2ba70470a70d232456a16d8c6852',
-    'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission': 'd78d626f69ece18ef60b03ede046394250bfef1c489bf3ef6957351f21b65a05',
+    'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission': '2456a57011b8eee5797894a87666f52c50ceaccf524ec270d24fb3a6d110d534',
 }
 
 FIXTURE_CORRIDORS = (
@@ -85,6 +85,7 @@ EXPECTED_TEST_INVENTORY = (
     (('#[test]',), 'checked_keypair_helper_is_deterministic_per_call_site'),
     (('#[test]',), 'soracloud_provenance_rejects_multisig_authority_without_panicking'),
     (('#[test]',), 'initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission'),
+    (('#[test]',), 'soracloud_component_fixture_owns_explicit_policy_before_permission_seeding'),
     (('#[test]',), 'soracloud_permission_allows_granted_authority'),
     (('#[test]',), 'soracloud_permission_rejects_ungranted_taira_testnet_authority'),
     (('#[test]',), 'soracloud_permission_rejects_ungranted_authority'),
@@ -168,7 +169,7 @@ EXPECTED_TEST_INVENTORY = (
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_wrong_circuit_verifier_key'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_zero_statement_hash'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_hash_only_entrypoint_stays_fail_closed_for_valid_shape'),
-    (('#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof'),
+    (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_emits_valid_native_air_proof'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_arithmetic_prover_binds_claims_while_production_qualification_is_unavailable'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_bounded_arithmetic_prover_binds_claims_while_production_qualification_is_unavailable'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_air_root_query_downgrade'),
@@ -180,12 +181,12 @@ EXPECTED_TEST_INVENTORY = (
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_audited_prover_rejects_wrong_verifier_key'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_unconverted_native_verifier_key'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_unbound_verifier_key'),
-    (('#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_prefix_trace_against_artifacts'),
+    (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_prefix_trace_against_artifacts'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_galois_key_set'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_galois_key_set_digest'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_proof_key_artifacts'),
-    (('#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_air_binding'),
-    (('#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_proof_helper_emits_native_air_proofs'),
+    (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_prover_rejects_stale_air_binding'),
+    (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_proof_helper_emits_native_air_proofs'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_proof_helper_rejects_unconverted_native_verifier_key'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_release_prover_rejects_role_spliced_artifacts'),
     (('#[cfg(feature = "zk-stark")]', '#[test]'), 'soracloud_fhe_full_bootstrap_execution_proof_accepts_bfv_native_zero_composition_air_active_verifier'),
@@ -260,6 +261,10 @@ EXPECTED_TEST_INVENTORY = (
     (('#[test]',), 'hf_revision_parser_rejects_mutable_and_noncanonical_references'),
     (('#[test]',), 'leave_hf_shared_lease_last_member_uses_configured_drain_grace'),
     (('#[test]',), 'hf_shared_lease_registration_does_not_create_runtime_service'),
+    (('#[test]',), 'soracloud_fee_destinations_keep_original_policy_across_local_and_sibling_changes'),
+    (('#[test]',), 'soracloud_fee_destinations_refuse_missing_original_despite_local_and_pending_policy'),
+    (('#[test]',), 'soracloud_uploaded_model_charge_uses_original_currency_and_sink'),
+    (('#[test]',), 'soracloud_shared_lease_genesis_charge_uses_authored_fee_sink'),
     (('#[test]',), 'renew_hf_shared_lease_active_window_queues_next_window'),
     (('#[test]',), 'active_inrou_resolver_rejects_dual_revision_rollout_and_keeps_retained_revision_inactive'),
     (('#[test]',), 'active_inrou_resolver_fails_closed_when_any_lease_volume_expires'),
@@ -576,13 +581,13 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
         initial_fixture = INITIAL_FIXTURE_SOURCE.read_text()
         for old, new in (
             ('production FHE upsert remains unavailable during metadata diagnostics', 'FHE upsert accepted'),
-            ('assert_invalid_parameter_contains(error, "soracloud_fhe_unavailable")', 'assert_invariant_contains(error, "soracloud_fhe_unavailable")'),
+            ('assert_invalid_parameter_contains(&(error), "soracloud_fhe_unavailable")', 'assert_invariant_contains(&(error), "soracloud_fhe_unavailable")'),
             ('words[0] ^= 1', 'words[0] ^= 0'),
             ('GoldilocksDigest384V1::new([word; 6])', 'GoldilocksDigest384V1::new([0; 6])'),
             ('worker_group_size: 4,', 'worker_group_size: 0,'),
         ):
             self.assertIn(old, source)
-            if old.startswith("assert_invalid_parameter_contains(error,"):
+            if old.startswith("assert_invalid_parameter_contains(&(error),"):
                 original = _function(source, "diagnose_fhe_input_preflight")
                 self.assertIn(old, original)
                 mutated = source.replace(original, original.replace(old, new, 1), 1)
@@ -648,7 +653,7 @@ class SoracloudFheJobFixtureSourceTest(unittest.TestCase):
         source = SOURCE.read_text()
         initial_fixture = INITIAL_FIXTURE_SOURCE.read_text()
         for name, old, new, occurrences in (
-            ("state_with_initial_soracloud_permission", "Arc::try_unwrap(prepared.state)", "Arc::clone(&prepared.state)", 1),
+            ("state_with_initial_soracloud_permission", "let state = prepared.state;", "let state = Arc::clone(&prepared.state);", 1),
             ("state_with_initial_soracloud_permission", "startup::apply_genesis(", "startup::discard_genesis(", 1),
             ("initial_soracloud_header", "state.view().latest_block_hash()", "None", 1),
             ("initial_soracloud_fixture_owns_original_genesis_and_preserves_exact_permission", "require_soracloud_permission(&ALICE_ID, &transaction)?;", "// permission assertion removed", 2),

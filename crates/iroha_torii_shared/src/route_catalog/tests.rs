@@ -781,6 +781,7 @@ mod tests {
             privacy_routes,
             vec![
                 &runtime_governance::PRIVACY_CAPABILITIES,
+                &runtime_governance::PRIVACY_IRONWOOD_POOL_CUT,
                 &runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_AUTHORIZE,
                 &runtime_governance::PRIVACY_BOOTLE_LANTERN_ISSUANCE_ISSUE,
             ]
@@ -796,6 +797,12 @@ mod tests {
         assert_eq!(
             runtime_governance::PRIVACY_CAPABILITIES.stable_route_id(),
             "privacy.capabilities"
+        );
+        assert!(
+            CATALOGED_ROUTES
+                .iter()
+                .all(|route| !route.path().starts_with("/v1/privacy/ironwood/blocks")),
+            "merchant discovery must not attribute public frame reads to an account"
         );
         for (route, stable_route_id, path) in [
             (

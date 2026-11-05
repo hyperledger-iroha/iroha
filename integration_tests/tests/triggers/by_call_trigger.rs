@@ -1,9 +1,10 @@
 //! Tests for executing triggers directly
-use crate::contract_fixture;
+#[path = "../support/contract_deployment.rs"]
+mod contract_deployment;
 use crate::triggers::get_asset_value;
 use eyre::{Result, WrapErr};
 use futures_util::StreamExt as _;
-use integration_tests::{sandbox, sync::spawn_blocking};
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::{
     crypto::KeyPair,
     data_model::{
@@ -16,8 +17,10 @@ use iroha::{
         prelude::*,
         query::{
             error::FindError,
-            trigger::{FindActiveTriggerIds, FindTriggers},
+            parameters::FetchSize,
+            trigger::{FindActiveTriggerIds, FindTriggerById, FindTriggers},
         },
+        smart_contract::{ContractAddress, ContractAlias, ContractArtifactId},
         transaction::Executable,
         transaction::error::TransactionRejectionReason,
     },
@@ -29,44 +32,298 @@ use iroha_model_base::metadata::Metadata;
 use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, load_sample_ivm};
 use mint_rose_trigger_data_model::MintRoseArgs;
+use std::{collections::BTreeSet, num::NonZeroU64};
 use tokio::time::{Duration, Instant, sleep, timeout};
 const TRIGGER_NAME: &str = "mint_rose";
-fn sample_contract_alias() -> ContractAlias {
-    ContractAlias::from_components("mint_rose_fixture", None, "universal")
-        .expect("canonical trigger fixture alias")
-}
 fn contract_entrypoint_metadata(entrypoint: &str) -> Metadata {
-    assert_eq!(entrypoint, "run", "sample has only the run callback");
-    contract_fixture::call_metadata(&sample_contract_alias())
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "contract_entrypoint"
+            .parse::<Name>()
+            .expect("static contract entrypoint metadata key is valid"),
+        Json::new(entrypoint.to_owned()),
+    );
+    metadata
 }
-fn sample_contract_builder() -> NetworkBuilder {
-    contract_fixture::deployment_permissions(&ALICE_ID, &[sample_contract_alias()])
-        .into_iter()
-        .fold(
-            NetworkBuilder::new(),
-            NetworkBuilder::with_genesis_instruction,
+// The genesis trigger may name its eventual alias before deployment, but no
+// callback executes until the exact artifact and live subject have been bound.
+fn mint_rose_fixture_builder(alias: &str) -> NetworkBuilder {
+    NetworkBuilder::new()
+        .with_genesis_instruction(Grant::account_permission(
+            iroha_executor_data_model::permission::smart_contract::CanManageSmartContractCode,
+            ALICE_ID.clone(),
+        ))
+        .with_genesis_instruction(Grant::account_permission(
+            contract_deployment::contract_alias_management_permission(alias),
+            ALICE_ID.clone(),
+        ))
+}
+
+fn mint_rose_trigger_metadata(bytecode: &IvmBytecode, alias: &ContractAlias) -> Result<Metadata> {
+    let verified = ivm::verify_contract_artifact(bytecode.as_ref())?;
+    let mut metadata = contract_entrypoint_metadata("run");
+    metadata.insert(
+        "contract_alias".parse::<Name>()?,
+        Json::new(alias.to_string()),
+    );
+    metadata.insert(
+        "contract_code_hash".parse::<Name>()?,
+        Json::new(hex::encode(verified.code_hash.as_ref())),
+    );
+    // The signed ExecuteTrigger event remains the only source of callback arguments.
+    Ok(metadata)
+}
+
+fn mint_rose_deployment_grants(address: &ContractAddress) -> Result<[InstructionBox; 2]> {
+    use iroha_executor_data_model::permission::{
+        asset::CanMintAssetWithDefinition, smart_contract::CanUseContractPermission,
+    };
+    Ok([
+        Grant::account_permission(
+            CanUseContractPermission {
+                contract: address.clone(),
+                permission: "Admin".parse()?,
+            },
+            ALICE_ID.clone(),
         )
+        .into(),
+        Grant::account_permission(
+            CanMintAssetWithDefinition {
+                asset_definition: AssetDefinitionId::derive_from_components(
+                    DomainId::try_new("wonderland", "universal")?,
+                    "rose".parse()?,
+                ),
+            },
+            address.subject_id(),
+        )
+        .into(),
+    ])
 }
-async fn deploy_sample_contract(client: &iroha::blocking::Client) -> Result<()> {
+
+fn require_mint_rose_binding(
+    binding: &iroha_torii::ContractAliasResolveResponseDto,
+    alias: &ContractAlias,
+    address: &ContractAddress,
+) -> Result<()> {
+    eyre::ensure!(
+        binding.contract_alias == alias.as_ref()
+            && binding.contract_address == address.as_ref()
+            && binding.contract_subject_account == address.subject_id().to_string()
+            && binding.dataspace == "universal"
+            && binding.source == "world_state"
+            && binding.contract_alias_binding.alias == alias.as_ref()
+            && binding.contract_alias_binding.status == "permanent"
+            && binding.contract_alias_binding.lease_expiry_ms.is_none()
+            && binding.contract_alias_binding.grace_until_ms.is_none(),
+        "mint callback alias did not resolve to its exact live contract and immutable subject"
+    );
+    Ok(())
+}
+
+async fn deploy_mint_rose_callback(
+    client: &iroha::blocking::Client,
+    bytecode: IvmBytecode,
+    alias: ContractAlias,
+) -> Result<()> {
     let client = client.clone();
-    spawn_blocking(move || {
-        let artifact = load_sample_ivm("mint_rose_trigger");
-        let permission = iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition {
-            asset_definition: AssetDefinitionId::derive_from_components(
-                DomainId::try_new("wonderland", "universal")?,
-                "rose".parse()?,
-            ),
-        }
-        .into();
-        contract_fixture::deploy(
+    run_on_dedicated_thread(move || -> Result<()> {
+        let verified = ivm::verify_contract_artifact(bytecode.as_ref())?;
+        let (address, code_hash, _, _) = contract_deployment::deploy_contract_locally_signed(
             &client,
-            artifact.as_ref(),
-            sample_contract_alias(),
-            &[permission],
-        )
-        .map(drop)
+            bytecode.as_ref(),
+            alias.clone(),
+        )?;
+        eyre::ensure!(
+            code_hash == hex::encode(verified.code_hash.as_ref()),
+            "deployment changed the trigger artifact hash"
+        );
+        client.submit_all(
+            mint_rose_deployment_grants(&address)?,
+            FeePaymentIntent::authority(Vec::new(), None),
+        )?;
+        let response = client.client().post_contract_alias_resolve(&alias)?;
+        eyre::ensure!(
+            response.status() == reqwest::StatusCode::OK,
+            "mint callback alias read failed with {}",
+            response.status()
+        );
+        eyre::ensure!(
+            response.body().len() <= 16 * 1024,
+            "mint callback alias response exceeds fixture bound"
+        );
+        let binding = norito::json::from_slice(response.body())?;
+        require_mint_rose_binding(&binding, &alias, &address)?;
+        let actual = client
+            .client()
+            .get_contract_code_bytes(&ContractArtifactId::for_address(
+                &address,
+                verified.code_hash,
+            )?)?;
+        eyre::ensure!(
+            actual.as_slice() == bytecode.as_ref(),
+            "live callback artifact differs from registered trigger bytes"
+        );
+        Ok(())
     })
     .await??;
+    Ok(())
+}
+
+#[test]
+fn mint_rose_metadata_keeps_event_arguments_and_exact_artifact_alias() -> Result<()> {
+    let bytecode = load_sample_ivm("mint_rose_trigger");
+    let alias = ContractAlias::from_components("argument_mint_rose", None, "universal")?;
+    let verified = ivm::verify_contract_artifact(bytecode.as_ref())?;
+    let metadata = mint_rose_trigger_metadata(&bytecode, &alias)?;
+    let mut expected = Metadata::default();
+    expected.insert(
+        "contract_entrypoint".parse::<Name>()?,
+        Json::new("run".to_owned()),
+    );
+    expected.insert(
+        "contract_alias".parse::<Name>()?,
+        Json::new(alias.to_string()),
+    );
+    expected.insert(
+        "contract_code_hash".parse::<Name>()?,
+        Json::new(hex::encode(verified.code_hash.as_ref())),
+    );
+    assert_eq!(metadata, expected);
+    assert!(metadata.get(&"contract_payload".parse::<Name>()?).is_none());
+    assert!(mint_rose_trigger_metadata(&IvmBytecode::from_compiled(vec![0]), &alias).is_err());
+    Ok(())
+}
+
+#[test]
+fn mint_rose_execute_arguments_encode_the_admitted_callback_quantity() -> Result<()> {
+    use ivm_abi::entrypoint::{
+        EntrypointArgumentRecordV1, EntrypointValueAtomV1, EntrypointValueKindV1,
+        EntrypointValueTypeNodeV1,
+    };
+
+    let artifact = load_sample_ivm("mint_rose_trigger");
+    let verified = ivm::verify_contract_artifact(artifact.as_ref())?;
+    let schema = verified
+        .contract_interface
+        .entrypoints
+        .iter()
+        .find(|entrypoint| entrypoint.name == "run")
+        .and_then(|entrypoint| entrypoint.argument_schema.as_ref())
+        .expect("the admitted mint callback declares its argument schema");
+    assert_eq!(schema.fields.len(), 1);
+    assert_eq!(schema.fields[0].name, "val");
+    assert!(matches!(
+        schema.fields[0].ty.nodes.as_slice(),
+        [EntrypointValueTypeNodeV1::Leaf(
+            EntrypointValueKindV1::Quantity
+        )]
+    ));
+
+    let trigger_id = TRIGGER_NAME.parse::<TriggerId>()?;
+    for val in [0, 1, 42, u32::MAX] {
+        let call = ExecuteTrigger::new(trigger_id.clone()).with_args(MintRoseArgs { val });
+        let encoded = ivm_abi::arguments::encode_argument_record_from_json(schema, &call.args)?;
+        let record: EntrypointArgumentRecordV1 = ivm_abi::codec::decode_canonical_norito(&encoded)?;
+        assert_eq!(
+            record.atoms,
+            vec![EntrypointValueAtomV1::Pointer(
+                ivm_abi::numeric_tlv::encode_quantity(&Quantity::from(val))?
+            )],
+        );
+    }
+    let numeric_call = ExecuteTrigger::new(trigger_id).with_args(norito::json!({"val": 42}));
+    assert!(matches!(
+        ivm_abi::arguments::encode_argument_record_from_json(schema, &numeric_call.args),
+        Err(ivm::VMError::DecodeError),
+    ));
+    Ok(())
+}
+
+#[test]
+fn mint_rose_grants_are_exact_invocation_and_subject_owned_definition() -> Result<()> {
+    use iroha_executor_data_model::permission::{
+        asset::CanMintAssetWithDefinition, smart_contract::CanUseContractPermission,
+    };
+    let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"mint-trigger-fixture",
+    )));
+    let address = ContractAddress::derive(
+        &network,
+        &ALICE_ID,
+        0,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )?;
+    let expected: [InstructionBox; 2] = [
+        Grant::account_permission(
+            CanUseContractPermission {
+                contract: address.clone(),
+                permission: "Admin".parse()?,
+            },
+            ALICE_ID.clone(),
+        )
+        .into(),
+        Grant::account_permission(
+            CanMintAssetWithDefinition {
+                asset_definition: "6pEP9RjNoZ7beWkT3pLfKoM1dyfi".parse()?,
+            },
+            address.subject_id(),
+        )
+        .into(),
+    ];
+    assert_eq!(mint_rose_deployment_grants(&address)?, expected);
+    let other = ContractAddress::derive(
+        &network,
+        &ALICE_ID,
+        1,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )?;
+    assert_ne!(mint_rose_deployment_grants(&other)?, expected);
+    let wrong_effect: InstructionBox = Grant::account_permission(
+        CanMintAssetWithDefinition {
+            asset_definition: "6pEP9RjNoZ7beWkT3pLfKoM1dyfi".parse()?,
+        },
+        ALICE_ID.clone(),
+    )
+    .into();
+    assert_ne!(expected[1], wrong_effect);
+    Ok(())
+}
+
+#[test]
+fn mint_rose_live_binding_rejects_identity_or_lease_substitution() -> Result<()> {
+    let network = NetworkId::from_genesis_hash(HashOf::from_untyped_unchecked(Hash::new(
+        b"mint-trigger-binding",
+    )));
+    let address = ContractAddress::derive(
+        &network,
+        &ALICE_ID,
+        0,
+        iroha_model_base::topology::DataSpaceId::UNIVERSAL,
+    )?;
+    let alias = ContractAlias::from_components("genesis_mint_rose", None, "universal")?;
+    let make = || -> Result<iroha_torii::ContractAliasResolveResponseDto> {
+        Ok(norito::json::from_value(norito::json!({
+            "contract_alias": (alias.to_string()), "contract_address": (address.to_string()),
+            "contract_subject_account": (address.subject_id().to_string()), "dataspace": "universal", "source": "world_state",
+            "contract_alias_binding": {"alias": (alias.to_string()), "bound_at_ms": 1, "status": "permanent"}
+        }))?)
+    };
+    require_mint_rose_binding(&make()?, &alias, &address)?;
+    for field in 0..9 {
+        let mut row = make()?;
+        match field {
+            0 => row.contract_alias = "other::universal".into(),
+            1 => row.contract_address = "other".into(),
+            2 => row.contract_subject_account = ALICE_ID.to_string(),
+            3 => row.dataspace = "other".into(),
+            4 => row.source = "cache".into(),
+            5 => row.contract_alias_binding.alias = "other::universal".into(),
+            6 => row.contract_alias_binding.status = "expired_pending_cleanup".into(),
+            7 => row.contract_alias_binding.lease_expiry_ms = Some(2),
+            _ => row.contract_alias_binding.grace_until_ms = Some(3),
+        }
+        assert!(require_mint_rose_binding(&row, &alias, &address).is_err());
+    }
     Ok(())
 }
 
@@ -95,13 +352,13 @@ async fn submit_instruction_and_wait(
     client: iroha::blocking::Client,
     instruction: impl Into<InstructionBox>,
     context: &str,
-) -> Result<()> {
+) -> Result<HashOf<SignedTransaction>> {
     let client = integration_tests::sync::rebind_blocking_client(&client, |client| {
         client.transaction_status_timeout = network.sync_timeout();
     });
     let instruction = instruction.into();
     let context = context.to_string();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client
             .submit(
                 instruction,
@@ -109,8 +366,29 @@ async fn submit_instruction_and_wait(
             )
             .wrap_err(context)
     })
-    .await??;
-    Ok(())
+    .await?
+}
+async fn quoted_transaction(
+    client: &iroha::blocking::Client,
+    instruction: InstructionBox,
+) -> Result<SignedTransaction> {
+    let account = client.account_client();
+    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+        [instruction],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        Metadata::default(),
+    ))?;
+    let quote = account
+        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+        .await?;
+    eyre::ensure!(
+        payload
+            .fee_payment
+            .has_same_payer_and_gas_bound(&quote.intent),
+        "trigger fixture quote changed payer or gas bound"
+    );
+    payload.fee_payment = quote.intent;
+    account.sign_transaction(payload).map_err(Into::into)
 }
 async fn wait_for_asset_value(
     client: &iroha::blocking::Client,
@@ -127,7 +405,7 @@ async fn wait_for_asset_value(
                 "timed out waiting for asset {asset_id} to equal {expected} after {context}; last_observed={last_observed}"
             ));
         }
-        match spawn_blocking({
+        match run_on_dedicated_thread({
             let client = client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -161,30 +439,121 @@ async fn wait_for_trigger(
                 "timed out waiting for trigger {trigger_id} after {context}; last_observed={last_observed}"
             ));
         }
-        match spawn_blocking({
-            let client = client.clone();
+        let found = run_on_dedicated_thread({
+            let client = client.with_request_deadline(deadline.into_std())?;
             let trigger_id = trigger_id.clone();
-            move || -> Result<Option<Trigger>> {
-                Ok(client
-                    .client()
-                    .query(FindTriggers::new())
-                    .execute_all()?
-                    .into_iter()
-                    .find(|trigger| trigger.id() == &trigger_id))
-            }
+            move || fixture_trigger(&client, &trigger_id)
         })
-        .await?
-        {
-            Ok(Some(trigger)) => return Ok(trigger),
-            Ok(None) => {
-                last_observed = "trigger not found".to_string();
-            }
-            Err(error) => {
-                last_observed = format!("query failed: {error}");
-            }
+        .await??;
+        eyre::ensure!(
+            Instant::now() < deadline,
+            "trigger read deadline elapsed after {context}"
+        );
+        if let Some(trigger) = found {
+            return Ok(trigger);
         }
+        last_observed = "trigger not found".to_string();
         sleep(Duration::from_millis(250)).await;
     }
+}
+fn fixture_trigger(client: &iroha::blocking::Client, id: &TriggerId) -> Result<Option<Trigger>> {
+    // These fixtures register at most two triggers. Request one complete small
+    // batch; a cursor/truncation cannot silently stand in for absence.
+    let rows = client
+        .client()
+        .query(FindTriggers::new())
+        .with_fetch_size(FetchSize {
+            fetch_size: NonZeroU64::new(2),
+        })
+        .execute()?;
+    eyre::ensure!(
+        rows.continue_cursor().is_none(),
+        "fixture trigger page is incomplete"
+    );
+    let rows = rows.take(3).collect::<std::result::Result<Vec<_>, _>>()?;
+    eyre::ensure!(rows.len() <= 2, "fixture trigger page exceeds two rows");
+    let ids = rows.iter().map(Trigger::id).collect::<BTreeSet<_>>();
+    eyre::ensure!(
+        ids.len() == rows.len(),
+        "fixture trigger page has duplicate IDs"
+    );
+    Ok(rows.into_iter().find(|trigger| trigger.id() == id))
+}
+fn trigger_with_registration_header(trigger: &Trigger, header: BlockHeader) -> Result<Trigger> {
+    let mut metadata = trigger.action().metadata().clone();
+    metadata.insert(
+        "__registered_block_height".parse::<Name>()?,
+        Json::from(header.height().get()),
+    );
+    metadata.insert(
+        "__registered_at_ms".parse::<Name>()?,
+        Json::from(u64::try_from(header.creation_time().as_millis())?),
+    );
+    Ok(Trigger::new(
+        trigger.id().clone(),
+        trigger.action().clone().with_metadata(metadata),
+    ))
+}
+fn require_identical_trigger(actual: &Trigger, expected: &Trigger) -> Result<()> {
+    // Trigger's ordinary equality intentionally compares IDs only. This oracle
+    // covers the executable, filter, authority, repeats and every metadata byte.
+    eyre::ensure!(
+        norito::codec::Encode::encode(actual) == norito::codec::Encode::encode(expected),
+        "stored trigger action differs from its exact registered action"
+    );
+    Ok(())
+}
+#[test]
+fn registered_trigger_oracle_covers_action_and_engine_metadata() -> Result<()> {
+    let id: TriggerId = "identical_contract".parse()?;
+    let trigger = Trigger::new(
+        id.clone(),
+        Action::new(
+            vec![Log::new(Level::INFO, "original".to_owned())],
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            ExecuteTriggerEventFilter::new()
+                .for_trigger(id.clone())
+                .under_authority(ALICE_ID.clone()),
+        )?
+        .with_metadata(contract_entrypoint_metadata("run")),
+    );
+    let header = BlockHeader::new(NonZeroU64::new(3).unwrap(), None, None, 5_000, 0);
+    let expected = trigger_with_registration_header(&trigger, header)?;
+    assert_eq!(
+        expected
+            .action()
+            .metadata()
+            .get(&"__registered_block_height".parse::<Name>()?),
+        Some(&Json::from(3u64))
+    );
+    assert_eq!(
+        expected
+            .action()
+            .metadata()
+            .get(&"__registered_at_ms".parse::<Name>()?),
+        Some(&Json::from(5_000u64))
+    );
+    require_identical_trigger(&expected, &expected)?;
+    let wrong_id = Trigger::new("other_contract".parse()?, expected.action().clone());
+    assert_ne!(wrong_id.id(), expected.id());
+    assert!(require_identical_trigger(&wrong_id, &expected).is_err());
+    // ID equality alone accepts both of these corrupted action oracles.
+    assert_eq!(trigger, expected);
+    assert!(require_identical_trigger(&trigger, &expected).is_err());
+    let changed = Trigger::new(
+        id,
+        Action::new(
+            vec![Log::new(Level::INFO, "substituted".to_owned())],
+            Repeats::Indefinitely,
+            ALICE_ID.clone(),
+            trigger.action().filter().clone(),
+        )?
+        .with_metadata(expected.action().metadata().clone()),
+    );
+    assert_eq!(changed, expected);
+    assert!(require_identical_trigger(&changed, &expected).is_err());
+    Ok(())
 }
 fn is_trigger_register_collision(err: &eyre::Report, trigger_id: &TriggerId) -> bool {
     err.chain().any(|cause| {
@@ -229,13 +598,47 @@ fn is_permission_grant_repetition(
         false
     })
 }
-fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
-    err.chain().any(|cause| {
-        let msg = cause.to_string();
-        msg.contains("tx confirmation timed out")
-            || msg.contains("haven't got tx confirmation within")
-            || msg.contains("transaction queued for too long")
-    })
+fn is_missing_domain_rejection(reason: &TransactionRejectionReason, expected: &DomainId) -> bool {
+    matches!(reason,
+        TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+            InstructionExecutionError::Find(FindError::Domain(id)),
+        )) if id == expected)
+}
+fn is_unknown_trigger_rejection(reason: &TransactionRejectionReason, expected: &TriggerId) -> bool {
+    // Native authority validation precedes execution and rejects a pruned trigger
+    // before the instruction executor could perform its own entity lookup.
+    matches!(reason,
+        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(message))
+            if message == &format!("permission references unknown trigger `{expected}`"))
+}
+#[test]
+fn trigger_rejections_require_exact_typed_cause_and_identity() -> Result<()> {
+    let missing_domain = DomainId::try_new("dummy", "universal")?;
+    let other_domain = DomainId::try_new("other", "universal")?;
+    let domain_error = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(
+        InstructionExecutionError::Find(FindError::Domain(missing_domain.clone())),
+    ));
+    assert!(is_missing_domain_rejection(&domain_error, &missing_domain));
+    assert!(!is_missing_domain_rejection(&domain_error, &other_domain));
+    let trigger_id: TriggerId = "self_modifying_trigger".parse()?;
+    let trigger_error = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        format!("permission references unknown trigger `{trigger_id}`"),
+    ));
+    assert!(is_unknown_trigger_rejection(&trigger_error, &trigger_id));
+    assert!(!is_unknown_trigger_rejection(
+        &trigger_error,
+        &"other".parse()?
+    ));
+    assert!(!is_missing_domain_rejection(
+        &trigger_error,
+        &missing_domain
+    ));
+    assert!(!is_unknown_trigger_rejection(&domain_error, &trigger_id));
+    let wrong_reason = TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+        format!("authority cannot execute trigger `{trigger_id}`"),
+    ));
+    assert!(!is_unknown_trigger_rejection(&wrong_reason, &trigger_id));
+    Ok(())
 }
 #[test]
 fn trigger_register_collision_is_detected() {
@@ -276,7 +679,7 @@ async fn call_execute_trigger() -> Result<()> {
         );
         let account_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_definition_id, account_id);
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -301,7 +704,7 @@ async fn call_execute_trigger() -> Result<()> {
             stringify!(call_execute_trigger),
         )
         .await?;
-        let new_value = spawn_blocking({
+        let new_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -394,7 +797,8 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             let account_id = ALICE_ID.clone();
             let asset_id = AssetId::new(asset_definition_id, account_id.clone());
             let bad_trigger_id = "bad_trigger".parse::<TriggerId>()?;
-            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal")?);
+            let missing_domain = DomainId::try_new("dummy", "universal")?;
+            let fail_isi = Unregister::domain(missing_domain.clone());
             let register_bad_trigger = Register::trigger(Trigger::new(
                 bad_trigger_id.clone(),
                 Action::new(
@@ -432,13 +836,13 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                 stringify!(trigger_failure_should_not_cancel_other_triggers_execution),
             )
             .await?;
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
             })
             .await??;
-            let err = spawn_blocking({
+            let err = run_on_dedicated_thread({
                 let client =
                     integration_tests::sync::rebind_blocking_client(&test_client, |client| {
                         client.transaction_status_timeout = network
@@ -462,17 +866,12 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             .expect_err("should immediately result in error");
             let has_domain_error = err
                 .chain()
-                .find_map(|cause| cause.downcast_ref::<FindError>())
-                .is_some_and(|err| matches!(err, FindError::Domain(_)));
-            if !has_domain_error {
-                if is_tx_confirmation_timeout(&err) {
-                    eprintln!(
-                        "warning: timed out waiting for failing trigger confirmation; proceeding"
-                    );
-                } else {
-                    return Err(err);
-                }
-            }
+                .find_map(|cause| cause.downcast_ref::<TransactionRejectionReason>())
+                .is_some_and(|reason| is_missing_domain_rejection(reason, &missing_domain));
+            eyre::ensure!(
+                has_domain_error,
+                "unexpected failing-trigger result: {err:?}"
+            );
             // Submit without tx-status confirmation to avoid flakiness after a failed by-call
             // trigger; wait for the next non-empty block instead.
             let baseline_non_empty = network
@@ -483,36 +882,12 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
                 .max()
                 .unwrap_or(0);
             let target_non_empty = baseline_non_empty.saturating_add(1);
-            let log_tx = {
-                let account = test_client.account_client();
-                let mut payload =
-                    account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                        [InstructionBox::from(Log::new(
-                            Level::INFO,
-                            "trigger probe".to_string(),
-                        ))],
-                        iroha_data_model::transaction::FeePaymentIntent::authority(
-                            Vec::new(),
-                            None,
-                        ),
-                        Metadata::default(),
-                    ))?;
-                let quote = account
-                    .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
-                        payload: &payload,
-                    })
-                    .await?;
-                eyre::ensure!(
-                    payload
-                        .fee_payment
-                        .has_same_payer_and_gas_bound(&quote.intent),
-                    "fee quote changed the trigger fixture transaction payer or gas bound"
-                );
-                payload.fee_payment = quote.intent;
-                account.sign_transaction(payload)
-            }
-            .expect("build integration-test transaction");
-            spawn_blocking({
+            let log_tx = quoted_transaction(
+                &test_client,
+                Log::new(Level::INFO, "trigger probe".to_string()).into(),
+            )
+            .await?;
+            run_on_dedicated_thread({
                 let client = test_client.clone();
                 move || client.submit_transaction(&log_tx)
             })
@@ -520,7 +895,7 @@ async fn trigger_failure_should_not_cancel_other_triggers_execution() -> Result<
             network
                 .ensure_blocks_with(|height| height.non_empty >= target_non_empty)
                 .await?;
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -577,7 +952,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             )
             .await?;
             // Saving current asset value
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -594,7 +969,7 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             )
             .await?;
             // Executing trigger second time
-            let error = spawn_blocking({
+            let error = run_on_dedicated_thread({
                 let client = test_client.clone();
                 move || {
                     client.submit(
@@ -608,21 +983,13 @@ async fn trigger_should_not_be_executed_with_zero_repeats_count() -> Result<()> 
             })
             .await?
             .expect_err("Error expected");
-            // The depleted trigger was removed, so initial capability validation
-            // rejects its exact ID before the ExecuteTrigger instruction runs.
-            let downcasted_error = error
+            let rejected_as_unknown = error
                 .chain()
-                .find_map(|cause| cause.downcast_ref::<ValidationFail>());
-            assert!(
-                matches!(
-                    downcasted_error,
-                    Some(ValidationFail::NotPermitted(message))
-                        if message == &format!("permission references unknown trigger `{trigger_id}`")
-                ),
-                "Unexpected error received: {error:?}",
-            );
+                .find_map(|cause| cause.downcast_ref::<TransactionRejectionReason>())
+                .is_some_and(|reason| is_unknown_trigger_rejection(reason, &trigger_id));
+            assert!(rejected_as_unknown, "Unexpected error received: {error:?}",);
             // Checking results
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -700,7 +1067,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             )
             .await?;
             // Saving current asset value
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -725,7 +1092,7 @@ async fn trigger_should_be_able_to_modify_its_own_repeats_count() -> Result<()> 
             )
             .await?;
             // Checking results
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -792,36 +1159,37 @@ async fn only_account_with_permission_can_register_trigger() -> Result<()> {
                 stringify!(only_account_with_permission_can_register_trigger),
             )
             .await?;
-            spawn_blocking({
+            run_on_dedicated_thread({
                 let client = test_client.clone();
                 let rabbit_account_id = rabbit_account_id.clone();
                 move || -> Result<()> {
-                    client
+                    let account = client
                         .client()
                         .query_single(FindAccountById::new(rabbit_account_id.clone()))
                         .expect("Account not found");
+                    assert_eq!(account.id(), &rabbit_account_id);
                     Ok(())
                 }
             })
             .await??;
             println!("Rabbit is found.");
-            // Fee admission must succeed before this scenario can exercise its
-            // missing trigger-registration permission and subsequent owner grant.
-            let native_fee_asset =
-                iroha_genesis::signed_genesis_root_fee_policy(&network.genesis().0)?.fee_asset_id;
+            // Fund the registered signer so the following rejection exercises
+            // trigger authority rather than transaction fee admission.
+            let fee_definition: AssetDefinitionId =
+                iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
             submit_instruction_and_wait(
                 &network,
                 test_client.clone(),
                 Transfer::asset_quantity(
-                    AssetId::new(native_fee_asset, alice_account_id.clone()),
-                    10_000_u32,
+                    AssetId::new(fee_definition, ALICE_ID.clone()),
+                    100u32,
                     rabbit_account_id.clone(),
                 ),
                 stringify!(only_account_with_permission_can_register_trigger),
             )
             .await?;
             // Trying register the trigger without permissions
-            let err = spawn_blocking({
+            let err = run_on_dedicated_thread({
                 let client = rabbit_client.clone();
                 let trigger = trigger.clone();
                 move || {
@@ -913,20 +1281,13 @@ async fn unregister_trigger() -> Result<()> {
         // Finding trigger
         let deadline = Instant::now() + Duration::from_secs(20);
         let found_trigger = loop {
-            let found_trigger = spawn_blocking({
-                let client = test_client.clone();
+            let found_trigger = run_on_dedicated_thread({
+                let client = test_client.with_request_deadline(deadline.into_std())?;
                 let trigger_id = trigger_id.clone();
-                move || {
-                    client
-                        .client()
-                        .query(FindTriggers::new())
-                        .execute_all()
-                        .unwrap()
-                        .into_iter()
-                        .find(|trigger| trigger.id() == &trigger_id)
-                }
+                move || fixture_trigger(&client, &trigger_id)
             })
-            .await?;
+            .await??;
+            eyre::ensure!(Instant::now() < deadline, "trigger read deadline elapsed");
             if let Some(found_trigger) = found_trigger {
                 break found_trigger;
             }
@@ -960,20 +1321,16 @@ async fn unregister_trigger() -> Result<()> {
         // Checking result
         let deadline = Instant::now() + Duration::from_secs(20);
         loop {
-            let still_present = spawn_blocking({
-                let client = test_client.clone();
+            let still_present = run_on_dedicated_thread({
+                let client = test_client.with_request_deadline(deadline.into_std())?;
                 let trigger_id = trigger_id.clone();
-                move || {
-                    client
-                        .client()
-                        .query(FindTriggers::new())
-                        .execute_all()
-                        .unwrap()
-                        .into_iter()
-                        .any(|trigger| trigger.id() == &trigger_id)
-                }
+                move || fixture_trigger(&client, &trigger_id).map(|trigger| trigger.is_some())
             })
-            .await?;
+            .await??;
+            eyre::ensure!(
+                Instant::now() < deadline,
+                "trigger removal read deadline elapsed"
+            );
             if !still_present {
                 break;
             }
@@ -989,12 +1346,14 @@ async fn unregister_trigger() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn trigger_in_genesis() -> Result<()> {
     let bytecode = load_sample_ivm("mint_rose_trigger");
+    let alias = ContractAlias::from_components("genesis_mint_rose", None, "universal")?;
+    let metadata = mint_rose_trigger_metadata(&bytecode, &alias)?;
     let account_id = ALICE_ID.clone();
     let trigger_id = "genesis_trigger".parse::<TriggerId>()?;
     let trigger = Trigger::new(
         trigger_id.clone(),
         Action::new(
-            bytecode,
+            bytecode.clone(),
             Repeats::Indefinitely,
             account_id.clone(),
             ExecuteTriggerEventFilter::new()
@@ -1002,10 +1361,11 @@ async fn trigger_in_genesis() -> Result<()> {
                 .under_authority(account_id.clone()),
         )
         .expect("trigger action fixture satisfies validation invariants")
-        .with_metadata(contract_entrypoint_metadata("run")),
+        .with_metadata(metadata),
     );
     let Some(network) = sandbox::start_network_async_or_skip(
-        sample_contract_builder().with_genesis_instruction(Register::trigger(trigger)),
+        mint_rose_fixture_builder("genesis_mint_rose")
+            .with_genesis_instruction(Register::trigger(trigger)),
         stringify!(trigger_in_genesis),
     )
     .await?
@@ -1014,14 +1374,14 @@ async fn trigger_in_genesis() -> Result<()> {
     };
     network.ensure_blocks_with(|h| h.total >= 1).await?;
     let test_client = network.client();
-    deploy_sample_contract(&test_client).await?;
     run_or_skip(stringify!(trigger_in_genesis), || async {
+        deploy_mint_rose_callback(&test_client, bytecode, alias).await?;
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
         let asset_id = AssetId::new(asset_definition_id, account_id);
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -1044,7 +1404,7 @@ async fn trigger_in_genesis() -> Result<()> {
         )
         .await?;
         // Checking result
-        let new_value = spawn_blocking({
+        let new_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -1120,7 +1480,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             )
             .await?;
             // Saving current asset value
-            let prev_asset_value = spawn_blocking({
+            let prev_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -1130,7 +1490,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             let execute_trigger_unregister = ExecuteTrigger::new(trigger_id_unregister);
             let execute_trigger_should_be_unregistered =
                 ExecuteTrigger::new(trigger_id_to_be_unregistered.clone());
-            let err = spawn_blocking({
+            let err = run_on_dedicated_thread({
                 let client = test_client.clone();
                 move || {
                     client.submit_all(
@@ -1169,7 +1529,7 @@ async fn trigger_should_be_able_to_modify_other_trigger() -> Result<()> {
             }
             // Checking results
             // First trigger should cancel second one, so value should stay the same
-            let new_asset_value = spawn_blocking({
+            let new_asset_value = run_on_dedicated_thread({
                 let client = test_client.clone();
                 let asset_id = asset_id.clone();
                 move || get_asset_value(&client, &asset_id)
@@ -1247,7 +1607,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
             )
             .await
             {
-                Ok(()) => break trigger_id,
+                Ok(_) => break trigger_id,
                 Err(err) => {
                     if is_trigger_register_collision(&err, &trigger_id) {
                         if attempt >= max_attempts {
@@ -1278,7 +1638,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
         .await?;
         timeout(network.sync_timeout(), async {
             loop {
-                let still_active = spawn_blocking({
+                let still_active = run_on_dedicated_thread({
                     let client = test_client.clone();
                     let trigger_id = trigger_id.clone();
                     move || -> Result<bool> {
@@ -1304,27 +1664,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
         // by observing the pipeline event instead of waiting on the confirmation stream.
         let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
         let instruction = Instruction::into_instruction_box(Box::new(execute_trigger));
-        let transaction = {
-            let account = test_client.account_client();
-            let mut payload =
-                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    [instruction],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    Metadata::default(),
-                ))?;
-            let quote = account
-                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-                .await?;
-            eyre::ensure!(
-                payload
-                    .fee_payment
-                    .has_same_payer_and_gas_bound(&quote.intent),
-                "fee quote changed the trigger fixture transaction payer or gas bound"
-            );
-            payload.fee_payment = quote.intent;
-            account.sign_transaction(payload)
-        }
-        .expect("build integration-test transaction");
+        let transaction = quoted_transaction(&test_client, instruction).await?;
         let hash = transaction.hash();
         let mut events = timeout(
             network.sync_timeout(),
@@ -1335,7 +1675,7 @@ async fn trigger_burn_repetitions() -> Result<()> {
         )
         .await
         .wrap_err("timed out opening pipeline event stream")??;
-        spawn_blocking({
+        run_on_dedicated_thread({
             let client = test_client.clone();
             let transaction = transaction.clone();
             move || client.submit_transaction(&transaction)
@@ -1351,22 +1691,13 @@ async fn trigger_burn_repetitions() -> Result<()> {
                 };
                 match event.status() {
                     TransactionStatus::Queued => {}
-                    TransactionStatus::Rejected(reason) => match reason.as_ref() {
-                        TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
-                            message,
-                        )) => {
-                            // Burning the last repetition pruned the trigger. Its
-                            // absence is rejected by initial capability validation.
-                            assert_eq!(
-                                message,
-                                &format!("permission references unknown trigger `{trigger_id}`")
-                            );
-                            break;
-                        }
-                        other => {
-                            return Err(eyre::eyre!("unexpected rejection reason: {other:?}"));
-                        }
-                    },
+                    TransactionStatus::Rejected(reason) => {
+                        eyre::ensure!(
+                            is_unknown_trigger_rejection(reason, &trigger_id),
+                            "unexpected rejection reason: {reason:?}"
+                        );
+                        break;
+                    }
                     status => {
                         return Err(eyre::eyre!("unexpected transaction status: {status:?}"));
                     }
@@ -1385,31 +1716,34 @@ async fn trigger_burn_repetitions() -> Result<()> {
 async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss()
 -> Result<()> {
     let Some(network) =
-        sandbox::start_network_async_or_skip(sample_contract_builder(), stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
+        sandbox::start_network_async_or_skip(mint_rose_fixture_builder("shared_mint_rose"), stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss))
             .await?
     else {
         return Ok(());
     };
     let test_client = network.client();
-    deploy_sample_contract(&test_client).await?;
     run_or_skip(
         stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
         || async {
             let account_id = ALICE_ID.clone();
+            let artifact = load_sample_ivm("mint_rose_trigger");
+            let alias = ContractAlias::from_components("shared_mint_rose", None, "universal")?;
+            let metadata = mint_rose_trigger_metadata(&artifact, &alias)?;
+            deploy_mint_rose_callback(&test_client, artifact.clone(), alias).await?;
             let first_trigger_id = "mint_rose_1".parse::<TriggerId>()?;
             let second_trigger_id = "mint_rose_2".parse::<TriggerId>()?;
             let build_trigger = |trigger_id: TriggerId| {
                 Trigger::new(
                     trigger_id.clone(),
                     Action::new(
-                        load_sample_ivm("mint_rose_trigger"),
+                        artifact.clone(),
                         Repeats::Indefinitely,
                         account_id.clone(),
                         ExecuteTriggerEventFilter::new()
                             .for_trigger(trigger_id)
                             .under_authority(account_id.clone()),
                     ).expect("trigger action fixture satisfies validation invariants")
-                    .with_metadata(contract_entrypoint_metadata("run")),
+                    .with_metadata(metadata.clone()),
                 )
             };
             let first_trigger = build_trigger(first_trigger_id.clone());
@@ -1422,7 +1756,7 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
                 stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
             )
             .await?;
-            submit_instruction_and_wait(
+            let second_registered = submit_instruction_and_wait(
                 &network,
                 test_client.clone(),
                 Register::trigger(second_trigger_for_register),
@@ -1436,21 +1770,24 @@ async fn unregistering_one_of_two_triggers_with_identical_contract_should_not_ca
                 stringify!(unregistering_one_of_two_triggers_with_identical_contract_should_not_cause_original_contract_loss),
             )
             .await?;
-            let got_second_trigger = spawn_blocking({
-                let client = test_client.clone();
+            let (got_second_trigger, expected_second_trigger) = run_on_dedicated_thread({
+                let client = test_client.with_request_deadline(std::time::Instant::now() + network.sync_timeout())?;
                 let second_trigger_id = second_trigger_id.clone();
-                move || {
-                    client
-                        .client().query(FindTriggers::new())
-                        .execute_all()
-                        .unwrap()
-                        .into_iter()
-                        .find(|trigger| trigger.id() == &second_trigger_id)
-                        .expect("trigger not found")
+                move || -> Result<_> {
+                    let registered = client.client().get_explorer_transaction_proof(
+                        HashOf::<TransactionEntrypoint>::from_untyped_unchecked(second_registered.into()),
+                    )?;
+                    eyre::ensure!(registered.transaction.result().is_ok(), "second trigger registration was rejected");
+                    let expected = trigger_with_registration_header(&second_trigger, registered.block_header)?;
+                    // This is one known retained trigger, so use the native bounded
+                    // exact-ID read; the full action-byte oracle below is unchanged.
+                    let actual = client.client().query_single(FindTriggerById::new(second_trigger_id.clone()))?;
+                    eyre::ensure!(actual.id() == &second_trigger_id, "trigger point read substituted its requested identity");
+                    Ok((actual, expected))
                 }
             })
-            .await?;
-            assert_eq!(got_second_trigger, second_trigger);
+            .await??;
+            require_identical_trigger(&got_second_trigger, &expected_second_trigger)?;
             Ok(())
         },
     )
@@ -1477,7 +1814,7 @@ fn build_register_trigger_isi(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn call_execute_trigger_with_args() -> Result<()> {
     let Some(network) = sandbox::start_network_async_or_skip(
-        sample_contract_builder(),
+        mint_rose_fixture_builder("argument_mint_rose"),
         stringify!(call_execute_trigger_with_args),
     )
     .await?
@@ -1486,15 +1823,18 @@ async fn call_execute_trigger_with_args() -> Result<()> {
     };
     let test_client = network.client();
     network.ensure_blocks_with(|h| h.total >= 1).await?;
-    deploy_sample_contract(&test_client).await?;
     run_or_skip(stringify!(call_execute_trigger_with_args), || async {
+        let bytecode = load_sample_ivm("mint_rose_trigger");
+        let alias = ContractAlias::from_components("argument_mint_rose", None, "universal")?;
+        let metadata = mint_rose_trigger_metadata(&bytecode, &alias)?;
+        deploy_mint_rose_callback(&test_client, bytecode.clone(), alias).await?;
         let asset_definition_id = AssetDefinitionId::derive_from_components(
             DomainId::try_new("wonderland", "universal")?,
             "rose".parse()?,
         );
         let account_id = ALICE_ID.clone();
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
-        let prev_value = spawn_blocking({
+        let prev_value = run_on_dedicated_thread({
             let client = test_client.clone();
             let asset_id = asset_id.clone();
             move || get_asset_value(&client, &asset_id)
@@ -1504,7 +1844,7 @@ async fn call_execute_trigger_with_args() -> Result<()> {
         let trigger = Trigger::new(
             trigger_id.clone(),
             Action::new(
-                load_sample_ivm("mint_rose_trigger"),
+                bytecode,
                 Repeats::Indefinitely,
                 account_id.clone(),
                 ExecuteTriggerEventFilter::new()
@@ -1512,7 +1852,7 @@ async fn call_execute_trigger_with_args() -> Result<()> {
                     .under_authority(account_id.clone()),
             )
             .expect("trigger action fixture satisfies validation invariants")
-            .with_metadata(contract_entrypoint_metadata("run")),
+            .with_metadata(metadata),
         );
         submit_instruction_and_wait(
             &network,

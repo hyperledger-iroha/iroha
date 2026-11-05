@@ -33068,15 +33068,7 @@ fn contract_event_projections_for_height_range(
             let count = rows.len().checked_add(emissions.len()).ok_or_else(history_capacity_error)?;
             check_history_retention(count, maximum)?;
             let execution_hash = output.execution_call_hash(block.hash(), &*block).map_err(conversion_error)?;
-            let fee_payment = match output {
-                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(network) => {
-                    let entrypoint = block.network_entrypoint_at(network.input_index as usize)
-                        .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
-                    let transaction = BorrowedNetworkTransaction { entrypoint, entrypoint_hash: entrypoint.hash(), result: &network.result };
-                    tx_fee_projection(&transaction)
-                }
-                _ => None,
-            };
+            let fee_payment = output_fee_projection(&block, output)?;
             for (emission_index, emission) in emissions.iter().enumerate() {
                 rows.push(contract_event_projection(
 (height as u64, block.hash(), timestamp_ms),
@@ -33792,6 +33784,24 @@ fn contract_activity_projection_from_tx(
         fee_payment: tx_fee_projection(tx),
     })
 }
+/// Resolve the signed source's fee intent for either Network row representation.
+pub(crate) fn output_fee_projection(
+    block: &iroha_data_model::block::SignedBlock,
+    output: &iroha_data_model::block::execution_output::ExecutionOutputV1,
+) -> Result<Option<iroha_data_model::transaction::FeePaymentIntent>, Error> {
+    let Some(network) = output.network() else {
+        return Ok(None);
+    };
+    let entrypoint = block
+        .network_entrypoint_at(network.input_index as usize)
+        .ok_or_else(|| conversion_error("emission output lost its Network input".into()))?;
+    Ok(tx_fee_projection(&BorrowedNetworkTransaction {
+        entrypoint,
+        entrypoint_hash: entrypoint.hash(),
+        result: &network.result,
+    }))
+}
+
 fn tx_fee_projection(
     tx: &impl HistoryTransaction,
 ) -> Option<iroha_data_model::transaction::FeePaymentIntent> {
@@ -60042,13 +60052,16 @@ pub mod block {
     use super::*;
     use crate::{block, stream::WebSocketNorito};
     /// Type for any error during blocks streaming
-    #[derive(Debug, displaydoc::Display, thiserror::Error)]
+    #[derive(Debug, thiserror::Error)]
     enum Error {
         /// Block consumption resulted in an error: {_0}
+        #[error("Block consumption resulted in an error: {0}")]
         Consumer(#[source] block::Error),
         /// Block stream authorization was revoked
+        #[error("Block stream authorization was revoked")]
         AuthorizationRevoked,
         /// Connection is closed
+        #[error("Connection is closed")]
         Close,
     }
     impl From<block::Error> for Error {
@@ -60230,6 +60243,37 @@ pub mod block {
         use super::*;
 
         #[test]
+        fn block_error_display_preserves_variants_sources_and_close_conversion() {
+            use crate::error_display_tests::{assert_display, assert_source};
+            let cases = [
+                (
+                    Error::Consumer(block::Error::InvalidHeight("height μ\n".into())),
+                    "Block consumption resulted in an error: Invalid block subscription height: height μ\n",
+                ),
+                (
+                    Error::AuthorizationRevoked,
+                    "Block stream authorization was revoked",
+                ),
+                (Error::Close, "Connection is closed"),
+            ];
+            for (error, expected) in cases {
+                assert_display(&error, expected);
+                let source: Option<&(dyn std::error::Error + 'static)> = match &error {
+                    Error::Consumer(source) => Some(source),
+                    Error::AuthorizationRevoked | Error::Close => None,
+                };
+                assert_source(&error, source);
+            }
+            let closed: Error = block::Error::Stream(crate::stream::Error::Closed).into();
+            assert!(matches!(closed, Error::Close));
+            let timeout: Error = block::Error::Stream(crate::stream::Error::ReadTimeout).into();
+            assert!(matches!(
+                timeout,
+                Error::Consumer(block::Error::Stream(crate::stream::Error::ReadTimeout))
+            ));
+        }
+
+        #[test]
         fn original_block_history_refusal_closes_retryably_without_erasing_owner() {
             let pool = iroha_core::state::AllocationBudget::new(8);
             let _held = pool.try_reserve_bytes(8).unwrap();
@@ -60313,19 +60357,24 @@ pub mod event {
     use super::*;
     use crate::{event, stream::WebSocketNorito};
     /// Type for any error during events streaming
-    #[derive(Debug, displaydoc::Display, thiserror::Error)]
+    #[derive(Debug, thiserror::Error)]
     enum Error {
         /// Event consumption resulted in an error: {_0}
+        #[error("Event consumption resulted in an error: {0}")]
         Consumer(#[source] event::Error),
         /// Event reception error
+        #[error("Event reception error")]
         Event(#[from] tokio::sync::broadcast::error::RecvError),
         /// Canonical event history could not be read; capacity refusal remains retryable.
+        #[error("Canonical event history could not be read; capacity refusal remains retryable.")]
         History(
             #[source] iroha_core::execution_attempt::ExecutionAttemptError<iroha_core::kura::Error>,
         ),
         /// Event stream authorization was revoked
+        #[error("Event stream authorization was revoked")]
         AuthorizationRevoked,
         /// Connection is closed
+        #[error("Connection is closed")]
         Close,
     }
     impl From<event::Error> for Error {
@@ -60542,6 +60591,56 @@ pub mod event {
     #[cfg(test)]
     mod tests {
         use super::*;
+
+        #[test]
+        fn event_error_display_preserves_variants_sources_and_conversions() {
+            use crate::error_display_tests::{assert_display, assert_source};
+            use tokio::sync::broadcast::error::RecvError;
+            let cases = [
+                (
+                    Error::Consumer(event::Error::InvalidSubscription("filter μ\n".into())),
+                    "Event consumption resulted in an error: Invalid event subscription: filter μ\n",
+                ),
+                (
+                    Error::Event(RecvError::Lagged(u64::MAX)),
+                    "Event reception error",
+                ),
+                (
+                    Error::History(
+                        iroha_core::execution_attempt::ExecutionAttemptError::Deferred(
+                            ivm::error::ExecutionDeferral::LocalInvariantViolation.into(),
+                        ),
+                    ),
+                    "Canonical event history could not be read; capacity refusal remains retryable.",
+                ),
+                (
+                    Error::AuthorizationRevoked,
+                    "Event stream authorization was revoked",
+                ),
+                (Error::Close, "Connection is closed"),
+            ];
+            for (error, expected) in cases {
+                assert_display(&error, expected);
+                let source: Option<&(dyn std::error::Error + 'static)> = match &error {
+                    Error::Consumer(source) => Some(source),
+                    Error::Event(source) => Some(source),
+                    Error::History(source) => Some(source),
+                    Error::AuthorizationRevoked | Error::Close => None,
+                };
+                assert_source(&error, source);
+            }
+            let closed: Error = event::Error::Stream(crate::stream::Error::Closed).into();
+            assert!(matches!(closed, Error::Close));
+            let timeout: Error = event::Error::Stream(crate::stream::Error::ReadTimeout).into();
+            assert!(matches!(
+                timeout,
+                Error::Consumer(event::Error::Stream(crate::stream::Error::ReadTimeout))
+            ));
+            for source in [RecvError::Closed, RecvError::Lagged(u64::MAX)] {
+                let error: Error = source.clone().into();
+                assert!(matches!(error, Error::Event(actual) if actual == source));
+            }
+        }
 
         #[test]
         fn event_frames_skip_hidden_items_and_preserve_history_refusals() {

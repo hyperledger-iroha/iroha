@@ -42,9 +42,6 @@ iroha_crypto = { path = "../iroha_crypto", default-features = false, features = 
 norito = { path = "../norito", default-features = false, features = ["node-codec"] }
 ed25519-dalek = "3.0.0"
 
-[dev-dependencies]
-hex = { workspace = true }
-
 [[test]]
 name = "cli_smoke"
 path = "tests/cli_smoke.rs"

@@ -49,12 +49,12 @@ pub enum CollectionTarget {
     ContractEvents,
     /// `/v1/repo/agreements`
     RepoAgreements,
+    /// `/v1/roles`
+    Roles,
+    /// `/v1/accounts/{account_id}/roles`
+    AccountRoles(String),
     /// `/v1/accounts/{account_id}/permissions`
     AccountPermissions(String),
-    /// `/v1/roles/query`, restricted to authenticated global readers.
-    Roles,
-    /// `/v1/accounts/{account_id}/roles/query`, restricted to global readers.
-    AccountRoles(String),
     /// `/v1/subscriptions/plans`
     SubscriptionPlans,
     /// `/v1/subscriptions`
@@ -85,9 +85,9 @@ impl CollectionTarget {
             Self::ContractActivity => &specs::CONTRACT_ACTIVITY,
             Self::ContractEvents => &specs::CONTRACT_EVENTS,
             Self::RepoAgreements => &specs::REPO_AGREEMENTS,
-            Self::AccountPermissions(_) => &specs::ACCOUNT_PERMISSIONS,
             Self::Roles => &specs::ROLES,
             Self::AccountRoles(_) => &specs::ACCOUNT_ROLES,
+            Self::AccountPermissions(_) => &specs::ACCOUNT_PERMISSIONS,
             Self::SubscriptionPlans => &specs::SUBSCRIPTION_PLANS,
             Self::Subscriptions => &specs::SUBSCRIPTIONS,
             Self::UaidManifests(_) => &specs::UAID_MANIFESTS,
@@ -105,11 +105,12 @@ impl CollectionTarget {
             | Self::AssetMovements(literal)
             | Self::AccountTransactions(literal)
             | Self::AccountHistory(literal)
-            | Self::AccountPermissions(literal)
             | Self::AccountRoles(literal)
+            | Self::AccountPermissions(literal)
             | Self::UaidManifests(literal)
             | Self::BondEntitlements(literal) => literal,
             Self::Domains
+            | Self::Roles
             | Self::Accounts
             | Self::AssetDefinitions
             | Self::Nfts
@@ -120,8 +121,7 @@ impl CollectionTarget {
             | Self::RepoAgreements
             | Self::SubscriptionPlans
             | Self::Subscriptions
-            | Self::Bonds
-            | Self::Roles => "",
+            | Self::Bonds => "",
         }
     }
 
@@ -142,9 +142,9 @@ impl CollectionTarget {
             Self::ContractActivity => ENDPOINT_CONTRACTS_ACTIVITY,
             Self::ContractEvents => ENDPOINT_CONTRACTS_EVENTS,
             Self::RepoAgreements => ENDPOINT_REPO_AGREEMENTS_QUERY,
+            Self::Roles => "/v1/roles",
+            Self::AccountRoles(_) => "/v1/accounts/{account_id}/roles",
             Self::AccountPermissions(_) => ENDPOINT_ACCOUNTS_PERMISSIONS,
-            Self::Roles => "/v1/roles/query",
-            Self::AccountRoles(_) => "/v1/accounts/{account_id}/roles/query",
             Self::SubscriptionPlans => ENDPOINT_SUBSCRIPTION_PLANS_LIST,
             Self::Subscriptions => ENDPOINT_SUBSCRIPTIONS_LIST,
             Self::UaidManifests(_) => ENDPOINT_SPACE_DIRECTORY_MANIFESTS,
@@ -464,11 +464,6 @@ fn execute_prepared_collection_local(
     .then(|| collection_history_read_budget(app.is_none(), limits.bytes))
     .transpose()?;
     let page = match target {
-        CollectionTarget::Roles | CollectionTarget::AccountRoles(_) => {
-            return roles::execute(
-                state, target, query, telemetry, visibility, prepared, limits,
-            );
-        }
         // Identity-ordered reads seek in storage order from the cursor; exact
         // `id` (and alias) constraints become direct lookups. The engine still
         // applies the whole filter.
@@ -878,6 +873,11 @@ fn execute_prepared_collection_local(
                 allowed.as_ref(),
                 visibility,
                 |transaction, position| Some(transaction_row(transaction, position)),
+            );
+        }
+        CollectionTarget::Roles | CollectionTarget::AccountRoles(_) => {
+            return roles::execute(
+                state, target, query, telemetry, visibility, prepared, limits,
             );
         }
         CollectionTarget::AccountPermissions(account_literal) => {
@@ -1538,21 +1538,7 @@ fn contract_emission_page(
             let execution_hash = output
                 .execution_call_hash(block.hash(), &*block)
                 .map_err(conversion_error)?;
-            let fee_payment = match output {
-                iroha_data_model::block::execution_output::ExecutionOutputV1::Network(network) => {
-                    let entrypoint = block
-                        .network_entrypoint_at(network.input_index as usize)
-                        .ok_or_else(|| {
-                            conversion_error("emission output lost its Network input".into())
-                        })?;
-                    tx_fee_projection(&BorrowedNetworkTransaction {
-                        entrypoint,
-                        entrypoint_hash: entrypoint.hash(),
-                        result: &network.result,
-                    })
-                }
-                _ => None,
-            };
+            let fee_payment = output_fee_projection(&block, output)?;
             for (emission_index, emission) in
                 output.result().contract_events().iter().enumerate().rev()
             {

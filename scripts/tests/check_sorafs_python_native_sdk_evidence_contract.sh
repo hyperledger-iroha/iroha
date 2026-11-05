@@ -50,6 +50,8 @@ if "--features dev-tools --bin iroha_native_source_delivery" not in runner[helpe
 helper_use = runner.index('IROHA_NATIVE_SOURCE_DELIVERY_TEST_HELPER="${NATIVE_HELPER}"')
 if not runner.index("SOURCE_BEFORE_PIN=") < helper_build < helper_check < helper_use:
     raise SystemExit("Native helper must be built inside the original authenticated source pin")
+if "--features dev-tools" not in runner[helper_build:helper_check]:
+    raise SystemExit("Native helper build must select its dev-tools executable")
 backup_selection = runner.split('SOURCE_BACKUP_DIRECTORY="$(', 1)[1].split("SOURCE_RECEIPT_SEAL=", 1)[0]
 if "mkdir" in backup_selection or "mktemp" in backup_selection:
     raise SystemExit("Only the retained native owner may create the protected backup directory")

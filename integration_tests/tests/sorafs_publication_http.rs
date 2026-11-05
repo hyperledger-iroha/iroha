@@ -216,7 +216,7 @@ pub async fn genesis_checkpoint(
             let path = iroha_torii_shared::route_catalog::sumeragi::BRIDGE_FINALITY
                 .path()
                 .replace("{height}", "1");
-            let response = http
+            let response = match http
                 .get(format!(
                     "{}{}",
                     network.peers()[0].torii_url().trim_end_matches('/'),
@@ -224,7 +224,17 @@ pub async fn genesis_checkpoint(
                 ))
                 .header("Accept", "application/x-norito")
                 .send()
-                .await?;
+                .await
+            {
+                Ok(response) => response,
+                // Startup may observe committed Kura state before Torii binds.
+                // Keep readiness retries inside this original checkpoint deadline.
+                Err(error) if error.is_connect() => {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            };
             if response.status() == reqwest::StatusCode::NOT_FOUND
                 || response.status() == reqwest::StatusCode::SERVICE_UNAVAILABLE
             {

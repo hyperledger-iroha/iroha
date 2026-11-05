@@ -72,6 +72,7 @@ fn fee_asset() -> AssetDefinitionId {
 
 fn config() -> TestChainConfig {
     let mut config = TestChainConfig::new(World::new(), 1_000);
+    // Execution consumes the original signed policy, never node-local fee configuration.
     let mut fees = iroha_config::parameters::defaults::nexus::fees::genesis_policy();
     fees.base_fee = Quantity::one();
     fees.per_byte_fee = Quantity::zero();
@@ -81,7 +82,7 @@ fn config() -> TestChainConfig {
     fees.fee_sink_account_id = AccountId::new(config.genesis_key.public_key().clone());
     config.genesis_parameters.push(Parameter::Custom(
         fees.into_custom_parameter()
-            .expect("original signed fee policy"),
+            .expect("authored payment fee policy"),
     ));
     config.genesis_instructions = vec![
         Register::account(Account::new(payer())).into(),
@@ -210,6 +211,17 @@ fn pinned_genesis(chain: &CertifiedTestChain) -> (Vec<u8>, SignedGenesisPinsV1) 
     // A remote response cannot supply or replace these installation pins.
     let wire = chain.genesis().encode_wire().unwrap();
     let configuration = config();
+    let fees = iroha_genesis::signed_genesis_root_fee_policy(chain.genesis())
+        .expect("original signed genesis must authenticate the payment fee policy");
+    assert_eq!(fees.fee_asset_id, fee_asset());
+    assert_eq!(
+        fees.fee_sink_account_id,
+        AccountId::new(configuration.genesis_key.public_key().clone())
+    );
+    assert_eq!(fees.base_fee, Quantity::one());
+    assert_eq!(fees.per_byte_fee, Quantity::zero());
+    assert_eq!(fees.per_instruction_fee, Quantity::zero());
+    assert_eq!(fees.per_gas_unit_fee, Quantity::zero());
     let pins = SignedGenesisPinsV1 {
         chain_id: configuration.chain_id.to_string(),
         network_id: chain.network_id(),

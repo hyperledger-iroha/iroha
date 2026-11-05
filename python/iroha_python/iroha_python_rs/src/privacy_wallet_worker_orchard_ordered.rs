@@ -13,7 +13,12 @@ fn validate_orchard_contract_calls_v1(
     let Some(value) = value else {
         return Ok(None);
     };
-    if protocol != PrivacyProtocolIdV1::OrchardHalo2ActionsV1.canonical_label() {
+    if ![
+        PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1.canonical_label(),
+        PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1.canonical_label(),
+    ]
+    .contains(&protocol)
+    {
         return Err(error);
     }
     let object = value.as_object().ok_or(error)?;
@@ -93,12 +98,15 @@ fn inspect_ordered_response_v1(
     let versioned = SignedTransaction::decode_all_versioned(&response.versioned_signed_transaction)
         .map_err(|_| WorkerError::NativeSelfInspectionFailed)?;
     for signed in [&adaptive, &versioned] {
-        let inspected = inspect_signed_privacy_orchard_note_action_with_contract_calls_v1(
-            signed,
-            expected_context,
-            expected_calls,
-        )
-        .map_err(|_| WorkerError::NativeSelfInspectionFailed)?;
+        let inspect = if response.protocol_id
+            == PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1.canonical_label()
+        {
+            inspect_signed_privacy_ironwood_note_action_with_contract_calls_v1
+        } else {
+            inspect_signed_privacy_orchard_note_action_with_contract_calls_v1
+        };
+        let inspected = inspect(signed, expected_context, expected_calls)
+            .map_err(|_| WorkerError::NativeSelfInspectionFailed)?;
         if inspected.action().transaction_hash() != response.transaction_hash {
             return Err(WorkerError::NativeSelfInspectionFailed);
         }

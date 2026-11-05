@@ -10,6 +10,7 @@ mod ordinary_query_memory_tests {
     mod trigger_rows {
         include!("ordinary_query_trigger_rows.rs");
     }
+    include!("ordinary_trigger_rows.rs");
     fn default_geometry() -> (QueryMemoryGeometry, ByteWeightedMemoryPool) {
         let geometry = query_memory_geometry(
             usize::try_from(defaults::torii::QUERY_FANOUT_MAX_RETAINED_BYTES.get())
@@ -247,6 +248,144 @@ mod ordinary_query_memory_tests {
         assert!(pool.can_reserve_parts(policy.singular_execution_reservation_parts()));
     }
     #[test]
+    fn complete_escrow_scope_has_one_fully_reserved_configured_source_phase() {
+        use iroha_data_model::query::{QueryItemKind, QueryRequest, QueryWithParams};
+        let app = mk_app_state_for_tests();
+        let policy = app.ordinary_query_policy;
+        let scope = policy
+            .complete_asset_scope_limits
+            .expect("default complete scope geometry");
+        assert_eq!(scope.max_page_items(), 1);
+        assert!(scope.max_source_item_bytes() > policy.limits.max_source_item_bytes());
+        assert!(scope.execution_headroom_bytes() <= policy.singular_execution_reservation_bytes);
+        let core_minimum = OrdinaryQueryExecutionLimits::required_execution_headroom_bytes(
+            scope.max_page_items(),
+            scope.max_source_item_bytes(),
+            scope.max_response_bytes(),
+            scope.max_request_graph_bytes(),
+            scope.max_revalidation_archive_bytes(),
+            scope.revalidation_decode_limits(),
+        )
+        .unwrap();
+        assert_eq!(
+            scope.execution_headroom_bytes(),
+            core_minimum
+                + scope.max_response_bytes()
+                + u64::try_from(TORII_PROXY_REQUEST_FRAME_OVERHEAD_BYTES_V1).unwrap()
+        );
+        // Admission chooses the geometry from the canonical discriminator;
+        // payload/predicate validation still belongs to the bounded Core path.
+        let mut query = QueryWithParams {
+            query: (),
+            query_payload: Vec::new(),
+            item: QueryItemKind::AssetEscrowScopeOriginalV1,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: Default::default(),
+        };
+        let options = routing::QueryOptions {
+            cursor_mode: Some("ephemeral".into()),
+            ..Default::default()
+        };
+        let plan = routing::ordinary_query_execution_plan(
+            &app.state,
+            &app.query_service,
+            &iroha_test_samples::ALICE_ID,
+            &QueryRequest::Start(query.clone()),
+            &options,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(
+            plan.ordinary_limits().max_source_item_bytes(),
+            scope.max_source_item_bytes()
+        );
+        assert!(!plan.requires_singular_execution());
+        let before = app.query_fanout_inflight.available_bytes();
+        let lease = try_acquire_ordinary_query_memory(&app, plan.ordinary_limits(), false, false)
+            .expect("complete scope reserves its own execution weight");
+        assert!(
+            before - app.query_fanout_inflight.available_bytes()
+                >= scope.execution_headroom_bytes()
+        );
+        drop(lease);
+        assert_eq!(app.query_fanout_inflight.available_bytes(), before);
+        query.item = QueryItemKind::AccountId;
+        let ordinary = routing::ordinary_query_execution_plan(
+            &app.state,
+            &app.query_service,
+            &iroha_test_samples::ALICE_ID,
+            &QueryRequest::Start(query),
+            &options,
+            policy,
+        )
+        .unwrap();
+        assert_eq!(
+            ordinary.ordinary_limits().max_source_item_bytes(),
+            policy.limits.max_source_item_bytes()
+        );
+    }
+    #[test]
+    fn complete_escrow_scope_refuses_stored_mode_or_unavailable_geometry() {
+        use iroha_data_model::query::{QueryItemKind, QueryRequest, QueryWithParams};
+        let app = mk_app_state_for_tests();
+        let query = QueryRequest::Start(QueryWithParams {
+            query: (),
+            query_payload: Vec::new(),
+            item: QueryItemKind::AssetEscrowScopeOriginalV1,
+            predicate_bytes: Vec::new(),
+            selector_bytes: Vec::new(),
+            params: Default::default(),
+        });
+        let options = routing::QueryOptions {
+            cursor_mode: Some("stored".into()),
+            ..Default::default()
+        };
+        assert!(
+            routing::ordinary_query_execution_plan(
+                &app.state,
+                &app.query_service,
+                &iroha_test_samples::ALICE_ID,
+                &query,
+                &options,
+                app.ordinary_query_policy
+            )
+            .is_err()
+        );
+        let mut policy = app.ordinary_query_policy;
+        policy.complete_asset_scope_limits = None;
+        let options = routing::QueryOptions {
+            cursor_mode: Some("ephemeral".into()),
+            ..Default::default()
+        };
+        assert!(
+            routing::ordinary_query_execution_plan(
+                &app.state,
+                &app.query_service,
+                &iroha_test_samples::ALICE_ID,
+                &query,
+                &options,
+                policy
+            )
+            .is_err()
+        );
+        let _held = app
+            .query_fanout_inflight
+            .try_acquire_parts([app.query_fanout_inflight.capacity_bytes()])
+            .unwrap();
+        assert!(
+            try_acquire_ordinary_query_memory(
+                &app,
+                app.ordinary_query_policy
+                    .complete_asset_scope_limits
+                    .unwrap(),
+                false,
+                false,
+            )
+            .is_err()
+        );
+    }
+    #[test]
     fn exhausted_weighted_pool_rejects_start_without_pinning_ingress() {
         let app = mk_app_state_for_tests();
         let _fanout = app
@@ -263,7 +402,10 @@ mod ordinary_query_memory_tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(app.query_ingress_inflight.available_permits(), 0);
-        assert!(try_acquire_ordinary_query_memory(&app, true, false).is_err());
+        assert!(
+            try_acquire_ordinary_query_memory(&app, app.ordinary_query_policy.limits, true, false,)
+                .is_err()
+        );
         drop(ingress);
         assert_eq!(
             app.query_ingress_inflight.available_permits(),

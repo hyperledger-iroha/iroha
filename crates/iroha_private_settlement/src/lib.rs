@@ -189,6 +189,7 @@ struct Request {
     intent: PrivateSettlementProofIntentV1,
     terms: Vec<PrivateSettlementBusinessTerms>,
     schema: Hash,
+    schemas: Vec<Hash>,
     minimum_context_time_ms: u64,
     endpoints: Vec<Vec<Url>>,
     padding: PrivateSettlementCapsulePaddingV1,
@@ -196,6 +197,8 @@ struct Request {
     max_carrier_bytes: u64,
     max_artifact_bytes: usize,
     max_total_artifact_bytes: usize,
+    // Immutable pre-family request identity, retained so an exact pin resumes old journals.
+    exact_schema_digest: Digest32,
     digest: Digest32,
 }
 impl OneCallPrivateSettlementRequest {
@@ -272,10 +275,11 @@ impl OneCallPrivateSettlementRequest {
             b"iroha:private-settlement:one-call-request:v1\0",
             &[&encoded],
         );
-        Ok(Self(Arc::new(Request {
+        Self(Arc::new(Request {
             intent,
             terms,
             schema,
+            schemas: vec![schema],
             minimum_context_time_ms,
             endpoints,
             padding,
@@ -283,8 +287,46 @@ impl OneCallPrivateSettlementRequest {
             max_carrier_bytes,
             max_artifact_bytes,
             max_total_artifact_bytes,
+            exact_schema_digest: digest,
             digest,
-        })))
+        }))
+        .with_world_schemas(
+            iroha_data_model::sumeragi_finality::native_world_schemas_for_anchor_v1(schema),
+        )
+    }
+    /// Bind an independently qualified schema family before sharing the request.
+    /// The constructor expands known native anchors by default; pass `vec![anchor]` here
+    /// to opt into an exact schema pin. Foreign anchors remain exact by default.
+    /// Each proof still authenticates its selected schema against its certified height.
+    /// An exact single-schema pin retains the original SDK digest. An expanded policy binds
+    /// the sorted family to that original digest, independently of setter order/history.
+    /// # Errors
+    /// Empty/oversized family, missing original anchor, or an already shared request.
+    pub fn with_world_schemas(
+        mut self,
+        mut schemas: Vec<Hash>,
+    ) -> std::result::Result<Self, OneCallPrivateSettlementError> {
+        schemas.sort_unstable();
+        schemas.dedup();
+        if schemas.is_empty() || schemas.len() > 64 || !schemas.contains(&self.0.schema) {
+            return Err(OneCallPrivateSettlementError::Binding);
+        }
+        if schemas == self.0.schemas {
+            return Ok(self);
+        }
+        let request = Arc::get_mut(&mut self.0).ok_or(OneCallPrivateSettlementError::Binding)?;
+        request.digest = if schemas == [request.schema] {
+            request.exact_schema_digest
+        } else {
+            let encoded =
+                norito::encode_canonical(&(request.exact_schema_digest, schemas.clone()))?;
+            domain_digest(
+                b"iroha:private-settlement:one-call-request:v1\0",
+                &[&encoded],
+            )
+        };
+        request.schemas = schemas;
+        Ok(self)
     }
     /// Exact public intent available for review before invoking the wallet.
     pub fn intent(&self) -> &PrivateSettlementProofIntentV1 {

@@ -564,8 +564,9 @@ fn build_pq_masp_trace_v1(
     }
     let asset =
         norito::to_bytes(&statement.asset_definition_id).map_err(|_| PqMaspAirErrorV1::Topology)?;
-    let namespace =
-        norito::to_bytes(&namespace_v1(statement)).map_err(|_| PqMaspAirErrorV1::Topology)?;
+    let namespace = namespace_v1(statement)
+        .canonical_wire_bytes_v1()
+        .map_err(|_| PqMaspAirErrorV1::Topology)?;
     let mut nonzero_components = Vec::<Vec<ByteVariableV1>>::new();
     for (index, input) in input_variables.iter_mut().enumerate() {
         let input_index = u8::try_from(index).map_err(|_| PqMaspAirErrorV1::Resource)?;

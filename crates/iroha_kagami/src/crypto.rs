@@ -28,8 +28,14 @@ pub struct Args {
     #[clap(long)]
     pop: bool,
 }
-#[derive(Clone, Debug, Default, derive_more::Display)]
+#[derive(Clone, Debug, Default)]
 struct AlgorithmArg(Algorithm);
+impl std::fmt::Display for AlgorithmArg {
+    #[inline]
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(&self.0, formatter)
+    }
+}
 impl ValueEnum for AlgorithmArg {
     fn value_variants<'a>() -> &'a [Self] {
         // Keep in sync with `Algorithm`; coverage is enforced by a unit test.
@@ -183,10 +189,34 @@ mod tests {
     use clap::ValueEnum;
     #[test]
     fn algorithm_arg_displays_as_algorithm() {
-        assert_eq!(
-            format!("{}", AlgorithmArg(Algorithm::Ed25519)),
-            format!("{}", Algorithm::Ed25519)
-        )
+        for argument in AlgorithmArg::value_variants() {
+            let algorithm = &argument.0;
+            assert_eq!(format!("{argument}"), format!("{algorithm}"));
+            assert_eq!(format!("{argument:>40}"), format!("{algorithm:>40}"));
+            assert_eq!(
+                format!("{argument:🦀^40.5}"),
+                format!("{algorithm:🦀^40.5}")
+            );
+            assert_eq!(
+                format!("{argument:+#020.3}"),
+                format!("{algorithm:+#020.3}")
+            );
+        }
+    }
+    #[test]
+    fn algorithm_arg_display_propagates_formatting_failure() {
+        use std::fmt::{self, Write as _};
+
+        struct FailingWriter;
+        impl fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> fmt::Result {
+                Err(fmt::Error)
+            }
+        }
+
+        for argument in AlgorithmArg::value_variants() {
+            assert_eq!(write!(FailingWriter, "{argument}"), Err(fmt::Error));
+        }
     }
     #[test]
     fn value_variants_covers_all_algorithms() {

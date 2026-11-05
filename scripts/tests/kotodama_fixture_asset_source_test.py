@@ -37,7 +37,7 @@ class SourceSpec:
 SOURCES = (
     SourceSpec(
         'crates/ivm/tests/kotodama.rs',
-        '142ae3b237cba92268b1a8f199b449f9a72e9d9e94de6e2d9adf49074e8d2387',
+        '09be9a1759f4ec4da44787fc42b0deef3f9df76f885b72cae82ba044ae144006',
         (
             AssetSpec('001.ko', '3b0dc428d838d7448dc26b228709fea882f41a1dbcb15fe05431df58c6d53544', 246, True),
             AssetSpec('002.ko', '24a24ebec2af2c9f2dd940362b242fe84b8d351ea1efedc618069b31df90abb1', 329, True),
@@ -46,10 +46,10 @@ SOURCES = (
             AssetSpec('005.ko', '6acd0f9145754daf4ee414404ec42bb5f911bb15d76b1fc63a9440c6c5c82435', 165, True),
             AssetSpec('006.ko', '80f14302dcc42236cd45cbe6df02c6d8c47a6093ac439c0f5cd09c0ee9d0f145', 206, True),
             AssetSpec('007.ko', '0dfec600c0a02ddeb07185f7f28d2ad7d3d7f89a5d09e2a18f60441e46f57ade', 766, True),
-            AssetSpec('008.ko', 'f92111a778669df41d421891583bfeecc8bd044c6cfdbfd0755dc0eae317ab9e', 480, True),
-            AssetSpec('009.ko', 'fc442c3cb44ed7ac66dfa853c917f406c0d0bb5d2409bd4bd112728cfcd50ecc', 206, True),
-            AssetSpec('010.ko', '75e05f0d2413859281cce05dd5e71e7459d036de0b201ed9f0612fa0b09aa923', 269, True),
-            AssetSpec('011.ko', '9dab22e1df9ca682af1d2e88bdeb5aff7ece147f6448fcaf0c64ec1f45c279df', 289, True),
+            AssetSpec('008.ko', 'decf055d68bfa86aeac2e6c231424dc2b88ad5e9f0db955204a01eb4644b90b9', 462, True),
+            AssetSpec('009.ko', '083ebf36c723c55e213deb4889167104c982c7798648dd1417a18a89bdd96b29', 188, True),
+            AssetSpec('010.ko', '239cd99bc552605c176661b236974a9945ee418de80888a4cc3cc75a1f117205', 251, True),
+            AssetSpec('011.ko', 'e8ce71dad72bbb8a00729fed3510aee20c351541f20be4ebb148683a40ca9917', 271, True),
             AssetSpec('012.ko', '9d86edb74a64d17700575b3a802c418ee8f88700c4c6f60bd0063f7a510a8f90', 497, True),
             AssetSpec('013.ko', 'b1f8ab5aff2053f39abec1674a90e81fffa561f6e2f5cfc5679f98bb0362215d', 130, True),
             AssetSpec('014.ko', 'b42e0cf7804c5e6348e12011ac399700cd1ea56daefac0b68731fab9b6ce704d', 180, True),
@@ -64,7 +64,7 @@ SOURCES = (
             AssetSpec('023.ko', '78229f755f5df8855070a669ad310fa182b84ba5ce7a334bb866ce4b4a194bf9', 386, True),
             AssetSpec('024.ko', '12232c2f7301b94e35599943b541e39571ffc3943e504319a3989eb46cf0ffaa', 172, True),
             AssetSpec('025.ko', '8525db4882e89b98fdcb118fbbfac68be946bec94f1ac88396297f8226c80957', 748, True),
-            AssetSpec('026.ko', 'd5510f5abb7f80150448005c4436d4a181f861079f22cf664a701e8c35642849', 328, True),
+            AssetSpec('026.ko', '9de6e8da19eab5b50b08adcefa53daa8e71b7bcc78f68045fd797e4f2d1db09c', 330, True),
             AssetSpec('027.ko', 'af7edf82532e9a7b8901962c55b1f9df53bba4563c546c67d839802a138a84cc', 470, True),
             AssetSpec('028.ko', '07c8bce80706d817c3e049254d6e8f9cb91ea919d7b4fd300c957ebb26b1a1a8', 325, True),
             AssetSpec('029.ko', 'b5fed2a934b7531e36aee4926adfa6d138429bff91fede7c59222ca308d30b1f', 178, True),
@@ -93,7 +93,7 @@ SOURCES = (
             AssetSpec('052.ko', '0e247b3fcece2f8385b4a5c467c99055f242ffaa0755933bb76c07bb213a75e9', 339, True),
             AssetSpec('053.ko', '17cca58a1f8ae78bf36b731bebbd1aba49ee0b685c2006bd00a7d2b98f06be90', 180, True),
             AssetSpec('054.ko', '63ac2faffb88e0e297290ae3446f60365641a485ab602d8a62c2bae7534e35ac', 481, True),
-            AssetSpec('055.ko', '908564cf3f1cdd1be8cb5b9dfd95a220f17dd5189837df363f774e5f0453d336', 530, True),
+            AssetSpec('055.ko', '28fa27420e410c99d841599ea2ac6d516d3d57bee1f6c2f74e1cd824669fe5a7', 512, True),
             AssetSpec('056.ko', '6392c2dd72c66ab78d884ed26c11ce47cd837faf0049b2ba9c83cc0f7dbab016', 385, True),
             AssetSpec('057.ko', 'c67d51b9cd457287966ca3c9a350a998de9fddc7be88de09ea9afb1f049c9c47', 107, False),
             AssetSpec('058.ko', '1549b393aa5c26932e8b8b646fbf436de55287fec7c7ac32890967cd15da4b37', 168, False),
@@ -101,9 +101,9 @@ SOURCES = (
             AssetSpec('060.ko', '57854702edeebb8ce9478486429951bce6c5101248570bfef1a6ea246156ecd5', 269, False),
             AssetSpec('061.ko', 'd93e6586a06c255db27d3ce38843821568c614eca875ad14e0e6a6190904364e', 199, True),
             AssetSpec('062.ko', '5bd52667ccc114a5d708729c468a39c262197354d3d5b331f94326675924eeab', 202, True),
-            AssetSpec('063.ko', '28b51a80dd9b6acaf7f05b4dce2d4df4e709a85990aba0fe9125a5582297a9b2', 282, True),
-            AssetSpec('064.ko', '0f53ff3bed918a58f178273fe493cf2a92be71fbd703ceb65e9ab403bad2aab6', 681, True),
-            AssetSpec('065.ko', '9ebc7e2bbac7c897a9e959b528c5a18ec2342aea0829a157a0b614c16ebcf2db', 194, True),
+            AssetSpec('063.ko', '379dab8929ef5d5c544c5005f7936fc762d8ee1e35ad9d7b6f53dd82d5407ae0', 360, True),
+            AssetSpec('064.ko', 'e9ba8fd5c6d02406a328b73e0430bc9e75bfad65328d28e001860fe495385e8b', 617, True),
+            AssetSpec('065.ko', '9a865021e7761a9eb5982801d381583ba466433995042783b50f0f9005b8aacc', 300, True),
             AssetSpec('066.ko', '15b8bc486e19a7830a5ace30720d406ef39f9157db24269b09ba1af704f3c3aa', 186, True),
             AssetSpec('067.ko', 'e9e855caf1d7182ec7d9def6b1e90ee31ceeeacdc7f98153ba9242ae234e4d1a', 168, True),
             AssetSpec('068.ko', 'ff651181676cea49b7be9b8aebee25084604e94acd62e7aee2d70166b7168552', 125, True),
@@ -115,7 +115,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_name_map_runtime.rs',
-        '5f43f8f17a3979b0823c712fb6455a1d751f64e661f8ce370ad18bd6d202a50b',
+        '30bc6c0d285f44061bfdd4e9ce61b207f093302e42656b79c7d7bfcc665ef2c3',
         (
             AssetSpec('001.ko', '453a3d980cd5a2d3fa5d764bdfaa8861a41a81aaf34885215dcb71b34a30a907', 290, True),
             AssetSpec('002.ko', 'ad7f419edf3f569a8fef0e1c774838dd136edd213c2c2cd772c1c1e4671f497d', 417, True),
@@ -150,7 +150,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs',
-        'fa30b839900a5544de07d520d5e466ffe50ecc06045f884cf50697b59e839687',
+        '6274bd0586f0c496c378e734f7009e07f2c12347159ff0c5515e5b89c5a7eec6',
         (
             AssetSpec('001.ko', 'eee436d9ed6b4b79486bb5e30248989f101c1dab2f96489830bac8022af46c3f', 334, False),
             AssetSpec('002.ko', 'c642ad27e57fbe485e00b1eb0e061c8dbfe3a32f572ec95dacfad4c35ce04936', 624, False),
@@ -171,7 +171,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_lists.rs',
-        'fc1b47a335f6d847047a32752808122ee3d641ae574fb58d60254ce21bf849b3',
+        'd1d4b64874fd731e21a6a2e9859d4c2cc387755ad73ed525ef431a439d762380',
         (
             AssetSpec('001.ko', '8bbf76933b2161f3dbc4459140bc68aa0c9d761bc55a59c6ae371120dafb9997', 593, True),
             AssetSpec('002.ko', '5abfe3588acf4209052222acd44b7e82c767dab79827355e2533b1310dce3b58', 430, True),
@@ -188,7 +188,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_toolchain/src/koto_test_driver_tests.rs',
-        '09a7b47cb7b460b718c8a2f66e6ec5c061a67a6a5b0fd8833b6c0207dd60ef2b',
+        'add7ad52dfdd62e2edd071c0469ee07c64a014623b167d34067550d867ee59a0',
         (
             AssetSpec('001.ko', 'e005c7a50dbd95fc718ff68174019a8313a923d497efe1eab9dbfb3f161e9d52', 892, True),
             AssetSpec('002.ko', '63961644f937f1cc2e56f76506f3578fc93067ce0da0da17203855519f13394d', 217, True),
@@ -231,7 +231,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs',
-        'ee26bf3753b3443e78981cae4148da75cae603aa3347164567227d2523ce4865',
+        '334e7d864824c4e4c71c23eb1555b347f16fb668c2e65109353930c0e248db2c',
         (
             AssetSpec('001.ko', '82e551d02e72a8b125a55bef9d68b4fff436fa4c46f2504d07e3be52c89cd0a4', 3003, True),
             AssetSpec('002.ko', '7df136db4866d8ecd84dcba6e90dfae6d1c225c71fa3d0acb7b71ce38ea872e1', 1475, True),
@@ -246,7 +246,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/ivm/tests/kotodama_state_scalar.rs',
-        '4f9a6ce040059b32c553cfe198752e501b8ec6df09363dedfee1da98012e46d5',
+        '7de7385b40ab6397d2b24db3771c1103d8aa3c2db70ad8eec45325dcb32744a3',
         (
             AssetSpec('001.ko', 'a3bb0c865a5a828c574e5c8860f455fec2612db32e2bdc9c2cef51be78ac8abe', 216, True),
             AssetSpec('002.ko', '4e9c0d53aa2f5f6d04822c1438c8ffcd4592154efb7e2fb55c13741314f6c011', 776, True),
@@ -256,7 +256,7 @@ SOURCES = (
     ),
     SourceSpec(
         'crates/kotodama_lang/src/resolved.rs',
-        'db7374183af896185c91a00495b268cb0afaffca9d487dc176f2fd05199e310e',
+        'cb2d022e5892de32e25ad447c0b5d9f9e6a5fef249dab0db7557970102298b5a',
         (
             AssetSpec('001.ko', 'a15f6256b419624f839af6961586120b08958cb3886b9f7a51671471b7a85e88', 176, False),
             AssetSpec('002.ko', 'fbdce614e48b118614c6817b2ec40eaa3719125c19ec72fe332acd0d5c0e8577', 249, False),
@@ -292,9 +292,12 @@ SOURCES = (
 # runtime behavior are qualified by the corresponding Rust integration targets.
 # Current contracts select authenticated public tables, reject untyped/extra test
 # arguments, and encode scalar map keys through the same state records as tuples.
+# Grouped ivm test roots own `common`. Entrypoint argument records use their own
+# public-input key; the trigger event key is not an argument channel.
 SOURCE_REQUIRED_FRAGMENTS = {
     'crates/ivm/tests/kotodama.rs': (
         b'use kotodama_lang::{',
+        b'use crate::common;',
         b'common::select_kotodama_entrypoint(&mut vm, &code, case.entrypoint);',
         b'fn run_vm_result_cases(cases: &[VmResultCase]) {',
         b'common::decode_i64_return_word(&vm, 0)',
@@ -303,10 +306,16 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'"axt::use_asset_handle",',
         b'.expect_err("retired AXT pointer operation is not in V1")',
         br'Json::parse(\"{\\\"cursor\\\":1,\\\"query\\\":\\\"sc_dummy\\\"}\")',
+        # Diagnostics name nominal types by their owner path.
+        b"unknown field 'z' on struct UnknownStructField::A (available: x, y)",
+        # Literals are rematerialized, so spill coverage needs runtime values.
+        b'src.push_str(&format!("  let v{i} = seed + {value};\\n"));',
     ),
     'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
+        b'use crate::common;',
         b'ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)',
-        b'ivm_abi::numeric_tlv::encode_int(',
+        b'let key: Name = ivm_abi::arguments::ENTRYPOINT_ARGUMENT_RECORD_PUBLIC_INPUT_KEY',
+        b'expected.sort_by_key(|key| common::encode_int_state_value(*key));',
         b'vm.public_call_result_word(index)',
         b'common::decode_i64_return_word(&vm, 6 + index)',
         b'.try_runtime_template()',
@@ -320,9 +329,13 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'assert_eq!(writer.state_paths(), ["Rate", "Supply", "Whole"]);',
     ),
     'crates/ivm/tests/kotodama_lists.rs': (
+        b'use crate::common;',
         b'ivm_abi::arguments::encode_argument_record_from_json(schema, &payload)',
+        b'let key: Name = ivm_abi::arguments::ENTRYPOINT_ARGUMENT_RECORD_PUBLIC_INPUT_KEY',
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
         b'{{"index":"{index}","operation":"{operation}"}}',
+        # Pop gas compares operation work without the per-active-int return check.
+        b'gas.checked_sub(int_list_active_return_validation_gas(vm, 3))',
     ),
     'crates/kotodama_toolchain/src/koto_test_driver_tests.rs': (
         b'vm.load_koto_test_harness(',
@@ -334,7 +347,12 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'WsvHost::new_with_subject(MockWorldStateView::default(), controller.clone())',
         b'fn invocation_alias_decoding_preserves_read_deferral_before_test_failure()',
         b'let budget = iroha_allocation::AllocationBudget::new(64 * 1024 * 1024);',
-        b'assert_eq!(host.invoke_entrypoint(&mut vm, false), Err(refusal));',
+        # VMError has no PartialEq; the exact deferral payload is compared.
+        b'assert!(match (host.invoke_entrypoint(&mut vm, false), refusal) {\n'
+        b'            (\n'
+        b'                Err(ivm::VMError::AllocationDeferred(actual)),\n'
+        b'                ivm::VMError::AllocationDeferred(expected),\n'
+        b'            ) => actual == expected,',
         b'assert_eq!(host.last_test_error(), None);',
         b'assert_eq!(budget.reserved_bytes(), occupied);',
         b'fn multifile_suite_discovers_and_executes_included_tests_with_local_modules()',
@@ -345,6 +363,7 @@ SOURCE_REQUIRED_FRAGMENTS = {
         b'"module Math { export fn value() -> int { return 7; } }"',
     ),
     'crates/ivm/tests/kotodama_state_name_map_runtime.rs': (
+        b'use crate::common;',
         b'let key = common::encode_int_state_value(key);',
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
         b'use std::str::FromStr;',
@@ -371,9 +390,11 @@ SOURCE_REQUIRED_FRAGMENTS = {
     ),
     # K1b: ivm no longer re-exports the Kotodama compiler; tests import kotodama_lang directly.
     'crates/ivm/tests/kotodama_state_aggregate_literal_runtime.rs': (
+        b'use crate::common;',
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
     ),
     'crates/ivm/tests/kotodama_state_scalar.rs': (
+        b'use crate::common;',
         b'use kotodama_lang::compiler::Compiler as KotodamaCompiler;',
     ),
 }
@@ -384,10 +405,13 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
         b'axt::AssetHandle {',
         b'ParsedAccountId',
         br'Json::parse(\"{\\\"query\\\":\\\"sc_dummy\\\",\\\"cursor\\\":1}\")',
+        b'src.push_str(&format!("  let v{i} = {value};\\n"));',
     ),
     'crates/ivm/tests/kotodama_v1_runtime_acceptance.rs': (
         b'ivm::encode_argument_record_from_json(',
         b'ivm::numeric_tlv::encode_int(',
+        b'ivm_abi::numeric_tlv::encode_int(',
+        b'let key: Name = "trigger_event_json".parse()',
         b'decode_i64_register(',
         b'vm.register(10',
         b'.runtime_template()',
@@ -395,6 +419,7 @@ SOURCE_FORBIDDEN_FRAGMENTS = {
     'crates/ivm/tests/kotodama_lists.rs': (
         b'ivm::encode_argument_record_from_json(',
         b'{{"operation":"{operation}","index":"{index}"}}',
+        b'let key: Name = "trigger_event_json".parse()',
     ),
     'crates/kotodama_toolchain/src/koto_test_driver_tests.rs': (
         b'mv::allocation::AllocationBudget',

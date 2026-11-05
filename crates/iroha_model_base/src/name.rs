@@ -108,14 +108,18 @@ fn nfc_normalizer() -> Result<&'static ComposingNormalizerBorrowed<'static>, Par
 #[model]
 mod model {
     use super::*;
-    use derive_more::{Debug, Display};
     use iroha_schema::IntoSchema;
     /// Canonical business name used by domain-owned entities and named protocol fields.
-    #[derive(Debug, Display, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+    #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
     #[repr(transparent)]
     #[derive(norito::NoritoSchema)]
     #[norito_schema(name = "iroha_data_model::name::model::Name")]
     pub struct Name(pub(super) ConstString);
+}
+impl core::fmt::Display for Name {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&self.0, formatter)
+    }
 }
 impl Name {
     /// Exact optional persistent backing requested by the canonical JSON reader.
@@ -291,8 +295,9 @@ impl Name {
     fn decode_wire(bytes: &[u8]) -> Result<(Self, usize), NoritoError> {
         let (value, end) = norito::core::borrow_text_payload(bytes, |len| {
             if len > MAX_NAME_BYTES {
-                return Err(NoritoError::Message(
-                    "`Name` exceeds the 255-byte UTF-8 limit".into(),
+                return Err(norito::core::prepaid_validation_error(
+                    "Name exceeds its UTF-8 limit",
+                    || NoritoError::Message("`Name` exceeds the 255-byte UTF-8 limit".into()),
                 ));
             }
             Ok(())
@@ -300,8 +305,11 @@ impl Name {
         let len = value.len();
         norito::core::reserve_decode_allocation(len)?;
         norito::core::reserve_decode_allocation(Self::canonical_validation_scratch_bytes(value))?;
-        let name =
-            Self::parse(value).map_err(|error| NoritoError::Message(error.reason().into()))?;
+        let name = Self::parse(value).map_err(|error| {
+            norito::core::prepaid_validation_error("invalid Name", || {
+                NoritoError::Message(error.reason().into())
+            })
+        })?;
         norito::core::note_payload_access(bytes, end);
         Ok((name, end))
     }

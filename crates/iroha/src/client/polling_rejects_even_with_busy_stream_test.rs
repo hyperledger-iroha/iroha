@@ -10,7 +10,7 @@ async fn polling_rejects_even_with_busy_stream() {
         status: TransactionStatus::Queued,
     }));
     let (tx, rx) = mpsc::unbounded_channel::<Result<EventBox, eyre::Report>>();
-    let mut events = UnboundedReceiverStream::new(rx);
+    let mut events = receiver_stream(rx);
     for _ in 0..128 {
         let _ = tx.send(Ok(queued_event.clone()));
     }

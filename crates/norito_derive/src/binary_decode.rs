@@ -369,8 +369,9 @@ pub(super) fn derive_enum_deserialize(
                 let value = match tag {
                     #(#arms,)*
                     _ => {
-                        return Err(norito::core::Error::Message(
-                            "invalid enum discriminant".into(),
+                        return Err(norito::core::prepaid_validation_error(
+                            "invalid enum discriminant",
+                            || norito::core::Error::Message("invalid enum discriminant".into()),
                         ))
                     }
                 };

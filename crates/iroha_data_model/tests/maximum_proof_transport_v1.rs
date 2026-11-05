@@ -45,9 +45,10 @@ use iroha_data_model::{
         },
     },
     privacy::{
-        IrohaZkAmsProofV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1, PrivacyProofEnvelopeV1,
-        PrivacyProofV1, PrivacyStatementV1, PrivacyStatementValidationError,
-        TAIRA_PRIVACY_MAX_ACTION_BYTES_V1, TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
+        IrohaZkAmsProofV1, PrivacyConsensusLimitsV1, PrivacyProofBytesV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProofV1, PrivacyRuntimeStatementV1,
+        PrivacyStatementValidationError, TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
+        TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1,
         TAIRA_PRIVACY_PROOF_ENVELOPE_METADATA_ALLOWANCE_BYTES_V1,
         privacy_exact12_fixture_bundle_v1,
     },
@@ -148,7 +149,7 @@ fn num_bigint_max_mantissa() -> String {
 
 /// Build the single canonical execution carrier for this protocol; synthetic bytes remain signed.
 fn transport_builder(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     authority: AccountId,
 ) -> (TransactionBuilder, usize) {
     use iroha_data_model::transaction::signed_attachments::*;
@@ -158,7 +159,7 @@ fn transport_builder(
         maximal_fee_intent(),
     )
     .with_metadata(flag_required_metadata());
-    if let PrivacyStatementV1::IrohaZkX509StarkP256V1(inputs) = &envelope.statement {
+    if let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(inputs) = &envelope.statement {
         let mut inputs = inputs.clone();
         inputs.wallet_account = authority;
         inputs.context.transaction_intent_digest =
@@ -198,7 +199,11 @@ fn transport_builder(
                 .unwrap(),
         )
     } else {
-        let instruction = SubmitPrivacyProofV1::new(envelope.clone());
+        let instruction = SubmitPrivacyProofV1::new(
+            (envelope.clone())
+                .try_into()
+                .expect("frozen Exact12 test input"),
+        );
         let bytes = norito::canonical_frame_len(&instruction).unwrap();
         (builder.with_instructions([instruction]), bytes)
     }
@@ -207,7 +212,7 @@ fn transport_builder(
 /// A complete signed transaction carrying `envelope` from `count` signers of `algorithm`,
 /// with the maximal admissible fee intent, lifetime and nonce.
 fn signed_with_required_context(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     algorithm: Algorithm,
     count: usize,
 ) -> SignedTransaction {
@@ -245,7 +250,7 @@ fn signed_with_required_context(
 /// A complete signed transaction carrying `envelope` from a single-key authority of `algorithm`,
 /// with the maximal admissible fee intent, lifetime and nonce.
 fn signed_by_single_key(
-    envelope: &PrivacyProofEnvelopeV1,
+    envelope: &PrivacyRuntimeProofEnvelopeV1,
     algorithm: Algorithm,
 ) -> SignedTransaction {
     let key = KeyPair::from_seed(
@@ -268,25 +273,29 @@ fn signed_by_single_key(
 }
 
 /// The PQ-MASP fixture envelope with its statement saturated to the aggregate statement cap.
-fn full_statement_envelope(limits: &PrivacyConsensusLimitsV1) -> PrivacyProofEnvelopeV1 {
+fn full_statement_envelope(limits: &PrivacyConsensusLimitsV1) -> PrivacyRuntimeProofEnvelopeV1 {
     let statement_cap = limits.max_statement_and_encrypted_output_bytes_per_transaction as usize;
     let fixtures = privacy_exact12_fixture_bundle_v1().expect("typed fixtures");
     let mut envelope = fixtures
         .rows
         .iter()
         .find_map(|row| {
-            let envelope: PrivacyProofEnvelopeV1 =
+            let envelope: PrivacyRuntimeProofEnvelopeV1 =
                 norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
-            matches!(envelope.statement, PrivacyStatementV1::PqMaspStarkV1(_)).then_some(envelope)
+            matches!(
+                envelope.statement,
+                PrivacyRuntimeStatementV1::PqMaspStarkV1(_)
+            )
+            .then_some(envelope)
         })
         .expect("PQ-MASP fixture");
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
         unreachable!("selected exact statement variant")
     };
     statement.encrypted_outputs[0].ciphertext = vec![0x5a; statement_cap];
     let oversized = norito::canonical_frame_len(&envelope.statement).expect("statement frame");
     let ciphertext_len = statement_cap - (oversized - statement_cap);
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
         unreachable!("selected exact statement variant")
     };
     statement.encrypted_outputs[0]
@@ -310,11 +319,12 @@ fn zk_ams_action_variants_have_the_same_proof_frame_size() {
         0x5a;
         TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1 as usize
     ]);
-    let batch = PrivacyProofV1::IrohaZkAmsV1(
+    let batch = PrivacyRuntimeProofV1::IrohaZkAmsV1(
         IrohaZkAmsProofV1::MaskedRelaxedSpartanBatchAdmission(bytes.clone()),
     );
-    let provision =
-        PrivacyProofV1::IrohaZkAmsV1(IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(bytes));
+    let provision = PrivacyRuntimeProofV1::IrohaZkAmsV1(
+        IrohaZkAmsProofV1::Ristretto255LsagProvisionAccount(bytes),
+    );
     assert_eq!(
         norito::canonical_frame_len(&batch).expect("batch proof frame"),
         norito::canonical_frame_len(&provision).expect("provision proof frame"),
@@ -363,9 +373,11 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
         .expect("sixteen-member signature policy");
         let authority = AccountId::new_multisig(policy);
         for row in &fixtures.rows {
-            let mut envelope: PrivacyProofEnvelopeV1 =
+            let mut envelope: PrivacyRuntimeProofEnvelopeV1 =
                 norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
-            if let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &mut envelope.statement {
+            if let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) =
+                &mut envelope.statement
+            {
                 statement.wallet_account = authority.clone();
                 envelope.statement_digest = envelope.statement.digest().unwrap();
             }
@@ -403,7 +415,7 @@ fn ceiling_proof_complete_envelopes_fit_the_fixed_transaction_cap() {
                 .expect("intrinsic envelope bounds and bindings, not native proof validity");
             let x509 = matches!(
                 envelope.statement,
-                PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
+                PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(_)
             );
             let (mut builder, action_bytes) = transport_builder(&envelope, authority.clone());
             if x509 {
@@ -490,18 +502,22 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
         .rows
         .iter()
         .find_map(|row| {
-            let envelope: PrivacyProofEnvelopeV1 =
+            let envelope: PrivacyRuntimeProofEnvelopeV1 =
                 norito::decode_canonical(&row.envelope_norito).expect("fixture envelope");
-            matches!(envelope.statement, PrivacyStatementV1::PqMaspStarkV1(_)).then_some(envelope)
+            matches!(
+                envelope.statement,
+                PrivacyRuntimeStatementV1::PqMaspStarkV1(_)
+            )
+            .then_some(envelope)
         })
         .expect("PQ-MASP fixture");
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
         unreachable!("selected exact statement variant")
     };
     statement.encrypted_outputs[0].ciphertext = vec![0x5a; statement_cap];
     let oversized = norito::canonical_frame_len(&envelope.statement).expect("statement frame");
     let ciphertext_len = statement_cap - (oversized - statement_cap);
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut envelope.statement else {
         unreachable!("selected exact statement variant")
     };
     statement.encrypted_outputs[0]
@@ -514,7 +530,7 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
     assert_eq!(envelope.statement.validate(&limits), Ok(()));
 
     let mut one_over = envelope.statement.clone();
-    let PrivacyStatementV1::PqMaspStarkV1(statement) = &mut one_over else {
+    let PrivacyRuntimeStatementV1::PqMaspStarkV1(statement) = &mut one_over else {
         unreachable!("selected exact statement variant")
     };
     statement.encrypted_outputs[0].ciphertext.push(0x5a);
@@ -542,7 +558,8 @@ fn maximum_statement_and_proof_fit_with_sixteen_mldsa_signatures() {
     envelope
         .validate_with_limits(&limits)
         .expect("intrinsic maximum envelope, not native proof validity");
-    let instruction = SubmitPrivacyProofV1::new(envelope);
+    let instruction =
+        SubmitPrivacyProofV1::new((envelope).try_into().expect("frozen Exact12 test input"));
     let submit_bytes = norito::canonical_frame_len(&instruction).expect("submit frame");
     assert_eq!(submit_bytes - envelope_bytes, 4);
     let parameters = Parameters::default();
@@ -636,14 +653,15 @@ fn maximal_action_context_constants_are_the_measured_worst_case() {
     ceiling.proof.bytes_mut().bytes = vec![0x5a; limits.max_proof_bytes_per_action as usize];
     let mut small = ceiling.clone();
     small.proof.bytes_mut().bytes = vec![0x5a];
-    let remainder = |envelope: &PrivacyProofEnvelopeV1, algorithm: Algorithm, count: usize| {
-        let signed = signed_with_required_context(envelope, algorithm, count);
-        let total = norito::encode_canonical(&signed)
-            .expect("canonical transaction")
-            .len();
-        u64::try_from(total - norito::canonical_frame_len(envelope).expect("envelope frame"))
-            .expect("remainder fits u64")
-    };
+    let remainder =
+        |envelope: &PrivacyRuntimeProofEnvelopeV1, algorithm: Algorithm, count: usize| {
+            let signed = signed_with_required_context(envelope, algorithm, count);
+            let total = norito::encode_canonical(&signed)
+                .expect("canonical transaction")
+                .len();
+            u64::try_from(total - norito::canonical_frame_len(envelope).expect("envelope frame"))
+                .expect("remainder fits u64")
+        };
     let signer = MAX_TRANSACTION_SIGNER_BYTES;
     let framing = MAXIMAL_ACTION_TRANSACTION_FRAMING_BYTES;
     let algorithms: Vec<_> = (0..=u8::MAX)

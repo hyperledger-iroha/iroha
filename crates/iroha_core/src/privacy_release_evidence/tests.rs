@@ -14,7 +14,7 @@ fn compiled_profile_digest_mutations_v1() -> [fn(&mut CompiledPrivacyProfileV1);
 }
 #[test]
 fn zk_ace_is_unavailable_and_bootle_release_context_binds_every_profile_digest() {
-    let zk_ace = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    let zk_ace = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     assert_eq!(
         compiled_privacy_profile_v1(zk_ace),
         Err(
@@ -24,7 +24,7 @@ fn zk_ace_is_unavailable_and_bootle_release_context_binds_every_profile_digest()
         )
     );
 
-    let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1;
     let profile = compiled_privacy_profile_v1(protocol_id).expect("compiled profile");
     let baseline = norito::encode_canonical(&release_statement_context_from_compiled_profile_v1(
         &profile,
@@ -54,7 +54,7 @@ fn zk_ace_is_unavailable_and_bootle_release_context_binds_every_profile_digest()
 }
 #[test]
 fn verange_release_transcript_binds_every_compiled_profile_digest() {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+    let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
         .expect("compiled VeRange profile");
     let parameters =
         VeRangeParametersV1::for_profile(VeRangeBitLengthV1::Bits32).expect("VeRange parameters");
@@ -81,7 +81,7 @@ fn verange_release_transcript_binds_every_compiled_profile_digest() {
 }
 #[test]
 fn fcmp_release_statement_length_frames_every_compiled_profile_digest() {
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
+    let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1)
         .expect("compiled FCMP++ profile");
     let encode = |profile: &CompiledPrivacyProfileV1| {
         let mut material = Vec::new();
@@ -262,7 +262,7 @@ fn zk_ams_release_envelope_distinguishes_admission_from_native_rejection() {
 #[test]
 fn jindo_release_envelope_requires_the_production_native_dispatch() {
     let profile =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .expect("compiled Jindo profile");
     let authoritative_network_id =
         release_network_id_from_genesis_hash(JINDO_RELEASE_GENESIS_HASH_V1);
@@ -332,7 +332,7 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
     let transaction =
         vega_release_transaction_context_v1().expect("canonical Vega transaction context");
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
     assert_eq!(
         compiled_privacy_profile_v1(protocol_id),
         Err(
@@ -367,7 +367,7 @@ fn vega_release_fixture_uses_the_canonical_single_taira_action() {
 fn vega_release_envelope_fails_closed_before_native_dispatch_while_profile_is_unavailable() {
     let fixture = vega_release_fixture_v1().expect("canonical Vega release fixture");
     let control_profile =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("available structural control profile");
     let authoritative_network_id = release_network_id_from_genesis_hash(fixture.genesis_hash);
     let input = fixture.public_input;
@@ -473,7 +473,7 @@ fn vega_public_action_builder_fails_closed_with_an_otherwise_valid_fixture() {
 }
 #[test]
 fn vega_release_stages_and_network_builder_fail_closed_without_an_activatable_profile() {
-    let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
     for case_kind in PrivacyReleaseCaseKindV1::ALL {
         assert_eq!(
             run_privacy_release_stage_v1(protocol_id, case_kind),
@@ -542,14 +542,14 @@ fn vega_release_stages_and_network_builder_fail_closed_without_an_activatable_pr
 }
 #[test]
 fn canonical_process_profile_is_exact_and_has_one_authoritative_source() {
-    let profiles = PrivacyProtocolIdV1::ALL
+    let profiles = PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS
         .into_iter()
         .filter_map(privacy_release_process_profile_v1)
         .collect::<Vec<_>>();
     assert_eq!(
         profiles,
         vec![PrivacyReleaseProcessProfileV1 {
-            protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             elapsed_ceiling_millis: 300_000,
             peak_rss_ceiling_bytes: 12_884_901_888,
             address_space_ceiling_bytes: 34_359_738_368,
@@ -628,7 +628,7 @@ fn frozen_stage_order_is_explicit_and_matches_the_enum_product() {
         &PRIVACY_RELEASE_STAGE_COORDINATES_V1
     ));
     let mut observed = Vec::new();
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         for case_kind in PrivacyReleaseCaseKindV1::ALL {
             observed.push(privacy_release_stage_ordinal_v1(protocol_id, case_kind));
         }
@@ -647,7 +647,7 @@ fn frozen_stage_order_is_explicit_and_matches_the_enum_product() {
 }
 #[test]
 fn resource_facts_are_frozen_for_every_exact12_stage() {
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         for case_kind in PrivacyReleaseCaseKindV1::ALL {
             let facts = privacy_release_resource_facts_v1(protocol_id, case_kind)
                 .expect("every exact-12 stage has frozen resource facts");
@@ -693,8 +693,8 @@ fn evidence_seeds_are_deterministic_and_purpose_separated() {
         b"invalid-path-proof",
     ];
     for protocol_id in [
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-        PrivacyProtocolIdV1::PqMaspStarkV1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
     ] {
         let seeds = purposes
             .iter()
@@ -716,13 +716,13 @@ fn evidence_seeds_are_deterministic_and_purpose_separated() {
     }
     assert_ne!(
         stage_purpose_seed_v1(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             case_kind,
             b"canonical-proof",
         )
         .expect("IVM proof seed"),
         stage_purpose_seed_v1(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             case_kind,
             b"canonical-proof",
         )
@@ -731,7 +731,7 @@ fn evidence_seeds_are_deterministic_and_purpose_separated() {
 }
 #[test]
 fn zk_x509_profile_refuses_missing_joint_reduction_while_resource_facts_are_total() {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
     assert!(matches!(
         compiled_privacy_profile_v1(protocol_id),
         Err(crate::privacy_profiles::CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete {
@@ -759,7 +759,7 @@ fn maximum_fixture_dimensions_equal_governed_first_release_caps() {
 }
 #[test]
 fn ordered_proof_artifact_cardinality_is_closed_and_fail_closed() {
-    let artifact = |protocol_id: PrivacyProtocolIdV1,
+    let artifact = |protocol_id: PrivacyRuntimeProtocolIdV1,
                     case_kind: PrivacyReleaseCaseKindV1,
                     artifact_ordinal: u8| {
         let canonical_proof_bytes =
@@ -776,10 +776,10 @@ fn ordered_proof_artifact_cardinality_is_closed_and_fail_closed() {
             .expect("valid fixture artifact has a canonical ceiling"),
         }
     };
-    let ordinary_protocol = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
+    let ordinary_protocol = PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1;
     let ordinary_case = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
-    let pgc_protocol = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1;
-    let zk_ams_protocol = PrivacyProtocolIdV1::IrohaZkAmsV1;
+    let pgc_protocol = PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1;
+    let zk_ams_protocol = PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1;
     let maximum_case = PrivacyReleaseCaseKindV1::MaximumShapeResource;
     let adversarial_case = PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation;
     assert_eq!(
@@ -943,7 +943,7 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
         u64::from(TAIRA_PRIVACY_MAX_PROOF_BYTES_PER_ACTION_V1)
     );
     assert_eq!(PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1, 9 * 1024 * 1024);
-    let protocol_id = PrivacyProtocolIdV1::PqMaspStarkV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::PqMaspStarkV1;
     let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
     let ceiling = privacy_release_proof_artifact_ceiling_v1(protocol_id, case_kind, 0)
         .expect("PQ-MASP stage has one canonical ceiling");
@@ -971,7 +971,7 @@ fn proof_artifact_consensus_cap_is_exact_and_cap_plus_one_rejects() {
 }
 #[test]
 fn zk_x509_codec_bound_fits_cap_without_qualifying_the_engine() {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
     let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
     let exact_x5s1_ceiling = u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1);
     assert_eq!(
@@ -1108,7 +1108,7 @@ fn zk_x509_public_evidence_binds_the_exact_validated_input_shape() {
 #[test]
 fn every_typed_artifact_has_one_exact_bound_and_oversized_bounds_reject() {
     let mut artifact_count = 0_usize;
-    for protocol_id in PrivacyProtocolIdV1::ALL {
+    for protocol_id in PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS {
         for case_kind in PrivacyReleaseCaseKindV1::ALL {
             let stage_count = usize::from(privacy_release_proof_artifact_count_v1(
                 protocol_id,
@@ -1125,7 +1125,7 @@ fn every_typed_artifact_has_one_exact_bound_and_oversized_bounds_reject() {
                 )
                 .expect("every required artifact has one canonical ceiling");
                 assert!(ceiling > 0);
-                if protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1 {
+                if protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1 {
                     assert_eq!(ceiling, u64::from(ZK_X509_MAXIMUM_ENCODED_X5S1_BYTES_V1));
                     assert!(ceiling > PRIVACY_RELEASE_MAX_PROOF_ARTIFACT_BYTES_V1);
                     let canonical_proof_bytes = vec![0x58, 0x35, 0x53, 0x31];
@@ -1158,7 +1158,7 @@ fn every_typed_artifact_has_one_exact_bound_and_oversized_bounds_reject() {
 }
 #[test]
 fn canonical_proof_bytes_use_json_base64_and_round_trip_exactly() {
-    let protocol_id = PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1;
     let case_kind = PrivacyReleaseCaseKindV1::PositiveCanonicalEndToEnd;
     let canonical_proof_bytes = vec![0x00, 0x01, 0xfe, 0xff];
     let artifact = PrivacyReleaseProofArtifactEvidenceV1 {
@@ -1191,7 +1191,8 @@ fn canonical_proof_bytes_use_json_base64_and_round_trip_exactly() {
 }
 #[test]
 fn every_protocol_has_one_distinct_nonempty_canonical_descriptor() {
-    let descriptors = PrivacyProtocolIdV1::ALL.map(privacy_release_protocol_descriptor_v1);
+    let descriptors =
+        PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS.map(privacy_release_protocol_descriptor_v1);
     assert!(descriptors.iter().all(|descriptor| !descriptor.is_empty()));
     for (index, descriptor) in descriptors.iter().enumerate() {
         assert!(!descriptors[index + 1..].contains(descriptor));
@@ -1200,7 +1201,7 @@ fn every_protocol_has_one_distinct_nonempty_canonical_descriptor() {
 #[test]
 fn vega_release_descriptor_is_derived_from_the_canonical_mc_constants() {
     let descriptor =
-        privacy_release_protocol_descriptor_v1(PrivacyProtocolIdV1::VegaExistingCredentialZkV1);
+        privacy_release_protocol_descriptor_v1(PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1);
     let upstream_commit = super::vega::VEGA_RELEASE_MC_UPSTREAM_COMMIT_V1;
     let wire = super::vega::VEGA_RELEASE_MC_WIRE_DESCRIPTOR_V1;
     assert!(descriptor.contains(&format!(
@@ -1239,7 +1240,7 @@ fn vega_release_descriptor_is_derived_from_the_canonical_mc_constants() {
 #[test]
 fn jindo_release_descriptor_binds_monomial_repetitions_and_fail_closed_qrom_gate() {
     let descriptor = privacy_release_protocol_descriptor_v1(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     );
     assert!(descriptor.contains("challenge=32-independent-uniform-signed-monomials"));
     assert!(descriptor.contains("all-distinct-signed-monomial-differences-machine-checked-units"));
@@ -1251,7 +1252,7 @@ fn jindo_release_descriptor_binds_monomial_repetitions_and_fail_closed_qrom_gate
 
 #[test]
 fn zk_ace_release_descriptor_binds_final_geometry_and_unresolved_qrom_gate() {
-    let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     let descriptor = privacy_release_protocol_descriptor_v1(protocol_id);
     assert!(descriptor.contains("poseidon-x7-goldilocks-digest384-six-independent-lanes"));
     assert!(descriptor.contains("fixed-secondary=136 unique verifier queries"));
@@ -1275,7 +1276,7 @@ fn zk_ace_release_descriptor_binds_final_geometry_and_unresolved_qrom_gate() {
 #[test]
 #[ignore = "operator-only native proof construction for the complete Bootle/Lantern release stage"]
 fn bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection() {
-    let protocol_id = PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1;
     let case_kind = PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation;
     let evidence = run_privacy_release_stage_v1(protocol_id, case_kind)
         .expect("Bootle/Lantern corruption-and-truncation release stage");
@@ -1303,7 +1304,7 @@ fn bootle_lantern_release_stage_exercises_one_shot_issuance_and_wire_rejection()
 #[test]
 #[ignore = "operator-only native proof construction for the complete ZK-AMS corruption stage"]
 fn zk_ams_corruption_stage_rejects_maximum_and_submaximum_wire_mutations() {
-    let protocol_id = PrivacyProtocolIdV1::IrohaZkAmsV1;
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1;
     let case_kind = PrivacyReleaseCaseKindV1::ProofCorruptionAndTruncation;
     let evidence =
         run_privacy_release_stage_v1(protocol_id, case_kind).expect("ZK-AMS corruption stage");
@@ -1325,4 +1326,24 @@ fn zk_ams_corruption_stage_rejects_maximum_and_submaximum_wire_mutations() {
         case_kind,
         &evidence.proof_artifacts,
     ));
+}
+
+#[test]
+fn ironwood_is_not_an_exact12_release_evidence_coordinate() {
+    let protocol_id = PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1;
+    assert_eq!(
+        privacy_release_protocol_descriptor_v1(protocol_id),
+        "ironwood-halo2-actions-v1; exact12-coordinate=excluded; qualification=unavailable; activation=unavailable-pending-governed-storage-transition"
+    );
+    for case_kind in PrivacyReleaseCaseKindV1::ALL {
+        assert!(privacy_release_resource_facts_v1(protocol_id, case_kind).is_none());
+        assert_eq!(
+            run_privacy_release_stage_v1(protocol_id, case_kind),
+            Err(PrivacyReleaseEvidenceErrorV1 {
+                protocol_id,
+                case_kind,
+                class: PrivacyReleaseEvidenceErrorClassV1::ProtocolUnavailable,
+            })
+        );
+    }
 }

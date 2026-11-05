@@ -14,6 +14,8 @@ pub mod cmpext;
 pub mod const_vec;
 pub mod conststr;
 pub mod erasure;
+#[cfg(test)]
+mod error_display_tests;
 #[cfg(any(
     target_os = "linux",
     all(
@@ -45,6 +47,8 @@ pub mod small;
 pub mod soradns;
 pub mod time;
 pub mod unique_vec;
+#[cfg(test)]
+mod wrapper_traits_tests;
 #[cfg(feature = "json")]
 /// Re-export Norito's JSON derive macros for use within the crate.
 pub mod json_macros {

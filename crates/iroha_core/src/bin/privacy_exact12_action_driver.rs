@@ -38,7 +38,7 @@ use iroha_data_model::{
     prelude::{AccountId, AssetDefinitionId, NetworkId},
     privacy::{
         PrivacyActionRoleV1, PrivacyCompiledProfileSnapshotV1, PrivacyPolicyIdV1, PrivacyPoolIdV1,
-        PrivacyProofEnvelopeV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
+        PrivacyRuntimeProofEnvelopeV1, PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
         TAIRA_PRIVACY_MAX_ACTION_BYTES_V1,
     },
     transaction::{Executable, FeePaymentIntent, SignedTransaction},
@@ -193,7 +193,8 @@ fn require_canonical_role_submission_v1(
         .as_any()
         .downcast_ref::<SubmitPrivacyProofV1>()
         .ok_or_else(|| "action-driver instruction is not SubmitPrivacyProofV1".to_owned())?;
-    let envelope = &submission.envelope;
+    let runtime_envelope: PrivacyRuntimeProofEnvelopeV1 = submission.envelope.clone().into();
+    let envelope = &runtime_envelope;
     let resolved = envelope
         .action_role_v1()
         .map_err(|error| format!("action-driver envelope selects no single role: {error}"))?;
@@ -203,7 +204,7 @@ fn require_canonical_role_submission_v1(
         ));
     }
     let canonical =
-        PrivacyProofEnvelopeV1::bind_v1(envelope.statement.clone(), envelope.proof.clone())
+        PrivacyRuntimeProofEnvelopeV1::bind_v1(envelope.statement.clone(), envelope.proof.clone())
             .map_err(|error| format!("action-driver envelope cannot be rebound: {error}"))?;
     if &canonical != envelope {
         return Err("action-driver envelope is not the canonical binding".to_owned());
@@ -448,13 +449,14 @@ fn verange_public_admission_artifacts_v1(
     let setup_authority = verange_setup_authority_v1(candidate)?;
     let (setup_authority_account_id, setup_public_key_bytes) =
         bounded_ed25519_authority_v1(&setup_authority, "qualification setup")?;
-    let compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
-        .map_err(|error| format!("native VeRange compiled profile is unavailable: {error}"))?;
+    let compiled =
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
+            .map_err(|error| format!("native VeRange compiled profile is unavailable: {error}"))?;
     let compiled_profile = PrivacyCompiledProfileSnapshotV1::from(compiled);
     compiled_profile
         .validate()
         .map_err(|error| format!("native VeRange compiled profile is invalid: {error}"))?;
-    let PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(limits) =
+    let PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(limits) =
         compiled_profile.protocol_limits
     else {
         return Err("native VeRange compiled profile has the wrong limit tag".to_owned());
@@ -479,7 +481,7 @@ fn verange_public_admission_artifacts_v1(
         candidate_binding_sha256: hex::encode(candidate),
         compiled_profile_sha256: compiled_profile_sha256.clone(),
         domain_id: VERANGE_QUALIFICATION_DOMAIN_ID.to_owned(),
-        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1
+        protocol_id: PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
             .canonical_label()
             .to_owned(),
         schema: VERANGE_SETUP_REQUIREMENTS_SCHEMA.to_owned(),
@@ -503,7 +505,7 @@ fn verange_public_admission_artifacts_v1(
         parameter_id_hex: hex::encode(compiled_profile.parameter_id.as_bytes()),
         policy_id_hex: hex::encode(policy_id),
         proof_system_id: "iroha-verange-p256".to_owned(),
-        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1
+        protocol_id: PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
             .canonical_label()
             .to_owned(),
         schema: VERANGE_PUBLIC_ADMISSION_ARTIFACT_SCHEMA.to_owned(),
@@ -863,7 +865,7 @@ mod tests {
         assert_eq!(
             profile,
             PrivacyCompiledProfileSnapshotV1::from(
-                compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+                compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
                     .unwrap()
             )
         );
@@ -1090,7 +1092,7 @@ mod tests {
         );
         assert_eq!(
             object["protocol"].as_str(),
-            Some(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1.canonical_label())
+            Some(PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1.canonical_label())
         );
         assert_eq!(
             object["missing_evidence"],
@@ -1150,7 +1152,7 @@ mod tests {
             .expect("the single instruction is SubmitPrivacyProofV1");
         assert_eq!(submission.envelope.action_role_v1(), Ok(role));
         assert_eq!(
-            PrivacyProofEnvelopeV1::bind_v1(
+            PrivacyRuntimeProofEnvelopeV1::bind_v1(
                 submission.envelope.statement.clone(),
                 submission.envelope.proof.clone()
             )
@@ -1198,7 +1200,7 @@ mod tests {
 
         // A relabelled protocol no longer resolves to one role.
         let mut relabelled = submission.clone();
-        relabelled.envelope.protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        relabelled.envelope.protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
         let error = require_canonical_role_submission_v1(&rebuild(vec![relabelled.into()]), role)
             .expect_err("protocol substitution");
         assert!(error.contains("selects no single role"), "{error}");

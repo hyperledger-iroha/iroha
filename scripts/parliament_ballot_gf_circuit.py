@@ -17,9 +17,17 @@ import re
 
 
 FIELD = "crates/iroha_zkp_vole/src/field.rs"
+HISTORICAL_FIELD_SHA256 = "df65fd59ae7970752ec71c18212e3aee09fc8f498068dff29e3ac23da9d5e3a8"
+# The sole reviewed change from the historical field source is this lint
+# expectation on the generic byte decoder. No arithmetic or decoder body changed.
+REVIEWED_LINT_ATTRIBUTE = '''    #[expect(
+        clippy::chunks_exact_to_as_chunks,
+        reason = "a trait's associated const cannot parameterize `as_chunks` in a default method"
+    )]
+'''
 ACCOUNTING = "docs/validation/parliament_ballot_ideal_sampler_accounting/report.json"
 PINS = {
-    FIELD: "df65fd59ae7970752ec71c18212e3aee09fc8f498068dff29e3ac23da9d5e3a8",
+    FIELD: "6bd8298d50a513d29979928f964dcfd3f7de3d12f1950203673d694ad8ca2b1a",
     ACCOUNTING: "32f13e842ac39f7f3c3d08ae2135a8ebdffd442acc776002e2229c36610ad043",
     "specs/parliament_ballot_b6_ideal_sampler_accounting.md": "c022d1f76360dfe4bdd6934fe352d5d87e7b9f63df3828608230f759cb1e22c5",
     "specs/parliament_ballot_b6_oracle_log_circuit.md": "de33b603bfc281238b348f082a2316a645f1d236894e7837ee95078ddbc1d673",
@@ -209,14 +217,34 @@ def source_geometry(source):
     return found
 
 
+def field_source_correspondence(source):
+    """Prove exact historical bytes after removing the one reviewed lint attribute.
+
+    This permits no generic comment stripping or semantic normalization. The
+    historical accounting remains historical; only its field interface is used.
+    """
+    require(source.count(REVIEWED_LINT_ATTRIBUTE) == 1,
+            "reviewed field lint attribute differs")
+    historical = source.replace(REVIEWED_LINT_ATTRIBUTE, "", 1).encode()
+    require(hashlib.sha256(historical).hexdigest() == HISTORICAL_FIELD_SHA256,
+            "field source differs beyond reviewed lint attribute")
+    return {"historical_sha256": HISTORICAL_FIELD_SHA256,
+            "current_sha256": hashlib.sha256(source.encode()).hexdigest(),
+            "change": "One Clippy expectation on BinaryField::vec_from_bytes; all other bytes identical.",
+            "historical_accounting_requalified": False}
+
+
 def report(root):
     """Bind four selected inputs, then report the exact three kernel resources."""
     root = Path(root).resolve()
     before = verify_sources(root)
-    fields = source_geometry((root / FIELD).read_text())
+    field_source = (root / FIELD).read_text()
+    fields = source_geometry(field_source)
+    correspondence = field_source_correspondence(field_source)
     previous = json.loads((root / ACCOUNTING).read_text())
-    require(previous["source_sha256_before"][FIELD] == before[FIELD]
-            and previous["source_sha256_after"][FIELD] == before[FIELD], "historical field source differs")
+    require(previous["source_sha256_before"][FIELD] == HISTORICAL_FIELD_SHA256
+            and previous["source_sha256_after"][FIELD] == HISTORICAL_FIELD_SHA256,
+            "historical field source differs")
     require(previous["checked_logical_accounting"] is True and previous["profile_qualified"] is False
             and previous["complete_resource_vector"] is False, "unexpected prior accounting scope")
     entries = {name: resources(g) for name, g in KERNELS.items()}
@@ -230,6 +258,7 @@ def report(root):
         "source_sha256_after": after,
         "selected_source_count": len(before),
         "source_field_geometry": fields,
+        "field_source_correspondence": correspondence,
         "kernels": entries,
         "exclusions": [
             "This four-input inventory is not a complete compiler/dependency or historical-accounting closure.",

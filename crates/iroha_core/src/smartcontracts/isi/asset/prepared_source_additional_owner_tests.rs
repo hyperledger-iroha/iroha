@@ -72,13 +72,13 @@ fn seed_prepared_test_orchard_reserve(
     id: &AssetId,
 ) -> PrivacyPublicReserveOwnerV1 {
     use iroha_data_model::privacy::{
-        PrivacyNamespaceScopeV1, PrivacyNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
-        PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyProtocolIdV1,
+        PrivacyNamespaceScopeV1, PrivacyRuntimeNamespaceV1, PrivacyOrchardPoolBootstrapDigestV1,
+        PrivacyPoolIdV1, PrivacyPoolNamespaceV1, PrivacyRuntimeProtocolIdV1,
     };
 
     let owner = PrivacyPublicReserveOwnerV1::Orchard {
-        namespace: PrivacyNamespaceV1::new(
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+        namespace: PrivacyRuntimeNamespaceV1::new(
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             PrivacyNamespaceScopeV1::Pool(PrivacyPoolNamespaceV1 {
                 pool_id: PrivacyPoolIdV1::new([0xD1; 32]),
             }),

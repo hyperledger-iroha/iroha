@@ -42,7 +42,7 @@ fn fcmp_root_from_native_v1(
 #[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize, Encode, Decode)]
 #[norito(deny_unknown_fields)]
 pub struct PrivacyFcmpAccumulatorStateV1 {
-    namespace: PrivacyNamespaceV1,
+    namespace: PrivacyRuntimeNamespaceV1,
     bootstrap_digest: PrivacyProofManagedPoolBootstrapDigestV1,
     epoch: u64,
     root: PrivacyFcmpTreeRootV1,

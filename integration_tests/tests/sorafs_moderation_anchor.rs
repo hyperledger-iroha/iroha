@@ -1,5 +1,6 @@
 //! Four-validator regressions for `SoraFS` moderation proof admission, sortition and bond settlement.
 
+use super::sorafs_network::{prepare_transaction, submit_transaction};
 use eyre::{Result, WrapErr as _, ensure, eyre};
 use futures_util::StreamExt as _;
 use integration_tests::sandbox;
@@ -46,7 +47,7 @@ use iroha::{
                 pop_credential_payload_commitment_v1, pop_revocation_nonce_commitment_v1,
             },
         },
-        transaction::{FeePaymentIntent, error::TransactionRejectionReason},
+        transaction::error::TransactionRejectionReason,
     },
 };
 use iroha_executor_data_model::permission::{
@@ -78,7 +79,7 @@ use sorafs_manifest::pop_credentials::{
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::{
     task::JoinSet,
-    time::{Instant, sleep, timeout_at},
+    time::{Instant, sleep, timeout, timeout_at},
 };
 
 const CASE_ID: &str = "four-peer-anchor";
@@ -90,36 +91,12 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 const CONVERGENCE_TIMEOUT: Duration = Duration::from_secs(180);
 const TRANSACTION_TIMEOUT: Duration = Duration::from_secs(180);
 
-fn no_fee() -> FeePaymentIntent {
-    FeePaymentIntent::authority(Vec::new(), None)
-}
-
 async fn submit_instructions(
     client: &Client,
     instructions: impl IntoIterator<Item = impl Into<InstructionBox>>,
 ) -> Result<HashOf<SignedTransaction>> {
-    let account = client.account_client();
-    let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-        instructions,
-        no_fee(),
-        Metadata::default(),
-    ))?;
-    let quote = account
-        .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-        .await?;
-    ensure!(
-        payload
-            .fee_payment
-            .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected payer, sponsor revision, or gas bound"
-    );
-    payload.fee_payment = quote.intent;
-    let transaction = account.sign_transaction(payload)?;
-    let client = client.clone();
-    integration_tests::sync::spawn_blocking(move || {
-        client.submit_transaction_and_wait(&transaction)
-    })
-    .await?
+    let transaction = prepare_transaction(client, instructions, Metadata::default()).await?;
+    submit_transaction(client, &transaction).await
 }
 
 fn unix_time_ms() -> Result<u64> {
@@ -1035,8 +1012,11 @@ async fn four_peer_moderation_sortition_anchor_is_post_deadline_and_delay_stable
         [
             InstructionBox::from(SetSorafsPopIssuerPolicy::new(pop_policy)),
             InstructionBox::from(CommitSorafsPopCredentialBatch::new(
-                norito::encode_canonical(&pop_batch(&BOB_KEYPAIR, now_epoch.saturating_sub(1)))
-                    .expect("encode canonical PoP registry batch"),
+                norito::encode_canonical(&valid_pop_batch(
+                    &BOB_KEYPAIR,
+                    &pop_material(&BOB_KEYPAIR, now_epoch.saturating_sub(1)),
+                ))
+                .expect("encode canonical PoP registry batch"),
             )),
             InstructionBox::from(SetSorafsModerationPolicy::new(moderation_policy)),
         ],
@@ -1149,8 +1129,10 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
             .parse()
             .wrap_err("parse default governance voting asset")?;
     let voting_domain = DomainId::try_new("sora", "universal")?;
-    let escrow_literal = BOB_ID.to_string();
-    let slash_receiver_literal = SAMPLE_GENESIS_ACCOUNT_ID.to_string();
+    let discriminant = iroha_config::parameters::defaults::common::chain_discriminant();
+    let escrow_literal = BOB_ID.to_i105_for_discriminant(discriminant)?;
+    let slash_receiver_literal =
+        SAMPLE_GENESIS_ACCOUNT_ID.to_i105_for_discriminant(discriminant)?;
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_auto_populated_trusted_peers()
@@ -1161,12 +1143,12 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
                 .write(["gov", "bond_escrow_account"], escrow_literal)
                 .write(["gov", "slash_receiver_account"], slash_receiver_literal);
         })
-        .with_genesis_instruction(Register::domain(Domain::new(voting_domain)))
+        .with_genesis_instruction(Register::domain(Domain::new(voting_domain.clone())))
         .with_genesis_instruction(Register::asset_definition(AssetDefinition::numeric(
             voting_asset_id.clone(),
             "moderation challenge XOR".to_owned(),
             AssetBalancePolicy::Global,
-            None,
+            Some(voting_domain),
         )))
         .with_genesis_instruction(Mint::asset_quantity(
             1_000_u32,
@@ -1705,6 +1687,52 @@ async fn four_peer_moderation_challenge_settlements_converge_and_conserve_bonds_
         },
     )
     .await?;
+    Ok(())
+}
+
+#[test]
+fn moderation_pop_batch_binds_a_real_canonical_signed_credential() -> Result<()> {
+    let material = pop_material(&BOB_KEYPAIR, 1_700_000_000);
+    let batch = valid_pop_batch(&BOB_KEYPAIR, &material);
+    batch.validate()?;
+    let root: PopCommitmentRootV1 = norito::decode_canonical(&batch.commitment_root_payload)?;
+    let revocations: PopRevocationListV1 =
+        norito::decode_canonical(&batch.revocation_list_payload)?;
+    verify_pop_credential_signature_v1(&material.credential)?;
+    verify_pop_commitment_root_signature_v1(&root)?;
+    verify_pop_revocation_list_signature_v1(&revocations)?;
+    assert_eq!(root, material.root);
+    assert_eq!(revocations, material.revocations);
+    assert_eq!(batch.commitments.len(), 1);
+    let commitment = &batch.commitments[0];
+    assert_eq!(
+        commitment.credential_commitment,
+        pop_credential_payload_commitment_v1(&norito::encode_canonical(&material.credential)?)
+    );
+    assert_eq!(
+        root.root_digest,
+        pop_credential_root_from_path_v1(
+            pop_credential_leaf_v1(&material.credential)?,
+            &material.credential_path,
+        )?
+    );
+    assert_eq!(commitment.commitment_root, root.root_digest);
+    assert_eq!(revocations.commitment_root, root.root_digest);
+    assert_eq!(
+        batch.issuer_policy_digest,
+        pop_policy(&BOB_KEYPAIR).digest()?
+    );
+
+    let mut noncanonical = root;
+    noncanonical.root_digest = [0x41; 32];
+    assert!(matches!(
+        verify_pop_commitment_root_signature_v1(&noncanonical),
+        Err(
+            sorafs_manifest::pop_credentials::PopCredentialValidationError::InvalidScalarEncoding {
+                field: "commitment root"
+            }
+        )
+    ));
     Ok(())
 }
 

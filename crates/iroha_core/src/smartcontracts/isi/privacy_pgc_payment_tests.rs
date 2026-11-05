@@ -196,7 +196,9 @@ fn payment_rejects_missing_stale_substituted_and_consumed_intent_before_effects(
 fn tampered_pgc_payment_proof_preserves_every_state_map_and_budget() {
     let bootstrap = valid_bootstrap_fixture();
     let mut payment = valid_payment_instruction();
-    let PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) = &mut payment.envelope.proof else {
+    let iroha_data_model::privacy::PrivacyProofV1::AnonymousPgcKOutOfNV1(proof) =
+        &mut payment.envelope.proof
+    else {
         unreachable!("Anonymous PGC payment fixture")
     };
     let middle = proof.bytes.len() / 2;
@@ -312,7 +314,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
     {
         let mut transaction = block.transaction();
         let invariant_key =
-            PrivacyPgcPoolInvariantKeyV1::new(bootstrap.request.bootstrap.namespace)
+            PrivacyPgcPoolInvariantKeyV1::new(bootstrap.request.bootstrap.namespace.into())
                 .expect("invariant key");
         let invariant_before = *transaction
             .world
@@ -320,7 +322,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             .get(&invariant_key)
             .expect("bootstrapped invariant");
         let first_key = PrivacyPgcAccountKeyV1::new(
-            bootstrap.request.bootstrap.namespace,
+            bootstrap.request.bootstrap.namespace.into(),
             bootstrap.request.bootstrap.accounts[0].public_key,
         )
         .expect("first account key");
@@ -355,7 +357,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
             "the complete successor table must replace current ciphertexts"
         );
         let head_key = PrivacyRootHeadKeyV1::new(
-            bootstrap.request.bootstrap.namespace,
+            bootstrap.request.bootstrap.namespace.into(),
             PrivacyRootRoleV1::PgcAccountState,
         )
         .expect("head key");
@@ -401,7 +403,7 @@ fn verified_pgc_payment_replaces_complete_table_atomically_and_replay_rejects() 
         "effective-height hook must prune PGC history to the tightened cap"
     );
     let head_key = PrivacyRootHeadKeyV1::new(
-        bootstrap.request.bootstrap.namespace,
+        bootstrap.request.bootstrap.namespace.into(),
         PrivacyRootRoleV1::PgcAccountState,
     )
     .expect("PGC head key");

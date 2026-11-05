@@ -1,5 +1,6 @@
 """Exact native source ownership rejects stale declarations and wrong module edges."""
 import importlib.util
+import re
 from pathlib import Path
 import shutil
 import tempfile
@@ -82,6 +83,45 @@ class NativeInventoryTests(unittest.TestCase):
         self.parent.write_text('mod tests {} mod other { include!("tests.rs"); }')
         with self.assertRaisesRegex(ValueError, "registration differs"):
             self.validate()
+
+    def test_windows_only_declarations_need_review_and_never_become_selectors(self):
+        """The darwin/linux gate never compiles #[cfg(windows)] tests, so --list cannot select them."""
+        windows = (("tests.rs", "windows_case"),)
+        for source in ('#[cfg(windows)]\n#[test]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n',
+                       '#[test]\n#[cfg( windows )]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n'):
+            with self.subTest(source=source):
+                self.source.write_text(source)
+                self.assertEqual(inventory.validate_native_source_inventory(
+                    self.root, owners=self.owners, windows_only=windows), {"owner::tests::exact_case"})
+                with self.assertRaisesRegex(ValueError, r"Windows-only census differs.*extra=\['windows_case'\]"):
+                    self.validate()
+        # A reviewed entry never hides a compiled, commented-out or removed declaration.
+        for source in ('#[cfg(not(windows))]\n#[test]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n',
+                       '// #[cfg(windows)]\n#[test]\nfn windows_case() {}\n#[test]\nfn exact_case() {}\n',
+                       '#[test]\nfn exact_case() {}\n'):
+            with self.subTest(source=source):
+                self.source.write_text(source)
+                with self.assertRaisesRegex(ValueError, r"Windows-only census differs.*missing=\['windows_case'\]"):
+                    inventory.validate_native_source_inventory(self.root, owners=self.owners, windows_only=windows)
+        self.source.write_text('#[cfg(windows)]\n#[test]\nfn exact_case() {}\n')
+        with self.assertRaisesRegex(ValueError, r"source census differs.*missing=\['exact_case'\]"):
+            inventory.validate_native_source_inventory(
+                self.root, owners=self.owners, windows_only=(("tests.rs", "exact_case"),))
+
+    def test_relocated_windows_control_is_exactly_gated_and_unselected(self):
+        parent = ROOT / "crates/iroha_core/src/query/native_context_archive/read/tests.rs"
+        leaf = "completed_native_read_rechecks_original_private_custody_at_receiver_finish"
+        module = "windows_custody_tests"
+        self.assertEqual(inventory.NATIVE_WINDOWS_ONLY_TESTS, ())
+        self.assertEqual(parent.read_text().count(
+            '#[cfg(windows)]\n#[path = "windows_custody_tests.rs"]\nmod windows_custody_tests;'), 1)
+        mask = inventory.rust_source_masker(ROOT)
+        declarations = re.findall(r"#\[test\]\s*fn\s+(\w+)\s*\(",
+                                  mask(parent.with_name(module + ".rs").read_text()))
+        self.assertEqual(declarations, [leaf])
+        self.assertNotIn("fn " + leaf + "(", mask(parent.read_text()))
+        selectors = {name for _, names in inventory.native_owner_stages() for name in names}
+        self.assertFalse(any(name.rsplit("::", 1)[-1] == leaf for name in selectors))
 
     def test_merged_original_custody_and_sccp_schedule_controls_require_exact_owners(self):
         """Merged controls remain mandatory and reject equal-count substitutions."""

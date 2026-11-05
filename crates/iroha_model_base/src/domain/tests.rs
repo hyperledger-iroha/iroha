@@ -3,6 +3,17 @@
 use super::*;
 
 #[test]
+fn domain_getters_borrow_the_stored_canonical_labels() {
+    let domain = DomainId::try_new("Treasury", "CentralBank").expect("domain id");
+    let name: &Name = domain.name();
+    let dataspace: &Name = domain.dataspace();
+    assert!(std::ptr::eq(name, &domain.name));
+    assert!(std::ptr::eq(dataspace, &domain.dataspace));
+    assert_eq!(name.as_ref(), "treasury");
+    assert_eq!(dataspace.as_ref(), "centralbank");
+}
+
+#[test]
 fn domain_id_try_new_canonicalizes_both_segments() {
     let domain_id = DomainId::try_new("Treasury", "CentralBank").expect("domain id");
     assert_eq!(domain_id.to_string(), "treasury.centralbank");

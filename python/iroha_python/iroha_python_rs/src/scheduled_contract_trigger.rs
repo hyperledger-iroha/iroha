@@ -3,7 +3,10 @@
 //! A trigger's direct ContractCall executable binds arguments from its event.
 //! A scheduled time event has no business argument record. The explicit Batch
 //! form instead owns one exact invocation, which is validated against the live
-//! pinned code and canonical ABI on each firing.
+//! pinned code and canonical ABI on each firing. Registration declares exactly
+//! one native progress attempt plus the retry budget (at most 1024 attempts), so
+//! an idle chain can schedule the action without synthetic keeper transactions.
+//! Every attempt consumes its allowance even when business execution rejects.
 
 use super::*;
 use iroha_data_model::{
@@ -86,6 +89,11 @@ pub(super) fn build(input: ScheduledContractCall<'_>) -> Result<InstructionBox, 
         NonZeroU32::new(input.max_retries).ok_or("max_retries must be greater than zero")?;
     let retry_after_ms =
         NonZeroU64::new(input.retry_after_ms).ok_or("retry_after_ms must be greater than zero")?;
+    let progress_attempts = input
+        .max_retries
+        .checked_add(1)
+        .filter(|attempts| *attempts <= 1_024)
+        .ok_or("scheduled contract retries exceed the native progress allowance")?;
     let arguments =
         ContractArgumentRecord::try_new(input.arguments.to_vec()).map_err(|e| e.to_string())?;
     let executable = Executable::Batch(
@@ -96,6 +104,13 @@ pub(super) fn build(input: ScheduledContractCall<'_>) -> Result<InstructionBox, 
             arguments: Some(arguments),
         })]
         .into(),
+    );
+    let mut metadata = Metadata::default();
+    metadata.insert(
+        "native_progress_attempts"
+            .parse()
+            .map_err(|error| format!("{error}"))?,
+        Json::new(progress_attempts),
     );
     let action = TriggerAction::new(
         executable,
@@ -111,14 +126,17 @@ pub(super) fn build(input: ScheduledContractCall<'_>) -> Result<InstructionBox, 
         max_retries,
         retry_after_ms,
     })
-    .map_err(|e| e.to_string())?;
+    .map_err(|e| e.to_string())?
+    .with_metadata(metadata);
     Ok(Register::trigger(Trigger::new(trigger_id, action)).into())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use iroha_data_model::{isi::RegisterBox, smart_contract::entrypoint::EntrypointValueAtomV1};
+    use iroha_data_model::{
+        HasMetadata, isi::RegisterBox, smart_contract::entrypoint::EntrypointValueAtomV1,
+    };
 
     fn fixture_arguments() -> Vec<u8> {
         norito::to_bytes(&EntrypointArgumentRecordV1 {
@@ -157,6 +175,21 @@ mod tests {
         };
         let action = register.object.action();
         assert_eq!(action.repeats(), Repeats::Exactly(1));
+        assert_eq!(
+            action
+                .metadata()
+                .get("native_progress_attempts")
+                .unwrap()
+                .try_into_any_norito::<u32>()
+                .unwrap(),
+            4
+        );
+        assert!(
+            action
+                .metadata()
+                .get("__native_progress_remaining")
+                .is_none()
+        );
         assert_eq!(
             action
                 .retry_policy()
@@ -201,6 +234,14 @@ mod tests {
             }
             assert!(build(input).is_err(), "{field}");
         }
+        for count in [1_024, u32::MAX] {
+            let mut input = fixture(&arguments);
+            input.max_retries = count;
+            assert!(build(input).is_err());
+        }
+        let mut input = fixture(&arguments);
+        input.max_retries = 1_023;
+        assert!(build(input).is_ok());
         let mut input = fixture(&arguments);
         input.entrypoint = " execute_scheduled_payment ";
         assert!(build(input).is_err());

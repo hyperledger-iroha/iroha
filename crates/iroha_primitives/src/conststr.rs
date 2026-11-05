@@ -16,7 +16,6 @@ use core::{
     slice::from_raw_parts,
     str::from_utf8_unchecked,
 };
-use derive_more::{Debug, Display};
 use iroha_schema::{Ident, IntoSchema, MetaMap, TypeId};
 use norito::{
     DeserializePayload, SerializePayload, core as ncore,
@@ -47,12 +46,15 @@ const MAX_INLINED_STRING_LEN: usize = 2 * size_of::<usize>() - 1;
 /// | Box     | ptr   | len                | tag (always 0) |
 /// +---------+-------+--------------------+----------------+
 /// ```
-#[derive(Display)]
-#[display("{}", &**self)]
 #[repr(C)]
 pub union ConstString {
     inlined: InlinedString,
     boxed: ManuallyDrop<BoxedString>,
+}
+impl fmt::Display for ConstString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", &**self)
+    }
 }
 impl norito::NoritoSchema for ConstString {
     fn nominal_name() -> String {
@@ -346,8 +348,6 @@ impl IntoSchema for ConstString {
         }
     }
 }
-#[derive(Debug)]
-#[debug("{:?}", &**self)]
 #[repr(C)]
 struct BoxedString {
     #[cfg(target_endian = "little")]
@@ -355,6 +355,11 @@ struct BoxedString {
     len: usize,
     #[cfg(target_endian = "big")]
     ptr: NonNull<u8>,
+}
+impl fmt::Debug for BoxedString {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&**self, f)
+    }
 }
 impl Default for BoxedString {
     fn default() -> Self {
@@ -506,6 +511,31 @@ impl TryFrom<String> for InlinedString {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn boxed_string_debug_preserves_escaped_text_flags_and_writer_errors() {
+        use std::fmt::Write as _;
+
+        struct FailingWriter;
+        impl fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> fmt::Result {
+                Err(fmt::Error)
+            }
+        }
+        for text in [
+            "",
+            "short",
+            "μ🔥\nquote\"\\",
+            "a long string stored on the heap",
+        ] {
+            let boxed = BoxedString::from(text);
+            assert_eq!(format!("{boxed:?}"), format!("{text:?}"));
+            assert_eq!(format!("{boxed:>64.3?}"), format!("{text:>64.3?}"));
+            assert_eq!(format!("{boxed:🦀^64.3?}"), format!("{text:🦀^64.3?}"));
+            assert_eq!(format!("{boxed:+#064.3?}"), format!("{text:+#064.3?}"));
+            assert_eq!(write!(FailingWriter, "{boxed:?}"), Err(fmt::Error));
+        }
+    }
     mod layout {
         use super::*;
         use core::mem::{align_of, size_of};

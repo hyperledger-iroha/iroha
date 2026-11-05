@@ -104,6 +104,76 @@ fn create_nfts_recipient_prefix_reproduces_the_complete_account_snapshot() {
 }
 
 #[test]
+fn create_nfts_transfer_sources_match_effect_authority() {
+    let authority = seeded_account(FIXTURE_ACCOUNTS + 1);
+    let recipients = Arc::new(vec![seeded_account(0), seeded_account(1)]);
+    let address = ContractAddress::derive(
+        &"hash:0000000000000000000000000000000000000000000000000000000000000001#C50E"
+            .parse()
+            .expect("canonical fixture network id"),
+        &authority,
+        48,
+        DataSpaceId::UNIVERSAL,
+    )
+    .expect("derive contract address");
+    let subject = address.subject_id();
+    assert_ne!(subject, authority);
+
+    for bound in [false, true] {
+        let expected_authority = if bound { &subject } else { &authority };
+        let mut host = CoreHost::with_accounts(authority.clone(), Arc::clone(&recipients));
+        if bound {
+            let authorization = ContractEntrypointAuthorizationSnapshot::new(
+                authority.clone(),
+                "run".to_owned(),
+                iroha_data_model::smart_contract::manifest::EntrypointAuthorizationV1::Anyone,
+                &crate::smartcontracts::code::BoundContractIdentity {
+                    lifecycle_revision: 1,
+                    contract_address: address.clone(),
+                    contract_alias: None,
+                    contract_alias_binding: None,
+                    code_hash: Hash::new(b"NFT source authority regression"),
+                },
+            );
+            host.bind_contract_runtime_context(subject.clone(), authorization);
+        }
+        let mut vm = IVM::new(1_000_000);
+        let quote = host
+            .prepare_syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &vm)
+            .expect("quote complete NFT effects");
+        let expected_gas = host.create_nfts_for_all_gas_quote();
+        assert_eq!(quote, 1_000_000, "preparation reserves the available gas");
+        let actual = host
+            .syscall(ivm_sys::SYSCALL_CREATE_NFTS_FOR_ALL_USERS, &mut vm)
+            .expect("queue NFT effects");
+        assert_eq!(actual, expected_gas);
+        assert!(actual <= quote);
+        assert_eq!(host.next_nft_sequence(), 2);
+        let effects = &host.queued;
+        assert_eq!(effects.len(), 2 * recipients.len());
+        for (pair, recipient) in effects.chunks_exact(2).zip(recipients.iter()) {
+            let register_authority = &pair[0].authority;
+            let transfer_authority = &pair[1].authority;
+            let register = pair[0].instruction().expect("queued registration");
+            let transfer = pair[1].instruction().expect("queued transfer");
+            assert_eq!(register_authority, expected_authority);
+            assert_eq!(transfer_authority, expected_authority);
+            let Some(RegisterBox::Nft(register)) = register.as_any().downcast_ref::<RegisterBox>()
+            else {
+                panic!("expected NFT registration before each transfer");
+            };
+            let Some(TransferBox::Nft(transfer)) = transfer.as_any().downcast_ref::<TransferBox>()
+            else {
+                panic!("expected NFT transfer after each registration");
+            };
+            assert_eq!(&transfer.source, register_authority);
+            assert_eq!(&transfer.destination, recipient);
+            assert_eq!(&transfer.object, register.object.id());
+        }
+    }
+}
+
+#[test]
 fn transaction_account_snapshot_stays_bounded_and_pinned_to_its_first_setup() {
     let mut world = World::default();
     insert_fixture_accounts(&mut world);

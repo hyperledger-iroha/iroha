@@ -30,6 +30,7 @@ pub struct ProviderFixture {
     pub completion_key: KeyPair,
     pub role_keys: [KeyPair; 4],
     pub storage_dir: PathBuf,
+    kura_dir: PathBuf,
     credential_dir: PathBuf,
 }
 
@@ -68,6 +69,7 @@ impl ProviderFixture {
         let root = root.join(format!("provider-{index}"));
         fs::create_dir_all(&root)?;
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700))?;
+        let root = root.canonicalize()?;
         let key = |offset| {
             KeyPair::try_from_seed(vec![0x40 + index * 8 + offset; 32], Algorithm::Ed25519)
         };
@@ -77,6 +79,7 @@ impl ProviderFixture {
             completion_key: key(5)?,
             role_keys: [key(1)?, key(2)?, key(3)?, key(4)?],
             storage_dir: root.join("storage"),
+            kura_dir: root.join("kura"),
             credential_dir: root.join("custody"),
         })
     }
@@ -139,7 +142,19 @@ impl ProviderFixture {
     }
     pub fn config(&self, origins: &[(ProviderId, String)]) -> Result<toml::Table> {
         let mut layer = toml::Table::new();
+        // The finalized ingest archive rejects symlink ancestors. Keep its Kura
+        // root under this provider's canonical directory, including on macOS.
+        set(
+            &mut layer,
+            &["kura", "store_dir"],
+            self.kura_dir.display().to_string(),
+        );
         set(&mut layer, &["sorafs", "storage", "enabled"], true);
+        set(
+            &mut layer,
+            &["sorafs", "discovery", "discovery_enabled"],
+            true,
+        );
         set(
             &mut layer,
             &["sorafs", "storage", "provider_id_hex"],
@@ -270,6 +285,11 @@ impl ProviderFixture {
             &["sorafs", "repair", "source", "credential"],
             role_paths[1].display().to_string(),
         );
+        set(
+            &mut layer,
+            &["sorafs", "repair", "source", "timeout_ms"],
+            i64::try_from(iroha_config::parameters::defaults::sorafs::repair::SOURCE_TIMEOUT_MS)?,
+        );
         Ok(layer)
     }
 }
@@ -283,6 +303,34 @@ fn software_fixture_writes_distinct_owner_only_runtime_custody() -> Result<()> {
         "http://127.0.0.1:18080/".into(),
     )])?;
     ensure!(layer["sorafs"]["storage"]["enabled"].as_bool() == Some(true));
+    ensure!(layer["sorafs"]["discovery"]["discovery_enabled"].as_bool() == Some(true));
+    let kura_dir = Path::new(layer["kura"]["store_dir"].as_str().unwrap());
+    ensure!(kura_dir.parent() == Some(root.path().canonicalize()?.join("provider-0").as_path()));
+    use iroha_config::parameters::defaults::sorafs::storage::provider_ingest_runtime::finalized_archive as archive;
+    use iroha_core::query::provider_ingest_finalized::{
+        ProviderIngestFinalizedArchiveBoundsV1, ProviderIngestFinalizedArchiveV1,
+    };
+    let bounds = ProviderIngestFinalizedArchiveBoundsV1::try_new(
+        archive::MAX_RECORD_BYTES.0,
+        archive::MAX_ARCHIVE_ENTRIES,
+        archive::MAX_TOTAL_BYTES.0,
+        archive::MAX_PROVIDERS_PER_ANCHOR,
+        archive::MAX_ORDERS_PER_PROVIDER,
+        archive::MAX_TOTAL_ORDERS_PER_ANCHOR,
+        archive::MAX_PAGE_ROWS,
+    )?;
+    let _archive =
+        ProviderIngestFinalizedArchiveV1::try_open(kura_dir.join(archive::RELATIVE_ROOT), bounds)?;
+    let repair = iroha_config_base::read::ConfigReader::new()
+        .with_toml_source(iroha_config_base::toml::TomlSource::inline(
+            layer["sorafs"]["repair"].as_table().unwrap().clone(),
+        ))
+        .read_and_complete::<iroha_config::parameters::user::SorafsRepair>()
+        .expect("publication repair source must deserialize");
+    ensure!(
+        repair.source.unwrap().timeout_ms
+            == iroha_config::parameters::defaults::sorafs::repair::SOURCE_TIMEOUT_MS
+    );
     let mut publics = std::collections::BTreeSet::new();
     for key in std::iter::once(&provider.owner_key).chain(provider.role_keys.iter()) {
         ensure!(publics.insert(key.public_key().to_string()));

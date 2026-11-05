@@ -65,8 +65,9 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         assert_pow(config, (6, 900, 120, 240, 8192, 1, 1));
     }
 
-    // One validator receives a different local configuration on restart. Readback
-    // must retain every setting independently of the other validators.
+    // Read back an alternative local policy before restoring handshake
+    // compatibility. Difficulty and Argon2 parameters must match peer tickets;
+    // changing them on only one validator intentionally disconnects that peer.
     let restarted_peer = &network.peers()[0];
     let mut layers: Vec<_> = network.config_layers_for_peer(restarted_peer).collect();
     layers.push(Cow::Owned(toml::toml! {
@@ -105,10 +106,28 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         "local proof-of-work policy must preserve the handshake identity and negotiated suite",
     );
 
-    // Tickets are minted with the sender's local work factors and verified with
-    // the receiver's policy; unequal difficulty is rejected before hashing. Keep
-    // the changed timing policy and logger, but restore shared work factors before
-    // requiring all four validators to exchange and apply the next block.
+    let assert_other_peers_unchanged = || -> Result<()> {
+        for (index, operator) in operators.iter().enumerate().skip(1) {
+            let config = operator.configuration().get()?;
+            assert_shared_settings(&config);
+            assert_eq!(config.logger.level, baseline[index].logger.level);
+            assert_eq!(config.logger.filter, baseline[index].logger.filter);
+            assert_pow(&config, (6, 900, 120, 240, 8192, 1, 1));
+            assert_eq!(
+                handshake_identity(&config.network.soranet_handshake),
+                handshake_identity(&baseline[index].network.soranet_handshake),
+            );
+        }
+        Ok(())
+    };
+    assert_other_peers_unchanged()?;
+    let restarted = operators[0].configuration().get()?;
+    assert_pow(&restarted, (7, 720, 180, 360, 12288, 3, 3));
+    assert_eq!(restarted.logger.level, Level::DEBUG);
+
+    // Keep the distinct logger and admission windows. Both peers' freshly
+    // minted ticket lifetimes fit the other side's min-TTL/max-skew window,
+    // while restoring the exact work parameters permits mutual verification.
     layers.push(Cow::Owned(toml::toml! {
         [network.soranet_handshake.pow]
         difficulty = 6
@@ -143,20 +162,16 @@ fn configuration_readback_and_node_local_restart() -> eyre::Result<()> {
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     runtime.block_on(network.ensure_blocks(height + 1))?;
-    for (index, operator) in operators.iter().enumerate().skip(1) {
-        let config = operator.configuration().get()?;
-        assert_shared_settings(&config);
-        assert_eq!(config.logger.level, baseline[index].logger.level);
-        assert_eq!(config.logger.filter, baseline[index].logger.filter);
-        assert_pow(&config, (6, 900, 120, 240, 8192, 1, 1));
-        assert_eq!(
-            handshake_identity(&config.network.soranet_handshake),
-            handshake_identity(&baseline[index].network.soranet_handshake),
-        );
-    }
+    assert_other_peers_unchanged()?;
     let restarted = operators[0].configuration().get()?;
+    assert_shared_settings(&restarted);
     assert_pow(&restarted, (6, 720, 180, 360, 8192, 1, 1));
     assert_eq!(restarted.logger.level, Level::DEBUG);
+    assert_eq!(restarted.logger.filter.as_deref(), Some("iroha_p2p=trace"));
+    assert_eq!(
+        handshake_identity(&restarted.network.soranet_handshake),
+        handshake_identity(&baseline[0].network.soranet_handshake),
+    );
     runtime.block_on(network.shutdown());
     Ok(())
 }

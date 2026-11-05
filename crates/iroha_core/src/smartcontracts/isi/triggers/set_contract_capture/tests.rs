@@ -16,6 +16,7 @@ fn fixture() -> (Set, HashOf<IvmBytecode>) {
     let blob = IvmBytecode::from_compiled(vec![1, 2, 3]);
     let hash = HashOf::new(&blob);
     let action = LoadedAction {
+        lifecycle_executable_digest: None,
         executable: ExecutableRef::Ivm(hash),
         repeats: Repeats::Indefinitely,
         authority: ALICE_ID.clone(),
@@ -29,7 +30,7 @@ fn fixture() -> (Set, HashOf<IvmBytecode>) {
         hash,
         IvmBytecodeEntry {
             code_hash: ivm::contract_code_hash(blob.as_ref()),
-            original_contract: blob,
+            original_contract: blob.into(),
             count: NonZeroU64::MIN,
         },
     )]
@@ -270,13 +271,13 @@ fn all_five_independent_capture_literals_admit_exactly_and_refuse_one_below() {
         let bytes = IvmBytecode::from_compiled(vec![0x55; length]);
         let hash = HashOf::new(&bytes);
         let mut row = action.clone();
-        row.executable = ExecutableRef::Ivm(hash);
+        row.replace_executable_for_testing(ExecutableRef::Ivm(hash));
         actions.push((label.parse().unwrap(), row));
         contracts.push((
             hash,
             IvmBytecodeEntry {
                 code_hash: ivm::contract_code_hash(bytes.as_ref()),
-                original_contract: bytes,
+                original_contract: bytes.into(),
                 count: NonZeroU64::MIN,
             },
         ));

@@ -53,6 +53,14 @@ impl Artifact {
         }
     }
 
+    /// Cargo target selection; the publisher executable is a `dev-tools` release tool.
+    fn selection(self) -> &'static [&'static str] {
+        match self {
+            Self::Publisher => &["--features", "dev-tools", "--bin", "iroha_release_bundle"],
+            Self::ProcessBridge => &["--lib"],
+        }
+    }
+
     fn filename(self) -> &'static str {
         match self {
             Self::Publisher => HELPER,
@@ -235,14 +243,7 @@ impl Bootstrap {
             "-p",
             self.artifact.package(),
         ]);
-        match self.artifact {
-            Artifact::Publisher => {
-                command.args(["--bin", "iroha_release_bundle"]);
-            }
-            Artifact::ProcessBridge => {
-                command.arg("--lib");
-            }
-        }
+        command.args(self.artifact.selection());
         command.arg("--message-format=json-render-diagnostics");
         self.configure(&mut command)?;
         // Capture the actual consumed command, including any original-descriptor
@@ -634,6 +635,15 @@ pub(super) fn run_bridge(
 mod tests {
     use super::*;
     use std::{collections::BTreeMap, fs};
+
+    #[test]
+    fn artifact_selection_builds_the_gated_publisher_and_plain_bridge_library() {
+        assert_eq!(
+            Artifact::Publisher.selection(),
+            ["--features", "dev-tools", "--bin", "iroha_release_bundle"]
+        );
+        assert_eq!(Artifact::ProcessBridge.selection(), ["--lib"]);
+    }
 
     struct Fixture {
         root: PrivateDirectory,

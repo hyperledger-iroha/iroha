@@ -3,6 +3,75 @@ mod tests {
     use super::*;
     use iroha_data_model::privacy::{AnonymousPgcLimitsV1, PRIVACY_PGC_BOOTSTRAP_INITIAL_EPOCH_V1};
     use iroha_schema::{Declaration, MetaMap, NamedFieldsMeta, TypeId};
+    #[test]
+    fn ironwood_profile_is_distinct_fixed_and_locally_validated() {
+        let old =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1).unwrap();
+        let new = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1)
+            .unwrap();
+        assert_ne!(old.parameter_id, new.parameter_id);
+        assert_ne!(old.parameter_digest, new.parameter_digest);
+        assert_ne!(old.verifier_digest, new.verifier_digest);
+        assert_ne!(
+            old.statement_schema_digest, new.statement_schema_digest,
+            "independently framed wire statements must bind independent schema identities"
+        );
+        assert_eq!(
+            new.statement_schema_digest,
+            PrivacyStatementSchemaDigestV1::new(
+                canonical_schema_digest_v1::<
+                    iroha_data_model::privacy::PrivacyIronwoodActionsStatementV1,
+                >()
+                .unwrap()
+            )
+        );
+        assert_eq!(
+            old.statement_schema_digest,
+            PrivacyStatementSchemaDigestV1::new(
+                canonical_schema_digest_v1::<OrchardHalo2ActionsStatementV1>().unwrap()
+            )
+        );
+        assert_ne!(old.engine_manifest_digest, new.engine_manifest_digest);
+        validate_compiled_privacy_profile_v1(&new.snapshot()).unwrap();
+        assert_eq!(
+            new,
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1)
+                .unwrap()
+        );
+        assert_eq!(
+            new.protocol_limits,
+            PrivacyRuntimeProtocolLimitsV1::IronwoodHalo2ActionsV1(OrchardLimitsV1 {
+                max_action_count: 2
+            })
+        );
+        let mut wrong = new.snapshot();
+        wrong.protocol_id = old.protocol_id;
+        assert!(validate_compiled_privacy_profile_v1(&wrong).is_err());
+        let mut wrong = new.snapshot();
+        wrong.statement_schema_digest = old.statement_schema_digest;
+        assert!(validate_compiled_privacy_profile_v1(&wrong).is_err());
+        let mut wrong = new.snapshot();
+        wrong.verifier_digest = old.verifier_digest;
+        assert!(validate_compiled_privacy_profile_v1(&wrong).is_err());
+        for (source, bridge) in [
+            (
+                b"wrong-source".as_slice(),
+                ORCHARD_PROVER_RANDOMNESS_POLICY_V1,
+            ),
+            (
+                TRY_CRYPTO_PROVER_RANDOMNESS_POLICY_V1,
+                b"wrong-bridge".as_slice(),
+            ),
+        ] {
+            let changed =
+                compiled_ironwood_profile_v1_with_randomness_policies(source, bridge).unwrap();
+            assert_eq!(new.parameter_id, changed.parameter_id);
+            assert_ne!(new.parameter_digest, changed.parameter_digest);
+            assert_ne!(new.verifier_digest, changed.verifier_digest);
+            assert_ne!(new.engine_manifest_digest, changed.engine_manifest_digest);
+        }
+    }
+
     type ProfileMutation = (
         CompiledPrivacyProfileValidationErrorV1,
         fn(&mut PrivacyCompiledProfileSnapshotV1),
@@ -171,17 +240,17 @@ mod tests {
         }
     }
     fn verange_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
             .expect("fixed VeRange parameters derive")
             .snapshot()
     }
     fn pgc_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("fixed Anonymous-PGC parameters derive")
             .snapshot()
     }
     fn jindo_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
             .expect("fixed Jindo parameters derive")
             .snapshot()
     }
@@ -191,22 +260,22 @@ mod tests {
             .snapshot()
     }
     fn orchard_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
             .expect("fixed Orchard profile derives")
             .snapshot()
     }
     fn fcmp_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1)
             .expect("fixed FCMP++ profile derives")
             .snapshot()
     }
     fn ivm_private_note_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
             .expect("fixed IVM private-note profile derives")
             .snapshot()
     }
     fn pq_masp_profile() -> PrivacyCompiledProfileSnapshotV1 {
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::PqMaspStarkV1)
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::PqMaspStarkV1)
             .expect("fixed PQ-MASP profile derives")
             .snapshot()
     }
@@ -346,13 +415,16 @@ mod tests {
     fn local_compiled_profile_catalog_is_exact12_and_contains_no_governance_state() {
         let catalog = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
         assert_eq!(catalog.version, PRIVACY_COMPILED_PROFILE_CATALOG_VERSION_V1);
-        assert_eq!(catalog.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(
+            catalog.protocols.len(),
+            PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
+        );
         assert!(
             catalog
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
-                .eq(PrivacyProtocolIdV1::ALL)
+                .eq(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
         );
         let json = norito::json::to_json(&catalog).expect("catalog JSON");
         let value: norito::json::Value = norito::json::from_str(&json).expect("catalog JSON value");
@@ -360,7 +432,7 @@ mod tests {
         assert_eq!(object.len(), 2);
         assert!(object.contains_key("version"));
         let rows = object["protocols"].as_array().expect("catalog rows");
-        assert_eq!(rows.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(rows.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
         for row in rows {
             let fields = row.as_object().expect("catalog row object");
             assert_eq!(fields.len(), 2);
@@ -400,7 +472,10 @@ mod tests {
     fn compiled_profile_catalog_cache_returns_owned_isolated_clones() {
         let canonical = compiled_privacy_profile_catalog_v1().expect("compiled profile catalog");
         canonical.validate().expect("canonical compiled catalog");
-        assert_eq!(canonical.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(
+            canonical.protocols.len(),
+            PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
+        );
         let canonical_archive =
             norito::encode_canonical(&canonical).expect("canonical compiled catalog archive");
         let mut caller_owned = canonical;
@@ -414,13 +489,16 @@ mod tests {
         subsequent
             .validate()
             .expect("the cached canonical catalog must remain valid");
-        assert_eq!(subsequent.protocols.len(), PrivacyProtocolIdV1::COUNT);
+        assert_eq!(
+            subsequent.protocols.len(),
+            PrivacyRuntimeProtocolIdV1::EXACT12_COUNT
+        );
         assert!(
             subsequent
                 .protocols
                 .iter()
                 .map(|row| row.protocol_id)
-                .eq(PrivacyProtocolIdV1::ALL)
+                .eq(PrivacyRuntimeProtocolIdV1::EXACT12_PROTOCOLS)
         );
         assert_eq!(
             norito::encode_canonical(&subsequent)
@@ -468,19 +546,20 @@ mod tests {
     }
     #[test]
     fn only_governance_released_engines_have_compiled_profiles() {
-        let available = PrivacyProtocolIdV1::ALL
+        let available = PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS
             .into_iter()
             .filter(|protocol_id| compiled_privacy_profile_v1(*protocol_id).is_ok())
             .collect::<Vec<_>>();
         let expected = vec![
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
         ];
         assert_eq!(available, expected);
     }
@@ -526,17 +605,19 @@ mod tests {
     fn ivm_private_note_and_pq_masp_profiles_are_exact_bounded_and_mutation_closed() {
         let cases = [
             (
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                 ivm_private_note_profile(),
-                PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(IvmPrivateNoteLimitsV1 {
-                    max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
-                    max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
-                }),
+                PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                    IvmPrivateNoteLimitsV1 {
+                        max_input_count: IVM_PRIVATE_NOTE_MAX_INPUTS_V1,
+                        max_output_count: IVM_PRIVATE_NOTE_MAX_OUTPUTS_V1,
+                    },
+                ),
             ),
             (
-                PrivacyProtocolIdV1::PqMaspStarkV1,
+                PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                 pq_masp_profile(),
-                PrivacyProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
+                PrivacyRuntimeProtocolLimitsV1::PqMaspStarkV1(PqMaspLimitsV1 {
                     max_input_count: PQ_MASP_MAX_INPUTS_V1,
                     max_output_count: PQ_MASP_MAX_OUTPUTS_V1,
                 }),
@@ -567,14 +648,14 @@ mod tests {
             // Release pins bind native32 Exact12 catalog framing, SHA3-384 outer
             // commitments, and the exact native geometry/relation descriptors.
             let expected_bindings = match protocol_id {
-                PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
+                PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1 => (
                     "b478a8c1078d3efadff53e63dcf0ef5bdf95a845c444ff3e92d4905af6741f4c".to_owned(),
                     "9d3fe012eca91ef629a997e056e9c4629044170671fb8aec0de7c9e88600b5f8".to_owned(),
                     "63c757dfdc0c152bcf6df12babda20f06f0031edac34d077d20df65a14096f40".to_owned(),
                     "59aac0b35adf82940e87293f55f304ab52904896a19bc5a5989aca24eb9c4bc9".to_owned(),
                     "2d5512ecb7ca57e22d3baeaa25d499127f96d4754e58c6ad88dba9adb12ad58c".to_owned(),
                 ),
-                PrivacyProtocolIdV1::PqMaspStarkV1 => (
+                PrivacyRuntimeProtocolIdV1::PqMaspStarkV1 => (
                     "78f6257fb6fca9e9832eda4b7274212bf6460e992ad77f3e192f697443bfd259".to_owned(),
                     "f91aa59d47f9ac85d911f5623bc12e8fd1880467ce87273d0b24daa63f48d985".to_owned(),
                     "4c9ae12d41666ab38876127149162194434b1f0c96b98cc0278d7a30ac823a4c".to_owned(),
@@ -629,10 +710,10 @@ mod tests {
                 (
                     CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                     |record| match &mut record.protocol_limits {
-                        PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) => {
+                        PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) => {
                             limits.max_input_count += 1;
                         }
-                        PrivacyProtocolLimitsV1::PqMaspStarkV1(limits) => {
+                        PrivacyRuntimeProtocolLimitsV1::PqMaspStarkV1(limits) => {
                             limits.max_output_count += 1;
                         }
                         _ => unreachable!("test covers only IVM private note and PQ-MASP"),
@@ -663,8 +744,8 @@ mod tests {
         )
         .expect("empty committed protocol-policy state is valid");
         for protocol_id in [
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
         ] {
             let row = snapshot
                 .protocols
@@ -680,9 +761,9 @@ mod tests {
     }
     #[test]
     fn fcmp_profile_is_deterministic_exact_bounded_and_mutation_closed() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
+        let first = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1)
             .expect("compiled FCMP++");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1)
+        let second = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1)
             .expect("compiled FCMP++");
         assert_eq!(first, second);
         assert_eq!(
@@ -692,7 +773,7 @@ mod tests {
         assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeFcmpPlusPlus);
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
                 max_input_count: FCMP_MAX_INPUTS_V1,
                 max_output_count: FCMP_MAX_OUTPUTS_V1,
             })
@@ -789,7 +870,7 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                 |record| {
                     record.protocol_limits =
-                        PrivacyProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
+                        PrivacyRuntimeProtocolLimitsV1::MoneroFcmpPlusPlusV1(FcmpLimitsV1 {
                             max_input_count: FCMP_MAX_INPUTS_V1 + 1,
                             max_output_count: FCMP_MAX_OUTPUTS_V1,
                         });
@@ -817,7 +898,7 @@ mod tests {
         assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeLanternLnp22);
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolLimitsV1::IrohaBootleLanternAnoncredV1
+            PrivacyRuntimeProtocolLimitsV1::IrohaBootleLanternAnoncredV1
         );
         assert_eq!(APPLICATION_RING_DEGREE_V1, 64);
         assert_eq!(
@@ -1044,9 +1125,11 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                 |record| {
                     record.protocol_limits =
-                        PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
-                            max_polynomial_count: 1,
-                        });
+                        PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                            JindoLimitsV1 {
+                                max_polynomial_count: 1,
+                            },
+                        );
                 },
             ),
         ];
@@ -1093,16 +1176,16 @@ mod tests {
     }
     #[test]
     fn orchard_profile_is_deterministic_complete_bounded_and_mutation_closed() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+        let first = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
             .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+        let second = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
             .expect("profile");
         assert_eq!(first, second);
         assert_eq!(first.proof_system_id, PrivacyProofSystemIdV1::Halo2IpaPasta);
         assert_eq!(first.engine_id, PrivacyEngineIdV1::NativeHalo2Orchard);
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
                 max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1,
             })
         );
@@ -1172,11 +1255,15 @@ mod tests {
                 hex::encode(first.engine_manifest_digest.as_bytes()),
             ),
             (
-                "8d5a2946c58314ac12d2968ffe9e8e0c672e3bbceefaaefad6a87420ea7dd212".to_owned(),
-                "b27b73d59151415e21b158c75ed9371cccd795655b604e4a6b53db621660b66e".to_owned(),
-                "5f44e8a6a901ef33bc3c99d5400592f420f006877ae9904b758ee49a3226718f".to_owned(),
+                // Deployed baseline evidence supplied by Claude on 2026-10-31: Taira
+                // a660d601 (local tree cade8d5a) matches 89b71821 privacy sources and
+                // Cargo.lock by blob OID: Orchard 0.16.0 / Halo2 0.4.1. Earlier goldens
+                // predated those dependency upgrades; these values freeze deployed identities.
+                "d53bdf99bb4a112d018efccfd949579d1bd917b5fef086b918594033b29eee43".to_owned(),
+                "2c2d3d4f1901a1067a5653b1e3770c9e99b05dd1ebbdddb1e69cc321174ff02a".to_owned(),
+                "0c1d3ba20ea6ae8f3c49474342d3db39d9bc13edb7f1d849be220ae1312d6688".to_owned(),
                 "2141dd88d579b2460cfb0f79f230bfb2f71663364d8700c8e7e6b3e8f57c5a2a".to_owned(),
-                "c294d7ddc1be131d273410ce3f191328ed589b7db37283b49b138658250f060c".to_owned(),
+                "9f981ac374079e1411925f2795cc10c76b71b27dc52536fa56a1a5634754ac91".to_owned(),
             ),
             "every consensus-critical Orchard profile binding is a pinned KAT"
         );
@@ -1202,7 +1289,7 @@ mod tests {
     #[test]
     #[cfg(feature = "zk-stark")]
     fn zk_ace_sha3_outer_profile_stays_unavailable_without_qrom_certification() {
-        let protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
@@ -1214,14 +1301,14 @@ mod tests {
     #[test]
     fn zk_ams_profile_is_unavailable_until_every_mkhe_gate_closes() {
         let expected = CompiledPrivacyProfileErrorV1::EngineUnavailable {
-            protocol_id: PrivacyProtocolIdV1::IrohaZkAmsV1,
+            protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
         };
         assert_eq!(
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1),
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1),
             Err(expected)
         );
         assert_eq!(
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkAmsV1),
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1),
             Err(expected),
             "the unavailable result must be deterministic"
         );
@@ -1268,14 +1355,16 @@ mod tests {
     }
     #[test]
     fn verange_profile_is_deterministic_and_uses_effective_global_cap() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
-            .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
-            .expect("profile");
+        let first =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
+                .expect("profile");
+        let second =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
+                .expect("profile");
         assert_eq!(first, second);
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
                 max_aggregation_count: 8,
             })
         );
@@ -1307,9 +1396,9 @@ mod tests {
     }
     #[test]
     fn anonymous_pgc_profile_is_deterministic_complete_and_bounded() {
-        let first = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+        let first = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("profile");
-        let second = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+        let second = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
             .expect("profile");
         assert_eq!(first, second);
         assert_eq!(
@@ -1318,7 +1407,7 @@ mod tests {
         );
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 64,
                 max_recipient_count: 8,
             })
@@ -1342,12 +1431,14 @@ mod tests {
     }
     #[test]
     fn jindo_profile_is_deterministic_complete_and_bounded() {
-        let first =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
-                .expect("profile");
-        let second =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
-                .expect("profile");
+        let first = compiled_privacy_profile_v1(
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        )
+        .expect("profile");
+        let second = compiled_privacy_profile_v1(
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        )
+        .expect("profile");
         assert_eq!(first, second);
         assert_eq!(
             first.proof_system_id,
@@ -1398,7 +1489,7 @@ mod tests {
         }
         assert_eq!(
             first.protocol_limits,
-            PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                 max_polynomial_count: u32::try_from(JINDO_MAX_BATCH_SIZE_V1)
                     .expect("fixed Jindo batch size fits u32"),
             })
@@ -1424,7 +1515,7 @@ mod tests {
     }
     #[test]
     fn vega_engine_remains_unavailable_until_exact12_qualification() {
-        let protocol_id = PrivacyProtocolIdV1::VegaExistingCredentialZkV1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::EngineUnavailable { protocol_id })
@@ -1439,7 +1530,7 @@ mod tests {
     #[test]
     #[ignore = "operator-only KAT regeneration after an intentional compiled-profile change"]
     fn print_available_profile_tuples() {
-        for protocol_id in PrivacyProtocolIdV1::ALL {
+        for protocol_id in PrivacyRuntimeProtocolIdV1::SUPPORTED_PROTOCOLS {
             let profile = match compiled_privacy_profile_v1(protocol_id) {
                 Ok(profile) => profile,
                 Err(error) => {
@@ -1497,9 +1588,11 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                 |record| {
                     record.protocol_limits =
-                        PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
-                            max_polynomial_count: 5,
-                        });
+                        PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(
+                            JindoLimitsV1 {
+                                max_polynomial_count: 5,
+                            },
+                        );
                 },
             ),
         ];
@@ -1560,11 +1653,11 @@ mod tests {
     #[test]
     fn compiled_snapshot_rejects_policy_limits_substituted_for_canonical_limits() {
         let verange_compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
                 .expect("VeRange profile");
         let mut verange = verange_profile();
         verange.protocol_limits =
-            PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
                 max_aggregation_count: 1,
             });
         assert_eq!(
@@ -1582,11 +1675,12 @@ mod tests {
             verange.engine_manifest_digest,
             verange_compiled.engine_manifest_digest
         );
-        let pgc_compiled = compiled_privacy_profile_v1(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
-            .expect("PGC profile");
+        let pgc_compiled =
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
+                .expect("PGC profile");
         let mut pgc = pgc_profile();
         pgc.protocol_limits =
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 16,
                 max_recipient_count: 1,
             });
@@ -1605,12 +1699,13 @@ mod tests {
             pgc.engine_manifest_digest,
             pgc_compiled.engine_manifest_digest
         );
-        let jindo_compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
-                .expect("Jindo profile");
+        let jindo_compiled = compiled_privacy_profile_v1(
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        )
+        .expect("Jindo profile");
         let mut jindo = jindo_profile();
         jindo.protocol_limits =
-            PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                 max_polynomial_count: 1,
             });
         assert_eq!(
@@ -1629,12 +1724,13 @@ mod tests {
             jindo_compiled.engine_manifest_digest
         );
         let orchard_compiled =
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::OrchardHalo2ActionsV1)
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1)
                 .expect("Orchard profile");
         let mut orchard = orchard_profile();
-        orchard.protocol_limits = PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
-            max_action_count: 1,
-        });
+        orchard.protocol_limits =
+            PrivacyRuntimeProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+                max_action_count: 1,
+            });
         assert_eq!(
             validate_compiled_privacy_profile_v1(&orchard),
             Err(CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch)
@@ -1656,64 +1752,64 @@ mod tests {
         let mut invalid = Vec::new();
         let mut verange_over = verange_profile();
         verange_over.protocol_limits =
-            PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
                 max_aggregation_count: 9,
             });
         invalid.push(verange_over);
         let mut oversized_anonymity_set = pgc_profile();
         oversized_anonymity_set.protocol_limits =
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 65,
                 max_recipient_count: 8,
             });
         invalid.push(oversized_anonymity_set);
         let mut excess_recipients = pgc_profile();
         excess_recipients.protocol_limits =
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 64,
                 max_recipient_count: 9,
             });
         invalid.push(excess_recipients);
         let mut pgc_bad_closed_set = pgc_profile();
         pgc_bad_closed_set.protocol_limits =
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 17,
                 max_recipient_count: 1,
             });
         invalid.push(pgc_bad_closed_set);
         let mut zero_verange = verange_profile();
         zero_verange.protocol_limits =
-            PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
                 max_aggregation_count: 0,
             });
         invalid.push(zero_verange);
         let mut jindo_over = jindo_profile();
         jindo_over.protocol_limits =
-            PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                 max_polynomial_count: 5,
             });
         invalid.push(jindo_over);
         let mut zero_jindo = jindo_profile();
         zero_jindo.protocol_limits =
-            PrivacyProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::IrohaJindoPolynomialCommitmentV1(JindoLimitsV1 {
                 max_polynomial_count: 0,
             });
         invalid.push(zero_jindo);
         let mut orchard_over = orchard_profile();
         orchard_over.protocol_limits =
-            PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
                 max_action_count: ORCHARD_MODEL_MAX_ACTIONS_V1 + 1,
             });
         invalid.push(orchard_over);
         let mut zero_orchard = orchard_profile();
         zero_orchard.protocol_limits =
-            PrivacyProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::OrchardHalo2ActionsV1(OrchardLimitsV1 {
                 max_action_count: 0,
             });
         invalid.push(zero_orchard);
         let mut wrong_variant = verange_profile();
         wrong_variant.protocol_limits =
-            PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
+            PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(AnonymousPgcLimitsV1 {
                 max_anonymity_set_size: 16,
                 max_recipient_count: 1,
             });
@@ -1727,7 +1823,7 @@ mod tests {
     }
     #[test]
     fn zk_x509_construction_refusal_preserves_exact_immutable_profile_binding() {
-        let protocol_id = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol_id = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         assert_eq!(
             compiled_privacy_profile_v1(protocol_id),
             Err(CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete { protocol_id })
@@ -1754,7 +1850,7 @@ mod tests {
         );
         assert_eq!(
             profile.protocol_limits,
-            PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1
+            PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1
         );
         let valid = profile.snapshot();
         validate_compiled_privacy_profile_against_profile_v1(&valid, &profile)
@@ -1763,15 +1859,15 @@ mod tests {
             (
                 CompiledPrivacyProfileValidationErrorV1::ProofSystemMismatch,
                 |record| {
-                    record.proof_system_id =
-                        PrivacyProtocolIdV1::VeRangeTransparentRangeV1.expected_proof_system();
+                    record.proof_system_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1
+                        .expected_proof_system();
                 },
             ),
             (
                 CompiledPrivacyProfileValidationErrorV1::EngineMismatch,
                 |record| {
                     record.engine_id =
-                        PrivacyProtocolIdV1::VeRangeTransparentRangeV1.expected_engine();
+                        PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1.expected_engine();
                 },
             ),
             (
@@ -1798,9 +1894,11 @@ mod tests {
                 CompiledPrivacyProfileValidationErrorV1::ProtocolLimitsMismatch,
                 |record| {
                     record.protocol_limits =
-                        PrivacyProtocolLimitsV1::VeRangeTransparentRangeV1(VeRangeLimitsV1 {
-                            max_aggregation_count: 1,
-                        });
+                        PrivacyRuntimeProtocolLimitsV1::VeRangeTransparentRangeV1(
+                            VeRangeLimitsV1 {
+                                max_aggregation_count: 1,
+                            },
+                        );
                 },
             ),
         ];
@@ -1813,7 +1911,7 @@ mod tests {
             );
         }
         let mut wrong_protocol = valid;
-        wrong_protocol.protocol_id = PrivacyProtocolIdV1::VeRangeTransparentRangeV1;
+        wrong_protocol.protocol_id = PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1;
         assert_eq!(
             validate_compiled_privacy_profile_against_profile_v1(&wrong_protocol, &profile),
             Err(CompiledPrivacyProfileValidationErrorV1::ProtocolMismatch)
@@ -1831,7 +1929,7 @@ mod tests {
             |record| record.statement_schema_digest.0[0] ^= 1,
             |record| record.engine_manifest_digest.0[0] ^= 1,
             |record| {
-                let PrivacyProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut limits) =
+                let PrivacyRuntimeProtocolLimitsV1::AnonymousPgcKOutOfNV1(ref mut limits) =
                     record.protocol_limits
                 else {
                     unreachable!("fixture is Anonymous PGC");

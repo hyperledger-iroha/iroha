@@ -3446,20 +3446,22 @@ pub mod tests {
                 parameters.commit();
                 if (is_finalize || is_abort) && tightened {
                     use iroha_data_model::privacy::{
-                        IvmPrivateNoteLimitsV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-                        PrivacyProtocolPolicyKeyV1, PrivacyProtocolPolicyV1,
+                        IvmPrivateNoteLimitsV1, PrivacyProtocolPolicyKeyV1,
+                        PrivacyProtocolPolicyV1, PrivacyRuntimeProtocolIdV1,
+                        PrivacyRuntimeProtocolLimitsV1,
                     };
-                    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+                    let protocol = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
                     world.privacy_protocol_policies.insert(
                         PrivacyProtocolPolicyKeyV1::new(protocol),
                         PrivacyProtocolPolicyV1 {
                             protocol_id: protocol,
-                            current_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
-                                IvmPrivateNoteLimitsV1 {
-                                    max_input_count: 1,
-                                    max_output_count: 1,
-                                },
-                            ),
+                            current_limits:
+                                PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                                    IvmPrivateNoteLimitsV1 {
+                                        max_input_count: 1,
+                                        max_output_count: 1,
+                                    },
+                                ),
                             pending_update: None,
                         },
                     );
@@ -3621,7 +3623,7 @@ pub mod tests {
         .expect("fixture settlement dataspace catalog");
 
         let protocol_id =
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let policy_key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol_id);
         let profile = crate::privacy_profiles::compiled_privacy_profile_v1(protocol_id)
             .expect("actual compiled IVM private-note profile");
@@ -3630,7 +3632,7 @@ pub mod tests {
             iroha_data_model::privacy::PrivacyProtocolPolicyV1 {
                 protocol_id,
                 current_limits:
-                    iroha_data_model::privacy::PrivacyProtocolLimitsV1::ZkAcePqAuthorizationV1,
+                    iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::ZkAcePqAuthorizationV1,
                 pending_update: None,
             },
         );
@@ -3680,7 +3682,7 @@ pub mod tests {
 
         for (inputs, outputs) in [(1, 2), (2, 1)] {
             let limits =
-                iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+                iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
                     iroha_data_model::privacy::IvmPrivateNoteLimitsV1 {
                         max_input_count: inputs,
                         max_output_count: outputs,

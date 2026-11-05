@@ -17,7 +17,7 @@ pub use samples::{LaneSamplesAdmissionError, LaneStateAdmissionError, SumeragiLa
 
 use iroha_model_base::{
     peer::PeerId,
-    topology::{DataSpaceId, LaneId},
+    topology::{DataSpaceId, LaneId, is_valid_committee_size},
 };
 use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
@@ -366,7 +366,8 @@ pub struct SumeragiFixedLane {
     pub lane: LaneId,
     /// The dataspace owning the lane.
     pub dataspace: DataSpaceId,
-    /// The committee pinned into each incarnation.
+    /// The strictly ascending, distinct committee pinned into each incarnation.
+    /// Its size must be `3f + 1` for `1 <= f <= 10`.
     pub committee: Vec<SumeragiLaneMember>,
 }
 
@@ -422,6 +423,7 @@ pub struct SumeragiLaneAutoscale {
     /// The dataspace owning elastic lanes.
     pub dataspace: DataSpaceId,
     /// Members of an elastic lane committee, drawn from the global validators.
+    /// This must be `3f + 1` for `1 <= f <= 10`.
     pub committee_size: u32,
     /// Transactions per second one default-route lane is expected to carry.
     pub per_lane_target_tps: u32,
@@ -483,9 +485,14 @@ pub enum SumeragiLanePolicyError {
     /// Fixed lanes are not strictly ascending, or one is lane `0`.
     #[error("fixed lanes must be strictly ascending and never lane 0")]
     FixedOrder,
-    /// A fixed lane has no committee or repeats a member.
-    #[error("fixed lane {0} needs a committee of distinct members")]
+    /// A fixed lane committee has invalid geometry or is not strictly ascending.
+    #[error(
+        "fixed lane {0} needs a strictly ascending committee of 3f + 1 members for 1 <= f <= 10"
+    )]
     FixedCommittee(LaneId),
+    /// An elastic lane committee has invalid production quorum geometry.
+    #[error("elastic committee size {0} must be 3f + 1 for 1 <= f <= 10")]
+    ElasticCommittee(u32),
     /// A fixed lane lies in the elastic range.
     #[error("fixed lane {0} lies in the elastic lane range")]
     FixedElastic(LaneId),
@@ -607,7 +614,6 @@ impl SumeragiLanePolicy {
                 return Err(SumeragiLanePolicyError::ElasticRange);
             }
             for (value, name) in [
-                (autoscale.committee_size, "committee_size"),
                 (autoscale.per_lane_target_tps, "per_lane_target_tps"),
                 (autoscale.window, "window"),
                 (autoscale.scale_out_permille, "scale_out_permille"),
@@ -615,6 +621,11 @@ impl SumeragiLanePolicy {
                 if value == 0 {
                     return Err(SumeragiLanePolicyError::Zero(name));
                 }
+            }
+            if !usize::try_from(autoscale.committee_size).is_ok_and(is_valid_committee_size) {
+                return Err(SumeragiLanePolicyError::ElasticCommittee(
+                    autoscale.committee_size,
+                ));
             }
             if autoscale.scale_in_permille >= autoscale.scale_out_permille {
                 return Err(SumeragiLanePolicyError::Hysteresis);
@@ -629,14 +640,12 @@ impl SumeragiLanePolicy {
             if self.is_elastic(fixed.lane) {
                 return Err(SumeragiLanePolicyError::FixedElastic(fixed.lane));
             }
-            let mut peers = fixed
-                .committee
-                .iter()
-                .map(|member| &member.peer)
-                .collect::<Vec<_>>();
-            peers.sort();
-            peers.dedup();
-            if peers.is_empty() || peers.len() != fixed.committee.len() {
+            if !is_valid_committee_size(fixed.committee.len())
+                || fixed
+                    .committee
+                    .windows(2)
+                    .any(|pair| pair[0].peer >= pair[1].peer)
+            {
                 return Err(SumeragiLanePolicyError::FixedCommittee(fixed.lane));
             }
         }
@@ -747,6 +756,79 @@ mod tests {
         }
     }
 
+    fn committee(size: u8) -> Vec<SumeragiLaneMember> {
+        let mut members = (1..=size).map(member).collect::<Vec<_>>();
+        members.sort_by(|left, right| left.peer.cmp(&right.peer));
+        members
+    }
+
+    #[test]
+    fn lane_policy_committee_geometry_and_order_are_canonical() {
+        let valid = policy();
+        let members = committee(34);
+        for size in 0..=34_u8 {
+            let mut candidate = valid.clone();
+            candidate.fixed[0].committee = members[..usize::from(size)].to_vec();
+            let expected = if is_valid_committee_size(usize::from(size)) {
+                Ok(())
+            } else {
+                Err(SumeragiLanePolicyError::FixedCommittee(LaneId::new(2)))
+            };
+            assert_eq!(candidate.validate(), expected, "fixed size {size}");
+            if expected.is_ok() {
+                let encoded = norito::encode_canonical(&candidate).unwrap();
+                let decoded: SumeragiLanePolicy = norito::decode_canonical(&encoded).unwrap();
+                assert_eq!(decoded, candidate);
+                assert_eq!(decoded.validate(), Ok(()));
+                assert_eq!(
+                    SumeragiLanePolicy::from_custom_parameter(
+                        &candidate.clone().into_custom_parameter()
+                    )
+                    .unwrap()
+                    .unwrap(),
+                    candidate
+                );
+            }
+            let mut elastic = valid.clone();
+            elastic.autoscale.as_mut().unwrap().committee_size = u32::from(size);
+            let expected = if is_valid_committee_size(usize::from(size)) {
+                Ok(())
+            } else {
+                Err(SumeragiLanePolicyError::ElasticCommittee(u32::from(size)))
+            };
+            assert_eq!(elastic.validate(), expected, "elastic size {size}");
+        }
+        let mut elastic = valid.clone();
+        elastic.autoscale.as_mut().unwrap().committee_size = u32::MAX;
+        assert_eq!(
+            elastic.validate(),
+            Err(SumeragiLanePolicyError::ElasticCommittee(u32::MAX))
+        );
+        for mutation in 0..3 {
+            let mut candidate = valid.clone();
+            match mutation {
+                0 => candidate.fixed[0].committee.swap(0, 1),
+                1 => candidate.fixed[0].committee.reverse(),
+                2 => candidate.fixed[0].committee[1] = candidate.fixed[0].committee[0].clone(),
+                _ => unreachable!(),
+            }
+            let exact = candidate.clone();
+            assert_eq!(
+                candidate.validate(),
+                Err(SumeragiLanePolicyError::FixedCommittee(LaneId::new(2)))
+            );
+            assert_eq!(
+                candidate, exact,
+                "validation must not normalize signed input"
+            );
+            assert!(
+                SumeragiLanePolicy::from_custom_parameter(&candidate.into_custom_parameter())
+                    .unwrap()
+                    .is_err()
+            );
+        }
+    }
+
     fn policy() -> SumeragiLanePolicy {
         SumeragiLanePolicy {
             da_layout: iroha_sumeragi::availability::recommended_data_availability_layout(),
@@ -757,7 +839,7 @@ mod tests {
             fixed: vec![SumeragiFixedLane {
                 lane: LaneId::new(2),
                 dataspace: DataSpaceId::new(0),
-                committee: vec![member(1), member(2)],
+                committee: committee(4),
             }],
             routes: vec![SumeragiLaneRoute {
                 lane: LaneId::new(2),

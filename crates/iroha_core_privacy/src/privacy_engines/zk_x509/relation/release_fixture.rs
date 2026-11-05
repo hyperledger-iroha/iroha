@@ -47,7 +47,7 @@ use iroha_data_model::{
     account::AccountId,
     privacy::{
         PrivacyChallengeV1, PrivacyConsensusLimitsV1, PrivacyIssuerIdV1, PrivacyPolicyDigestV1,
-        PrivacyPolicyIdV1, PrivacyRootPublicationV1, PrivacyRootRoleV1, PrivacyRootV1,
+        PrivacyPolicyIdV1, PrivacyRootRoleV1, PrivacyRootV1, PrivacyRuntimeRootPublicationV1,
         PrivacyStatementContextV1, PrivacyX509ExtendedKeyUsageV1, PrivacyX509KeyUsageRequirementV1,
         PrivacyX509TrustStoreDigestV1, PrivacyZkX509CertificateValidityV1,
         PrivacyZkX509DisclosedAttributeV1, PrivacyZkX509PresentationWindowV1,
@@ -958,7 +958,7 @@ pub(crate) fn authoritative_state_v1(
         trust_anchor.ca_membership_root,
     )
     .map_err(|_| "release CA root key failed")?;
-    let publication = PrivacyRootPublicationV1::new(
+    let publication = PrivacyRuntimeRootPublicationV1::new(
         ca_namespace,
         PrivacyRootRoleV1::CertificateAuthorityMembership,
         root_key.epoch(),

@@ -283,7 +283,10 @@ fn ensure_private_instruction(
         // bootstrap initializes its own alias registry, never a foreign dataspace or parent registry.
         return Ok(());
     }
-    let multisig = match MultisigInstructionBox::try_from(instruction) {
+    let multisig = match crate::runtime::ironwood::admission::multisig_instruction(
+        instruction,
+        state.world.runtime_selection.get(),
+    ) {
         Ok(multisig) => Some(multisig),
         Err(error) => {
             match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(

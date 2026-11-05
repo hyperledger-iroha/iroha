@@ -1,0 +1,9 @@
+# Current arena source-model evidence
+
+The four stale arena source guards now bind the reviewed Rust 1.99.1 and current protocol sources. The conditional source-model campaign checked all 135,064 classes with stable inputs. Its group results, domain, spatial proof, registration argument and rejection argument exactly match the historical report; allocation formulas and event-generating function ASTs are unchanged. The focused tests pass 66 cases (before review: four source-guard failures and 61 passes).
+
+`run-receipt.json` retains the exact command. `--require-qualified` exits 2 deliberately: conditional source-model sufficiency is true, while compiled allocation correspondence, complete arena/workspace certificates and production qualification remain false. This run does not measure native verifier allocations or stack use, and does not replace the historical native-oracle capture with new binary evidence.
+
+The twelve retained Rust source files and source review cover requested layouts, default `GlobalAlloc::realloc` allocation-before-free behavior, vector growth and iterator collection. The unchanged `Routed` allocator implements `GlobalAlloc` directly and inherits its default reallocation; the new `GlobalAllocator` blanket implementation does not apply to it. Source-level allocator calls can still be optimized away or transformed, so compiled correspondence remains an explicit open obligation. The comparator is diagnostic-only.
+
+The separate current resource-accounting provider receipt retains eight compile-only target/mode observations: 960 bytes with alignment 8 for portable and 16 for accelerated AES-256 objects. Its exact digest is included in the arena assumptions; these observations are not hardware execution or complete native-memory evidence. Historical captures remain unchanged.

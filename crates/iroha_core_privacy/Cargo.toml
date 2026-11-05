@@ -41,6 +41,8 @@ ivm = { workspace = true }
 mv = { workspace = true }
 soranet_pq = { workspace = true }
 iroha_zkp_halo2 = { path = "../iroha_zkp_halo2" }
+# Bounded-integer execution STARK behind the RaceV1 execution-proof adapter.
+iroha_execution_stark = { path = "../iroha_execution_stark" }
 fastpq_isi = { path = "../fastpq_isi" }
 iroha_fhe = { path = "../iroha_fhe", default-features = false }
 fastpq_prover = { path = "../fastpq_prover" }

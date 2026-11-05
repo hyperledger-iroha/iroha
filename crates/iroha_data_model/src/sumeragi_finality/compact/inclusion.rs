@@ -40,7 +40,7 @@ impl CertifiedTransactionInclusionV1 {
     /// # Errors
     /// A Pipeline or Time row, or a leaf index that differs from the row's input index.
     pub fn joined_network_output(&self) -> Result<&NetworkExecutionOutputV1, FinalityError> {
-        let ExecutionOutputV1::Network(output) = &self.output else {
+        let Some(output) = self.output.network() else {
             return Err(FinalityError(
                 "inclusion output is not a Network row".into(),
             ));

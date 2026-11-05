@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tomllib
@@ -101,7 +102,7 @@ def test_actual_core_router_retains_feature_gated_harnesses(native_package, monk
     monkeypatch.setattr(router, "NATIVE_SHARDS", shards)
     manifest = native_package / "Cargo.toml"
     manifest.write_text(manifest.read_text().replace('name = "native-shard-control"', 'name = "iroha_core"')
-                        .replace('unselected = []', 'unselected = []\niroha-core-tests = []\nexpensive-telemetry = []'))
+                        .replace('unselected = []', 'unselected = []\niroha-core-tests = []\nexpensive-telemetry = []\ndev-tools = []\nnode = []\njson = []'))
     original = tomllib.loads((ROOT / "crates/iroha_core/Cargo.toml").read_text())
     names = {test["name"] for test in original["test"]
              if test["name"] == "private_dataspace_runtime" or test["name"].startswith("iroha_core_group_")}
@@ -112,6 +113,28 @@ def test_actual_core_router_retains_feature_gated_harnesses(native_package, monk
         (native_package / "tests" / (name + ".rs")).write_text(
             '//! Required-feature harness.\n#[test] fn retained() { '
             'assert!(cfg!(feature = "iroha-core-tests")); assert!(cfg!(feature = "expensive-telemetry")); }\n')
+    preflight_cases = {}
+    for binary in original["bin"]:
+        if binary["name"] not in {"ironwood_activation_preflight", "trigger_lifecycle_preflight"}:
+            continue
+        leaves = re.findall(r"#\[test\]\s*fn\s+(\w+)\s*\(",
+                            (ROOT / "crates/iroha_core" / binary["path"]).read_text())
+        assert leaves
+        preflight_cases["bin:" + binary["name"]] = leaves
+        required = binary["required-features"]
+        assert "dev-tools" in required
+        with manifest.open("a") as output:
+            output.write(f'\n[[bin]]\nname = "{binary["name"]}"\npath = "{binary["path"]}"\n'
+                         + 'required-features = ' + json.dumps(required) + '\n')
+        source = native_package / binary["path"]
+        source.parent.mkdir(parents=True, exist_ok=True)
+        source.write_text('//! Required-feature developer executable.\nfn main() {}\n' +
+                          ''.join(f'#[test] fn {leaf}() {{ assert!(cfg!(feature = "dev-tools")); }}\n'
+                                  for leaf in leaves))
+    assert set(preflight_cases) == {"bin:ironwood_activation_preflight", "bin:trigger_lifecycle_preflight"}
+    assert sum(map(len, preflight_cases.values())) == 5
+    # The production Core defaults already enable node/json; keep that graph here too.
+    manifest.write_text(manifest.read_text().replace('[features]\n', '[features]\ndefault = ["node", "json"]\n'))
     subprocess.run(["cargo", "generate-lockfile", "--offline"], cwd=native_package,
                    check=True, capture_output=True)
     for index in range(1, 5):
@@ -123,10 +146,13 @@ def test_actual_core_router_retains_feature_gated_harnesses(native_package, monk
     inventory = {target["key"]: target for target in receipts[0]["inventory"]}
     assert {"test:" + name for name in names} <= set(inventory)
     for target in inventory.values():
-        assert {"iroha-core-tests", "expensive-telemetry"} <= set(target["features"])
+        assert {"iroha-core-tests", "expensive-telemetry", "dev-tools"} <= set(target["features"])
     executed = {(item["key"], name) for receipt in receipts for item in receipt["executions"]
                 for name, status in item["statuses"].items() if status == "ok"}
     assert {("test:" + name, "retained") for name in names} <= executed
+    for key, leaves in preflight_cases.items():
+        assert set(inventory[key]["tests"]) == set(leaves)
+        assert {(key, leaf) for leaf in leaves} <= executed
 
 
 def test_actual_cargo_target_only_shards_retain_serial_harness(native_package, monkeypatch):

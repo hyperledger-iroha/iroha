@@ -30,13 +30,16 @@ pub const MAX_BITS: usize = 4_096;
 /// Maximum canonical two's-complement payload length.
 pub const MAX_ENCODED_BYTES: usize = MAX_BITS / 8;
 /// Errors returned by [`BigInt`] operations.
-#[derive(Debug, Clone, Copy, displaydoc::Display, thiserror::Error, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, thiserror::Error, PartialEq, Eq)]
 pub enum BigIntError {
     /// Value exceeds configured bit cap
+    #[error("Value exceeds configured bit cap")]
     Overflow,
     /// Two's-complement byte representation is not minimal
+    #[error("Two's-complement byte representation is not minimal")]
     NonCanonical,
     /// Division by zero
+    #[error("Division by zero")]
     DivisionByZero,
 }
 /// Refusal while cloning one exact native-digit magnitude for resource admission.
@@ -600,18 +603,26 @@ impl core::str::FromStr for BigInt {
 /// The owning and prepared decoders share length, domain and minimality checks.
 pub(crate) fn canonical_twos_payload(bytes: &[u8]) -> Result<(&[u8], usize), ncore::Error> {
     let (len_u32, used_len) = <u32 as DecodeFromSlice>::decode_from_slice(bytes)?;
-    let len_usize: usize = len_u32
-        .try_into()
-        .map_err(|_| ncore::Error::Message("length overflow".into()))?;
-    let end = used_len
-        .checked_add(len_usize)
-        .ok_or_else(|| ncore::Error::Message("length overflow".into()))?;
+    let len_usize: usize = len_u32.try_into().map_err(|_| {
+        ncore::prepaid_validation_error("invalid bigint", || {
+            ncore::Error::Message("length overflow".into())
+        })
+    })?;
+    let end = used_len.checked_add(len_usize).ok_or_else(|| {
+        ncore::prepaid_validation_error("invalid bigint", || {
+            ncore::Error::Message("length overflow".into())
+        })
+    })?;
     if end > bytes.len() {
-        return Err(ncore::Error::Message("buffer too short".into()));
+        return Err(ncore::prepaid_validation_error("invalid bigint", || {
+            ncore::Error::Message("buffer too short".into())
+        }));
     }
     let payload = &bytes[used_len..end];
     if payload.len() > MAX_ENCODED_BYTES {
-        return Err(ncore::Error::Message("invalid bigint".into()));
+        return Err(ncore::prepaid_validation_error("invalid bigint", || {
+            ncore::Error::Message("invalid bigint".into())
+        }));
     }
     let redundant = match payload {
         [0] => true,
@@ -621,7 +632,9 @@ pub(crate) fn canonical_twos_payload(bytes: &[u8]) -> Result<(&[u8], usize), nco
         _ => false,
     };
     if redundant {
-        return Err(ncore::Error::Message(BigIntError::NonCanonical.to_string()));
+        return Err(ncore::prepaid_validation_error("invalid bigint", || {
+            ncore::Error::Message(BigIntError::NonCanonical.to_string())
+        }));
     }
     Ok((payload, end))
 }

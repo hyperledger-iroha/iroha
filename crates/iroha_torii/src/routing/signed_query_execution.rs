@@ -744,6 +744,11 @@ pub struct OrdinaryQueryExecutionPlan {
     continue_budget: Option<u64>,
 }
 impl OrdinaryQueryExecutionPlan {
+    pub(crate) const fn ordinary_limits(
+        self,
+    ) -> iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits {
+        self.ordinary_limits
+    }
     pub(crate) fn is_stored_start(self, request: &iroha_data_model::query::QueryRequest) -> bool {
         self.mode == iroha_core::query::snapshot::CursorMode::Stored
             && matches!(request, iroha_data_model::query::QueryRequest::Start(_))
@@ -756,6 +761,8 @@ impl OrdinaryQueryExecutionPlan {
 /// Capture one app-local ordinary policy before any weighted promotion.
 pub fn ordinary_query_execution_plan(
     state: &CoreState,
+    live_query_store: &LiveQueryStoreHandle,
+    authority: &AccountId,
     request: &iroha_data_model::query::QueryRequest,
     opts: &QueryOptions,
     policy: crate::OrdinaryQueryServerPolicy,
@@ -819,10 +826,61 @@ pub fn ordinary_query_execution_plan(
     if singular_execution {
         limits = limits.with_singular_output_limits(policy.singular_output_limits);
     }
+    let ordinary_limits = if matches!(
+        request,
+        iroha_data_model::query::QueryRequest::Start(query)
+            if query.item == iroha_data_model::query::QueryItemKind::AssetEscrowScopeOriginalV1
+    ) {
+        if mode != CursorMode::Ephemeral {
+            return Err(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "escrow scope admits only an ephemeral complete result".into(),
+                ),
+            )
+            .into());
+        }
+        policy.complete_asset_scope_limits.ok_or_else(|| {
+            ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )
+        })?
+    } else if matches!(
+        request,
+        iroha_data_model::query::QueryRequest::Start(query)
+            if query.item == iroha_data_model::query::QueryItemKind::Trigger
+    ) {
+        policy.trigger_limits.ok_or_else(|| {
+            ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )
+        })?
+    } else if let iroha_data_model::query::QueryRequest::Continue(cursor) = request {
+        if mode != CursorMode::Stored {
+            return Err(ValidationFail::NotPermitted(
+                "cursor continuation requires stored cursor mode".to_owned(),
+            )
+            .into());
+        }
+        // Authenticate the existing cursor before selecting its reservation.
+        // The lookup copies only fixed-size facts; Core rechecks the original
+        // complete policy and archive after the matching lease is acquired.
+        let retained = live_query_store
+            .ordinary_cursor_execution_limits(cursor, authority)
+            .map_err(ValidationFail::QueryFailed)?;
+        if retained != policy.limits && policy.trigger_limits != Some(retained) {
+            return Err(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Expired,
+            )
+            .into());
+        }
+        retained
+    } else {
+        policy.limits
+    };
     Ok(OrdinaryQueryExecutionPlan {
         mode,
         limits,
-        ordinary_limits: policy.limits,
+        ordinary_limits,
         singular_execution,
         stored_start_budget,
         requested_gas_budget: opts.gas_units,

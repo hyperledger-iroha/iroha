@@ -1,0 +1,143 @@
+{
+  "schema": "parliament-provider-layout-current-v1",
+  "compiler": "rustc 1.99.1 (58cf8f9c3 2026-10-13)\nbinary: rustc\ncommit-hash: 58cf8f9c35b355199727627d07ae34a4e2846d67\ncommit-date: 2026-10-13\nhost: aarch64-apple-darwin\nrelease: 1.99.1\nLLVM version: 23.1.1\n",
+  "source_sha256": {
+    "vendor/aes/src/autodetect.rs": "e07e5a15a9d3749d48e7721d666766f08abab344d0e7fb1f257994a0a7004108",
+    "vendor/aes/src/backends/aarch64_aes/encdec.rs": "32a8e4b8d9d685c7c8d5a647fb723ae0c57447bed87427c4f468cda7b7788d1d",
+    "vendor/aes/src/backends/aarch64_aes/expand.rs": "0bd1ed1c28e6e5164208117a647e15b058c6fdeb171c4195820780bbde25a055",
+    "vendor/aes/src/backends/aarch64_aes/hazmat.rs": "b840e65dcbcff211f5ad10c2fa694b8c4b117ccbca43b9dbdb1b37715df70084",
+    "vendor/aes/src/backends/aarch64_aes/utils.rs": "9346cd8c8ddf2b3c00f81fd2955aa8fa680570bebdb71c9c544a23a7f239c795",
+    "vendor/aes/src/backends/aarch64_aes.rs": "a8f440d995265f8ee53d39da05d33d5d524ccafd22766c223aea8468da842e93",
+    "vendor/aes/src/backends/fixslice/aes128.rs": "e33dd01071622fbbc179b27349db5cb63f1dd674a3ab39896890ac89d13b73d5",
+    "vendor/aes/src/backends/fixslice/aes192.rs": "e5cda3d9a394ec25148997cc45bfc9291fef60d28648be171dd4a96ba751bb3e",
+    "vendor/aes/src/backends/fixslice/aes256.rs": "9d0b52fa3d152a2cc2b69b8d40bf7b2aed5302047f4cdb6e16e8f54b8e3df7ce",
+    "vendor/aes/src/backends/fixslice/hazmat.rs": "d1bf3681ad8fd858f82c55af40c09558d84215305627ba40e4bf3f46a96fd496",
+    "vendor/aes/src/backends/fixslice/mix_columns.rs": "fe78113def7e11a6a8449b16a8b4e54bdaf6b9aad9bfef74687bee1150a7d948",
+    "vendor/aes/src/backends/fixslice/mod.rs": "703101eb67276b982a89b944b2a7c59996dc729de6cf18035335c40ee40673b8",
+    "vendor/aes/src/backends/fixslice/sbox.rs": "5750d37d2a59cbdfa9ac5dbf488301501d1e8f6209407d6942c642a7b162bb85",
+    "vendor/aes/src/backends/fixslice/utils.rs": "48366859088eebc862e9690cfad83005df7aee4b72f90724d959d806c1172c10",
+    "vendor/aes/src/backends/fixslice/word.rs": "d3aa2a529d07135fc1e3f3dfb45a6ddbd325c3a41e7166f7058747421422199b",
+    "vendor/aes/src/backends/soft.rs": "105c126d69df5e739a678f448ced2e74c794965249354a1df030dfa2c4d0d6e4",
+    "vendor/aes/src/backends/x86_aes/encdec.rs": "f788ca5ec2d2eae61b24c7154aed8370dce3bd075da9465ec88d5451137853b8",
+    "vendor/aes/src/backends/x86_aes/expand.rs": "f826cfa3a54b988d04e95c605b8211ff4a35ffb3ccb68ad5576919db1433ee86",
+    "vendor/aes/src/backends/x86_aes/hazmat.rs": "c2b191b59e23a8239ebdae782ed7e1e0a022b4992af32b901f00146ab3eeb49d",
+    "vendor/aes/src/backends/x86_aes/utils.rs": "da596d91622e029e358f4b5c72d751ff5fa3aafdb109f6faa2b5b4ea8b1522f0",
+    "vendor/aes/src/backends/x86_aes.rs": "8638b3faa06e0bb3428c5f44afb95cae578a7e2ddb69671b83ef6ffee97dd070",
+    "vendor/aes/src/backends/x86_vaes256/encdec.rs": "67ef400ed7ed04741b2c24e07547e6ae107154393ba0a9b9b068e6ffa200f3fc",
+    "vendor/aes/src/backends/x86_vaes256.rs": "46dbbd880984600fb4253f9b6adaa5f22063c80897787d52e07f8bed4a2114e0",
+    "vendor/aes/src/backends/x86_vaes512/encdec.rs": "4d63fe6b8964705a9b18c08409569c1c85b6328d1128dcbc9b5cf3b713b6f133",
+    "vendor/aes/src/backends/x86_vaes512.rs": "48812ed13365c03c6db1d48521764818ce869f87db1b05755c7d80e80e4a8eea",
+    "vendor/aes/src/backends.rs": "de1d6f3c73abc926afa8f1e13b068f872074906851f888585bb7ad080f2b15fc",
+    "vendor/aes/src/hazmat.rs": "d2d4c8ca5556fe4656a760f8069f5a2145f755b8da1015a331d2952517ba9c09",
+    "vendor/aes/src/lib.rs": "5ba13c3ac1b130536ea8958ee1a6ba72ac81715957e78fcfb2c7687753e050a0",
+    "vendor/aes/src/soft.rs": "a4595bae56cb37a99d127c27e3591b8137f61b81abcc6416069a0b4e2d17db55",
+    "vendor/aes/Cargo.toml": "e334a03931c6945b4b54f21c50ff4cd9acfd5d0c36d48813074d2cf50e1c3eaf",
+    "docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout.rs": "c9edcd0a910c4120d52e5e38d4c1f07283abf4a16b5e896613ffde46023cbaad",
+    "docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout-Cargo.toml.template": "8da00800e39fe92c595c69c20a7bb0c72433a0dbea90cd1bb110705a9b3bc14c",
+    "docs/validation/parliament_ballot_resource_accounting_20261104/provider-layout-Cargo.lock.template": "6a36b355f5a6c4bc8509c01fd207b92e7407657d75f917dc22abdddc222b200f"
+  },
+  "producer_receipt": "producer-receipt.json",
+  "producer_receipt_sha256": "b89c01685238a5c617913c0efb55aaf618d7cfe1802ad8cd0c7cd7b37b6a5680",
+  "targets": [
+    {
+      "target": "aarch64-apple-darwin",
+      "mode": "portable",
+      "bytes": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "aarch64-apple-darwin-portable.ll.txt",
+      "llvm_ir_sha256": "6c70fba9dfa96e8e2af5ed5a30aad3e33975244ddd400056dc008e749da47a36"
+    },
+    {
+      "target": "aarch64-apple-darwin",
+      "mode": "accel",
+      "bytes": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "aarch64-apple-darwin-accel.ll.txt",
+      "llvm_ir_sha256": "732faa9dac91ae0751163a40383503cd704b3f12d035ca7df01204fab638cdc9"
+    },
+    {
+      "target": "aarch64-apple-ios",
+      "mode": "portable",
+      "bytes": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "aarch64-apple-ios-portable.ll.txt",
+      "llvm_ir_sha256": "7b18877d3c7cf4d59cd3100ddb284bb244663e99bd43632a55f248a775598621"
+    },
+    {
+      "target": "aarch64-apple-ios",
+      "mode": "accel",
+      "bytes": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "aarch64-apple-ios-accel.ll.txt",
+      "llvm_ir_sha256": "a218cf0c07386d2f765def892e88e95fe9afc622e157c5681d3a0ff50a11727e"
+    },
+    {
+      "target": "aarch64-linux-android",
+      "mode": "portable",
+      "bytes": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "aarch64-linux-android-portable.ll.txt",
+      "llvm_ir_sha256": "e7eca53ae4e694f9f52141894864f27d8541196cace8b986863324c1486d3a10"
+    },
+    {
+      "target": "aarch64-linux-android",
+      "mode": "accel",
+      "bytes": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "aarch64-linux-android-accel.ll.txt",
+      "llvm_ir_sha256": "7f43432f3b8f475e7fde9a03dd49899545a7ff5e9558fcb37ed1edd475ef51f2"
+    },
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "mode": "portable",
+      "bytes": {
+        "AUTO_ALIGN": 8,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "x86_64-unknown-linux-musl-portable.ll.txt",
+      "llvm_ir_sha256": "e0ff2629b4479b94b8ac7c5e4856c033772ac99aa81e81a6fd3864c65a0bf00d"
+    },
+    {
+      "target": "x86_64-unknown-linux-musl",
+      "mode": "accel",
+      "bytes": {
+        "AUTO_ALIGN": 16,
+        "AUTO_SIZE": 960,
+        "SOFT_ALIGN": 8,
+        "SOFT_SIZE": 960
+      },
+      "llvm_ir_file": "x86_64-unknown-linux-musl-accel.ll.txt",
+      "llvm_ir_sha256": "d1127c94f71b5936dda4cb997eb1301bceb2f1d7614c91235b5f14a30e736b67"
+    }
+  ],
+  "maximum_simultaneous_verifier_provider_boxes": 1,
+  "compile_only": true,
+  "profile_qualified": false,
+  "scope": "Actual current AES provider requested Layout only. No device execution, allocator internals, stack, provider operation cost, production certificate or release qualification."
+}

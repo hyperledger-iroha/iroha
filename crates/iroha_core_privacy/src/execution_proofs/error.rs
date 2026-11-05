@@ -27,3 +27,18 @@ impl From<ProofManagedNoteStarkErrorV1> for ExecutionProofErrorV1 {
         Self::Cryptography(error.to_string())
     }
 }
+impl From<iroha_execution_stark::ProveError> for ExecutionProofErrorV1 {
+    fn from(error: iroha_execution_stark::ProveError) -> Self {
+        Self::Cryptography(error.to_string())
+    }
+}
+impl From<iroha_execution_stark::VerifyError> for ExecutionProofErrorV1 {
+    fn from(error: iroha_execution_stark::VerifyError) -> Self {
+        Self::Cryptography(error.to_string())
+    }
+}
+impl From<iroha_execution_stark::params::SecurityError> for ExecutionProofErrorV1 {
+    fn from(error: iroha_execution_stark::params::SecurityError) -> Self {
+        Self::Cryptography(error.to_string())
+    }
+}

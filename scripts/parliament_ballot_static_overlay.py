@@ -21,8 +21,8 @@ VALUE_BITS = 2112
 FRAMING = "scripts/parliament_ballot_write_framing.py"
 LOOKUP = "scripts/parliament_ballot_oracle_log_circuit.py"
 PINS = {
-    FRAMING: "ad5230fdcd01b52588b40d29a2e766625050ef530dfba4cb529350f993a21617",
-    LOOKUP: "d045f66581f7a50bcb4e696b0346a192724f5d0858a21c23343bb35478d5c558",
+    FRAMING: "dea334da1192d8d13a6068d0b10c2874ff8b07e1eddd0434e18205f8c9197ce8",
+    LOOKUP: "8a9231ebc700f0b2628420a101825aa87d5cfe51714de0a7e5db4c95f74e3c58",
 }
 
 

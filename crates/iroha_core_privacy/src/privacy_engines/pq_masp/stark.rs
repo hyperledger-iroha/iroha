@@ -41,7 +41,7 @@ use crate::privacy_engines::{
 };
 use iroha_data_model::privacy::{
     PqMaspStarkStatementV1, PrivacyConsensusLimitsV1, PrivacyNativeConsensusBindingV1,
-    PrivacyProtocolIdV1,
+    PrivacyRuntimeProtocolIdV1,
 };
 use rand::TryRng;
 const TYPE_SHA_ROUND: usize = 0;
@@ -110,7 +110,7 @@ const PQ_MASP_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
 pub const PQ_MASP_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
     aggregate::AggregateStarkDomainsV1 {
         digest_context: TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             b"pq-masp-stark-profile-v1",
         ),
         base_leaf: b"pq-masp-stark-base-leaf-v1",
@@ -725,10 +725,11 @@ mod tests {
                 .expect("matched alternate-genesis inner public input"),
             "a matched network/genesis substitution must change the inner commitment"
         );
-        let statement_digest =
-            iroha_data_model::privacy::PrivacyStatementV1::PqMaspStarkV1(other_statement.clone())
-                .digest()
-                .expect("alternate-genesis statement digest");
+        let statement_digest = iroha_data_model::privacy::PrivacyRuntimeStatementV1::PqMaspStarkV1(
+            other_statement.clone(),
+        )
+        .digest()
+        .expect("alternate-genesis statement digest");
         let binding_digest = other_binding
             .digest()
             .expect("alternate-genesis binding digest");
@@ -1147,7 +1148,7 @@ mod tests {
             )),
             "an inconsistent network/genesis binding reached proof verification"
         );
-        let statement_digest = iroha_data_model::privacy::PrivacyStatementV1::PqMaspStarkV1(
+        let statement_digest = iroha_data_model::privacy::PrivacyRuntimeStatementV1::PqMaspStarkV1(
             other_genesis_statement.clone(),
         )
         .digest()

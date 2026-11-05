@@ -714,6 +714,13 @@ NATIVE_CORE_TEST_OWNERS = (
     )),
  )
 
+# (owned test source, exact test leaf) for reviewed declarations carrying #[cfg(windows)].
+# The darwin/linux gate never compiles them, so they complete their owner's census but
+# are never executable selectors (selectors must appear in the harness --list).
+# The archive-reader Windows control lives in its separately gated child module.
+# No inline Windows declarations remain in these shipping source owners.
+NATIVE_WINDOWS_ONLY_TESTS = ()
+
 def native_owner_stages(label=None, *, exclude=()):
     """Return explicitly selected static suites, independent of filesystem availability."""
     return tuple((coverage, tuple(prefix + "::" + leaf for leaf in leaves))
@@ -731,11 +738,13 @@ def rust_source_masker(root):
     return namespace["mask_rust_comments"]
 
 
-def validate_native_source_inventory(root, *, owners=NATIVE_CORE_TEST_OWNERS):
+def validate_native_source_inventory(root, *, owners=NATIVE_CORE_TEST_OWNERS,
+                                     windows_only=NATIVE_WINDOWS_ONLY_TESTS):
     """Require the complete reviewed native declaration census and parent registration."""
     mask = rust_source_masker(root)
     package = Path(root) / "crates/iroha_core/src"
-    declarations = re.compile(r"#\[(?:tokio::)?test(?:\([^\]]*\))?\]\s*(?:#\[[^\]]*\]\s*)*(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*\(")
+    # Attribute blocks before and after #[test] are captured to find an attached #[cfg(windows)].
+    declarations = re.compile(r"((?:#\[[^\]]*\]\s*)*)#\[(?:tokio::)?test(?:\([^\]]*\))?\]\s*((?:#\[[^\]]*\]\s*)*)(?:async\s+)?fn\s+([A-Za-z_]\w*)\s*\(")
     seen = set()
     for coverage, parent, source, module, prefix, expected in owners:
         for relative in (parent, source):
@@ -781,7 +790,13 @@ def validate_native_source_inventory(root, *, owners=NATIVE_CORE_TEST_OWNERS):
                     bound.append(base / (module + ".rs"))
         if len(bound) != 1 or bound[0].resolve() != target:
             raise ValueError("native test module source registration differs: " + prefix)
-        actual = tuple(declarations.findall(mask((package / source).read_text())))
+        actual, windows = [], []
+        for before, after, name in declarations.findall(mask((package / source).read_text())):
+            attributes = {re.sub(r"\s+", "", item) for item in re.findall(r"#\[[^\]]*\]", before + after)}
+            (windows if "#[cfg(windows)]" in attributes else actual).append(name)
+        reviewed = [name for path, name in windows_only if path == source]
+        if set(windows) != set(reviewed) or len(windows) != len(reviewed):
+            raise ValueError(f"native Windows-only census differs for {source}: missing={sorted(set(reviewed)-set(windows))}, extra={sorted(set(windows)-set(reviewed))}")
         if set(actual) != set(expected) or len(actual) != len(expected):
             raise ValueError(f"native source census differs for {source}: missing={sorted(set(expected)-set(actual))}, extra={sorted(set(actual)-set(expected))}")
     return seen

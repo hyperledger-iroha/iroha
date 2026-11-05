@@ -12,8 +12,8 @@ use iroha_data_model::{
     privacy::{
         IrohaZkX509StarkP256StatementV1, PrivacyCompiledProfileResultV1,
         PrivacyCompiledProfileSnapshotV1, PrivacyConsensusLimitsV1,
-        PrivacyExact12CapabilityManifestV1, PrivacyProtocolIdV1, PrivacyProtocolLimitsV1,
-        PrivacyStatementV1,
+        PrivacyExact12CapabilityManifestV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1,
     },
     transaction::{TransactionBuilder, TransactionPayload, signed_attachments::*},
 };
@@ -22,7 +22,7 @@ use napi_derive::napi;
 
 const MAX_PAYLOAD_BYTES: usize = 10 * 1024 * 1024;
 const MAX_CONTEXT_JSON_BYTES: usize = 256 * 1024;
-const PROTOCOL: PrivacyProtocolIdV1 = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+const PROTOCOL: PrivacyRuntimeProtocolIdV1 = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
 
 /// Exact inputs for one original direct X509 action; transport authentication belongs to the SDK.
 #[napi(object)]
@@ -49,7 +49,7 @@ pub struct JsPrivacyX509DirectInputV1 {
 
 struct Admission {
     profile: PrivacyCompiledProfileSnapshotV1,
-    protocol_limits: PrivacyProtocolLimitsV1,
+    protocol_limits: PrivacyRuntimeProtocolLimitsV1,
     limits: PrivacyConsensusLimitsV1,
 }
 
@@ -228,9 +228,9 @@ fn project(
         .statement_digest_for_v1(ordered)
         .map_err(super::norito_to_napi)?;
     Ok(Projection {
-        statement_norito: norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
-            statement.clone(),
-        ))
+        statement_norito: norito::encode_canonical(
+            &PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone()),
+        )
         .map_err(super::norito_to_napi)?,
         statement,
         ordered_intent: *ordered.as_bytes(),
@@ -276,7 +276,7 @@ pub fn privacy_prepare_x509_direct_transaction_v1(
     let projection = project(&original, &request, &admitted.limits)?;
     admitted
         .protocol_limits
-        .validate_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+        .validate_statement(&PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(
             projection.statement.clone(),
         ))
         .map_err(super::norito_to_napi)?;

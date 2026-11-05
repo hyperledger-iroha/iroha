@@ -1,0 +1,12 @@
+{
+  "observed_utc": "2026-11-04T05:12:23.979583+00:00",
+  "reviewed_manifest_sha256": "2936fe005c345ef35e241d04f998e39c3daf82c262ddc3beeb57cf191cca51ca",
+  "manifest_files_checked": 17,
+  "helper_exact_current_and_historical_hashes_checked": true,
+  "helper_ast_changes_only_reviewed_metadata_and_row_scope": true,
+  "writer_AST_changes_only_two_helper_pins": true,
+  "all_four_report_objects_identical_except_source_hash_maps": true,
+  "all_current_report_source_bindings_match": true,
+  "profile_qualified": false,
+  "findings": []
+}

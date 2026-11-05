@@ -1,0 +1,423 @@
+{
+  "schema": "parliament-takeover-current-diagnostics-v1",
+  "repository_commit_at_capture": "c63d346bc8",
+  "source_state": "Shared dirty checkout; exact source bytes and producer tools are bound in build/build-receipt.json. This is not clean/index-equal production provenance.",
+  "root_working_lock_sha256": "a4006ddc2eda6a0565e524739994db6c8055901c932ce685ae012e9847c7e804",
+  "root_head_index_lock_sha256": "bd41e0e58629c94a8b8ed990c98d12021b76cdec7a400f6b62cc2916c0815c0f",
+  "producer_commands_passed": 6,
+  "worker_tests_per_mode": 17,
+  "strict_clippy_modes": [
+    "portable",
+    "accel"
+  ],
+  "memory_observations": 122,
+  "mode_pairs": 61,
+  "fatal_output_observations": 4,
+  "stack_analyzer_tests_passed": 62,
+  "binaries": {
+    "portable": {
+      "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/binaries/worker-portable",
+      "sha256": "7e9227ea785265bcae0e4bc4c61efc9ebec2d9d1a46574669ec966b497a1fb84"
+    },
+    "accel": {
+      "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/binaries/worker-accel",
+      "sha256": "350f2634f2a0d56d37650657874e3b02bbd156036fed1ab3c1ece01afc2ff717"
+    }
+  },
+  "stack_scope": "Current ARM64 disassembly captured with current llvm-objdump; exact demangled roots reviewed for Rust 1.99. Analyzer unchanged. All roots retain unresolved frontiers and null complete bounds.",
+  "complete_stack_certificate": false,
+  "complete_workspace_certificate": false,
+  "profile_qualified": false,
+  "physical_cost_calibrated": false,
+  "release_qualified": false,
+  "historical_evidence_rebound": false,
+  "remaining_historical_failures_without_verified_repair": 113,
+  "retained_files": [
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/Cargo.lock.build.template",
+      "archived_path": "build/Cargo.lock.build.template",
+      "original_sha256": "a4006ddc2eda6a0565e524739994db6c8055901c932ce685ae012e9847c7e804",
+      "archived_sha256": "a4006ddc2eda6a0565e524739994db6c8055901c932ce685ae012e9847c7e804",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/Cargo.toml.build.template",
+      "archived_path": "build/Cargo.toml.build.template",
+      "original_sha256": "c9f95c23e5150f0406471d6f364f283f72eb24056fc4bd0df5a7cf7986e416b1",
+      "archived_sha256": "c9f95c23e5150f0406471d6f364f283f72eb24056fc4bd0df5a7cf7986e416b1",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/accel-build.txt",
+      "archived_path": "build/accel-build.txt",
+      "original_sha256": "18910923e5608441701f52c9420026b6b8e73d329d667fb56156936ca2884273",
+      "archived_sha256": "18910923e5608441701f52c9420026b6b8e73d329d667fb56156936ca2884273",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/accel-clippy.txt",
+      "archived_path": "build/accel-clippy.txt",
+      "original_sha256": "e030630d849097d49fa65729c1a152ea06230bd4e8feb376e05250806ea67a12",
+      "archived_sha256": "e030630d849097d49fa65729c1a152ea06230bd4e8feb376e05250806ea67a12",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/accel-test.txt",
+      "archived_path": "build/accel-test.txt",
+      "original_sha256": "258439773ffe54737d397e4858717b7c83b38723484139c982e9195ac30717c2",
+      "archived_sha256": "258439773ffe54737d397e4858717b7c83b38723484139c982e9195ac30717c2",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/build-receipt.json",
+      "archived_path": "build/build-receipt.json",
+      "original_sha256": "ac3e4ddc0685ec1f000fa809cccd4c060ecc9899010ed1b9d7047bde2659817a",
+      "archived_sha256": "ac3e4ddc0685ec1f000fa809cccd4c060ecc9899010ed1b9d7047bde2659817a",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/build-source.json",
+      "archived_path": "build/build-source.json",
+      "original_sha256": "60218ecc4869e46b75a841ea762832ae32bbe1bb4dd5888b9643f1d5498820db",
+      "archived_sha256": "60218ecc4869e46b75a841ea762832ae32bbe1bb4dd5888b9643f1d5498820db",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/build_worker.py.template",
+      "archived_path": "build/build_worker.py.template",
+      "original_sha256": "63802d4a784236d7a9a9f28d641a6dea7bfac76fb9affa33fc8fd45228e6446b",
+      "archived_sha256": "63802d4a784236d7a9a9f28d641a6dea7bfac76fb9affa33fc8fd45228e6446b",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/dependency-metadata.json",
+      "archived_path": "build/dependency-metadata.json",
+      "original_sha256": "2157fe8f7a30af7511dacf5aab5b84769efb286efdba216565c8bfc71b66b4f1",
+      "archived_sha256": "2157fe8f7a30af7511dacf5aab5b84769efb286efdba216565c8bfc71b66b4f1",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/Cargo.lock.template",
+      "archived_path": "build/generated-source/Cargo.lock.template",
+      "original_sha256": "b462a7ebc5334e779d5d5e3ded91ae86d68de6b1c31c25dc527c417fe9a1442c",
+      "archived_sha256": "b462a7ebc5334e779d5d5e3ded91ae86d68de6b1c31c25dc527c417fe9a1442c",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/Cargo.toml.template",
+      "archived_path": "build/generated-source/Cargo.toml.template",
+      "original_sha256": "2306524eee137fb004a39d9d506750db116824f99f4b12f4240a12423436f624",
+      "archived_sha256": "2306524eee137fb004a39d9d506750db116824f99f4b12f4240a12423436f624",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/driver.rs.template",
+      "archived_path": "build/generated-source/driver.rs.template",
+      "original_sha256": "97779e3cd2c0275ee12abc16349fd119f662dfb695d7f35d0f6fc1edec7ec72d",
+      "archived_sha256": "97779e3cd2c0275ee12abc16349fd119f662dfb695d7f35d0f6fc1edec7ec72d",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/fatal.rs.template",
+      "archived_path": "build/generated-source/fatal.rs.template",
+      "original_sha256": "78eb3d7daf45307083679fe98b9f2f6ede49080d289b6a17072c2f1181d5d601",
+      "archived_sha256": "78eb3d7daf45307083679fe98b9f2f6ede49080d289b6a17072c2f1181d5d601",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/generated_workspace.rs.template",
+      "archived_path": "build/generated-source/generated_workspace.rs.template",
+      "original_sha256": "d6162ad6b3a34979ee9ef534ef683e5e1a1f76d5b99a4ea7d093c9b8cbafb787",
+      "archived_sha256": "d6162ad6b3a34979ee9ef534ef683e5e1a1f76d5b99a4ea7d093c9b8cbafb787",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/preparation.json.template",
+      "archived_path": "build/generated-source/preparation.json.template",
+      "original_sha256": "8c73a976225e96abbbae886448dadd9b8fd42ce1370e084d9c8a8d45886fb664",
+      "archived_sha256": "8c73a976225e96abbbae886448dadd9b8fd42ce1370e084d9c8a8d45886fb664",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/root-Cargo.lock.template.template",
+      "archived_path": "build/generated-source/root-Cargo.lock.template.template",
+      "original_sha256": "a4006ddc2eda6a0565e524739994db6c8055901c932ce685ae012e9847c7e804",
+      "archived_sha256": "a4006ddc2eda6a0565e524739994db6c8055901c932ce685ae012e9847c7e804",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/staging.rs.template",
+      "archived_path": "build/generated-source/staging.rs.template",
+      "original_sha256": "fcfebbbdfdc26bc40fa85c8f400fa987bc609693966f3c19f4a269d3fea226f0",
+      "archived_sha256": "fcfebbbdfdc26bc40fa85c8f400fa987bc609693966f3c19f4a269d3fea226f0",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/generated-source/workspace.diff.template",
+      "archived_path": "build/generated-source/workspace.diff.template",
+      "original_sha256": "173730421354b8650a7111b8033233f5d8f324f2dd63fec5f311c9471e7cbf0e",
+      "archived_sha256": "173730421354b8650a7111b8033233f5d8f324f2dd63fec5f311c9471e7cbf0e",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/lib.rs.build.template",
+      "archived_path": "build/lib.rs.build.template",
+      "original_sha256": "cd90b0cee427827b256c18120c0547c87d3580d99ab7928a1fc02a4dcc0a92e7",
+      "archived_sha256": "cd90b0cee427827b256c18120c0547c87d3580d99ab7928a1fc02a4dcc0a92e7",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/lock-comparison.json",
+      "archived_path": "build/lock-comparison.json",
+      "original_sha256": "cbc22fe21071f00bf82ff73b65a2daa3d3b0521e873c5047fd8fc24566344abf",
+      "archived_sha256": "cbc22fe21071f00bf82ff73b65a2daa3d3b0521e873c5047fd8fc24566344abf",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/metadata-stderr.txt",
+      "archived_path": "build/metadata-stderr.txt",
+      "original_sha256": "0a4574a81fa5cad8fc8b380f089b13b3b2de96e04c9a7ae1ada493ddc681f9cc",
+      "archived_sha256": "0a4574a81fa5cad8fc8b380f089b13b3b2de96e04c9a7ae1ada493ddc681f9cc",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/portable-build.txt",
+      "archived_path": "build/portable-build.txt",
+      "original_sha256": "dfc1cb9b2051a8cefb0d451ea031fa5e8fa14ab04a8497d1f1269e1fb5f73eb2",
+      "archived_sha256": "dfc1cb9b2051a8cefb0d451ea031fa5e8fa14ab04a8497d1f1269e1fb5f73eb2",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/portable-clippy.txt",
+      "archived_path": "build/portable-clippy.txt",
+      "original_sha256": "b51c44ec4fc74f776afaeab27bf7bcecb3116425212ff55c175abc400cbca76a",
+      "archived_sha256": "b51c44ec4fc74f776afaeab27bf7bcecb3116425212ff55c175abc400cbca76a",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/portable-test.txt",
+      "archived_path": "build/portable-test.txt",
+      "original_sha256": "5df17bff04b11bc7ef2ddccd283a8366310bda7ae4df9c11e11dfc5b9781f74f",
+      "archived_sha256": "5df17bff04b11bc7ef2ddccd283a8366310bda7ae4df9c11e11dfc5b9781f74f",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/producer.log",
+      "archived_path": "build/producer.log",
+      "original_sha256": "50e3edf41e2fc73a326075aa4b547abf5391ba753e07147605183bade530baa9",
+      "archived_sha256": "50e3edf41e2fc73a326075aa4b547abf5391ba753e07147605183bade530baa9",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/build/tool-identities.json",
+      "archived_path": "build/tool-identities.json",
+      "original_sha256": "e4940bb826c2b01d4731cf5c2b87bc94fa7466eac2754536a718e7a9dd0b9f48",
+      "archived_sha256": "e4940bb826c2b01d4731cf5c2b87bc94fa7466eac2754536a718e7a9dd0b9f48",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/campaign/cases.jsonl",
+      "archived_path": "campaign/cases.jsonl.gz",
+      "original_sha256": "91b8c2f6503a185fe0b820ac40adeb48f2ddd8b66d141a7f8f7ed129334865ca",
+      "archived_sha256": "bef1a9640bcca11c7d2418c732112c0c16018b960504448142e0bc2deaed1339",
+      "gzip": true
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/campaign/report.json",
+      "archived_path": "campaign/report.json",
+      "original_sha256": "ea32672b012c52e7da53273221dc45564100d3def969ee12b8da8a4d4d4d7a67",
+      "archived_sha256": "ea32672b012c52e7da53273221dc45564100d3def969ee12b8da8a4d4d4d7a67",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/fatal-output/cases.jsonl",
+      "archived_path": "fatal-output/cases.jsonl",
+      "original_sha256": "c27fac5e03317bcbee8f65371e4439ef882d824eceb711674009c804b753ec3d",
+      "archived_sha256": "c27fac5e03317bcbee8f65371e4439ef882d824eceb711674009c804b753ec3d",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/fatal-output/check_parliament_ballot_fatal_output.py.template",
+      "archived_path": "fatal-output/check_parliament_ballot_fatal_output.py.template",
+      "original_sha256": "c21327451c5f1789b5acb35ee124181ccd20ff9a62332fa6e72fb95146d98a32",
+      "archived_sha256": "c21327451c5f1789b5acb35ee124181ccd20ff9a62332fa6e72fb95146d98a32",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/fatal-output/report.json",
+      "archived_path": "fatal-output/report.json",
+      "original_sha256": "71c68c85583a3a9715fea3425344a90115284664eaf22be7a078d59bd7c329c7",
+      "archived_sha256": "71c68c85583a3a9715fea3425344a90115284664eaf22be7a078d59bd7c329c7",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/accel/disassembly.txt",
+      "archived_path": "stack-v2/accel/disassembly.txt.gz",
+      "original_sha256": "784f6cc11fa905215f3c3856101730eebf1b8c91687cd8331014fc12d2334796",
+      "archived_sha256": "f02b9456c79c7459a3d80da4e614aac40798d544fda8cb970f5f1faf5402c90b",
+      "gzip": true
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/accel/starts.txt",
+      "archived_path": "stack-v2/accel/starts.txt",
+      "original_sha256": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+      "archived_sha256": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/accel/stubs.txt",
+      "archived_path": "stack-v2/accel/stubs.txt",
+      "original_sha256": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+      "archived_sha256": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/accel/unwind.txt",
+      "archived_path": "stack-v2/accel/unwind.txt",
+      "original_sha256": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+      "archived_sha256": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/accel.json",
+      "archived_path": "stack-v2/accel.json.gz",
+      "original_sha256": "299b8d13fd14a57b183f2be418443699641f26bf3f5d6e67b50ef18a911ed902",
+      "archived_sha256": "62d7ba9d884b61126ad48364af3c6faca3ae7ca8fd14cad4ce710c84f92fbda4",
+      "gzip": true
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/capture_stack.py.template",
+      "archived_path": "stack-v2/capture_stack.py.template",
+      "original_sha256": "ce4ddaff9a2767cf2be64fee25197e587dbc23ec1ef45fc0124b520d3e95e8eb",
+      "archived_sha256": "ce4ddaff9a2767cf2be64fee25197e587dbc23ec1ef45fc0124b520d3e95e8eb",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/check_parliament_ballot_memory_entry.py.template",
+      "archived_path": "stack-v2/check_parliament_ballot_memory_entry.py.template",
+      "original_sha256": "fca0dade57bc12c218b49fd2117da10d8a2c0fd21c3011bba094d43e54780bca",
+      "archived_sha256": "fca0dade57bc12c218b49fd2117da10d8a2c0fd21c3011bba094d43e54780bca",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/check_parliament_ballot_resource_contract.py.template",
+      "archived_path": "stack-v2/check_parliament_ballot_resource_contract.py.template",
+      "original_sha256": "ae559c8d7a4c0c0f962f879c8f11b4dd5d8257c327fa5a8810d8b4d8a016019a",
+      "archived_sha256": "ae559c8d7a4c0c0f962f879c8f11b4dd5d8257c327fa5a8810d8b4d8a016019a",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/parliament_ballot_memory_supervisor.py.template",
+      "archived_path": "stack-v2/parliament_ballot_memory_supervisor.py.template",
+      "original_sha256": "cc09a3a66be58ef179d363da90ce920044f634791e132a036417bddc379ce0a5",
+      "archived_sha256": "cc09a3a66be58ef179d363da90ce920044f634791e132a036417bddc379ce0a5",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/parliament_ballot_stack_audit.py.template",
+      "archived_path": "stack-v2/parliament_ballot_stack_audit.py.template",
+      "original_sha256": "d54365c9f3460635cd9ba653d7139827b737161052a1d409ecaf06f9dd19830e",
+      "archived_sha256": "d54365c9f3460635cd9ba653d7139827b737161052a1d409ecaf06f9dd19830e",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/parliament_ballot_stack_audit_test.py.template",
+      "archived_path": "stack-v2/parliament_ballot_stack_audit_test.py.template",
+      "original_sha256": "8aa57e41ec678ec3f18d0aa563b4874680b6dfacb967f335e0d2ff51eb3643fe",
+      "archived_sha256": "8aa57e41ec678ec3f18d0aa563b4874680b6dfacb967f335e0d2ff51eb3643fe",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/portable/disassembly.txt",
+      "archived_path": "stack-v2/portable/disassembly.txt.gz",
+      "original_sha256": "4f7c2c6c1133060c002b66261cf6d6be860051d6fcf243f4c6eb0ad5fe874bac",
+      "archived_sha256": "4e37d8f1cbf69c0cf450c1eaf229c895b2a83d806b381346f76b8311e1c15663",
+      "gzip": true
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/portable/starts.txt",
+      "archived_path": "stack-v2/portable/starts.txt",
+      "original_sha256": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+      "archived_sha256": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/portable/stubs.txt",
+      "archived_path": "stack-v2/portable/stubs.txt",
+      "original_sha256": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+      "archived_sha256": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/portable/unwind.txt",
+      "archived_path": "stack-v2/portable/unwind.txt",
+      "original_sha256": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+      "archived_sha256": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/portable.json",
+      "archived_path": "stack-v2/portable.json.gz",
+      "original_sha256": "24ea8b3bb0ff8c239755472c9705ca1edb3ba5bf1f25289e72a4a485897b862c",
+      "archived_sha256": "657236df37df0a24a131056c8c8e5981f22e272011132e69f55783cb41571a6e",
+      "gzip": true
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/receipt.json",
+      "archived_path": "stack-v2/receipt.json",
+      "original_sha256": "07b863553d8df8f2ad3277b58fdbea6291017918f57f322b9780dce55ee3f29c",
+      "archived_sha256": "07b863553d8df8f2ad3277b58fdbea6291017918f57f322b9780dce55ee3f29c",
+      "gzip": false
+    },
+    {
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v2/tests.txt",
+      "archived_path": "stack-v2/tests.txt",
+      "original_sha256": "4de2372a5b96ca1b954409cbd14d6172508d1075424e64cae1d8b97e28f38feb",
+      "archived_sha256": "4de2372a5b96ca1b954409cbd14d6172508d1075424e64cae1d8b97e28f38feb",
+      "gzip": false
+    }
+  ],
+  "failed_attempts_retained": [
+    "/private/tmp/iroha-parliament-20261104-current/build",
+    "/private/tmp/iroha-parliament-20261104-current/build-v2",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack"
+  ],
+  "limitations": [
+    "Finite candidate/comparator diagnostic corpus, not universal input or network coverage.",
+    "Original historical binaries, tool bytes and missing lock template were not recreated or relabeled.",
+    "Substantive AES/SHAKE/provider, allocation, framing and compiled-image formulas require independent current source review.",
+    "Binary bytes remain at the exact persistent cache paths above; SHA-256 checked at archive time. Cache is not permanent release custody.",
+    "Raw artifacts preserve original absolute paths; archived_path mappings retain exact byte hashes. Large text/JSON captures are losslessly gzip-compressed with deterministic mtime."
+  ],
+  "historical_failure_repair_progress": {
+    "updated_utc": "2026-11-04T05:13:03.674887+00:00",
+    "historical_nodes": 160,
+    "latest_all_160_rerun": {
+      "path": "docs/validation/parliament_ballot_takeover_20261104/historical-nodes-current-rerun.json",
+      "sha256": "a9b31799f0df2ef1ac898bb480a717d10ea7a2584cf5ad1b8bd3805d15759bb5",
+      "passed": 47,
+      "failed": 113
+    },
+    "subsequent_exact_node_recheck": {
+      "path": "docs/validation/parliament_ballot_frontend_prover_accounting_20261104/historical-three-node-recheck.json",
+      "sha256": "5c7b2013928c10c7d57ce35ce89ee12562233ed2a4078da0679bee6905a0687f",
+      "passed": 3,
+      "nodeids": [
+        "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_receipt_keeps_incomplete_status_and_explicit_rejection_scope",
+        "scripts/tests/parliament_ballot_frontend_accounting_test.py::test_source_drift_and_missing_inputs_fail_closed",
+        "scripts/tests/parliament_ballot_prover_accounting_test.py::EvidenceTests::test_report_checks_all_shapes_and_does_not_qualify"
+      ],
+      "current_capture": "docs/validation/parliament_ballot_frontend_prover_accounting_20261104/receipt.json",
+      "current_capture_sha256": "fb1400430104393adeb8b847360d550819de4b41510b9f823a7c0941c20427a5"
+    },
+    "verified_repaired_nodes_combined": 47,
+    "remaining_without_verified_repair": 113,
+    "scope": "47 nodes passed the latest exact 160-node historical rerun; 113 remain failed. This is not the full script suite. Historical physical captures remain unchanged; no production or release qualification.",
+    "prior_all_160_rerun": {
+      "path": "docs/validation/parliament_ballot_takeover_20261104/historical-nodes-after-resource-arena-rerun.json",
+      "sha256": "88df593086370a2ed0054125ef181da03b307b77b8c23329e7f673e26ba68c00",
+      "passed": 44,
+      "failed": 116
+    }
+  }
+}

@@ -1013,6 +1013,9 @@ impl ByteWeightedMemoryPool {
 #[derive(Clone, Copy, Debug)]
 struct OrdinaryQueryServerPolicy {
     limits: iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits,
+    trigger_limits: Option<iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits>,
+    complete_asset_scope_limits:
+        Option<iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits>,
     singular_output_limits: iroha_core::smartcontracts::isi::query::SingularQueryOutputLimits,
     singular_execution_reservation_bytes: u64,
     max_fetch_size: u64,
@@ -1023,20 +1026,69 @@ impl OrdinaryQueryServerPolicy {
         ingress: QueryIngressMemoryEnvelope,
         fanout: QueryFanoutMemoryEnvelope,
     ) -> Option<Self> {
-        use iroha_core::smartcontracts::isi::query::{
-            ORDINARY_NAME_ID_SOURCE_BYTES, OrdinaryQueryExecutionLimits,
-        };
-        let max_page_items = app_limits.max_fetch_size;
-        // Complete trigger rows include their executable, authority, selectors and metadata.
-        // Divide the already admitted source-allocation phase across a full page plus its
-        // overflow probe, rather than applying the name-only identifier charge to every row.
-        // The same ceiling bounds each frame and its decoded resident graph; Core then charges
-        // both immutable-source passes, page overlap and retained cursor values below.
-        let source_slots = max_page_items.checked_add(1)?;
-        let max_source_item_bytes = u64::try_from(fanout.candidate_allocation_bytes)
-            .ok()?
-            .checked_div(source_slots)
-            .filter(|bytes| *bytes >= ORDINARY_NAME_ID_SOURCE_BYTES)?;
+        use iroha_core::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES;
+        let generation = next_ordinary_query_policy_generation();
+        let limits = Self::iterable_limits(
+            generation,
+            app_limits.max_fetch_size,
+            ORDINARY_NAME_ID_SOURCE_BYTES,
+            ingress,
+            fanout,
+        )?;
+        // An escrow scope is one complete aggregate, not a name/id row. Its
+        // canonical bytes, decoded records and scratch share one configured
+        // fanout source phase. Keep this geometry separate from ordinary
+        // multi-row pages and reserve its full execution envelope before Core
+        // decodes any source. A smaller deployment may refuse this query
+        // without disabling its ordinary name/id reads.
+        let complete_asset_scope_limits = Self::iterable_limits(
+            generation,
+            1,
+            u64::try_from(fanout.candidate_encoded_bytes).ok()?,
+            ingress,
+            fanout,
+        )
+        .filter(|limits| {
+            u64::try_from(fanout.working_set_bytes)
+                .is_ok_and(|ceiling| limits.execution_headroom_bytes() <= ceiling)
+        });
+        // Full triggers retain an executable, filter and metadata. Keep their
+        // graph allowance separate from the name/id lane, with at most the SDK's
+        // default page size. Oversized explicit pages are rejected, never clamped.
+        // Both execution and a stored tail must fit one configured working set.
+        let trigger_limits = Self::iterable_limits(
+            generation,
+            app_limits
+                .max_fetch_size
+                .min(iroha_data_model::query::parameters::DEFAULT_FETCH_SIZE.get()),
+            4 * 1024,
+            ingress,
+            fanout,
+        )
+        .filter(|limits| {
+            limits
+                .execution_headroom_bytes()
+                .checked_add(limits.max_cursor_retained_bytes())
+                .zip(u64::try_from(fanout.working_set_bytes).ok())
+                .is_some_and(|(required, ceiling)| required <= ceiling)
+        });
+        Some(Self {
+            limits,
+            trigger_limits,
+            complete_asset_scope_limits,
+            singular_output_limits: fanout.singular_output_limits(),
+            singular_execution_reservation_bytes: u64::try_from(fanout.working_set_bytes).ok()?,
+            max_fetch_size: app_limits.max_fetch_size,
+        })
+    }
+    fn iterable_limits(
+        generation: u64,
+        max_page_items: u64,
+        max_source_item_bytes: u64,
+        ingress: QueryIngressMemoryEnvelope,
+        fanout: QueryFanoutMemoryEnvelope,
+    ) -> Option<iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits> {
+        use iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits;
         let max_response_bytes = u64::try_from(fanout.final_body_bytes).ok()?;
         let max_cursor_retained_items = max_page_items;
         let max_cursor_value_bytes =
@@ -1074,8 +1126,8 @@ impl OrdinaryQueryServerPolicy {
                 max_revalidation_archive_bytes,
             )
             .ok()?;
-        let limits = OrdinaryQueryExecutionLimits::try_new(
-            next_ordinary_query_policy_generation(),
+        OrdinaryQueryExecutionLimits::try_new(
+            generation,
             fanout.execution_budget(),
             max_page_items,
             execution_headroom_bytes,
@@ -1088,24 +1140,13 @@ impl OrdinaryQueryServerPolicy {
             max_revalidation_archive_bytes,
             revalidation_decode_limits,
         )
-        .ok()?;
-        let singular_output_limits = fanout.singular_output_limits();
-        let singular_execution_reservation_bytes = u64::try_from(fanout.working_set_bytes).ok()?;
-        Some(Self {
-            limits,
-            singular_output_limits,
-            singular_execution_reservation_bytes,
-            max_fetch_size: app_limits.max_fetch_size,
-        })
+        .ok()
     }
     fn start_reservation_parts(self) -> [u64; 2] {
         [
             self.limits.execution_headroom_bytes(),
             self.limits.max_cursor_retained_bytes(),
         ]
-    }
-    fn execution_reservation_parts(self) -> [u64; 1] {
-        [self.limits.execution_headroom_bytes()]
     }
     fn singular_execution_reservation_parts(self) -> [u64; 1] {
         [self.singular_execution_reservation_bytes]
@@ -1147,6 +1188,7 @@ impl iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryReservation
 }
 fn try_acquire_ordinary_query_memory(
     app: &SharedAppState,
+    limits: iroha_core::smartcontracts::isi::query::OrdinaryQueryExecutionLimits,
     stored_start: bool,
     singular: bool,
 ) -> Result<iroha_core::smartcontracts::isi::query::OrdinaryQueryMemoryLease, Error> {
@@ -1156,11 +1198,13 @@ fn try_acquire_ordinary_query_memory(
                 .singular_execution_reservation_parts(),
         )
     } else if stored_start {
-        app.query_fanout_inflight
-            .try_acquire_parts(app.ordinary_query_policy.start_reservation_parts())
+        app.query_fanout_inflight.try_acquire_parts([
+            limits.execution_headroom_bytes(),
+            limits.max_cursor_retained_bytes(),
+        ])
     } else {
         app.query_fanout_inflight
-            .try_acquire_parts(app.ordinary_query_policy.execution_reservation_parts())
+            .try_acquire_parts([limits.execution_headroom_bytes()])
     }
     .ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(

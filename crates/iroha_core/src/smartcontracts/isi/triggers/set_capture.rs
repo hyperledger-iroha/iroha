@@ -105,6 +105,7 @@ impl<'set> SetBlock<'set> {
         self.publication.assert_executing();
         assert!(self.fields.is_some(), "original trigger block fields");
         let original = SetBlock {
+            lifecycle_work: std::cell::Cell::new(self.lifecycle_work.get()),
             publication: std::mem::replace(&mut self.publication, AggregatePublication::Released),
             fields: self.fields.take(),
         };

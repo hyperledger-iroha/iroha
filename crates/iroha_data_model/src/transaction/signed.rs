@@ -17,7 +17,10 @@ use crate::{
     block::consensus::NexusFeeReceipt,
     events::data::prelude::AssetBatchTransferOutcome,
     governance::anonymous_ballot::CanonicalAnonymousBallotEnvelopeV1,
-    isi::{CustomInstruction, ExecuteTrigger, InstructionBox, privacy::SubmitPrivacyProofV1},
+    isi::{
+        CustomInstruction, ExecuteTrigger, InstructionBox,
+        privacy::{SubmitPrivacyIronwoodProofV1, SubmitPrivacyProofV1},
+    },
     nexus::FeeSponsorProgramId,
     privacy::{
         PrivacyStatementDigestV1, PrivacyStatementV1, PrivacyTransactionIntentDigestV1,
@@ -1060,7 +1063,7 @@ pub enum PrivacyTransactionIntentUnsupportedPathV1 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum PrivacyTransactionIntentErrorV1 {
     /// The payload has no direct typed privacy proof submission.
-    #[error("privacy transaction intent requires exactly one direct SubmitPrivacyProofV1")]
+    #[error("privacy transaction intent requires exactly one direct typed privacy submission")]
     MissingSubmission,
     /// X.509 execution uses the proof-free request and original signed action attachment.
     #[error(
@@ -1114,16 +1117,81 @@ pub enum PrivacyTransactionIntentErrorV1 {
         actual: PrivacyStatementDigestV1,
     },
 }
+/// One original, independently framed signed privacy operation.
+///
+/// The reference preserves the exact instruction grammar for hashing and intent projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PrivacySubmissionRefV1<'a> {
+    /// Original frozen Exact12 operation.
+    Exact12(&'a SubmitPrivacyProofV1),
+    /// Additive governed Ironwood operation.
+    Ironwood(&'a SubmitPrivacyIronwoodProofV1),
+}
+impl<'a> PrivacySubmissionRefV1<'a> {
+    /// Resolve only explicit direct typed operations; no payload reinterpretation occurs.
+    #[must_use]
+    pub fn from_instruction(instruction: &'a InstructionBox) -> Option<Self> {
+        if let Some(value) = instruction.as_any().downcast_ref::<SubmitPrivacyProofV1>() {
+            return Some(Self::Exact12(value));
+        }
+        instruction
+            .as_any()
+            .downcast_ref::<SubmitPrivacyIronwoodProofV1>()
+            .map(Self::Ironwood)
+    }
+    /// Borrow the original public statement context.
+    #[must_use]
+    pub fn context(self) -> &'a crate::privacy::PrivacyStatementContextV1 {
+        match self {
+            Self::Exact12(value) => value.envelope.statement.context(),
+            Self::Ironwood(value) => &value.envelope.statement.context,
+        }
+    }
+    /// Copy the digest carried in the original signed frame.
+    #[must_use]
+    pub fn statement_digest(self) -> PrivacyStatementDigestV1 {
+        match self {
+            Self::Exact12(value) => value.envelope.statement_digest,
+            Self::Ironwood(value) => value.envelope.statement_digest,
+        }
+    }
+    /// Recompute the digest from its original statement grammar.
+    /// # Errors
+    /// Canonical encoding fails.
+    pub fn recompute_statement_digest(self) -> Result<PrivacyStatementDigestV1, norito::Error> {
+        match self {
+            Self::Exact12(value) => value.envelope.statement.digest(),
+            Self::Ironwood(value) => value.envelope.statement.digest(),
+        }
+    }
+    /// Encode the original signed instruction, including its distinct frame identity.
+    /// # Errors
+    /// Canonical encoding fails.
+    pub fn canonical_bytes(self) -> Result<Vec<u8>, norito::Error> {
+        match self {
+            Self::Exact12(value) => norito::encode_canonical(value),
+            Self::Ironwood(value) => norito::encode_canonical(value),
+        }
+    }
+    /// Produce the internal execution representation after retaining original byte custody.
+    #[must_use]
+    pub fn runtime_envelope(self) -> crate::privacy::PrivacyRuntimeProofEnvelopeV1 {
+        match self {
+            Self::Exact12(value) => value.envelope.clone().into(),
+            Self::Ironwood(value) => value.envelope.clone().into(),
+        }
+    }
+}
 #[derive(Default)]
 struct PrivacyTransactionIntentScan<'a> {
-    first_submission: Option<&'a SubmitPrivacyProofV1>,
+    first_submission: Option<PrivacySubmissionRefV1<'a>>,
     direct_submission_count: u64,
     unsupported_path: Option<PrivacyTransactionIntentUnsupportedPathV1>,
     privacy_in_unsupported_path: bool,
 }
 impl<'a> PrivacyTransactionIntentScan<'a> {
     fn inspect_direct_instruction(&mut self, instruction: &'a InstructionBox) {
-        if let Some(submission) = instruction.as_any().downcast_ref::<SubmitPrivacyProofV1>() {
+        if let Some(submission) = PrivacySubmissionRefV1::from_instruction(instruction) {
             self.direct_submission_count = self.direct_submission_count.saturating_add(1);
             self.first_submission.get_or_insert(submission);
             return;
@@ -1145,11 +1213,7 @@ impl<'a> PrivacyTransactionIntentScan<'a> {
         }
     }
     fn inspect_proved_overlay_instruction(&mut self, instruction: &InstructionBox) {
-        if instruction
-            .as_any()
-            .downcast_ref::<SubmitPrivacyProofV1>()
-            .is_some()
-        {
+        if PrivacySubmissionRefV1::from_instruction(instruction).is_some() {
             self.privacy_in_unsupported_path = true;
         }
     }
@@ -1195,7 +1259,7 @@ fn scan_privacy_transaction_intent_v1(executable: &Executable) -> PrivacyTransac
 }
 fn validate_exact_direct_privacy_submission_v1<'a>(
     scan: &PrivacyTransactionIntentScan<'a>,
-) -> Result<&'a SubmitPrivacyProofV1, PrivacyTransactionIntentErrorV1> {
+) -> Result<PrivacySubmissionRefV1<'a>, PrivacyTransactionIntentErrorV1> {
     if scan.direct_submission_count == 0 {
         if let Some(path) = scan.unsupported_path {
             return Err(PrivacyTransactionIntentErrorV1::UnsupportedPath { path });
@@ -1213,14 +1277,15 @@ fn validate_exact_direct_privacy_submission_v1<'a>(
     let submission = scan
         .first_submission
         .expect("a non-zero direct submission count stores its first submission");
-    if submission.envelope.protocol_id
-        == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
-        || submission.envelope.proof.protocol_id()
+    if let PrivacySubmissionRefV1::Exact12(submission) = submission
+        && (submission.envelope.protocol_id
             == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
-        || matches!(
-            &submission.envelope.statement,
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
-        )
+            || submission.envelope.proof.protocol_id()
+                == crate::privacy::PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+            || matches!(
+                &submission.envelope.statement,
+                PrivacyStatementV1::IrohaZkX509StarkP256V1(_)
+            ))
     {
         return Err(PrivacyTransactionIntentErrorV1::X509RequiresSignedAttachment);
     }
@@ -1239,8 +1304,38 @@ impl SubmitPrivacyProofV1 {
     }
 }
 
-fn normalize_privacy_submission_for_intent_v1(submission: &SubmitPrivacyProofV1) -> InstructionBox {
-    normalized_privacy_submission_for_intent_v1(submission).into()
+fn normalize_privacy_submission_for_intent_v1(
+    submission: PrivacySubmissionRefV1<'_>,
+) -> InstructionBox {
+    match submission {
+        PrivacySubmissionRefV1::Exact12(value) => {
+            normalized_privacy_submission_for_intent_v1(value).into()
+        }
+        PrivacySubmissionRefV1::Ironwood(value) => {
+            normalized_ironwood_submission_for_intent_v1(value).into()
+        }
+    }
+}
+fn normalized_ironwood_submission_for_intent_v1(
+    value: &SubmitPrivacyIronwoodProofV1,
+) -> SubmitPrivacyIronwoodProofV1 {
+    let mut normalized = value.clone();
+    normalized.envelope.proof.bytes.clear();
+    normalized
+        .envelope
+        .statement
+        .context
+        .transaction_intent_digest = PrivacyTransactionIntentDigestV1::new([0; 32]);
+    normalized.envelope.statement_digest = PrivacyStatementDigestV1::new([0; 32]);
+    normalized
+}
+impl SubmitPrivacyIronwoodProofV1 {
+    /// Exact Ironwood instruction grammar with generated proof and digest fields cleared.
+    /// # Errors
+    /// Canonical encoding fails.
+    pub fn ordered_intent_projection_bytes_v1(&self) -> Result<Vec<u8>, norito::Error> {
+        norito::encode_canonical(&normalized_ironwood_submission_for_intent_v1(self))
+    }
 }
 
 fn normalized_privacy_submission_for_intent_v1(
@@ -1282,13 +1377,10 @@ fn normalize_privacy_executable_for_intent_v1(
             let normalized = instructions
                 .iter()
                 .map(|instruction| {
-                    instruction
-                        .as_any()
-                        .downcast_ref::<SubmitPrivacyProofV1>()
-                        .map_or_else(
-                            || instruction.clone(),
-                            normalize_privacy_submission_for_intent_v1,
-                        )
+                    PrivacySubmissionRefV1::from_instruction(instruction).map_or_else(
+                        || instruction.clone(),
+                        normalize_privacy_submission_for_intent_v1,
+                    )
                 })
                 .collect::<Vec<_>>();
             Ok(Executable::Instructions(normalized.into()))
@@ -1299,13 +1391,10 @@ fn normalize_privacy_executable_for_intent_v1(
                 .map(|item| match item {
                     ExecutableBatchItem::Instruction(instruction) => {
                         ExecutableBatchItem::Instruction(
-                            instruction
-                                .as_any()
-                                .downcast_ref::<SubmitPrivacyProofV1>()
-                                .map_or_else(
-                                    || instruction.clone(),
-                                    normalize_privacy_submission_for_intent_v1,
-                                ),
+                            PrivacySubmissionRefV1::from_instruction(instruction).map_or_else(
+                                || instruction.clone(),
+                                normalize_privacy_submission_for_intent_v1,
+                            ),
                         )
                     }
                     ExecutableBatchItem::ContractCall(call) => {
@@ -1422,17 +1511,11 @@ impl TransactionPayload {
     ) -> Result<PrivacyTransactionIntentDigestV1, PrivacyTransactionIntentErrorV1> {
         let scan = scan_privacy_transaction_intent_v1(&self.instructions);
         let submission = validate_exact_direct_privacy_submission_v1(&scan)?;
-        if self.domain
-            != TransactionDomain::Network(submission.envelope.statement.context().network_id)
-        {
+        if self.domain != TransactionDomain::Network(submission.context().network_id) {
             return Err(PrivacyTransactionIntentErrorV1::NetworkDomainMismatch);
         }
         let expected_intent = self.privacy_transaction_intent_digest_v1()?;
-        let actual_intent = submission
-            .envelope
-            .statement
-            .context()
-            .transaction_intent_digest;
+        let actual_intent = submission.context().transaction_intent_digest;
         if actual_intent.is_zero() {
             return Err(PrivacyTransactionIntentErrorV1::ZeroIntentDigest);
         }
@@ -1443,11 +1526,9 @@ impl TransactionPayload {
             });
         }
         let expected_statement = submission
-            .envelope
-            .statement
-            .digest()
+            .recompute_statement_digest()
             .map_err(|_| PrivacyTransactionIntentErrorV1::StatementEncodingFailure)?;
-        let actual_statement = submission.envelope.statement_digest;
+        let actual_statement = submission.statement_digest();
         if actual_statement.is_zero() {
             return Err(PrivacyTransactionIntentErrorV1::ZeroStatementDigest);
         }
@@ -1472,7 +1553,7 @@ impl TransactionPayload {
     pub fn privacy_transaction_intent_binding_if_present_v1(
         &self,
     ) -> Result<
-        Option<(PrivacyTransactionIntentDigestV1, &SubmitPrivacyProofV1)>,
+        Option<(PrivacyTransactionIntentDigestV1, PrivacySubmissionRefV1<'_>)>,
         PrivacyTransactionIntentErrorV1,
     > {
         let scan = scan_privacy_transaction_intent_v1(&self.instructions);
@@ -1611,7 +1692,7 @@ impl SignedTransaction {
     pub fn privacy_transaction_intent_binding_if_present_v1(
         &self,
     ) -> Result<
-        Option<(PrivacyTransactionIntentDigestV1, &SubmitPrivacyProofV1)>,
+        Option<(PrivacyTransactionIntentDigestV1, PrivacySubmissionRefV1<'_>)>,
         PrivacyTransactionIntentErrorV1,
     > {
         self.payload

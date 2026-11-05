@@ -1317,7 +1317,7 @@ class CoordinatorTests(unittest.TestCase):
         self.assertIn('stop-all', events)
         self.assertIn('start', events)
         self.assertTrue(records['result.json']['state_preserved'])
-        self.assertEqual(records['intent.json']['schema'], 'taira.daemon-update.plan.v1')
+        self.assertEqual(records['intent.json']['schema'], 'taira.daemon-update.plan.v2')
         self.assertEqual(records['before.json'][0]['systemd']['InvocationID'], 'f' * 32)
         self.assertEqual(len(records['stopped.json']['observations']), 4)
 
@@ -1356,7 +1356,8 @@ class CoordinatorTests(unittest.TestCase):
         for failure in ('final-observation-invocation', 'final-observation-pid',
                         'final-observation-http', 'final-observation-hash'):
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as temporary:
-                _, records, _, failed = self.simulate(failure)
+                # Failed-start recovery reuses only v1 lineage; v2 needs explicit reconciliation.
+                _, records, _, failed = self.simulate(failure, modern=False)
                 root = Path(temporary).resolve()
                 failed_directory = root / failed['operation']
                 required = {name: records[name] for name in guest.FAILED_START_RECORDS}

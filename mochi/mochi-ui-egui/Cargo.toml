@@ -24,7 +24,6 @@ egui = { version = "0.37.0", default-features = false, features = ["monochrome_e
 # default ab_glyph backend brings the retired ttf-parser implementation.
 winit = { version = "0.30.13", default-features = false, features = ["wayland-csd-adwaita-crossfont"], optional = true }
 tokio = { workspace = true, features = ["signal"] }
-hex = { workspace = true }
 norito = { workspace = true, default-features = false, features = ["node-codec"] }
 
 [dev-dependencies]

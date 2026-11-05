@@ -30451,10 +30451,16 @@ fn storage_backend_error(err: StorageBackendError) -> Response {
             StatusCode::NOT_FOUND,
             format!("manifest {manifest_id} not found"),
         ),
-        StorageBackendError::PayloadUnavailable { .. } => json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "manifest payload is quarantined pending verified repair",
-        ),
+        StorageBackendError::PayloadUnavailable { .. } => {
+            crate::utils::respond_with_status_and_format(
+                StatusCode::SERVICE_UNAVAILABLE,
+                &iroha_torii_shared::ErrorEnvelope::new(
+                    "sorafs_payload_quarantined",
+                    "manifest payload is quarantined pending verified repair",
+                ),
+                crate::utils::current_response_format(),
+            )
+        }
         StorageBackendError::ManifestRetirementInProgress { manifest_id } => json_error(
             StatusCode::CONFLICT,
             format!("manifest {manifest_id} retirement is already in progress"),
@@ -30611,12 +30617,108 @@ mod storage_backend_error_tests {
             response.status(),
             axum::http::StatusCode::SERVICE_UNAVAILABLE
         );
+        let format = crate::utils::typed_response_format_for_content_type(
+            response.headers()[axum::http::header::CONTENT_TYPE]
+                .to_str()
+                .unwrap(),
+        )
+        .expect("quarantine response declares its canonical encoding");
         let bytes = axum::body::to_bytes(response.into_body(), 1024)
             .await
             .unwrap();
-        let text = std::str::from_utf8(&bytes).unwrap();
-        assert!(text.contains("quarantined"));
-        assert!(!text.contains("damaged-manifest"));
+        let envelope: iroha_torii_shared::ErrorEnvelope = match format {
+            crate::utils::ResponseFormat::Json => norito::json::from_slice(&bytes).unwrap(),
+            crate::utils::ResponseFormat::Norito => norito::decode_from_bytes(&bytes).unwrap(),
+        };
+        assert_eq!(envelope.code(), "sorafs_payload_quarantined");
+        assert_eq!(
+            envelope.message(),
+            "manifest payload is quarantined pending verified repair"
+        );
+        assert!(!String::from_utf8_lossy(&bytes).contains("damaged-manifest"));
+    }
+    #[tokio::test]
+    async fn quarantined_payload_reason_survives_http_error_contract() {
+        use axum::{Router, body::Body, http::Request, routing::get};
+        use iroha_torii_shared::ErrorEnvelope;
+        use tower::ServiceExt as _;
+
+        let router = Router::new()
+            .route(
+                "/quarantined",
+                get(|| async {
+                    storage_backend_error(StorageBackendError::PayloadUnavailable {
+                        manifest_id: "damaged-manifest".to_owned(),
+                    })
+                }),
+            )
+            .route(
+                "/unrelated",
+                get(|| async {
+                    super::json_error(
+                        axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                        "unrelated internal storage marker",
+                    )
+                }),
+            )
+            .layer(axum::middleware::from_fn(crate::capture_response_format))
+            .layer(axum::middleware::from_fn(
+                crate::enforce_typed_error_contract,
+            ));
+        for accept in ["application/json", crate::utils::NORITO_MIME_TYPE] {
+            for (path, code, message) in [
+                (
+                    "/quarantined",
+                    "sorafs_payload_quarantined",
+                    "manifest payload is quarantined pending verified repair",
+                ),
+                (
+                    "/unrelated",
+                    "service_unavailable",
+                    "The service is temporarily unavailable.",
+                ),
+            ] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .uri(path)
+                            .header(axum::http::header::ACCEPT, accept)
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(
+                    response.status(),
+                    axum::http::StatusCode::SERVICE_UNAVAILABLE
+                );
+                let content_type = if accept == "application/json" {
+                    "application/json; charset=utf-8"
+                } else {
+                    accept
+                };
+                assert_eq!(
+                    response.headers()[axum::http::header::CONTENT_TYPE],
+                    content_type
+                );
+                assert_eq!(response.headers()[RETRY_AFTER], "1");
+                let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                    .await
+                    .unwrap();
+                let envelope: ErrorEnvelope = if accept == "application/json" {
+                    norito::json::from_slice(&bytes).unwrap()
+                } else {
+                    norito::decode_from_bytes(&bytes).unwrap()
+                };
+                assert_eq!(envelope.code(), code);
+                assert_eq!(envelope.message(), message);
+                assert_eq!(envelope.details.unwrap().retry_after_seconds, Some(1));
+                let text = String::from_utf8_lossy(&bytes);
+                assert!(!text.contains("damaged-manifest"));
+                assert!(!text.contains("unrelated internal storage marker"));
+            }
+        }
     }
     use sorafs_node::scheduler::{FetchRateScope, SchedulerAdmissionError};
     use std::time::Duration;

@@ -3,7 +3,7 @@ use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
 use integration_tests::{
     sandbox,
-    sync::{get_status_with_retry_async, spawn_blocking},
+    sync::{get_status_with_retry_async, run_on_dedicated_thread},
 };
 use iroha::{
     blocking::Client,
@@ -26,7 +26,6 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID, SAMPLE_GENESIS_ACCOUNT_KEYPAIR};
 use std::collections::BTreeSet;
 use tokio::time::Instant;
-const SNS_LEASE_PAYMENT_ASSET_DEFINITION: &str = "61CtjvNd9T3THAR65GsMVHr82Bjc";
 fn produce_instructions(
     prefix: &str,
     owner: &AccountId,
@@ -68,27 +67,6 @@ fn genesis_client(network: &Network) -> Client {
             SAMPLE_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
         )
 }
-fn genesis_alias_payment_bootstrap() -> Result<Vec<InstructionBox>> {
-    let genesis_id = genesis_account_id();
-    let payment_asset_definition =
-        AssetDefinitionId::parse_address_literal(SNS_LEASE_PAYMENT_ASSET_DEFINITION)
-            .wrap_err("parse SNS lease payment asset definition")?;
-    let native_fee_asset = AssetDefinitionId::parse_address_literal(
-        &iroha_config::parameters::defaults::nexus::fees::fee_asset_id(),
-    )?;
-    Ok(vec![
-        Mint::asset_quantity(
-            10_000_u32,
-            AssetId::new(native_fee_asset, genesis_id.clone()),
-        )
-        .into(),
-        Mint::asset_quantity(
-            500_000_u32,
-            AssetId::new(payment_asset_definition, genesis_id.clone()),
-        )
-        .into(),
-    ])
-}
 async fn transaction_execution_should_produce_events(
     context: &'static str,
     network: &Network,
@@ -102,9 +80,12 @@ async fn transaction_execution_should_produce_events(
         .await
         .map_err(|err| err.wrap_err(format!("{context}: wait for status")))?;
     let baseline_non_empty = status.blocks_non_empty;
+    // Observe through Alice's explicit global read grant; the distinct genesis
+    // authority below still authors all domain registrations.
+    let observer = network.client();
     let mut events_stream = tokio::time::timeout(
         network.sync_timeout(),
-        client
+        observer
             .account_client()
             .events()
             .subscribe([DataEventFilter::Domain(
@@ -116,27 +97,15 @@ async fn transaction_execution_should_produce_events(
     let result = async {
         {
             let client = client.clone();
-            let submit_result = spawn_blocking(move || {
-                let account = client.account_client();
-                let mut payload = account.prepare_transaction(
-                    iroha::client::AccountTransactionDraft::new(
-                        executable,
-                        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                        <_>::default(),
-                    ),
-                )?;
-                let quote = client.quote_fees(iroha::client::FeeQuoteRequest::AccountSignature {
-                    payload: &payload,
-                })?;
-                eyre::ensure!(
-                    payload.fee_payment.has_same_payer_and_gas_bound(&quote.intent),
-                    "fee quote changed the event transaction payer or gas bound"
-                );
-                payload.fee_payment = quote.intent;
-                let tx = account.sign_transaction(payload)?;
-                client.submit_transaction(&tx)
-            })
-            .await?;
+            let tx = super::quoted_transaction(
+                &client,
+                iroha::client::AccountTransactionDraft::new(
+                    executable,
+                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                    <_>::default(),
+                ),
+            ).await?;
+            let submit_result = run_on_dedicated_thread(move || client.submit_transaction(&tx)).await?;
             if let Err(err) = submit_result {
                 if is_tx_confirmation_timeout(&err) {
                     eprintln!(
@@ -248,7 +217,7 @@ async fn produce_multiple_events_scenario(network: &Network) -> Result<()> {
     .wrap_err("produce_multiple_events: timed out opening event stream")??;
     {
         let client = network.client();
-        spawn_blocking(move || {
+        run_on_dedicated_thread(move || {
             client.submit_all::<InstructionBox>(
                 [
                     register_role.into(),
@@ -392,17 +361,34 @@ async fn data_event_scenarios() -> Result<()> {
     let (instruction_instructions, instruction_expected) =
         produce_instructions("instr", &genesis_id)?;
     let (ivm_instructions, ivm_expected) = produce_instructions("ivm", &genesis_id)?;
-    let payment_bootstrap = genesis_alias_payment_bootstrap()?;
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new()
-            .with_peers(4)
-            .with_genesis_post_bootstrap_isi(payment_bootstrap),
+            .with_genesis_keypair(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone())
+            .with_peers(4),
         "data_events",
     )
     .await?
     else {
         return Ok(());
     };
+    // The native fee asset is created by the builder's final bootstrap transaction.
+    // Fund this distinct signing authority from the already-funded runtime owner.
+    let funding_client = network.client();
+    run_on_dedicated_thread(move || {
+        funding_client.submit(
+            Transfer::asset_quantity(
+                AssetId::of(
+                    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                        .parse::<AssetDefinitionId>()?,
+                    ALICE_ID.clone(),
+                ),
+                500_000_u32,
+                genesis_id,
+            ),
+            FeePaymentIntent::authority(Vec::new(), None),
+        )
+    })
+    .await??;
     let submit_client = genesis_client(&network);
     if sandbox::handle_result(
         transaction_execution_should_produce_events(

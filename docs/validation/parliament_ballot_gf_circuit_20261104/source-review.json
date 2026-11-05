@@ -1,0 +1,11 @@
+{
+  "historical_commit": "e954df4850",
+  "historical_field_sha256": "df65fd59ae7970752ec71c18212e3aee09fc8f498068dff29e3ac23da9d5e3a8",
+  "current_field_sha256": "6bd8298d50a513d29979928f964dcfd3f7de3d12f1950203673d694ad8ca2b1a",
+  "review": "The complete diff adds one exact Clippy chunks_exact_to_as_chunks expectation on BinaryField::vec_from_bytes. All arithmetic macro choices, widening association, decoder and arithmetic bodies are byte-identical after removing that exact attribute. Helper enforces this byte correspondence; no generic stripping is permitted.",
+  "emitter_or_formula_changes": false,
+  "historical_accounting_requalified": false,
+  "tests_passed": 103,
+  "historical_failures_repaired": 4,
+  "profile_qualified": false
+}

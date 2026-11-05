@@ -23,6 +23,41 @@ use norito::{DecodeLimits, core::DecodeBudgetContext};
 const WORK: u64 = 500;
 const BYTES: u64 = 1 << 30;
 
+#[test]
+fn lifecycle_committed_outcome_joins_both_carriers_without_changing_source_checks() {
+    use iroha_data_model::block::execution_output::{
+        NetworkExecutionOutputV2, TriggerLifecycleEffectsV1,
+    };
+    for lifecycle in [false, true] {
+        for applied in [false, true] {
+            let mut output = ExecutionOutputV1::network_output_limit_rejection(3);
+            let ExecutionOutputV1::Network(row) = &mut output else {
+                unreachable!()
+            };
+            if applied {
+                row.result = iroha_data_model::transaction::TransactionResult::new(Ok(Vec::new()));
+            }
+            let expected = row.result.0.clone().map(drop);
+            if lifecycle {
+                let ExecutionOutputV1::Network(execution) = output else {
+                    unreachable!()
+                };
+                output = ExecutionOutputV1::NetworkWithLifecycle(NetworkExecutionOutputV2 {
+                    execution,
+                    trigger_lifecycle: TriggerLifecycleEffectsV1::Complete {
+                        effects: Vec::new(),
+                    },
+                });
+            }
+            assert_eq!(matched_network_result(output.clone(), 3).unwrap(), expected);
+            assert_eq!(
+                conversion(matched_network_result(output, 2).unwrap_err()),
+                "matched Network output names another input"
+            );
+        }
+    }
+}
+
 fn read_budget(frames: usize, decoded: usize) -> CanonicalHistoryReadBudget {
     CanonicalHistoryReadBudget::new(
         AllocationBudget::new(frames),

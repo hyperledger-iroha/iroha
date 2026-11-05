@@ -16,7 +16,7 @@ use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
 use iroha_model_base::name::Name;
 use iroha_test_network::*;
-use iroha_test_samples::{ALICE_ID, SAMPLE_GENESIS_ACCOUNT_ID, gen_account_in};
+use iroha_test_samples::{ALICE_ID, gen_account_in};
 use iroha_torii_shared::status::Status;
 use std::{
     num::NonZeroU64,
@@ -120,25 +120,27 @@ fn unique_asset_definition_id(
 fn named_numeric_asset_definition(
     id: AssetDefinitionId,
     name: String,
+    owning_domain: DomainId,
 ) -> iroha::data_model::asset::NewAssetDefinition {
     AssetDefinition::numeric(
         id,
         name,
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
+        Some(owning_domain),
     )
 }
 fn named_asset_definition(
     id: AssetDefinitionId,
     name: String,
     spec: NumericSpec,
+    owning_domain: DomainId,
 ) -> iroha::data_model::asset::NewAssetDefinition {
     AssetDefinition::new(
         id,
         name,
         spec,
         iroha_data_model::asset::AssetBalancePolicy::Global,
-        Some(DomainId::try_new("wonderland", "universal").expect("fixture domain")),
+        Some(owning_domain),
     )
 }
 fn is_transient_client_error(err: &Report) -> bool {
@@ -207,24 +209,19 @@ fn wait_for_asset_definition_owner(
     let deadline = Instant::now() + NON_EMPTY_BLOCK_TIMEOUT;
     loop {
         let client = clients.next();
-        let last_err = match collections::definitions(client) {
-            Ok(definitions) => definitions
-                .into_iter()
-                .find(|asset_definition| asset_definition.id() == asset_definition_id)
-                .map_or_else(
-                    || Some(eyre!("{not_found_msg}")),
-                    |asset_definition| {
-                        if asset_definition.owned_by() == expected_owner {
-                            None
-                        } else {
-                            Some(eyre!(
-                                "{unexpected_owner_msg}: expected={expected_owner}, actual={}",
-                                asset_definition.owned_by()
-                            ))
-                        }
-                    },
-                ),
-            Err(err) => Some(err),
+        let last_err = match client
+            .client()
+            .query_single(FindAssetDefinitionById::new(asset_definition_id.clone()))
+        {
+            Ok(asset_definition) if asset_definition.id() != asset_definition_id => {
+                Some(eyre!("{not_found_msg}"))
+            }
+            Ok(asset_definition) if asset_definition.owned_by() != expected_owner => Some(eyre!(
+                "{unexpected_owner_msg}: expected={expected_owner}, actual={}",
+                asset_definition.owned_by()
+            )),
+            Ok(_) => None,
+            Err(err) => Some(Report::new(err)),
         };
         if last_err.is_none() {
             return Ok(());
@@ -495,20 +492,29 @@ fn start_test_network_with_builder(
 fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();
+    let owning_domain =
+        DomainId::parse_fully_qualified("wonderland.universal").expect("fixture owning domain");
     let (asset_definition_id, asset_definition_name) =
         unique_asset_definition_id("wonderland.universal", "xor");
     let (big_asset_definition_id, big_asset_definition_name) =
         unique_asset_definition_id("wonderland.universal", "xorbig");
     let (decimal_definition_id, decimal_definition_name) =
         unique_asset_definition_id("wonderland.universal", "xorfrac");
-    let asset_definition =
-        named_numeric_asset_definition(asset_definition_id.clone(), asset_definition_name);
-    let big_asset_definition =
-        named_numeric_asset_definition(big_asset_definition_id.clone(), big_asset_definition_name);
+    let asset_definition = named_numeric_asset_definition(
+        asset_definition_id.clone(),
+        asset_definition_name,
+        owning_domain.clone(),
+    );
+    let big_asset_definition = named_numeric_asset_definition(
+        big_asset_definition_id.clone(),
+        big_asset_definition_name,
+        owning_domain.clone(),
+    );
     let decimal_definition = named_asset_definition(
         decimal_definition_id.clone(),
         decimal_definition_name,
         NumericSpec::fractional(3),
+        owning_domain,
     );
     let builder = quiet_network_builder();
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
@@ -641,24 +647,48 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let rate = AssetId::new(rate_def.clone(), dex_id.clone());
         let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
         let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());
+        let genesis_id = AccountId::new(
+            iroha_test_samples::SAMPLE_GENESIS_ACCOUNT_KEYPAIR
+                .public_key()
+                .clone(),
+        );
+        let fee_asset_id: AssetDefinitionId =
+            iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
+                .parse()
+                .expect("fixture fee asset definition");
         let mut builder = quiet_network_builder();
         builder = builder
             .with_genesis_instruction(register::domain("exchange.universal"))
             .with_genesis_instruction(register::domain("company.universal"))
             .with_genesis_instruction(register::domain("crypto.universal"))
+            // Runtime registration is authorized by each domain's committed owner.
             .with_genesis_instruction(Transfer::domain(
-                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                genesis_id.clone(),
                 exchange_domain.clone(),
                 ALICE_ID.clone(),
             ))
             .with_genesis_instruction(Transfer::domain(
-                SAMPLE_GENESIS_ACCOUNT_ID.clone(),
+                genesis_id,
                 crypto_domain.clone(),
                 ALICE_ID.clone(),
             ))
             .with_genesis_instruction(register::account(dex_id.clone(), exchange_domain.clone()))
             .with_genesis_instruction(register::account(seller_id.clone(), company_domain.clone()))
-            .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()));
+            .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()))
+            // Each owner pays for its permission grant, using the same fee funding as
+            // the network's standard signers after the fee asset is bootstrapped.
+            .with_genesis_post_bootstrap_isi(
+                [seller_id.clone(), buyer_id.clone()]
+                    .into_iter()
+                    .map(|owner| {
+                        Mint::asset_quantity(
+                            1_000_000_u32,
+                            AssetId::new(fee_asset_id.clone(), owner),
+                        )
+                        .into()
+                    })
+                    .collect(),
+            );
         let Some((network, rt)) = start_test_network_with_builder(builder) else {
             return Ok(());
         };
@@ -671,7 +701,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             None => return Ok(()),
         };
         let mut last_non_empty_height = status.blocks_non_empty;
-        for (definition, name, domain) in [
+        for (definition, name, owning_domain) in [
             (rate_def.clone(), rate_name, exchange_domain),
             (btc_def.clone(), btc_name, crypto_domain.clone()),
             (eth_def.clone(), eth_name, crypto_domain),
@@ -681,7 +711,7 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
                     definition.clone(),
                     name,
                     iroha_data_model::asset::AssetBalancePolicy::Global,
-                    Some(domain),
+                    Some(owning_domain),
                 ))
                 .into();
             clients.next().submit::<InstructionBox>(
@@ -737,40 +767,36 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         )?;
         let alice_id = ALICE_ID.clone();
         {
-            let mut alice_can_transfer_asset = |asset_id: AssetId,
-                                                owner_key_pair: KeyPair|
-             -> Result<()> {
-                let permission = CanTransferAsset {
-                    asset: asset_id.clone(),
-                };
-                let instruction = Grant::account_permission(permission, alice_id.clone());
-                let owner =
-                    integration_tests::sync::rebind_blocking_client(clients.current(), |client| {
-                        client.account = asset_id.account().clone();
-                        client.key_pair = owner_key_pair;
-                    });
-                let transaction = quoted_transaction(&owner, [instruction.into()])?;
-                if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
-                    .is_none()
-                {
-                    return Ok(());
-                }
-                status = match status_or_skip(
-                    sync_after_submission(
-                        &network,
-                        &rt,
-                        clients.next(),
-                        last_non_empty_height,
+            let mut alice_can_transfer_asset =
+                |asset_id: AssetId, owner_key_pair: KeyPair| -> Result<()> {
+                    let permission = CanTransferAsset {
+                        asset: asset_id.clone(),
+                    };
+                    let instruction = Grant::account_permission(permission, alice_id.clone());
+                    let owner_client = network.peers()[0]
+                        .client_for(asset_id.account(), owner_key_pair.private_key().clone());
+                    let transaction = quoted_transaction(&owner_client, [instruction.into()])?;
+                    if submit_tx_or_skip(&mut clients, &transaction, "grant transfer permission")?
+                        .is_none()
+                    {
+                        return Ok(());
+                    }
+                    status = match status_or_skip(
+                        sync_after_submission(
+                            &network,
+                            &rt,
+                            clients.next(),
+                            last_non_empty_height,
+                            "grant transfer permission",
+                        ),
                         "grant transfer permission",
-                    ),
-                    "grant transfer permission",
-                )? {
-                    Some(status) => status,
-                    None => return Ok(()),
+                    )? {
+                        Some(status) => status,
+                        None => return Ok(()),
+                    };
+                    last_non_empty_height = status.blocks_non_empty;
+                    Ok::<(), eyre::Report>(())
                 };
-                last_non_empty_height = status.blocks_non_empty;
-                Ok::<(), eyre::Report>(())
-            };
             alice_can_transfer_asset(seller_btc.clone(), seller_keypair)?;
             alice_can_transfer_asset(buyer_eth.clone(), buyer_keypair)?;
         }
@@ -904,6 +930,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             asset_definition_id.clone(),
             asset_definition_name,
             NumericSpec::integer(),
+            DomainId::parse_fully_qualified("wonderland.universal").expect("fixture owning domain"),
         );
         let mut builder = quiet_network_builder();
         let domain_id: DomainId =
@@ -1075,6 +1102,7 @@ mod register {
 #[cfg(test)]
 mod helper_tests {
     use super::*;
+    use iroha_data_model::parameter::SumeragiParameters;
     #[test]
     fn tx_confirmation_timeout_includes_fallback_status() {
         let err = eyre!("transaction confirmation timed out; fallback status check failed");
@@ -1111,22 +1139,38 @@ mod helper_tests {
     fn quiet_network_builder_uses_fast_pipeline_time() {
         let builder = quiet_network_builder_base();
         assert_eq!(builder.configured_block_cadence(), Some(FAST_PIPELINE_TIME));
+        let parameters = SumeragiParameters {
+            block_cadence_ms: u64::try_from(FAST_PIPELINE_TIME.as_millis())
+                .expect("fixture cadence fits the signed millisecond field")
+                .try_into()
+                .expect("fixture cadence is nonzero"),
+            ..SumeragiParameters::default()
+        };
+        iroha_data_model::sumeragi_finality::ChainParamsRecord::from_parameters(&parameters)
+            .validate()
+            .expect("fixture cadence satisfies the signed consensus transport bounds");
     }
     #[test]
     fn asset_definition_uses_explicit_name() {
+        let owning_domain =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("fixture owning domain");
         let (numeric_id, numeric_name) =
             unique_asset_definition_id("wonderland.universal", "named");
         let numeric =
-            named_numeric_asset_definition(numeric_id, numeric_name.clone()).build(&ALICE_ID);
+            named_numeric_asset_definition(numeric_id, numeric_name.clone(), owning_domain.clone())
+                .build(&ALICE_ID);
         assert_eq!(numeric.name(), &numeric_name);
+        assert_eq!(numeric.owning_domain(), &Some(owning_domain.clone()));
         let (fractional_id, fractional_name) =
             unique_asset_definition_id("wonderland.universal", "fractional");
         let fractional = named_asset_definition(
             fractional_id,
             fractional_name.clone(),
             NumericSpec::fractional(3),
+            owning_domain.clone(),
         )
         .build(&ALICE_ID);
         assert_eq!(fractional.name(), &fractional_name);
+        assert_eq!(fractional.owning_domain(), &Some(owning_domain));
     }
 }

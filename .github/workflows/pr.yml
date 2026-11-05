@@ -636,6 +636,8 @@ jobs:
       TEST_NETWORK_BIN_IROHAD_DISPOSABLE_BROKER: ${{ github.workspace }}/bins/iroha_test_runtime_provider_broker
       KAGAMI_BIN: ${{ github.workspace }}/bins/kagami
       TEST_NETWORK_BIN_SORAFS_CLI: ${{ github.workspace }}/bins/sorafs_cli
+      # Real network harnesses retain their serial execution policy.
+      RUST_TEST_THREADS: "1"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

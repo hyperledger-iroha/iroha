@@ -46,6 +46,8 @@ pub enum ExecutionWitnessKeyTagV1 {
     FeeRecord = 0xDB,
     /// Bounded historical staking exposure under original certified block custody.
     RewardExposureArchive = 0xDC,
+    /// Selected successor's native per-block lifecycle runtime selection anchor.
+    TriggerLifecycleSelection = 0xDD,
 }
 
 const fn tagged_fixed_key<const N: usize>(
@@ -88,6 +90,14 @@ pub const FEE_EVIDENCE_RECORD_TAG_V1: u8 = ExecutionWitnessKeyTagV1::FeeRecord a
 pub const REWARD_EXPOSURE_ARCHIVE_TAG_V1: u8 =
     ExecutionWitnessKeyTagV1::RewardExposureArchive as u8;
 
+/// Native-only fixed key for a selected lifecycle runtime anchor.
+/// Its first two bytes cannot begin a UTF-8 guest StatePath; other recorders use
+/// distinct typed tags. This key is emitted only by the selected successor.
+pub const TRIGGER_LIFECYCLE_SELECTION_WITNESS_KEY_V1: &[u8] = &tagged_fixed_key(
+    ExecutionWitnessKeyTagV1::TriggerLifecycleSelection,
+    *b"\0iroha:runtime:lifecycle-selection:v1",
+);
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -114,6 +124,7 @@ mod tests {
             FeeSnapshot,
             FeeRecord,
             RewardExposureArchive,
+            TriggerLifecycleSelection,
         ];
         let distinct = tags
             .into_iter()
@@ -149,5 +160,8 @@ mod tests {
         assert!(!fixed.contains(&FEE_EVIDENCE_RECORD_TAG_V1));
         assert!(!fixed.contains(&REWARD_EXPOSURE_ARCHIVE_TAG_V1));
         assert_eq!(REWARD_EXPOSURE_ARCHIVE_TAG_V1, 0xDC);
+        assert_eq!(TRIGGER_LIFECYCLE_SELECTION_WITNESS_KEY_V1[0], 0xDD);
+        assert!(std::str::from_utf8(TRIGGER_LIFECYCLE_SELECTION_WITNESS_KEY_V1).is_err());
+        assert!(!fixed.contains(&TRIGGER_LIFECYCLE_SELECTION_WITNESS_KEY_V1[0]));
     }
 }

@@ -10,6 +10,12 @@ use std::{
 
 #[cfg(any(unix, test))]
 use std::path::Path;
+#[cfg(unix)]
+use std::{
+    collections::BTreeMap,
+    path::PathBuf,
+    sync::{Mutex, Weak},
+};
 
 fn changed() -> io::Error {
     io::Error::other("test port lease original custody changed")
@@ -56,10 +62,41 @@ impl PortLeasePool {
         Self::from_directory(PrivateDirectory::open_or_create(directory)?)
     }
 
+    #[cfg(windows)]
     pub(crate) fn runtime() -> io::Result<Self> {
         Self::from_directory(runtime_lease_directory()?)
     }
 
+    /// Each effective user has a stable OS namespace independent of checkout and temp settings.
+    #[cfg(unix)]
+    pub(crate) fn runtime() -> io::Result<Self> {
+        let owner = nix::unistd::Uid::effective().as_raw();
+        let path = Path::new("/tmp")
+            .canonicalize()?
+            .join(format!("iroha-test-network-ports-{owner}"));
+        Self::for_runtime_path(path)
+    }
+
+    #[cfg(unix)]
+    fn for_runtime_path(path: PathBuf) -> io::Result<Self> {
+        // Each peer holds several port leases. Share their original ancestry descriptors,
+        // but let the final pool or lease release them all.
+        static DIRECTORIES: Mutex<BTreeMap<PathBuf, Weak<PrivateDirectory>>> =
+            Mutex::new(BTreeMap::new());
+        let mut directories = DIRECTORIES.lock().map_err(|_| changed())?;
+        if let Some(directory) = directories.get(&path).and_then(Weak::upgrade) {
+            drop(directories);
+            directory.revalidate()?;
+            return Ok(Self { directory });
+        }
+        directories.retain(|_, directory| directory.strong_count() > 0);
+        let directory = Arc::new(PrivateDirectory::open_or_create(&path)?);
+        directory.revalidate()?;
+        directories.insert(path, Arc::downgrade(&directory));
+        Ok(Self { directory })
+    }
+
+    #[cfg(any(windows, test))]
     fn from_directory(directory: PrivateDirectory) -> io::Result<Self> {
         directory.revalidate()?;
         Ok(Self {
@@ -144,16 +181,6 @@ impl PortLeasePool {
         }
         Ok(None)
     }
-}
-
-/// Use the OS user's stable namespace, independently of source and temp environment variables.
-#[cfg(unix)]
-fn runtime_lease_directory() -> io::Result<PrivateDirectory> {
-    let owner = nix::unistd::Uid::effective().as_raw();
-    let path = Path::new("/tmp")
-        .canonicalize()?
-        .join(format!("iroha-test-network-ports-{owner}"));
-    PrivateDirectory::open_or_create(path)
 }
 
 #[cfg(windows)]
@@ -295,6 +322,34 @@ mod tests {
         assert!(pool.try_port(0).is_err());
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn runtime_pool_refuses_replaced_directory_until_last_lease_drops() {
+        let _socket_probes = SOCKET_PROBES.lock().unwrap();
+        let fixture = Fixture::new();
+        let path = fixture.0.join("leases");
+        let pool = PortLeasePool::for_runtime_path(path.clone()).unwrap();
+        let lease = free_block(&pool, 1).pop().unwrap();
+        let original = Arc::downgrade(&pool.directory);
+        drop(pool);
+        let pool = PortLeasePool::for_runtime_path(path.clone()).unwrap();
+        assert!(Arc::ptr_eq(&pool.directory, &lease.directory));
+        let other = PortLeasePool::for_runtime_path(fixture.0.join("other-user")).unwrap();
+        assert!(!Arc::ptr_eq(&pool.directory, &other.directory));
+        drop(pool);
+        fs::rename(&path, fixture.0.join("displaced")).unwrap();
+        let replacement = PortLeasePool::open(&path).unwrap();
+        assert!(PortLeasePool::for_runtime_path(path.clone()).is_err());
+        assert!(lease.revalidate().is_err());
+        drop(lease);
+        assert!(original.upgrade().is_none());
+        let reopened = PortLeasePool::for_runtime_path(path).unwrap();
+        assert_eq!(
+            reopened.directory.identity().unwrap(),
+            replacement.directory.identity().unwrap()
+        );
+    }
+
     fn child(pool: &PortLeasePool, port: u16, mode: &str, cwd: &Path) -> std::process::Output {
         let module = module_path!().split_once("::").unwrap().1;
         let exact = format!("{module}::lease_child");
@@ -323,9 +378,14 @@ mod tests {
             .parse()
             .unwrap();
         let mode = std::env::var("IROHA_PORT_LEASE_TEST_MODE").unwrap();
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        if mode == "descriptor-count" {
+            measure_runtime_lease_descriptors();
+            return;
+        }
         if mode == "namespace" {
-            let directory = runtime_lease_directory().unwrap();
-            println!("runtime-namespace={}", directory.path().display());
+            let pool = PortLeasePool::runtime().unwrap();
+            println!("runtime-namespace={}", pool.directory.path().display());
             return;
         }
         let pool = PortLeasePool::open(Path::new(&root)).unwrap();
@@ -338,6 +398,62 @@ mod tests {
             // Deliberately bypass Rust Drop to verify OS release on process exit.
             std::process::exit(0);
         }
+    }
+
+    // Count in an isolated test process, where other tests cannot open or close descriptors.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn measure_runtime_lease_descriptors() {
+        const PORTS: u16 = 16;
+        #[cfg(target_os = "linux")]
+        const FDS: &str = "/proc/self/fd";
+        #[cfg(target_os = "macos")]
+        const FDS: &str = "/dev/fd";
+        let count = || fs::read_dir(FDS).unwrap().count();
+        let path = PortLeasePool::runtime()
+            .unwrap()
+            .directory
+            .path()
+            .to_owned();
+        let ancestors = path.components().count();
+        let baseline = count();
+        for shared in [false, true] {
+            let start = std::time::Instant::now();
+            let mut leases = Vec::new();
+            for index in 0..PORTS {
+                let pool = if shared {
+                    PortLeasePool::runtime().unwrap()
+                } else {
+                    PortLeasePool::open(&path).unwrap()
+                };
+                leases.extend(
+                    pool.allocate(1, 30_000..=49_151, 30_000 + index)
+                        .unwrap()
+                        .unwrap(),
+                );
+            }
+            let descriptors = count() - baseline;
+            let roots = if shared { 1 } else { usize::from(PORTS) };
+            assert_eq!(descriptors, usize::from(PORTS) + roots * ancestors);
+            println!(
+                "shared={shared} ports={PORTS} descriptors={descriptors} elapsed={:?}",
+                start.elapsed()
+            );
+            drop(leases);
+            assert_eq!(count(), baseline);
+        }
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn runtime_allocations_share_ancestry_descriptors() {
+        let fixture = Fixture::new();
+        let output = child(&fixture.pool(), 30_000, "descriptor-count", &fixture.0);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        print!("{}", String::from_utf8_lossy(&output.stdout));
     }
 
     #[test]
@@ -387,7 +503,12 @@ mod tests {
         assert!(String::from_utf8_lossy(&output.stdout).contains("lease-acquired-before-exit"));
         assert!(fs::read_dir(&source).unwrap().next().is_none());
         assert_eq!(
-            runtime_lease_directory().unwrap().path().parent().unwrap(),
+            PortLeasePool::runtime()
+                .unwrap()
+                .directory
+                .path()
+                .parent()
+                .unwrap(),
             Path::new("/tmp").canonicalize().unwrap()
         );
     }

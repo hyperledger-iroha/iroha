@@ -36,8 +36,8 @@ use iroha_data_model::nexus::{
 };
 #[cfg(any(test, feature = "test-utils"))]
 use iroha_data_model::privacy::{
-    PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyNamespaceV1,
-    PrivacyPoolProgramNamespaceV1, PrivacyProtocolIdV1, PrivacyRootV1,
+    PrivacyCommitmentV1, PrivacyNamespaceScopeV1, PrivacyPoolProgramNamespaceV1, PrivacyRootV1,
+    PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1,
 };
 use iroha_data_model::privacy::{PrivacyEncryptedOutputV1, PrivacyNullifierV1};
 use rand_core::TryCryptoRng;
@@ -701,8 +701,8 @@ pub fn plan_atomic_private_settlement_bootstrap_v1(
     if pool_id.is_zero() {
         return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
     }
-    let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id,
             program_id: atomic_private_settlement_program_id_v1()
@@ -754,8 +754,8 @@ pub fn plan_atomic_private_settlement_initial_inputs_v1(
     if pool_id.is_zero() {
         return Err(AtomicPrivateSettlementWalletErrorV1::PublicBinding);
     }
-    let namespace = PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+    let namespace = PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id,
             program_id: atomic_private_settlement_program_id_v1()
@@ -1386,43 +1386,139 @@ mod tests {
 
     #[test]
     fn preproof_authorization_inputs_match_original_nullifiers_and_reject_changed_secrets() {
-        let fixture = sidecar_fixture();
-        let intent = fixture.sidecar.manifest.proof_intent();
-        let expected = fixture.sidecar.payload.statement.nullifiers.clone();
-        let mut inputs = fixture.plaintext.inputs.clone();
+        use crate::privacy_engines::atomic_private_settlement::test_fixtures::{
+            active_opening, dummy_opening, hash, network, route,
+        };
+        use iroha_data_model::{
+            account::AccountId, nexus::PrivateSettlementBundleLegMaterialV1,
+            privacy::PrivacyPoolIdV1, transaction::FeePaymentIntent,
+        };
+        use sha2::{Digest as _, Sha256};
+
+        fn note_hash(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+            let mut hash = Sha256::new();
+            hash.update(b"iroha:privacy:ivm-private-note:hash-frame:v1");
+            hash.update(u16::try_from(domain.len()).unwrap().to_be_bytes());
+            hash.update(domain);
+            hash.update(u16::try_from(fields.len()).unwrap().to_be_bytes());
+            for field in fields {
+                hash.update(u64::try_from(field.len()).unwrap().to_be_bytes());
+                hash.update(field);
+            }
+            hash.finalize().into()
+        }
+
+        // A pre-proof intent needs only the public terms. Fixed policy digests keep
+        // the bundle ID independent of the sidecar fixture's generated auditor key.
+        let sponsor = KeyPair::from_seed(vec![0x23; 32], Algorithm::Ed25519);
+        let legs = (0..2_u8)
+            .map(|ordinal| PrivateSettlementBundleLegMaterialV1 {
+                ordinal,
+                route: route(7 + u64::from(ordinal)),
+                pool_id: PrivacyPoolIdV1::new([0x27 + ordinal; 32]),
+                asset_binding_commitment: hash(0x28 + ordinal),
+                audit_policy_digest: hash(0x2D + ordinal),
+            })
+            .collect();
+        let intent = PrivateSettlementProofIntentV1::new(
+            network(1),
+            10,
+            100,
+            AccountId::new(sponsor.public_key().clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
+            hash(0x26),
+            0,
+            legs,
+        )
+        .unwrap();
+        let secrets = [[0x81; 32], [0x82; 32]];
+        let mut originals = [active_opening(0x90, 47), dummy_opening(0x91)];
+
+        // Only the virtual input's memo is bound to this bundle, leg, slot, and private domain.
+        let dummy_domain = originals[1].dummy_domain.unwrap();
+        let mut memo = Sha256::new();
+        memo.update(b"iroha.atomic-private-settlement.input.dummy.v1");
+        memo.update(4_u64.to_be_bytes());
+        let fields: [&[u8]; 4] = [
+            intent.bundle_id.as_ref(),
+            &[0],
+            &1_u64.to_be_bytes(),
+            dummy_domain.as_ref(),
+        ];
+        for field in fields {
+            memo.update(u64::try_from(field.len()).unwrap().to_be_bytes());
+            memo.update(field);
+        }
+        originals[1].memo_digest = memo.finalize().into();
+
+        let program = atomic_private_settlement_program_id_v1().unwrap();
+        let expected = [0, 1].map(|index| {
+            let opening = &mut originals[index];
+            opening.spending_authority = note_hash(
+                b"iroha:privacy:ivm-private-note:authority:v1",
+                &[&secrets[index]],
+            );
+            opening.commitment = PrivacyCommitmentV1::new(note_hash(
+                b"iroha:privacy:ivm-private-note:commitment:v1",
+                &[
+                    &opening.value.to_be_bytes(),
+                    &opening.spending_authority,
+                    &opening.rho,
+                    &opening.blinding,
+                    &opening.memo_digest,
+                ],
+            ));
+            PrivacyNullifierV1::new(note_hash(
+                b"iroha:privacy:ivm-private-note:nullifier:v1",
+                &[
+                    &secrets[index],
+                    &opening.rho,
+                    opening.commitment.as_bytes(),
+                    intent.legs[0].pool_id.as_bytes(),
+                    program.as_bytes(),
+                ],
+            ))
+        });
+        assert_eq!(
+            hex::encode(expected[0].as_bytes()),
+            "5dd9a52db3ba9fda173803e84a9cb87017cc91cce9ff00d99a11d20fd9b7125a"
+        );
+        let mut inputs = originals.clone();
+        inputs[1].memo_digest = [0; 32];
+        for opening in &mut inputs {
+            opening.commitment = PrivacyCommitmentV1::new([0; 32]);
+        }
+        let unprepared = inputs.clone();
         let derived = prepare_atomic_private_settlement_authorization_inputs_v1(
             &intent,
             0,
             &mut inputs,
-            &[[0x81; 32], [0x82; 32]],
+            &secrets,
         )
         .unwrap();
-        assert_eq!(derived.as_slice(), expected.as_slice());
-        assert_eq!(inputs, fixture.plaintext.inputs);
-        let mut inputs = fixture.plaintext.inputs.clone();
-        let before = inputs.clone();
-        assert!(
-            prepare_atomic_private_settlement_authorization_inputs_v1(
-                &intent,
-                0,
-                &mut inputs,
-                &[[0x91; 32], [0x82; 32]]
-            )
-            .is_err()
-        );
-        assert_eq!(
-            inputs, before,
-            "substituted secret refuses before mutating input openings"
-        );
-        assert!(
-            prepare_atomic_private_settlement_authorization_inputs_v1(
-                &intent,
-                255,
-                &mut inputs,
-                &[[0x81; 32], [0x82; 32]]
-            )
-            .is_err()
-        );
+        assert_eq!(derived, expected);
+        assert_eq!(inputs, originals);
+
+        for (ordinal, supplied) in [
+            (0, [[0x91; 32], secrets[1]]),
+            (0, [secrets[0], [0x92; 32]]),
+            (u8::MAX, secrets),
+        ] {
+            let mut inputs = unprepared.clone();
+            assert!(matches!(
+                prepare_atomic_private_settlement_authorization_inputs_v1(
+                    &intent,
+                    ordinal,
+                    &mut inputs,
+                    &supplied,
+                ),
+                Err(AtomicPrivateSettlementPreparationErrorV1::Binding)
+            ));
+            assert_eq!(
+                inputs, unprepared,
+                "invalid authorization changed an opening"
+            );
+        }
     }
 
     #[test]

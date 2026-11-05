@@ -2023,9 +2023,8 @@ fn parse_provider_id(raw: &str) -> Result<ProviderId, MusubiArchiveRuntimeErrorV
     if !is_lower_hex(raw, 64) {
         return Err(permanent("MUSUBI_ARCHIVE_FETCH_PROVIDER_ID_INVALID"));
     }
-    let decoded =
-        hex::decode(raw).map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_PROVIDER_ID_INVALID"))?;
-    let bytes = <[u8; 32]>::try_from(decoded)
+    let mut bytes = [0; 32];
+    hex::decode_to_slice(raw, &mut bytes)
         .map_err(|_| permanent("MUSUBI_ARCHIVE_FETCH_PROVIDER_ID_INVALID"))?;
     if bytes.iter().all(|byte| *byte == 0) {
         return Err(permanent("MUSUBI_ARCHIVE_FETCH_PROVIDER_ID_INVALID"));
@@ -2036,8 +2035,10 @@ fn parse_lower_hex_32(raw: &str) -> Result<[u8; 32], MusubiArchiveRuntimeErrorV1
     if !is_lower_hex(raw, 64) {
         return Err(integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"));
     }
-    let decoded = hex::decode(raw).map_err(|_| integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"))?;
-    <[u8; 32]>::try_from(decoded).map_err(|_| integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"))
+    let mut bytes = [0; 32];
+    hex::decode_to_slice(raw, &mut bytes)
+        .map_err(|_| integrity("MUSUBI_ARCHIVE_RESPONSE_HEX_INVALID"))?;
+    Ok(bytes)
 }
 fn is_lower_hex(value: &str, length: usize) -> bool {
     value.len() == length
@@ -2764,3 +2765,7 @@ operator_private_key_file = "provider.key"
 #[cfg(test)]
 #[path = "musubi_archive_fetch/stream_token_codec_tests.rs"]
 mod stream_token_codec_tests;
+
+#[cfg(test)]
+#[path = "musubi_archive_fetch/hex_tests.rs"]
+mod hex_tests;

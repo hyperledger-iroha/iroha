@@ -5,6 +5,7 @@ use mv::storage::Storage;
 
 pub(super) fn action(hash: HashOf<IvmBytecode>) -> LoadedAction<DataEventFilter> {
     LoadedAction {
+        lifecycle_executable_digest: None,
         executable: ExecutableRef::Ivm(hash),
         repeats: Repeats::Indefinitely,
         authority: ALICE_ID.clone(),
@@ -23,7 +24,7 @@ pub(super) fn fixture() -> (Set, HashOf<IvmBytecode>) {
         key,
         IvmBytecodeEntry {
             code_hash: ivm::contract_code_hash(bytes.as_ref()),
-            original_contract: bytes,
+            original_contract: bytes.into(),
             count: NonZeroU64::MIN,
         },
     )]
@@ -68,7 +69,7 @@ fn original_lookup_code_count_and_missing_diagnostics_remain_exact() {
         checked(&set),
         Err(TriggerContractError::Semantic(SemanticFailure::Code))
     );
-    entry.original_contract = IvmBytecode::from_compiled(vec![4]);
+    entry.original_contract = IvmBytecode::from_compiled(vec![4]).into();
     set.contracts = [(key, entry)].into_iter().collect();
     assert_eq!(
         set.view().validate_world_contract_rows(),
@@ -124,14 +125,14 @@ fn one_engine_keeps_action_phase_then_sorted_contract_first_fault() {
             other_key,
             IvmBytecodeEntry {
                 code_hash: ivm::contract_code_hash(other.as_ref()),
-                original_contract: other,
+                original_contract: other.into(),
                 count: NonZeroU64::MIN,
             },
         ),
     ];
     entries.sort_by_key(|(key, _)| *key);
     entries[0].1.count = NonZeroU64::new(2).unwrap();
-    entries[1].1.original_contract = IvmBytecode::from_compiled(vec![0xff]);
+    entries[1].1.original_contract = IvmBytecode::from_compiled(vec![0xff]).into();
     set.data_triggers = [
         ("a".parse().unwrap(), action(entries[0].0)),
         ("b".parse().unwrap(), action(entries[1].0)),

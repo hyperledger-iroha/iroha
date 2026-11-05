@@ -85,11 +85,16 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
         Transfer::nft(source_account, nft_id.clone(), destination_nft.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let nft = client.client().query_single(FindNftById::new(nft_id))?;
-    assert_eq!(nft.owned_by(), &destination_nft);
-    let account = client
+    let nft = client
         .client()
-        .query_single(FindAccountById::new(destination_asset.clone()))?;
-    assert_eq!(account.id(), &destination_asset);
+        .query_single(FindNftById::new(nft_id.clone()))?;
+    assert_eq!(nft.id(), &nft_id);
+    assert_eq!(nft.owned_by(), &destination_nft);
+    for destination in [destination_asset, destination_nft] {
+        let account = client
+            .client()
+            .query_single(FindAccountById::new(destination.clone()))?;
+        assert_eq!(account.id(), &destination);
+    }
     Ok(())
 }

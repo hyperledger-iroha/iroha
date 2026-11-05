@@ -435,6 +435,7 @@ pub(super) fn matched_benchmark_builder(
                 transactions,
                 topology,
                 entries,
+                genesis_staking_policy(),
             );
             assert_eq!(
                 iroha_genesis::signed_genesis_consensus_metadata(&genesis.0)

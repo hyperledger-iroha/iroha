@@ -72,7 +72,31 @@ If the committed `query_stored_min_gas_units` is 200, the above is rejected with
 For the canonical list of Torii endpoints, see the Reference section. This page covers only mode selection and behavior for snapshot-lane query execution.
 
 
-## Bounded ordinary account identities
+## Bounded ordinary sources
+
+`FindAssetEscrowsByAssetDefinitionV1` returns one complete escrow scope and
+requires ephemeral mode with fetch size one. Its aggregate uses a separate
+source allowance derived from the configured fanout memory envelope. Torii
+reserves that query's complete execution weight, including response transport
+copies, before Core reads the scope. Record graphs, canonical bytes and scan
+work remain bounded; unavailable capacity or incomplete records fail the query
+instead of returning a prefix or allocating a stored cursor. Ordinary name/id
+queries retain their smaller per-row allowance.
+
+Full `FindTriggers` rows have a separate 4 KiB allowance for each retained
+executable/filter/metadata graph and its bounded decoder work. Their page
+ceiling is the smaller of the configured maximum fetch size and 100; larger
+explicit fetch sizes are rejected, never clamped. The profile is available only
+when its complete execution and stored-tail reservations fit the configured
+working set. Oversized rows or unavailable capacity fail closed without a
+partial response. `FindActiveTriggerIds` keeps the ordinary name/id allowance.
+
+Before reserving continuation work, Torii reads only fixed-size admission facts
+from the stored cursor after checking its opaque ID, authority, exact position,
+completed archive and retained lease. The original limits must exactly match a
+current app-local profile, including its generation. Core repeats the complete
+policy and archive validation under the newly acquired execution lease; a
+consumed, foreign or expired cursor cannot adopt a different profile.
 
 Ordinary `FindAccountIds` admits a pass predicate, default selector, bounded
 counting and unsorted zero-offset pagination. The immutable world adapter owns
@@ -93,14 +117,13 @@ ceiling. Source and page storage fit the combined fresh and retained admission
 leases; neither a live-State replay nor a generic producer fallback is used.
 Peers support the bounded ephemeral adapter, and `FindTriggers` and
 `FindActiveTriggerIds` follow the same unfiltered, unsorted, zero-offset shape.
-The ordinary per-row frame and resident-graph ceiling divides the configured
-source-allocation phase across a maximum page plus its overflow probe. Complete
-trigger rows therefore include executable, authority, selector and metadata
-ownership; the name-only identifier allowance is a minimum admission requirement,
-not the ceiling for a complete trigger. Source scans, decoding, page overlap and
-cursor retention remain charged to the same configured working-set and work budgets.
-Every other iterable query, and these with a predicate, offset or sorting, is
-refused before execution with the stable reason
+Complete trigger rows include executable, authority, selector and metadata
+ownership under their source-specific bounded profile. Source scans, decoding,
+page overlap and cursor retention remain charged to the configured working-set
+and work budgets.
+Iterable producers without a source-specific bounded adapter, and shapes with
+predicates, offsets or sorting not admitted by their adapter, are refused before
+execution with the stable reason
 `signed_query_shape_not_admitted`; the refusal names the query and lists the
 Torii collection endpoints (`/v1/domains`, `/v1/accounts`,
 `/v1/assets/definitions`, `/v1/nfts`, `/v1/rwas`, `/v1/accounts/{id}/assets`,

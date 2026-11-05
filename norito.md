@@ -59,6 +59,29 @@ decoders reject unread bytes inside a declared child field with a typed length
 error in every build profile; bytes after the complete outer value remain
 available to a prefix-decoding caller.
 
+The opt-in `core::with_prepaid_validation` scope joins the cumulative decoder
+controls to an original reservation from the same allocation pool before typed
+transient validation. The reservation covers the entire allocation allowance
+and stays alive until decoded values, serializer scratch and owned errors retire;
+nested or foreign-pool scopes are refused. `with_enclosing_depth` carries a
+borrowed parser's enclosing depth into the same original counters. `try_box_for_decode`
+admits a typed box before fallible allocation. `with_bounded_encode_work` shares
+one cumulative serializer allowance with exact-payload comparison or streaming
+semantic hashes. `EncodeWorkBudget` and `with_cumulative_encode_work` retain and
+debit a root-wide allowance across successive bounded calls, including unwind;
+per-frame and recursion ceilings remain enforced. A fixed native recipe may use `write_canonical_payload_with_identity`
+with a separately audited literal equal to the original type's frame identity;
+this retains the original alignment and checked two-pass writer without permitting
+dynamic identity construction in ordinary bounded writers.
+The lifecycle Action scanner uses these scopes for individual dynamic
+instructions and complex filters. Its crate-private validator scope selects
+static built-in decoding without exposing that semantic switch through the public
+prepaid allocation capability. Encoding, including bounded lifecycle semantic
+hashes, always honors the installed instruction registry; only a cold uninstalled
+registry uses the identical built-in encoding inventory. This does not alter ordinary codec behavior,
+any frame or payload layout, or any schema identity. The scopes establish
+resource custody, not activation, authorization or authenticated coverage.
+
 `Decode`/`NoritoDeserialize` and `DeserializePayload` derives accept
 `#[norito(validate = "path")]` for fallible owner validation. The function
 consumes the reconstructed value and returns `Result<Self, norito::Error>`;

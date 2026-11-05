@@ -1877,6 +1877,13 @@ struct SnapshotJsonBudgetScanner<'a> {
 enum SnapshotJsonContext {
     Root,
     World,
+    ByteStorage(SnapshotByteValue),
+    ByteEntries(SnapshotByteValue),
+    ByteUndoEntries(SnapshotByteValue),
+    BytePresentUndo(SnapshotByteValue),
+    ByteArray,
+    Byte,
+    ContentChunk,
     ElectionsStorage,
     ElectionEntries,
     ElectionUndoEntries,
@@ -1886,6 +1893,21 @@ enum SnapshotJsonContext {
     ElectionAcceptedBallot,
     ElectionDigest,
     Other,
+}
+/// Only these typed World values contain discounted byte arrays. Never infer a
+/// byte vector from its contents: arbitrary JSON arrays can own expensive nodes.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SnapshotByteValue {
+    Raw,
+    ContentChunk,
+}
+impl SnapshotByteValue {
+    fn context(self) -> SnapshotJsonContext {
+        match self {
+            Self::Raw => SnapshotJsonContext::ByteArray,
+            Self::ContentChunk => SnapshotJsonContext::ContentChunk,
+        }
+    }
 }
 impl<'a> SnapshotJsonBudgetScanner<'a> {
     fn new(input: &'a str, policy: SnapshotResourcePolicy) -> Self {
@@ -1930,6 +1952,15 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             )));
         }
         let token = self.peek();
+        if context == SnapshotJsonContext::Byte {
+            return self.parse_byte();
+        }
+        if (context == SnapshotJsonContext::ByteArray && token != Some(b'['))
+            || (matches!(context, SnapshotJsonContext::BytePresentUndo(_))
+                && !matches!(token, Some(b'{' | b'n')))
+        {
+            return Err(TryReadError::NonCanonicalSnapshotPayload);
+        }
         if (context == SnapshotJsonContext::ElectionPresentUndo
             && !matches!(token, Some(b'{' | b'n')))
             || (context == SnapshotJsonContext::ElectionAcceptedBallots && token != Some(b'['))
@@ -1968,7 +1999,8 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
     ) -> Result<(), TryReadError> {
         self.consume_byte(b'{')?;
         let exact_ballot_entry = context == SnapshotJsonContext::ElectionAcceptedBallot;
-        let exact_present_undo = context == SnapshotJsonContext::ElectionPresentUndo;
+        let exact_present_undo = context == SnapshotJsonContext::ElectionPresentUndo
+            || matches!(context, SnapshotJsonContext::BytePresentUndo(_));
         let mut present_undo_fields = 0_u8;
         let mut ballot_entry_fields = 0_u8;
         if self.peek() == Some(b'}') {
@@ -2011,6 +2043,25 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             let value_start = self.cursor;
             let child_context = match (context, key.raw) {
                 (SnapshotJsonContext::Root, "world") => SnapshotJsonContext::World,
+                (
+                    SnapshotJsonContext::World,
+                    "contract_code" | "contract_code_upload_chunks" | "smart_contract_state",
+                ) => SnapshotJsonContext::ByteStorage(SnapshotByteValue::Raw),
+                (SnapshotJsonContext::World, "content_chunks") => {
+                    SnapshotJsonContext::ByteStorage(SnapshotByteValue::ContentChunk)
+                }
+                (SnapshotJsonContext::ByteStorage(value), "blocks") => {
+                    SnapshotJsonContext::ByteEntries(value)
+                }
+                (SnapshotJsonContext::ByteStorage(value), "revert") => {
+                    SnapshotJsonContext::ByteUndoEntries(value)
+                }
+                (SnapshotJsonContext::ByteEntries(value), _)
+                | (SnapshotJsonContext::BytePresentUndo(value), "value") => value.context(),
+                (SnapshotJsonContext::ByteUndoEntries(value), _) => {
+                    SnapshotJsonContext::BytePresentUndo(value)
+                }
+                (SnapshotJsonContext::ContentChunk, "data") => SnapshotJsonContext::ByteArray,
                 (SnapshotJsonContext::World, "elections") => SnapshotJsonContext::ElectionsStorage,
                 (SnapshotJsonContext::ElectionsStorage, "blocks") => {
                     SnapshotJsonContext::ElectionEntries
@@ -2079,6 +2130,7 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             _ => None,
         };
         let child_context = match context {
+            SnapshotJsonContext::ByteArray => SnapshotJsonContext::Byte,
             SnapshotJsonContext::ElectionAcceptedBallots => {
                 SnapshotJsonContext::ElectionAcceptedBallot
             }
@@ -2102,7 +2154,15 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
                     self.policy.max_blob_bytes
                 )));
             }
-            self.charge_item()?;
+            if context == SnapshotJsonContext::ByteArray {
+                // Vec<u8> is decoded directly with an exact preflight reservation,
+                // without a Value per byte. Allow three bytes for each payload byte
+                // (backing plus conservative copy/growth headroom). The surrounding
+                // field/entry still pays the ordinary collection-node charge.
+                self.charge_transient(3)?;
+            } else {
+                self.charge_item()?;
+            }
             self.parse_value(depth.saturating_add(1), false, child_context)?;
             match self.peek() {
                 Some(b',') => self.cursor += 1,
@@ -2229,6 +2289,24 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             }
         }
     }
+    fn parse_byte(&mut self) -> Result<(), TryReadError> {
+        let start = self.cursor;
+        let mut value = 0_u16;
+        while let Some(digit @ b'0'..=b'9') = self.peek() {
+            // At most three digits; rejecting here also bounds arithmetic and work.
+            if self.cursor - start == 3
+                || (self.cursor > start && self.input.as_bytes()[start] == b'0')
+            {
+                return Err(TryReadError::NonCanonicalSnapshotPayload);
+            }
+            value = value * 10 + u16::from(digit - b'0');
+            self.cursor += 1;
+        }
+        if self.cursor == start || value > u16::from(u8::MAX) {
+            return Err(TryReadError::NonCanonicalSnapshotPayload);
+        }
+        Ok(())
+    }
     fn parse_number(&mut self) -> Result<(), TryReadError> {
         let start = self.cursor;
         let mut parser = json::Parser::new_at(self.input, start);
@@ -2273,6 +2351,11 @@ impl<'a> SnapshotJsonBudgetScanner<'a> {
             return Ok(());
         }
         let additional = bytes - self.largest_typed_field_bytes;
+        // Typed canonical comparison builds one field-sized String. Include
+        // geometric capacity and the old allocation during its final growth.
+        let additional = additional.checked_mul(3).ok_or_else(|| {
+            TryReadError::SnapshotResourceLimit("snapshot typed field budget overflowed".to_owned())
+        })?;
         self.charge_transient(additional)?;
         self.largest_typed_field_bytes = bytes;
         Ok(())
@@ -5572,6 +5655,7 @@ mod tests {
     }
 
     include!("snapshot/support_policy_tests.rs");
+    include!("snapshot/byte_accounting_tests.rs");
     include!("snapshot/write_roundtrip_tests.rs");
     include!("snapshot/reconciliation_generation_tests.rs");
     include!("snapshot/read_buffer_custody_tests.rs");

@@ -180,11 +180,16 @@ carrier/business outcome evidence across restart. Its cold-resume regression pas
 under the original proof-read allowance. AMX bounded pending custody, fair source
 admission and separate handoff capacity are implemented. Cold handoff recovery and
 cancellation during native checkpoint work now pass on the default stack under
-the original worker and workflow leases. Full 16 MiB paid blocks settle, but the
-Torii receipt regression exhausts its 384 MB native proof allowance. A reviewed
-source repair preserves all retained lifetimes while deriving smaller bounds for
-validated committee authority. Execution of that repair and fresh network
-qualification await build space.
+the original worker and workflow leases. Full 16 MiB paid blocks settle. SNS
+lease-proof reconstruction now retires each checked history graph before reusing
+its bounded decode stage; [focused component evidence](docs/validation/sns_current_cut_takeover_20261104/README.md)
+preserves logical charges and the 384 MB request allowance on its recorded
+candidate. The [later lock change](docs/validation/sns_current_cut_lock_drift_20261104/README.md)
+requires fresh evidence for the changed dependency candidate. The
+[separate native HTTP receipt-owner regression](docs/validation/torii_receipt_owner_retained_20261104.md)
+also passes on the retained artifact, including final-slice custody and complete
+pool release. Current-candidate build custody and fresh network qualification
+remain open.
 
 The private-settlement five-second proof-through-settlement target is unmet.
 Current-source happy-day settlements and serial restart have functional coverage;
@@ -209,11 +214,12 @@ overflow in `beacon_bootstrap::seat_attempt::aggregate_tests` after five
 `durable::tests` failures, and two `musubi_publication_service::finality`
 tests fail. The repository owner approved `optimizations` at
 `06912ee4f8f9423b458d72039dbd0a1c8fde7b43` plus the reviewed CI repairs as
-the release-source baseline. The source seal and generated-artifact ownership
-have been reconciled; this approval does not establish release or network
-qualification. Current-schema G.2 records now reproduce exactly from eight
-accepted native harness runs under the existing observation contract: 95 native
-and 210 in-circuit rows. The inventory guard passes; no State-commitment
+the release-source baseline. Subsequent upstream changes are being reconciled;
+the combined source seal and complete hosted checks require current-candidate
+validation. This approval does not establish release or network qualification.
+Generated-artifact ownership includes the eight FAEST tables and narrow retained
+capture exemptions. State candidates were measured against an earlier table
+schema and require fresh G.2 or G.3 measurements; no State-commitment
 construction is selected or qualified.
 
 ## Deployment state
@@ -572,8 +578,10 @@ passes.
   page after reproducing a blocking stdout failure. Its new 122 observations
   and full/broken-output controls pass, with 41.109375 MiB reserved on this Mac;
   all-input completion and full native-memory coverage remain unqualified.
-  Fresh stack captures decode both images after tested `STLUR`/`EON` support,
-  retaining native, indirect, exceptional and recursive costs as unresolved.
+  The [retained-image stack-v5 diagnostic](docs/validation/parliament_ballot_stack_v5_20261104/README.md)
+  adds reviewed instruction coverage and image-bound ordinary control-flow facts.
+  Every original resource obligation remains active, including the deferred
+  Shape merge; all ten complete stack bounds remain unknown.
   A [conditional adapter bound](docs/validation/parliament_ballot_adapter_bound/README.md)
   isolates the ordinary wrapper's stack, instructions and owned input block;
   native and complete verifier costs remain opaque.
@@ -586,19 +594,27 @@ passes.
   separate profile and typed-decoder checks bound their outer ordinary paths.
   Lower constructor/validation, cryptography, allocation, cleanup, native and
   exceptional costs stay open.
-  A [fresh current-source worker](docs/validation/parliament_ballot_current_candidate/README.md)
-  passes both-mode builds and finite resource/output controls; its fresh stack
-  capture retains the same unresolved runtime costs. A test/comment-only waker
-  correction preserves actual custody checks and passes focused allocation tests.
-  A separate compiled correspondence check reruns the four unchanged component
-  analyzers on current captures, retaining their premises and unresolved costs.
-  Later root-lock changes and six integration-source changes are recorded as
-  post-capture drift; prior results retain their captured source scope.
-  The repaired phase, construction, Torii release, daemon startup, beacon-witness
-  and execution-result source guards have passing captured controls. The full
-  Python regression result retains its sources before two constructor-migration
-  edits; the post-merge source check passes on those changes. Shared qualification
-  dispatch now passes both host bridge modes' checks; runtime qualification stays open.
+  The [November 4 worker capture](docs/validation/parliament_ballot_current_candidate_20261104/README.md)
+  retains passing portable/accelerated finite resource and fatal-output controls.
+  Later rustup/Cargo.lock drift prevents latest-source qualification; stack-v5
+  analyzes the retained images only. The [selected 160-node historical rerun](docs/validation/parliament_ballot_takeover_20261104/historical-nodes-current-rerun.json)
+  reports 47 passed and 113 failed. This is not a full script-suite result, and
+  no historical certificates were repinned.
+  Earlier candidate evidence remains separate. A test/comment-only waker
+  correction preserved custody checks and passed focused allocation tests.
+  The [earlier compiled correspondence check](docs/validation/parliament_ballot_current_correspondence/README.md)
+  reran four unchanged component analyzers on that worker's captures, retaining
+  their premises and unresolved costs. That worker's later root-lock drift and
+  the [construction-guard capture's six-file drift](docs/validation/parliament_ballot_construction_guard/README.md)
+  remain recorded separately.
+  Earlier captured controls cover the repaired phase, construction, Torii release,
+  daemon startup, beacon-witness and execution-result source guards. The
+  [historical result for the full source-contract test module](docs/validation/parliament_ballot_source_guard_regressions/README.md)
+  remains bound to its inputs before two constructor-migration edits; the
+  [separate post-merge source check](docs/validation/parliament_ballot_post_merge_source_check/README.md)
+  passed on those changes without transferring that regression result. The earlier
+  shared-dispatch capture passed both host bridge modes' checks; runtime
+  qualification stays open.
   A standalone finish-and-discard
   adapter passes both-mode lifecycle and selected-buffer cleanup tests; it
   does not establish prompt cancellation or comprehensive secret erasure.

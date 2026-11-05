@@ -1,10 +1,10 @@
 #[test]
 fn every_governed_envelope_binding_fails_closed_when_tampered() {
-    type EnvelopeMutation = (&'static str, fn(&mut PrivacyProofEnvelopeV1));
+    type EnvelopeMutation = (&'static str, fn(&mut PrivacyRuntimeProofEnvelopeV1));
     let (envelope, profile, network_id) = valid_envelope();
     let mutations: [EnvelopeMutation; 9] = [
         ("protocol", |value| {
-            value.protocol_id = PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1
+            value.protocol_id = PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1
         }),
         ("parameter-id", |value| value.parameter_id.0[0] ^= 1),
         ("parameter-digest", |value| value.parameter_digest.0[0] ^= 1),

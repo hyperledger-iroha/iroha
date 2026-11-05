@@ -1275,7 +1275,7 @@ impl ManagedStreamTokenCustody {
         let owner = self
             .authority
             .provider_role(StreamTokenAuthorityRole::IssuerOperator)?;
-        let schema = iroha_core::state::State::native_world_schema_hash_v1()
+        let schema = iroha_core::state::State::native_world_schema_hashes_v1()
             .map_err(|_| invalid("native custody schema is unavailable"))?;
         read_selected_peers(&self.authority.peers, deadline, |client, deadline| {
             client
@@ -1284,7 +1284,7 @@ impl ManagedStreamTokenCustody {
                     self.authority.provider_id()?,
                     owner,
                     binding,
-                    schema,
+                    schema.as_slice(),
                     block,
                 )
                 .map_err(|_| invalid("native custody candidate is unavailable or invalid"))
@@ -1319,8 +1319,8 @@ impl ManagedStreamTokenCustody {
                 self.authority
                     .provider_role(StreamTokenAuthorityRole::IssuerOperator)?,
                 &selection.binding,
-                iroha_core::state::State::native_world_schema_hash_v1()
-                    .map_err(|_| invalid("native custody schema is unavailable"))?,
+                iroha_core::state::State::select_native_world_schema_v1(proof.world.schema_hash)
+                    .map_err(|_| invalid("native custody schema is unavailable or unqualified"))?,
                 block,
             )
             .map_err(|_| {

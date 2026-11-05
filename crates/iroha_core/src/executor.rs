@@ -21,7 +21,6 @@ use core::{
     convert::TryFrom,
     ops::{Deref, DerefMut},
 };
-use derive_more::Debug;
 use iroha_config::parameters::actual::{ConfidentialGas, Pipeline};
 use iroha_crypto::Hash;
 use iroha_data_model::block::consensus::RootFeePolicy;
@@ -267,7 +266,7 @@ const EXECUTOR_LENGTH_PREFIX_BYTES_U64: u64 = 8;
 /// host-side limit at that deterministic region size prevents a guest-controlled length prefix from
 /// requesting an unbounded host allocation, while retaining the entire addressable result envelope.
 const MAX_EXECUTOR_OUTPUT_BYTES: u64 = Memory::HEAP_MAX_SIZE;
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum NativeQueryAccess {
     /// Control-plane or public-definition data available to any registered account.
     Registered,
@@ -286,6 +285,65 @@ enum NativeQueryAccess {
     AssetFiOwner(AssetDefinitionId, AccountId),
     /// Ledger-wide state requiring the genesis-issued read root.
     AllLedger,
+}
+impl core::fmt::Debug for NativeQueryAccess {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // Pretty tuple fields retain their own default flags; compact output forwards outer flags.
+        let pretty = formatter.alternate();
+        match self {
+            Self::Registered => formatter.write_str("Registered"),
+            Self::Account(account) => {
+                let mut tuple = formatter.debug_tuple("Account");
+                if pretty {
+                    tuple.field(&format_args!("{account:#?}"));
+                } else {
+                    tuple.field(account);
+                }
+                tuple.finish()
+            }
+            Self::EnrollmentAccount(account) => {
+                let mut tuple = formatter.debug_tuple("EnrollmentAccount");
+                if pretty {
+                    tuple.field(&format_args!("{account:#?}"));
+                } else {
+                    tuple.field(account);
+                }
+                tuple.finish()
+            }
+            Self::AssetUidOwner(asset) => {
+                let mut tuple = formatter.debug_tuple("AssetUidOwner");
+                if pretty {
+                    tuple.field(&format_args!("{asset:#?}"));
+                } else {
+                    tuple.field(asset);
+                }
+                tuple.finish()
+            }
+            Self::AssetEscrowOwner(asset, incarnation) => {
+                let mut tuple = formatter.debug_tuple("AssetEscrowOwner");
+                if pretty {
+                    tuple
+                        .field(&format_args!("{asset:#?}"))
+                        .field(&format_args!("{incarnation:#?}"));
+                } else {
+                    tuple.field(asset).field(incarnation);
+                }
+                tuple.finish()
+            }
+            Self::AssetFiOwner(asset, account) => {
+                let mut tuple = formatter.debug_tuple("AssetFiOwner");
+                if pretty {
+                    tuple
+                        .field(&format_args!("{asset:#?}"))
+                        .field(&format_args!("{account:#?}"));
+                } else {
+                    tuple.field(asset).field(account);
+                }
+                tuple.finish()
+            }
+            Self::AllLedger => formatter.write_str("AllLedger"),
+        }
+    }
 }
 fn decode_native_iterable_payload_exact<Q>(payload: &[u8]) -> Option<Q>
 where
@@ -1458,7 +1516,7 @@ pub(crate) fn execute_instruction_detached(
 ///
 /// Executing is done in order to verify dependent instructions in transaction.
 /// Can be upgraded with [`Upgrade`](iroha_data_model::isi::Upgrade) instruction.
-#[derive(Debug, Default, Clone)]
+#[derive(Default, Clone)]
 pub enum Executor {
     /// Initial executor with minimal built-in permission checks for critical instructions.
     #[default]
@@ -1466,8 +1524,25 @@ pub enum Executor {
     /// User-provided executor with arbitrary logic.
     UserProvided(LoadedExecutor),
 }
+impl core::fmt::Debug for Executor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let pretty = formatter.alternate();
+        match self {
+            Self::Initial => formatter.write_str("Initial"),
+            Self::UserProvided(executor) => {
+                let mut tuple = formatter.debug_tuple("UserProvided");
+                if pretty {
+                    tuple.field(&format_args!("{executor:#?}"));
+                } else {
+                    tuple.field(executor);
+                }
+                tuple.finish()
+            }
+        }
+    }
+}
 /// Migration outcome at the State-owning instruction boundary.
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ExecutorMigrationError {
     /// A completed migration error retains its original VM fields.
     #[error("executor migration rejected: {0}")]
@@ -1480,6 +1555,24 @@ pub enum ExecutorMigrationError {
     /// become a completed rejection; the outer State terminal must export the original once.
     #[error("local executor migration did not complete; original refusal retained in State")]
     LocalRefusalRetained,
+}
+impl core::fmt::Debug for ExecutorMigrationError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let pretty = formatter.alternate();
+        match self {
+            Self::Rejected(error) => {
+                let mut tuple = formatter.debug_tuple("Rejected");
+                if pretty {
+                    tuple.field(&format_args!("{error:#?}"));
+                } else {
+                    tuple.field(error);
+                }
+                tuple.finish()
+            }
+            Self::LiveCustody => formatter.write_str("LiveCustody"),
+            Self::LocalRefusalRetained => formatter.write_str("LocalRefusalRetained"),
+        }
+    }
 }
 
 /// Execution profile applied when running native ISIs.
@@ -2156,7 +2249,7 @@ fn parse_account_id_literal(
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal, now_ms)
 }
 /// Deterministic reason a Nexus fee quote or admission check failed.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum NexusFeeAdmissionError {
     /// The selected fee payer cannot satisfy deterministic admission.
     Rejected {
@@ -2167,6 +2260,27 @@ pub enum NexusFeeAdmissionError {
     },
     /// Node or persisted fee configuration is invalid.
     ConfigInvalid(String),
+}
+impl core::fmt::Debug for NexusFeeAdmissionError {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let pretty = formatter.alternate();
+        match self {
+            Self::Rejected { code, reason } => formatter
+                .debug_struct("Rejected")
+                .field("code", code)
+                .field("reason", reason)
+                .finish(),
+            Self::ConfigInvalid(reason) => {
+                let mut tuple = formatter.debug_tuple("ConfigInvalid");
+                if pretty {
+                    tuple.field(&format_args!("{reason:#?}"));
+                } else {
+                    tuple.field(reason);
+                }
+                tuple.finish()
+            }
+        }
+    }
 }
 impl core::fmt::Display for NexusFeeAdmissionError {
     fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -2494,25 +2608,27 @@ fn fee_sponsor_asset_transfer_definition_id(
 }
 fn fee_sponsor_instruction_operation(
     instruction: &InstructionBox,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> Result<
     FeeSponsorOperation,
     crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
 > {
     use crate::execution_attempt::ExecutionAttemptError;
-    let multisig = match MultisigInstructionBox::try_from(instruction) {
-        Ok(value) => Some(value),
-        Err(error) => {
-            match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
-                error,
-                |_| (),
-            ) {
-                ExecutionAttemptError::Deferred(reason) => {
-                    return Err(ExecutionAttemptError::Deferred(reason));
+    let multisig =
+        match crate::runtime::ironwood::admission::multisig_instruction(instruction, selection) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                match crate::smartcontracts::isi::multisig::multisig_instruction_decode_attempt(
+                    error,
+                    |_| (),
+                ) {
+                    ExecutionAttemptError::Deferred(reason) => {
+                        return Err(ExecutionAttemptError::Deferred(reason));
+                    }
+                    ExecutionAttemptError::Rejected(()) => None,
                 }
-                ExecutionAttemptError::Rejected(()) => None,
             }
-        }
-    };
+        };
     if let Some(multisig) = multisig {
         let (operation, account_id) = match multisig {
             MultisigInstructionBox::Propose(propose) => {
@@ -2551,6 +2667,7 @@ fn fee_sponsor_instruction_operation(
 }
 fn fee_sponsor_operations(
     executable: &Executable,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> Result<
     Vec<FeeSponsorOperation>,
     crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>,
@@ -2558,7 +2675,7 @@ fn fee_sponsor_operations(
     match executable {
         Executable::Instructions(instructions) => instructions
             .iter()
-            .map(fee_sponsor_instruction_operation)
+            .map(|instruction| fee_sponsor_instruction_operation(instruction, selection))
             .collect(),
         Executable::ContractCall(invocation) => Ok(vec![FeeSponsorOperation::ContractCall {
             contract_address: invocation.contract_address.clone(),
@@ -2569,7 +2686,7 @@ fn fee_sponsor_operations(
             .iter()
             .map(|item| match item {
                 ExecutableBatchItem::Instruction(instruction) => {
-                    fee_sponsor_instruction_operation(instruction)
+                    fee_sponsor_instruction_operation(instruction, selection)
                 }
                 ExecutableBatchItem::ContractCall(invocation) => {
                     Ok(FeeSponsorOperation::ContractCall {
@@ -2647,6 +2764,34 @@ fn fee_sponsor_selector_matches_operation(
         _ => false,
     }
 }
+#[cfg(test)]
+mod ironwood_classifier_tests {
+    use super::*;
+
+    #[test]
+    fn ironwood_opaque_custom_keeps_predecessor_sponsor_classification() {
+        let catalog = crate::runtime::release_catalog().unwrap();
+        let instruction = crate::runtime::ironwood::admission::tests::opaque_proposal(
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1,
+        );
+        assert!(matches!(
+            fee_sponsor_instruction_operation(&instruction, &catalog.baseline).unwrap(),
+            FeeSponsorOperation::NativeInstruction { .. }
+        ));
+        assert!(matches!(
+            fee_sponsor_instruction_operation(
+                &instruction,
+                &catalog.ironwood.as_ref().unwrap().selection
+            )
+            .unwrap(),
+            FeeSponsorOperation::Multisig {
+                operation: FeeSponsorMultisigOperation::Propose,
+                ..
+            }
+        ));
+    }
+}
+
 fn validate_fee_sponsor_rules(
     world: &impl WorldReadOnly,
     revision: &FeeSponsorProgramRevision,
@@ -2654,7 +2799,7 @@ fn validate_fee_sponsor_rules(
     payload: &TransactionPayload,
     context: fee_sponsor_multisig::RuleContext,
 ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<NexusFeeAdmissionError>> {
-    let operations = fee_sponsor_operations(&payload.instructions)?;
+    let operations = fee_sponsor_operations(&payload.instructions, world.runtime_selection())?;
     if operations.is_empty() {
         return Err(NexusFeeAdmissionError::sponsor(
             FeeRejectionCode::OperationNotAllowed,
@@ -6763,6 +6908,13 @@ impl Executor {
                         index,
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     );
+                    state_transaction.arm_direct_parliament_registration(
+                        transaction,
+                        authority,
+                        isi,
+                        index,
+                        contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
+                    );
                     state_transaction.current_direct_kagemusha_load_instruction_index =
                         (contract_runtime_context.is_none() && entrypoint_authorization.is_none())
                             .then_some(index);
@@ -6781,26 +6933,37 @@ impl Executor {
                         index,
                         contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
                     );
-                    let result = if contract_runtime_context.is_none()
-                        && entrypoint_authorization.is_none()
-                        && attachment_custody.is_some()
-                    {
-                        self.execute_original_direct_instruction(
-                            state_transaction,
-                            authority,
-                            isi,
-                            index,
-                            attachment_custody.as_deref_mut(),
-                        )
-                    } else {
-                        self.execute_instruction_with_profile_and_contract_runtime_context(
-                            state_transaction,
-                            authority,
-                            isi,
-                            InstructionExecutionProfile::Runtime,
-                            contract_runtime_context,
-                        )
-                    };
+                    let lifecycle_origin = state_transaction.direct_trigger_lifecycle_origin(
+                        transaction,
+                        isi,
+                        index,
+                        contract_runtime_context.is_none() && entrypoint_authorization.is_none(),
+                    );
+                    let result = state_transaction.with_trigger_lifecycle_origin(
+                        lifecycle_origin,
+                        |state_transaction| {
+                            if contract_runtime_context.is_none()
+                                && entrypoint_authorization.is_none()
+                                && attachment_custody.is_some()
+                            {
+                                self.execute_original_direct_instruction(
+                                    state_transaction,
+                                    authority,
+                                    isi,
+                                    index,
+                                    attachment_custody.as_deref_mut(),
+                                )
+                            } else {
+                                self.execute_instruction_with_profile_and_contract_runtime_context(
+                                    state_transaction,
+                                    authority,
+                                    isi,
+                                    InstructionExecutionProfile::Runtime,
+                                    contract_runtime_context,
+                                )
+                            }
+                        },
+                    );
                     state_transaction.current_direct_privacy_instruction_index = None;
                     state_transaction.clear_direct_parliament_candidate_testing();
                     state_transaction.current_direct_sccp_forgery = false;
@@ -8042,7 +8205,15 @@ impl Executor {
                                 index,
                                 true,
                             );
-                            let result = if attachment_custody.is_some() {
+                            let lifecycle_origin = state_transaction
+                                .direct_trigger_lifecycle_origin(
+                                    transaction,
+                                    instruction,
+                                    index,
+                                    true,
+                                );
+                            let result = state_transaction.with_trigger_lifecycle_origin(lifecycle_origin, |state_transaction| {
+                                if attachment_custody.is_some() {
                                 self.execute_original_direct_instruction(
                                     state_transaction,
                                     authority,
@@ -8058,7 +8229,8 @@ impl Executor {
                                     InstructionExecutionProfile::Runtime,
                                     None,
                                 )
-                            };
+                                }
+                            });
                             state_transaction.current_direct_privacy_instruction_index = None;
                             state_transaction.current_direct_kagemusha_load_instruction_index =
                                 None;
@@ -8694,6 +8866,36 @@ impl Executor {
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
         attachment_invocation: Option<attachment_direct::AttachmentExecution<'_, '_, '_>>,
     ) -> Result<(), ValidationFail> {
+        let origin = if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_))
+        {
+            state_transaction.derived_trigger_lifecycle_origin()
+        } else {
+            state_transaction
+                .world
+                .triggers
+                .lifecycle_origin()
+                .unwrap_or_else(|| state_transaction.derived_trigger_lifecycle_origin())
+        };
+        state_transaction.with_trigger_lifecycle_origin(origin, |state_transaction| {
+            self.execute_instruction_within_lifecycle_origin(
+                state_transaction,
+                authority,
+                instruction,
+                profile,
+                contract_runtime_context,
+                attachment_invocation,
+            )
+        })
+    }
+    fn execute_instruction_within_lifecycle_origin(
+        &self,
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        instruction: &InstructionBox,
+        profile: InstructionExecutionProfile,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
+        attachment_invocation: Option<attachment_direct::AttachmentExecution<'_, '_, '_>>,
+    ) -> Result<(), ValidationFail> {
         // A user executor/contract cannot inherit original native genesis authority.
         if contract_runtime_context.is_some() || matches!(self, Self::UserProvided(_)) {
             state_transaction.clear_direct_parliament_candidate_testing();
@@ -8823,7 +9025,10 @@ impl Executor {
                 "executing instruction (Initial executor)"
             );
         }
-        match MultisigInstructionBox::try_from(instruction) {
+        match crate::runtime::ironwood::admission::multisig_instruction(
+            instruction,
+            state_transaction.world.runtime_selection.get(),
+        ) {
             Ok(multisig) => {
                 return crate::smartcontracts::isi::multisig::execute_multisig_instruction(
                     state_transaction,
@@ -9657,7 +9862,10 @@ fn execute_multisig_custom_instruction_if_present(
     {
         return Ok(false);
     }
-    let Ok(multisig) = MultisigInstructionBox::try_from(instruction) else {
+    let Ok(multisig) = crate::runtime::ironwood::admission::multisig_instruction(
+        instruction,
+        state_transaction.world.runtime_selection.get(),
+    ) else {
         return Ok(false);
     };
     crate::smartcontracts::isi::multisig::execute_multisig_instruction(
@@ -10025,6 +10233,10 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
 mod runtime_memory_tests;
 
 #[cfg(test)]
+#[path = "executor_formatting_tests.rs"]
+mod formatting_tests;
+
+#[cfg(test)]
 #[path = "executor_public_pin_admission_tests.rs"]
 mod public_pin_admission_tests;
 
@@ -10046,8 +10258,7 @@ fn executor_test_budget() -> iroha_allocation::AllocationBudget {
 }
 
 /// [`Executor`] with cached [`IVM`] for execution.
-#[derive(Debug, Clone)]
-#[debug("LoadedExecutor {{ runtime: <IVM> }}")]
+#[derive(Clone)]
 pub struct LoadedExecutor {
     runtime_pool: Arc<Mutex<ExecutorRuntimePool>>,
     pool_memory: Arc<ivm::cache_memory::MemoryReservation>,
@@ -10055,6 +10266,11 @@ pub struct LoadedExecutor {
     /// Sharing immutable bytecode makes executor clones cheap.
     /// See [`crate::tx::TransactionExecutor::validate_with_runtime_executor`].
     raw_executor: ivm::cache_memory::SharedValue<data_model_executor::Executor>,
+}
+impl core::fmt::Debug for LoadedExecutor {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("LoadedExecutor { runtime: <IVM> }")
+    }
 }
 // Stack sizing and the governed heap ceiling define distinct VM memory
 // authorities. Keep a small bounded LRU so adversarial governance/gas

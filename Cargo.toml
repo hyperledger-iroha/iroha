@@ -37,6 +37,7 @@ iroha_torii_shared = { path = "crates/iroha_torii_shared" }
 iroha = { path = "crates/iroha" }
 iroha_private_settlement = { path = "crates/iroha_private_settlement" }
 iroha_contract_deploy = { path = "crates/iroha_contract_deploy" }
+iroha_cli_docs = { path = "crates/iroha_cli_docs" }
 iroha_deploy = { path = "crates/iroha_deploy" }
 iroha_fs = { path = "crates/iroha_fs" }
 iroha_managed_ipc = { path = "crates/iroha_managed_ipc" }
@@ -123,7 +124,6 @@ darling = "0.24.0"
 
 futures = { version = "0.3.31", default-features = false }
 tokio = "1.54.1"
-tokio-stream = "0.1.17"
 tokio-tungstenite = "0.30.0"
 tokio-util = "0.7.17"
 tokio-rustls = { version = "0.26.4", default-features = false }

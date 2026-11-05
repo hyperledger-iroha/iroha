@@ -1,4 +1,8 @@
 //! Original native certificate DATA under one admitted request and destination-independent source.
+//!
+//! An original State-view acquisition refusal with a release owner is HTTP 503
+//! `sccp_state_busy`; it retains the ordinary canonical retry metadata. This code
+//! never describes changed/poisoned state, invalid sources or capacity refusal.
 
 use std::{net::SocketAddr, num::NonZeroU64, sync::atomic::Ordering, time::Instant};
 
@@ -298,6 +302,26 @@ pub(super) fn source_error(error: &SccpNativeReadError) -> Response {
     use iroha_data_model::sumeragi_finality::{
         CommitmentError, certified_result::CertifiedResultError,
     };
+    // Only an original publishing/reader owner with a release source is transient.
+    // Keep the one-shot acquisition and all permanent source classifications intact.
+    if matches!(
+        error,
+        SccpNativeReadError::View(iroha_core::state::StateViewError::Busy(_))
+    ) {
+        let mut response = crate::utils::respond_with_status_and_format(
+            StatusCode::SERVICE_UNAVAILABLE,
+            &iroha_torii_shared::ErrorEnvelope::new(
+                "sccp_state_busy",
+                "The SCCP committed state is temporarily busy.",
+            ),
+            crate::utils::current_response_format(),
+        );
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("private, no-store"),
+        );
+        return response;
+    }
     let (status, code) = match error {
         SccpNativeReadError::Request(_) => (StatusCode::BAD_REQUEST, "sccp_invalid_query"),
         SccpNativeReadError::NotFound(_) => (StatusCode::NOT_FOUND, "sccp_not_found"),

@@ -9,6 +9,11 @@
 
 #[path = "world_state_snapshot/amx_approval.rs"]
 mod amx_approval;
+#[path = "world_state_snapshot/ironwood.rs"]
+mod ironwood;
+#[cfg(feature = "iroha-core-tests")]
+#[path = "world_state_snapshot/lifecycle_fixture.rs"]
+mod lifecycle_fixture;
 #[path = "world_state_snapshot/private_settlement.rs"]
 mod private_settlement;
 #[path = "world_state_snapshot/reserve_account.rs"]
@@ -24,7 +29,7 @@ use crate::{
         AssetDefinitionAliasBindingRecord, State, StateReadOnly, StateView, StateViewError,
         WorldReadOnly, is_stable_state_view_generation,
     },
-    sumeragi::certified_chain::CommittedBlock,
+    sumeragi::certified_chain::{CommittedBlock, CurrentCertifiedCut},
 };
 use iroha_allocation::{AllocationBudget, AllocationCharge, ChargedBuffer};
 use iroha_data_model::{
@@ -589,12 +594,80 @@ impl StateView<'_> {
     }
 }
 
-fn require_cut(view: &StateView<'_>, tip: &CommittedBlock) -> Result<(), WorldStateSnapshotError> {
+// Private scalar access keeps the original publication/check order for retained
+// receipts and the sealed current-cut reader. It grants no new certificate authority.
+trait SnapshotCut {
+    fn height(&self) -> u64;
+    fn block_hash(&self) -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>;
+    fn core_hash(&self) -> iroha_sumeragi::types::Hash32;
+    fn result(&self) -> iroha_sumeragi::types::Hash32;
+    fn block_time_ms(&self) -> u64;
+    fn network(&self) -> iroha_data_model::id::NetworkId;
+    fn world_state_root(&self) -> Hash;
+    fn consistent(&self) -> bool;
+}
+impl SnapshotCut for CommittedBlock {
+    fn height(&self) -> u64 {
+        CommittedBlock::height(self)
+    }
+    fn block_hash(&self) -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> {
+        CommittedBlock::block_hash(self)
+    }
+    fn core_hash(&self) -> iroha_sumeragi::types::Hash32 {
+        CommittedBlock::core_hash(self)
+    }
+    fn result(&self) -> iroha_sumeragi::types::Hash32 {
+        CommittedBlock::result(self)
+    }
+    fn block_time_ms(&self) -> u64 {
+        CommittedBlock::block_time_ms(self)
+    }
+    fn network(&self) -> iroha_data_model::id::NetworkId {
+        self.commitment().schedule.current.network_id
+    }
+    fn world_state_root(&self) -> Hash {
+        self.commitment().execution.world_state_root
+    }
+    fn consistent(&self) -> bool {
+        self.height() >= 2 && self.header().is_some() && self.commitment().height == self.height()
+    }
+}
+impl SnapshotCut for CurrentCertifiedCut {
+    fn height(&self) -> u64 {
+        CurrentCertifiedCut::height(self)
+    }
+    fn block_hash(&self) -> iroha_crypto::HashOf<iroha_data_model::block::BlockHeader> {
+        CurrentCertifiedCut::block_hash(self)
+    }
+    fn core_hash(&self) -> iroha_sumeragi::types::Hash32 {
+        CurrentCertifiedCut::core_hash(self)
+    }
+    fn result(&self) -> iroha_sumeragi::types::Hash32 {
+        CurrentCertifiedCut::result(self)
+    }
+    fn block_time_ms(&self) -> u64 {
+        CurrentCertifiedCut::block_time_ms(self)
+    }
+    fn network(&self) -> iroha_data_model::id::NetworkId {
+        CurrentCertifiedCut::network(self)
+    }
+    fn world_state_root(&self) -> Hash {
+        CurrentCertifiedCut::world_state_root(self)
+    }
+    fn consistent(&self) -> bool {
+        self.height() >= 2
+    }
+}
+
+fn require_cut(
+    view: &StateView<'_>,
+    tip: &impl SnapshotCut,
+) -> Result<(), WorldStateSnapshotError> {
     let observed_height = view.native_world_snapshot_height_v1()?;
     let native = view
         .native_execution_tip()
         .ok_or("World snapshot has no original native execution tip")?;
-    if tip.height() < 2 || tip.header().is_none() || tip.commitment().height != tip.height() {
+    if !tip.consistent() {
         return Err("World snapshot requested certified tip is inconsistent".into());
     }
     if observed_height != tip.height() {
@@ -680,6 +753,50 @@ impl State {
     pub fn native_world_schema_hash_v1() -> Result<Hash, String> {
         let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
         selection_schema(&catalog.baseline)
+    }
+
+    /// Qualified complete-World schemas with the native typed field meanings of this release.
+    /// Readers select from this set using each proof's candidate schema, then authenticate the
+    /// unchanged complete proof against the independently selected block at its own height.
+    /// This supports both sides of activation without trusting a current/latest schema for history.
+    /// # Errors
+    /// A compiled selection or its commitment profile is invalid.
+    pub fn native_world_schema_hashes_v1() -> Result<Vec<Hash>, String> {
+        let catalog = crate::runtime::release_catalog().map_err(|error| error.to_string())?;
+        let mut schemas = vec![selection_schema(&catalog.baseline)?];
+        if let Some(ironwood) = &catalog.ironwood {
+            schemas.push(selection_schema(&ironwood.selection)?);
+        }
+        schemas.sort_unstable();
+        schemas.dedup();
+        Ok(schemas)
+    }
+
+    /// Expand a qualified installation anchor only within this release's known native schema
+    /// family. An explicitly qualified foreign registry remains a singleton; it never acquires
+    /// authority to interpret any other schema. Installation metadata itself is unchanged.
+    /// # Errors
+    /// The compiled native schema family cannot be constructed.
+    pub fn native_world_schemas_for_anchor_v1(anchor: Hash) -> Result<Vec<Hash>, String> {
+        let schemas = Self::native_world_schema_hashes_v1()?;
+        Ok(if schemas.contains(&anchor) {
+            schemas
+        } else {
+            vec![anchor]
+        })
+    }
+
+    /// Select a compiled native schema candidate for a typed proof verifier. This does not
+    /// authenticate the candidate: the verifier must still bind its complete snapshot to the
+    /// independently selected certified block and verify every requested typed preimage.
+    /// # Errors
+    /// The candidate schema is not implemented by this release.
+    pub fn select_native_world_schema_v1(candidate: Hash) -> Result<Hash, String> {
+        use iroha_data_model::sumeragi_finality::WorldStateSchemaPolicyV1 as _;
+        Self::native_world_schema_hashes_v1()?
+            .as_slice()
+            .select_schema(candidate)
+            .map_err(|error| error.to_string())
     }
 
     /// Publish complete current-state evidence and exact provider authority originals.
@@ -793,16 +910,43 @@ impl State {
         })
     }
 
-    /// Publish the exact original SNS lease bytes at one native certified World cut.
+    /// Exercise the original full-body input in byte and error parity tests only.
+    #[cfg(test)]
+    pub(crate) fn with_sns_lease_snapshot_reference_for_test<T>(
+        &self,
+        tip: &CommittedBlock,
+        selector: &iroha_data_model::sns::NameSelectorV1,
+        budget: &AllocationBudget,
+        consume: impl FnOnce(&WorldStateSnapshotV1, &Vec<u8>) -> Result<T, String>,
+    ) -> Result<T, WorldStateSnapshotError> {
+        self.with_native_sns_lease_publication_v1(tip, selector, budget, consume)
+    }
+
+    /// Publish original SNS bytes using a sealed fully verified current-cut projection.
+    /// The source's complete transaction graphs have already retired.
     ///
     /// This is data publication only. The independent recipient selects its finality decision,
     /// qualified native schema, expected owner and current lease-validity time.
+    /// Obtain the cut through [`crate::sumeragi::certified_chain::read_current_certified_cut`].
     /// # Errors
     /// Private or unbound root, noncanonical selector, absent or tail-modified record, changed
     /// certified cut, unavailable original publication custody, or finite allocation bounds.
-    pub fn with_native_sns_lease_snapshot_v1<T>(
+    pub fn with_native_sns_lease_cut_v1<T>(
         &self,
-        tip: &CommittedBlock,
+        tip: &CurrentCertifiedCut,
+        selector: &iroha_data_model::sns::NameSelectorV1,
+        budget: &AllocationBudget,
+        consume: impl FnOnce(&WorldStateSnapshotV1, &Vec<u8>) -> Result<T, String>,
+    ) -> Result<T, WorldStateSnapshotError> {
+        if tip.root_scope() != iroha_data_model::block::consensus::SumeragiRootScope::Global {
+            return Err("SNS lease projection requires a certified global cut".into());
+        }
+        self.with_native_sns_lease_publication_v1(tip, selector, budget, consume)
+    }
+
+    fn with_native_sns_lease_publication_v1<T>(
+        &self,
+        tip: &impl SnapshotCut,
         selector: &iroha_data_model::sns::NameSelectorV1,
         budget: &AllocationBudget,
         consume: impl FnOnce(&WorldStateSnapshotV1, &Vec<u8>) -> Result<T, String>,
@@ -1065,7 +1209,7 @@ impl State {
 
     fn with_native_world_state_snapshot_cut_v1<T>(
         &self,
-        tip: &CommittedBlock,
+        tip: &impl SnapshotCut,
         read_authority: Option<&AccountId>,
         budget: &AllocationBudget,
         consume: impl FnOnce(
@@ -1078,7 +1222,7 @@ impl State {
         if !generation.is_multiple_of(2) {
             return Err(StateViewError::Busy(publication_release).into());
         }
-        if tip.commitment().schedule.current.network_id != *self.network_id_ref() {
+        if tip.network() != *self.network_id_ref() {
             return Err("World snapshot native tip belongs to another network".into());
         }
         #[cfg(test)]
@@ -1098,7 +1242,7 @@ impl State {
             || cut.tip.core_hash() != tip.core_hash()
             || cut.tip.result() != tip.result()
             || cut.tip.creation_time_ms() != tip.block_time_ms()
-            || cut.root != tip.commitment().execution.world_state_root
+            || cut.root != tip.world_state_root()
         {
             // A real commit may publish between the first view and this capture.
             // Only the current original native publication can establish that race.

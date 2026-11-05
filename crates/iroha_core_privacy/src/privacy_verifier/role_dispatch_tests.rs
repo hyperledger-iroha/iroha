@@ -39,8 +39,8 @@ fn role_sample(role: PrivacyActionRoleV1) -> iroha_data_model::privacy::PrivacyA
 }
 
 /// The protocol whose native verifier arm produced `error`, if it came from one.
-fn verifier_arm_of(error: &PrivacyVerificationErrorV1) -> Option<PrivacyProtocolIdV1> {
-    use PrivacyProtocolIdV1 as Protocol;
+fn verifier_arm_of(error: &PrivacyVerificationErrorV1) -> Option<PrivacyRuntimeProtocolIdV1> {
+    use PrivacyRuntimeProtocolIdV1 as Protocol;
     use PrivacyVerificationErrorV1 as Error;
     Some(match error {
         Error::NativeVeRange(_) => Protocol::VeRangeTransparentRangeV1,
@@ -85,7 +85,7 @@ fn pgc_root_refusals_are_classified_as_the_pgc_verifier_arm() {
         };
         assert_eq!(
             verifier_arm_of(&error),
-            Some(PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1)
+            Some(PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1)
         );
         assert!(matches!(
             error,
@@ -105,7 +105,7 @@ fn every_role_reaches_its_own_native_verifier_or_its_typed_refusal() {
     let samples = role_samples();
     assert_eq!(
         samples.iter().map(|sample| sample.role).collect::<Vec<_>>(),
-        PrivacyActionRoleV1::ALL
+        PrivacyActionRoleV1::EXACT12_ROLES
     );
     for sample in &samples {
         let result = verify_privacy_envelope_after_compiled_profile_v1(
@@ -274,7 +274,7 @@ fn constructed_effects() -> Vec<(Option<PrivacyActionRoleV1>, VerifiedPrivacyLed
     let mut effects = vec![(None, VerifiedPrivacyLedgerEffectsV1::None)];
 
     let ace = role_sample(PrivacyActionRoleV1::ZkAceAuthorization);
-    let PrivacyStatementV1::ZkAcePqAuthorizationV1(statement) = &ace.envelope.statement else {
+    let PrivacyRuntimeStatementV1::ZkAcePqAuthorizationV1(statement) = &ace.envelope.statement else {
         unreachable!("ZK-ACE sample")
     };
     effects.push((
@@ -298,7 +298,7 @@ fn constructed_effects() -> Vec<(Option<PrivacyActionRoleV1>, VerifiedPrivacyLed
         PrivacyActionRoleV1::ZkAmsProvisionAccount,
     ] {
         let sample = role_sample(role);
-        let PrivacyStatementV1::IrohaZkAmsV1(statement) = &sample.envelope.statement else {
+        let PrivacyRuntimeStatementV1::IrohaZkAmsV1(statement) = &sample.envelope.statement else {
             unreachable!("ZK-AMS sample")
         };
         let effect = match &statement.action {
@@ -339,13 +339,13 @@ fn constructed_effects() -> Vec<(Option<PrivacyActionRoleV1>, VerifiedPrivacyLed
     }
 
     let x509 = role_sample(PrivacyActionRoleV1::ZkX509CertificatePresentation);
-    let PrivacyStatementV1::IrohaZkX509StarkP256V1(statement) = &x509.envelope.statement else {
+    let PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement) = &x509.envelope.statement else {
         unreachable!("ZK-X509 sample")
     };
     effects.push((
         Some(PrivacyActionRoleV1::ZkX509CertificatePresentation),
         VerifiedPrivacyLedgerEffectsV1::ZkX509Certificate(VerifiedZkX509CertificateEffectV1 {
-            namespace: PrivacyNamespaceV1::from_statement(&x509.envelope.statement),
+            namespace: PrivacyRuntimeNamespaceV1::from_statement(&x509.envelope.statement),
             certificate_nullifier: statement.certificate_nullifier,
             trust_anchor_record_digest:
                 iroha_data_model::privacy::PrivacyZkX509TrustAnchorRecordDigestV1::new([0x11; 32]),
@@ -527,16 +527,16 @@ fn verified_real_proofs_seal_the_role_of_their_envelope() {
 #[test]
 fn compiled_profile_matches_only_envelopes_bound_from_its_own_statements() {
     let (envelope, _, _) = valid_envelope();
-    let profile = compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1)
+    let profile = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1)
         .expect("compiled VeRange profile");
     assert!(profile.matches_envelope_v1(&envelope));
     // The fixture envelope is the canonical binding of its own statement and proof.
     assert_eq!(
-        PrivacyProofEnvelopeV1::bind_v1(envelope.statement.clone(), envelope.proof.clone())
+        PrivacyRuntimeProofEnvelopeV1::bind_v1(envelope.statement.clone(), envelope.proof.clone())
             .as_ref(),
         Ok(&envelope)
     );
-    let mutations: [fn(&mut PrivacyProofEnvelopeV1); 5] = [
+    let mutations: [fn(&mut PrivacyRuntimeProofEnvelopeV1); 5] = [
         |envelope| envelope.parameter_id.0[0] ^= 1,
         |envelope| envelope.parameter_digest.0[0] ^= 1,
         |envelope| envelope.verifier_digest.0[0] ^= 1,
@@ -552,7 +552,7 @@ fn compiled_profile_matches_only_envelopes_bound_from_its_own_statements() {
     let sample = role_sample(PrivacyActionRoleV1::VeRangeRange);
     assert_eq!(sample.envelope.protocol_id, profile.protocol_id);
     assert!(!profile.matches_envelope_v1(&sample.envelope));
-    let other = compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
+    let other = compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1)
         .expect("compiled Jindo profile");
     assert!(!other.matches_envelope_v1(&envelope));
 }

@@ -1,6 +1,5 @@
 #![allow(unexpected_cfgs, clippy::similar_names)]
 //! Structures formalising the peer topology (e.g. which peers have which predefined roles).
-use derive_more::Display;
 use indexmap::IndexSet;
 use iroha_crypto::HashOf;
 #[cfg(test)]
@@ -27,14 +26,30 @@ pub struct Topology(
     u64,
 );
 /// Topology with at least one peer
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::Deref)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NonEmptyTopology<'topology> {
     topology: &'topology Topology,
 }
 /// Topology which requires consensus (more than one peer)
-#[derive(Debug, Clone, PartialEq, Eq, derive_more::Deref)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsensusTopology<'topology> {
     topology: &'topology Topology,
+}
+impl<'topology> core::ops::Deref for NonEmptyTopology<'topology> {
+    type Target = &'topology Topology;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.topology
+    }
+}
+impl<'topology> core::ops::Deref for ConsensusTopology<'topology> {
+    type Target = &'topology Topology;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.topology
+    }
 }
 impl AsRef<[PeerId]> for Topology {
     fn as_ref(&self) -> &[PeerId] {
@@ -169,6 +184,8 @@ impl Topology {
         &self.0[self.proxy_tail_index()]
     }
     /// Filter signatures by roles in the topology.
+    ///
+    /// Preserves input signature order and multiplicity, checking index ranges without allocating.
     pub fn filter_signatures_by_roles<'a, I: IntoIterator<Item = &'a BlockSignature>>(
         &self,
         roles: &[Role],
@@ -177,29 +194,29 @@ impl Topology {
     where
         <I as IntoIterator>::IntoIter: 'a,
     {
-        let mut filtered = IndexSet::new();
+        let len = self.0.len();
+        let proxy_tail = self.proxy_tail_index();
+        let mut leader = false;
+        let mut tail = false;
+        let mut validating = false;
+        let mut set_b = false;
         for role in roles {
-            match (role, self.is_non_empty(), self.is_consensus_required()) {
-                (Role::Leader, Some(topology), _) => {
-                    filtered.insert(topology.leader_index());
-                }
-                (Role::ProxyTail, Some(topology), None) => {
-                    filtered.insert(topology.proxy_tail_index());
-                }
-                (Role::ProxyTail, _, Some(topology)) => {
-                    filtered.insert(topology.proxy_tail_index());
-                }
-                (Role::ValidatingPeer, _, Some(topology)) => {
-                    filtered.extend(topology.leader_index() + 1..topology.proxy_tail_index());
-                }
-                (Role::SetBValidator, _, Some(topology)) => {
-                    filtered.extend(topology.proxy_tail_index() + 1..topology.0.len());
-                }
-                _ => {}
+            match role {
+                Role::Leader => leader = true,
+                Role::ProxyTail => tail = true,
+                Role::ValidatingPeer => validating = true,
+                Role::SetBValidator => set_b = true,
+                Role::Undefined => {}
             }
         }
         signatures.into_iter().filter(move |signature| {
-            usize::try_from(signature.index()).is_ok_and(|idx| filtered.contains(&idx))
+            usize::try_from(signature.index()).is_ok_and(|idx| {
+                idx < len
+                    && ((leader && idx == 0)
+                        || (tail && idx == proxy_tail)
+                        || (validating && idx > 0 && idx < proxy_tail)
+                        || (set_b && idx > proxy_tail))
+            })
         })
     }
     /// What role does this peer have in the topology.
@@ -708,7 +725,7 @@ impl<'topology> ConsensusTopology<'topology> {
     }
 }
 /// Possible Peer's roles in consensus.
-#[derive(Debug, Display, Clone, Copy, PartialOrd, Ord, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, PartialOrd, Ord, Eq, PartialEq, Hash)]
 pub enum Role {
     /// Leader.
     Leader,
@@ -720,6 +737,17 @@ pub enum Role {
     ProxyTail,
     /// Undefined. Not part of the topology
     Undefined,
+}
+impl core::fmt::Display for Role {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str(match self {
+            Self::Leader => "Leader",
+            Self::ValidatingPeer => "ValidatingPeer",
+            Self::SetBValidator => "SetBValidator",
+            Self::ProxyTail => "ProxyTail",
+            Self::Undefined => "Undefined",
+        })
+    }
 }
 #[cfg(test)]
 fn checked_keypair() -> KeyPair {
@@ -755,6 +783,52 @@ mod tests {
     use super::*;
     use crate::block::ValidBlock;
     use iroha_primitives::unique_vec;
+    #[test]
+    fn topology_wrapper_deref_keeps_the_borrowed_reference_target() {
+        fn assert_target<'a, T: core::ops::Deref<Target = &'a Topology>>(
+            value: &T,
+            expected: &'a Topology,
+        ) {
+            let target: &&'a Topology = value;
+            assert!(core::ptr::eq(*target, expected));
+        }
+
+        let topology = test_topology(4);
+        let non_empty = topology.is_non_empty().expect("four peers");
+        let consensus = topology.is_consensus_required().expect("four peers");
+        assert_target(&non_empty, &topology);
+        assert_target(&consensus, &topology);
+        assert_eq!(non_empty.view_change_index(), topology.view_change_index());
+        assert_eq!(
+            consensus.min_votes_for_commit(),
+            topology.min_votes_for_commit()
+        );
+    }
+
+    #[test]
+    fn role_display_keeps_all_names_and_ignores_outer_flags() {
+        use core::fmt::Write as _;
+
+        struct Refuse;
+        impl core::fmt::Write for Refuse {
+            fn write_str(&mut self, _: &str) -> core::fmt::Result {
+                Err(core::fmt::Error)
+            }
+        }
+
+        for (role, expected) in [
+            (Role::Leader, "Leader"),
+            (Role::ValidatingPeer, "ValidatingPeer"),
+            (Role::SetBValidator, "SetBValidator"),
+            (Role::ProxyTail, "ProxyTail"),
+            (Role::Undefined, "Undefined"),
+        ] {
+            assert_eq!(role.to_string(), expected);
+            assert_eq!(format!("{role:*^32.3}"), expected);
+            assert_eq!(format!("{role:+#032}"), expected);
+            assert!(write!(Refuse, "{role}").is_err());
+        }
+    }
     fn extract_order(topology: &Topology, initial_topology: &Topology) -> Vec<usize> {
         topology
             .0
@@ -864,6 +938,83 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(leader_signatures.len(), 1);
         assert_eq!(leader_signatures[0].index(), 0);
+    }
+    #[test]
+    fn filter_by_role_matches_membership_reference_for_all_role_sets() {
+        use std::collections::BTreeSet;
+
+        let peers = test_peers(64);
+        let signer = checked_keypair();
+        let signature = iroha_crypto::SignatureOf::<BlockHeader>::try_from_hash(
+            signer.private_key(),
+            HashOf::from_untyped_unchecked(iroha_crypto::Hash::new(b"role-filter-test")),
+        )
+        .expect("sign role-filter fixture");
+        let all_roles = [
+            Role::Leader,
+            Role::ProxyTail,
+            Role::ValidatingPeer,
+            Role::SetBValidator,
+            Role::Undefined,
+        ];
+        for len in [0, 1, 2, 3, 4, 7, 31, 32, 64] {
+            // Exercise the empty internal representation and sizes beyond a global committee.
+            let topology = Topology(peers[..len].to_vec(), 0);
+            let len_u64 = u64::try_from(len).expect("test topology length fits u64");
+            let signatures = (0..len_u64)
+                .rev()
+                .chain([
+                    0,
+                    len_u64.saturating_sub(1),
+                    0,
+                    len_u64,
+                    len_u64 + 1,
+                    u64::from(u32::MAX) + 1,
+                    u64::MAX,
+                ])
+                .map(|index| BlockSignature::new(index, signature.clone()))
+                .collect::<Vec<_>>();
+            for mask in 0..32 {
+                let selected = all_roles
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, _)| mask & (1 << bit) != 0)
+                    .map(|(_, role)| *role)
+                    .collect::<Vec<_>>();
+                let mut repeated = selected.clone();
+                repeated.extend(selected.iter().rev().copied());
+                repeated.push(Role::Undefined);
+                for roles in [selected, repeated] {
+                    // Independently classify peers, rather than recreating index ranges.
+                    let mut allowed = topology
+                        .as_ref()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, peer)| roles.contains(&topology.role(peer)))
+                        .map(|(index, _)| u64::try_from(index).expect("test index fits u64"))
+                        .collect::<BTreeSet<_>>();
+                    // A singleton is both leader and proxy tail; role() returns only Leader.
+                    if len == 1 && roles.contains(&Role::ProxyTail) {
+                        allowed.insert(0);
+                    }
+                    let expected = signatures
+                        .iter()
+                        .filter(|signature| allowed.contains(&signature.index()))
+                        .collect::<Vec<_>>();
+                    let actual = topology
+                        .filter_signatures_by_roles(&roles, signatures.iter())
+                        .collect::<Vec<_>>();
+                    assert_eq!(actual.len(), expected.len(), "len={len}, roles={roles:?}");
+                    assert!(
+                        actual
+                            .iter()
+                            .zip(expected)
+                            .all(|(actual, expected)| std::ptr::eq(*actual, expected)),
+                        "original signature order and multiplicity: len={len}, roles={roles:?}"
+                    );
+                }
+            }
+        }
     }
     #[test]
     fn filter_by_role_1() {

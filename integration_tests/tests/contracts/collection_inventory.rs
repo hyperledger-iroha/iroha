@@ -2,36 +2,9 @@
 
 use eyre::{Result, eyre};
 use integration_tests::collections::field;
-use iroha::{
-    blocking::Client,
-    collections::{Collection, ListQuery},
-    data_model::{asset::AssetBalanceScope, prelude::*},
-};
+use iroha::data_model::{asset::AssetBalanceScope, prelude::*};
 use iroha_model_base::topology::DataSpaceId;
-use norito::json::{JsonDeserialize, Value};
-
-/// Preserve the canonical collection's ID order for non-asset entities.
-pub(super) fn ids<T: JsonDeserialize>(client: &Client, collection: Collection) -> Result<Vec<T>> {
-    client
-        .list(collection, ListQuery::new().select(["id"]))
-        .map(|row| field(&row?, "id"))
-        .collect()
-}
-
-/// Combine the exact account partitions into the VM's canonical asset-ID order.
-pub(super) fn asset_ids(client: &Client, accounts: &[AccountId]) -> Result<Vec<AssetId>> {
-    let mut ids = Vec::new();
-    for account in accounts {
-        for row in client.list(
-            Collection::AccountAssets(account.clone()),
-            ListQuery::new().select(["asset", "account_id", "scope"]),
-        ) {
-            ids.push(asset_id_from_row(&row?, account)?);
-        }
-    }
-    ids.sort();
-    Ok(ids)
-}
+use norito::json::Value;
 
 fn asset_id_from_row(row: &Value, expected_account: &AccountId) -> Result<AssetId> {
     let definition: AssetDefinitionId = field(row, "asset")?;

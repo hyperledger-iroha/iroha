@@ -14,9 +14,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE_PATH = ROOT / "crates/iroha_torii/src/mcp.rs"
 ASSET_PATH = ROOT / "crates/iroha_torii/src/mcp/manual_tool_descriptors_v1.json"
 # Manual asset formatting owner: one-space JSON indentation, enforced below.
-EXPECTED_ASSET_LENGTH = 129_980
-EXPECTED_ASSET_SHA256 = "29333e31136bbce492fcf6c69c13b5938dd49591b512d30e208e50dde5d9d866"
-EXPECTED_SEMANTIC_SHA256 = "0fb59689cdbe56f2deb2a6eb75ca37a206e05a6e3fb08df058cbb475378adffa"
+EXPECTED_ASSET_LENGTH = 129_052
+EXPECTED_ASSET_SHA256 = "0e9ca8f21025400102fbc414c1d696775dcffc6b9085ab689efc824ca7d9399d"
+EXPECTED_SEMANTIC_SHA256 = "81b10c7abe67a40879c619ccf10c0fef854f9769b6e41022e9f592c402e73b9b"
 EXPECTED_HISTORICAL_RUST_PREIMAGE_SHA256 = (
     "1273686f98de21c686573d399d511be7606155b9d09de21869a8c060436242b4"
 )
@@ -24,7 +24,7 @@ EXPECTED_RETAINED_DIRECT_SHA256 = (
     "b622e1954eefa86e664057e20f2f8852507a4a3d2ca4c6289a1611e94a8def3d"
 )
 EXPECTED_LOADER_SOURCE_SHA256 = (
-    "46754060d889aac8ea8d8bc43dd6c4d49f85c87940a0c43d0208a77b4461561f"
+    "ce51da3d27f9188c601113ab0c84e3b3c7b4676935dc9cfc40dd25d0efe52c2c"
 )
 EXPECTED_WRAPPERS = (
     ('iroha_connect_ws_ticket_tool', 'iroha.connect.ws.ticket'),
@@ -32,7 +32,6 @@ EXPECTED_WRAPPERS = (
     ('iroha_connect_session_delete_tool', 'iroha.connect.session.delete'),
     ('iroha_node_query_projection_shard_catalog_tool', 'iroha.node.query_projection_shard_catalog'),
     ('iroha_da_manifests_get_tool', 'iroha.da.manifests.get'),
-    ('iroha_runtime_upgrades_activate_tool', 'iroha.runtime.upgrades.activate'),
     ('iroha_runtime_upgrades_cancel_tool', 'iroha.runtime.upgrades.cancel'),
     ('iroha_bridge_finality_proof_tool', 'iroha.bridge.finality.proof'),
     ('iroha_bridge_finality_bundle_tool', 'iroha.bridge.finality.bundle'),
@@ -711,7 +710,7 @@ class ToriiMcpManualDescriptorAssetTest(unittest.TestCase):
                 '',
             ),
             (
-                'MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 79;',
+                'MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 78;',
                 'MANUAL_STATIC_TOOL_ASSET_DESCRIPTOR_COUNT: usize = 60;',
             ),
             (

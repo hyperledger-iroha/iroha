@@ -99,7 +99,8 @@ publish = false
 [workspace]
 
 [features]
-default = []
+default = ["diagnostics"]
+diagnostics = ["iroha_parliament_ballot_proof/diagnostics"]
 accel = ["iroha_parliament_ballot_proof/accel"]
 
 [[bin]]
@@ -114,7 +115,9 @@ path = "driver.rs"
         if name == "iroha_parliament_ballot_proof":
             options = ', features = ["diagnostics"]'
         text += f'{name} = {{ path = {json.dumps(str(root / "crates" / name))}{options} }}\n'
-    text += 'libc = "0.2.177"\nthiserror = "2.0"\nsha3 = { version = "0.10.8", default-features = false, features = ["std"] }\n\n[patch.crates-io]\n'
+    # The worker tests include the proof crate's current shared fixture module.
+    # Its SHAKE implementation and digest traits must use matching generations.
+    text += 'libc = "0.2.177"\nthiserror = "2.0"\nsha3 = { version = "0.12.0", default-features = false, features = ["alloc"] }\nshake = { version = "0.1.0", default-features = false, features = ["zeroize"] }\n\n[patch.crates-io]\n'
     for name, value in tomllib.loads((root / "Cargo.toml").read_text())["patch"]["crates-io"].items():
         if set(value) != {"path"}:
             raise ValueError("unreviewed root patch kind")

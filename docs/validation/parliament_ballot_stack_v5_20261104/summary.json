@@ -1,0 +1,547 @@
+{
+  "all_eight_raw_outputs_byte_identical_to_v4": true,
+  "all_ten_complete_stack_bounds_unknown": true,
+  "analyzer_tests_passed": 244,
+  "capture_passed": true,
+  "captures": {
+    "accel": {
+      "binary_sha256": "350f2634f2a0d56d37650657874e3b02bbd156036fed1ab3c1ece01afc2ff717",
+      "deferred_continuation_call_count": 6,
+      "deferred_continuation_frontier_kinds": {
+        "exceptional_terminal": 44,
+        "function_fallthrough": 34,
+        "inconsistent_sp_merge": 1,
+        "native_edge": 5
+      },
+      "exact_obligation_comparison": {
+        "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel-v4-comparison.json",
+        "sha256": "da9963b9067e6f606d670972bca30e1f7492d125169d5d1197b1898476944253"
+      },
+      "function_count": 860,
+      "functions_with_ordinary_cfg_refinements": 108,
+      "ordinary_continuations_omitted": 151,
+      "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel.json",
+      "prior_capture_comparisons": [
+        {
+          "address": "0x100000b40",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 66,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 119
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 12864,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "<parliament_memory_entry::budget::Reservation>::verify"
+        },
+        {
+          "address": "0x1000030ec",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 67,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 126
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 13056,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "parliament_memory_entry::workspace::worker"
+        },
+        {
+          "address": "0x1000050a0",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 144,
+          "positive_weight_recursive_components": 0,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "parliament_memory_entry::fatal::exhausted"
+        },
+        {
+          "address": "0x10000770c",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 82
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 6800,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+        },
+        {
+          "address": "0x10000858c",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 83
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 6800,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+        }
+      ],
+      "roots": [
+        {
+          "address": "0x100000b40",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 241,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 66,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 119
+          },
+          "resolved_region_stack_bytes": 12864,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify"
+        },
+        {
+          "address": "0x1000030ec",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 242,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 67,
+            "function_fallthrough": 43,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 126
+          },
+          "resolved_region_stack_bytes": 13056,
+          "root": "parliament_memory_entry::workspace::worker"
+        },
+        {
+          "address": "0x1000050a0",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 1,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "resolved_region_stack_bytes": 144,
+          "root": "parliament_memory_entry::fatal::exhausted"
+        },
+        {
+          "address": "0x10000770c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 195,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 34,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 82
+          },
+          "resolved_region_stack_bytes": 6800,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+        },
+        {
+          "address": "0x10000858c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 197,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 35,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 83
+          },
+          "resolved_region_stack_bytes": 6800,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+        }
+      ],
+      "sha256": "8804a8328172dde9ebea86bd706921d1cdcf70ee16d496be235d4087fda5cd93",
+      "terminal_callee_facts": 25,
+      "text_instructions": 89887,
+      "v4_raw_bytes_identical": {
+        "disassembly": true,
+        "starts": true,
+        "stubs": true,
+        "unwind": true
+      },
+      "whole_image_frame_error_count": 1,
+      "whole_image_frame_error_kinds": {
+        "inconsistent_sp_merge": 1
+      },
+      "whole_image_ordinary_frame_error_count": 0
+    },
+    "portable": {
+      "binary_sha256": "7e9227ea785265bcae0e4bc4c61efc9ebec2d9d1a46574669ec966b497a1fb84",
+      "deferred_continuation_call_count": 6,
+      "deferred_continuation_frontier_kinds": {
+        "exceptional_terminal": 42,
+        "function_fallthrough": 36,
+        "inconsistent_sp_merge": 1,
+        "native_edge": 5
+      },
+      "exact_obligation_comparison": {
+        "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable-v4-comparison.json",
+        "sha256": "039efc8cad360737291449512dbd5d56201fcb97572f55b62abefba0417d6644"
+      },
+      "function_count": 870,
+      "functions_with_ordinary_cfg_refinements": 108,
+      "ordinary_continuations_omitted": 151,
+      "path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable.json",
+      "prior_capture_comparisons": [
+        {
+          "address": "0x100000b40",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 125
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 15808,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "<parliament_memory_entry::budget::Reservation>::verify"
+        },
+        {
+          "address": "0x1000030ec",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 65,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 132
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 16000,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "parliament_memory_entry::workspace::worker"
+        },
+        {
+          "address": "0x1000050a0",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 144,
+          "positive_weight_recursive_components": 0,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "parliament_memory_entry::fatal::exhausted"
+        },
+        {
+          "address": "0x10000770c",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 88
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 9744,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+        },
+        {
+          "address": "0x10000858c",
+          "all_frontiers_identical_with_original_addresses_and_depths": true,
+          "complete_stack_bound_bytes": null,
+          "direct_resource_reachability_identical": true,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 89
+          },
+          "ordinary_abi_conditional_resolved_region_bytes_unchanged": 9744,
+          "positive_weight_recursive_components": 1,
+          "positive_weight_recursive_components_identical": true,
+          "prior_capture": "stack-v4",
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+        }
+      ],
+      "roots": [
+        {
+          "address": "0x100000b40",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 248,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 64,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 125
+          },
+          "resolved_region_stack_bytes": 15808,
+          "root": "<parliament_memory_entry::budget::Reservation>::verify"
+        },
+        {
+          "address": "0x1000030ec",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 249,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 65,
+            "function_fallthrough": 49,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 132
+          },
+          "resolved_region_stack_bytes": 16000,
+          "root": "parliament_memory_entry::workspace::worker"
+        },
+        {
+          "address": "0x1000050a0",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 1,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 1,
+            "native_edge": 1
+          },
+          "resolved_region_stack_bytes": 144,
+          "root": "parliament_memory_entry::fatal::exhausted"
+        },
+        {
+          "address": "0x10000770c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 202,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 40,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 88
+          },
+          "resolved_region_stack_bytes": 9744,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::registration::RegistrationRelation>"
+        },
+        {
+          "address": "0x10000858c",
+          "complete_stack_bound_bytes": null,
+          "direct_reachable_functions": 204,
+          "frontier_kind_counts": {
+            "exceptional_terminal": 62,
+            "function_fallthrough": 41,
+            "inconsistent_sp_merge": 1,
+            "indirect_branch": 5,
+            "indirect_call": 32,
+            "native_edge": 89
+          },
+          "resolved_region_stack_bytes": 9744,
+          "root": "iroha_zkp_vole::proof::verify::<iroha_zkp_vole::field::Gf256, iroha_parliament_ballot_proof::vote::VoteRelation>"
+        }
+      ],
+      "sha256": "0498e2ec5dc4c54d3c21f16b6975e6276809f38f60f759ef4de807327ad35f22",
+      "terminal_callee_facts": 25,
+      "text_instructions": 91775,
+      "v4_raw_bytes_identical": {
+        "disassembly": true,
+        "starts": true,
+        "stubs": true,
+        "unwind": true
+      },
+      "whole_image_frame_error_count": 1,
+      "whole_image_frame_error_kinds": {
+        "inconsistent_sp_merge": 1
+      },
+      "whole_image_ordinary_frame_error_count": 0
+    }
+  },
+  "complete_stack_certificate": false,
+  "complete_workspace_certificate": false,
+  "exact_v4_obligations_preserved_with_addresses_depths_and_sccs": true,
+  "historical_evidence_rebound": false,
+  "latest_source_build_validated": false,
+  "limitations": [
+    "Only ordinary ABI control flow is refined. Every original physical/resource refusal stays machine-active.",
+    "The Shape merge has an ordinary-return-path explanation but remains an active deferred stack refusal.",
+    "Native endpoint costs, traps, indirect targets, positive recursion, function fallthroughs, hidden exception/signal/unwind paths and memory aliases remain unresolved.",
+    "Resolved-region figures remain conditional on the analyzer ABI assumptions and are not physical complete stack bounds.",
+    "Latest-source qualification remains unavailable: prior review found rustup/Cargo.lock drift against the retained build.",
+    "Historical 160-node suite remains 47 passed and 113 failed; no historical evidence was repinned.",
+    "Binary/tool/reference bytes remain in guarded cache paths, which are not permanent release custody."
+  ],
+  "no_build_or_worker_execution": true,
+  "observed_utc": "2026-11-04T07:16:19.299265+00:00",
+  "original_v2_v3_v4_and_diagnosis_files_unchanged": 120,
+  "physical_cost_calibrated": false,
+  "profile_qualified": false,
+  "release_qualified": false,
+  "retained_files": [
+    {
+      "archived_path": "accel/disassembly.txt.gz",
+      "archived_sha256": "7f8aeb3856b51643ba9bd095a498060f5009a0f4e952a1ad1b3cce25154d8b1e",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel/disassembly.txt",
+      "original_sha256": "00ff8bbe858e96d109e516601372788abbc92c692eb8a503968ab290f3b6a925"
+    },
+    {
+      "archived_path": "accel/starts.txt",
+      "archived_sha256": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel/starts.txt",
+      "original_sha256": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f"
+    },
+    {
+      "archived_path": "accel/stubs.txt",
+      "archived_sha256": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel/stubs.txt",
+      "original_sha256": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43"
+    },
+    {
+      "archived_path": "accel/unwind.txt",
+      "archived_sha256": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel/unwind.txt",
+      "original_sha256": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad"
+    },
+    {
+      "archived_path": "accel-v4-comparison.json",
+      "archived_sha256": "da9963b9067e6f606d670972bca30e1f7492d125169d5d1197b1898476944253",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel-v4-comparison.json",
+      "original_sha256": "da9963b9067e6f606d670972bca30e1f7492d125169d5d1197b1898476944253"
+    },
+    {
+      "archived_path": "accel.json.gz",
+      "archived_sha256": "4c24c7e561d7a5c414c4b854257dcb40a385805c39acc45c120a10531969bcf8",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/accel.json",
+      "original_sha256": "8804a8328172dde9ebea86bd706921d1cdcf70ee16d496be235d4087fda5cd93"
+    },
+    {
+      "archived_path": "capture_retained_stack_v5.py.template",
+      "archived_sha256": "0404de2bf57c1c49b034acdacfd02c7cd18c452ba34292a2fca20a1cddf4e063",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/capture_retained_stack_v5.py.template",
+      "original_sha256": "0404de2bf57c1c49b034acdacfd02c7cd18c452ba34292a2fca20a1cddf4e063"
+    },
+    {
+      "archived_path": "parliament_ballot_stack_audit.py.template",
+      "archived_sha256": "63146df4723720655462fcf45ac935c493d161a265f9f0042b7e1260ad9ab31a",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/parliament_ballot_stack_audit.py.template",
+      "original_sha256": "63146df4723720655462fcf45ac935c493d161a265f9f0042b7e1260ad9ab31a"
+    },
+    {
+      "archived_path": "parliament_ballot_stack_audit_test.py.template",
+      "archived_sha256": "c3d420b45dea95468aec5361f7383ed452b70515c4f23faa8fc97d1cb4c5b820",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/parliament_ballot_stack_audit_test.py.template",
+      "original_sha256": "c3d420b45dea95468aec5361f7383ed452b70515c4f23faa8fc97d1cb4c5b820"
+    },
+    {
+      "archived_path": "portable/disassembly.txt.gz",
+      "archived_sha256": "a1f237aab25d603428432471fed2f33ad5fa64c3ca3a83c0662593f4237071b7",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable/disassembly.txt",
+      "original_sha256": "237de91b1490b0192b80710c5f0d6ceb4ea6dc6d6d99e6ab0d51eb854091e5a7"
+    },
+    {
+      "archived_path": "portable/starts.txt",
+      "archived_sha256": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable/starts.txt",
+      "original_sha256": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a"
+    },
+    {
+      "archived_path": "portable/stubs.txt",
+      "archived_sha256": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable/stubs.txt",
+      "original_sha256": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14"
+    },
+    {
+      "archived_path": "portable/unwind.txt",
+      "archived_sha256": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable/unwind.txt",
+      "original_sha256": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d"
+    },
+    {
+      "archived_path": "portable-v4-comparison.json",
+      "archived_sha256": "039efc8cad360737291449512dbd5d56201fcb97572f55b62abefba0417d6644",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable-v4-comparison.json",
+      "original_sha256": "039efc8cad360737291449512dbd5d56201fcb97572f55b62abefba0417d6644"
+    },
+    {
+      "archived_path": "portable.json.gz",
+      "archived_sha256": "c3f5f47974b3b2b97fa87c13268158f798e8bb5a8bf0c1181491f98f1c16dab7",
+      "gzip": true,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/portable.json",
+      "original_sha256": "0498e2ec5dc4c54d3c21f16b6975e6276809f38f60f759ef4de807327ad35f22"
+    },
+    {
+      "archived_path": "receipt.json",
+      "archived_sha256": "a2f2883e1d7576a8938ad0d87b8a39ba7e200d7ad6c8275cfc69915949ff1287",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/receipt.json",
+      "original_sha256": "a2f2883e1d7576a8938ad0d87b8a39ba7e200d7ad6c8275cfc69915949ff1287"
+    },
+    {
+      "archived_path": "tests.txt",
+      "archived_sha256": "82c94a1ae8193d04591ec9fb50e31b68739955c8836fb0a9ffddc4dcb8ab032b",
+      "gzip": false,
+      "original_path": "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v5/tests.txt",
+      "original_sha256": "82c94a1ae8193d04591ec9fb50e31b68739955c8836fb0a9ffddc4dcb8ab032b"
+    }
+  ],
+  "schema": "parliament-retained-image-stack-v5-summary-v1",
+  "scope": "Artifact-bound static analysis of retained November 4 workers; not latest working-tree or live candidate qualification."
+}

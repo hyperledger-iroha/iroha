@@ -232,12 +232,12 @@ fn discover(
     block
         .verify_global_scope(owner.config.network_id, owner.config.chain.as_str())
         .map_err(|_| MusubiArchiveDiscoveryErrorV1::Rejected)?;
-    let schema = iroha_core::state::State::native_world_schema_hash_v1()
+    let schema = iroha_core::state::State::native_world_schema_hashes_v1()
         .map_err(|_| MusubiArchiveDiscoveryErrorV1::Unavailable)?;
     let result = read_selected_peers(&owner.peers, deadline, |client, selected_deadline| {
         client
             .with_request_deadline(selected_deadline)
-            .get_account_read_provider_discovery(provider, schema, &block, now_ms()?)
+            .get_account_read_provider_discovery(provider, schema.as_slice(), &block, now_ms()?)
             .map_err(|_| invalid("generated native provider discovery unavailable or invalid"))
     });
     check_deadline(deadline)?;

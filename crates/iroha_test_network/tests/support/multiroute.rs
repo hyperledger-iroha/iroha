@@ -3,6 +3,7 @@ use iroha_crypto::{Algorithm, KeyPair};
 use iroha_data_model::{
     account::{Account, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetId},
+    block::consensus::PublicLaneStakingPolicy,
     domain::Domain,
     isi::{
         InstructionBox, Mint, Register, SetParameter,
@@ -57,8 +58,10 @@ pub(super) fn universal_route_key_pair() -> KeyPair {
 fn checked_localnet_smoke_keypair(seed: Vec<u8>, algorithm: Algorithm) -> KeyPair {
     KeyPair::try_from_seed(seed, algorithm).expect("derive localnet smoke fixture key")
 }
-fn route_stake_asset_definition_id() -> AssetDefinitionId {
-    route_fee_asset_definition_id()
+fn route_staking_policy() -> PublicLaneStakingPolicy {
+    // Author the fixture's original custody in genesis, never in node config.
+    let custody = route_bootstrap_gas_account_id();
+    iroha_genesis::default_staking_policy(route_fee_asset_definition_id(), custody.clone(), custody)
 }
 pub(super) fn route_fee_asset_definition_id() -> AssetDefinitionId {
     iroha_data_model::parameter::system::SumeragiNposParameters::default().xor_asset_definition_id
@@ -67,7 +70,8 @@ fn route_multilane_genesis_post_topology_transactions(
     topology: &[PeerId],
     topology_entries: &[GenesisTopologyEntry],
 ) -> Vec<Vec<InstructionBox>> {
-    let stake_asset_id = route_stake_asset_definition_id();
+    let staking_policy = route_staking_policy();
+    let stake_asset_id = staking_policy.stake_asset_id;
     let fee_asset_id = route_fee_asset_definition_id();
     let gas_account_id = route_bootstrap_gas_account_id();
     let lane_ids = [LaneId::new(0), LaneId::new(1), LaneId::new(2)];
@@ -183,9 +187,10 @@ fn route_multilane_genesis_post_topology_transactions(
                     Metadata::default(),
                     iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
                         AssetId::new(stake_asset_id.clone(), validator_id.clone()),
-                        // The custom genesis factory authors Alice as staking custody.
-                        // The separate gas account is only a funded route probe.
-                        AssetId::new(stake_asset_id.clone(), ALICE_ID.clone()),
+                        AssetId::new(
+                            stake_asset_id.clone(),
+                            staking_policy.stake_escrow_account_id.clone(),
+                        ),
                         Quantity::from(ROUTE_VALIDATOR_STAKE),
                     ),
                 )
@@ -312,6 +317,7 @@ pub(super) fn network_builder_with_genesis_transactions(
                 post_topology,
                 topology,
                 topology_entries,
+                route_staking_policy(),
             )
         })
         .with_block_cadence(SMOKE_PIPELINE_TIME)
@@ -388,6 +394,7 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
     );
     let mut native_policies = Vec::new();
     let mut staking_policies = Vec::new();
+    let mut registrations = Vec::new();
     for input in genesis.0.network_entrypoints() {
         let iroha_data_model::transaction::TransactionEntrypoint::External(tx) = input else {
             panic!("genesis must contain signed transactions");
@@ -398,6 +405,12 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
             continue;
         };
         for instruction in instructions {
+            if let Some(register) = instruction
+                .as_any()
+                .downcast_ref::<RegisterPublicLaneValidator>()
+            {
+                registrations.push(register);
+            }
             let Some(parameter) = instruction.as_any().downcast_ref::<SetParameter>() else {
                 continue;
             };
@@ -407,25 +420,66 @@ fn multiroute_genesis_authenticates_all_configured_lane_policies() {
             if let Some(policy) = SumeragiLanePolicy::from_custom_parameter(custom) {
                 native_policies.push(policy.expect("canonical signed native policy"));
             }
-            if custom.id()
-                == &iroha_data_model::block::consensus::PublicLaneStakingPolicy::parameter_id()
-            {
+            if custom.id() == &PublicLaneStakingPolicy::parameter_id() {
                 staking_policies.push(
-                    iroha_data_model::block::consensus::PublicLaneStakingPolicy::from_custom_parameter(custom)
-                        .expect("canonical original signed staking policy"),
+                    PublicLaneStakingPolicy::from_custom_parameter(custom)
+                        .expect("canonical signed staking policy"),
                 );
             }
         }
     }
     assert_eq!(
         staking_policies,
-        vec![iroha_genesis::default_staking_policy(
-            route_stake_asset_definition_id(),
-            ALICE_ID.clone(),
-            ALICE_ID.clone(),
-        )],
-        "all validator monetary plans use the single signed staking authority"
+        vec![route_staking_policy()],
+        "the custom genesis retains exactly one original staking policy"
     );
+    let staking = &staking_policies[0];
+    assert_eq!(staking.stake_asset_id, route_fee_asset_definition_id());
+    assert_eq!(
+        staking.stake_escrow_account_id,
+        route_bootstrap_gas_account_id(),
+        "the signed policy retains the fixture's original bootstrap custody"
+    );
+    assert_eq!(
+        registrations.len(),
+        12,
+        "four validators for each public lane"
+    );
+    for lane_id in [LaneId::new(0), LaneId::new(1), LaneId::new(2)] {
+        let validators = registrations
+            .iter()
+            .filter(|register| register.lane_id == lane_id)
+            .map(|register| register.validator.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            validators,
+            (0..4)
+                .map(route_lane_validator_account)
+                .collect::<std::collections::BTreeSet<_>>(),
+            "each lane registers the same four funded validators"
+        );
+    }
+    for register in registrations {
+        assert_eq!(
+            register.initial_stake,
+            Quantity::from(ROUTE_VALIDATOR_STAKE)
+        );
+        assert_eq!(
+            register.monetary_plan,
+            iroha_data_model::nexus::PublicLaneMonetaryPlanV1::genesis_registration(
+                AssetId::new(
+                    staking.stake_asset_id.clone(),
+                    register.stake_account.clone()
+                ),
+                AssetId::new(
+                    staking.stake_asset_id.clone(),
+                    staking.stake_escrow_account_id.clone(),
+                ),
+                register.initial_stake.clone(),
+            ),
+            "every registration binds its transfer and custody to the original signed policy"
+        );
+    }
     assert_eq!(
         native_policies.len(),
         1,

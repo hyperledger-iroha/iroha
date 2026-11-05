@@ -19,7 +19,9 @@ pub use super::privacy_outer_hash::{PrivacyOuterDigestV1, PrivacyOuterProofFamil
 use super::privacy_outer_hash::{
     PrivacyOuterDomainPrefixV1, PrivacyOuterDomainV1, PrivacyOuterFrameV1,
 };
-use iroha_data_model::privacy::{PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1, PrivacyProtocolIdV1};
+use iroha_data_model::privacy::{
+    PRIVACY_EXACT12_CATALOG_COMMITMENT_BYTES_V1, PrivacyRuntimeProtocolIdV1,
+};
 use rand::TryRng;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -65,13 +67,13 @@ const GOLDILOCKS_FP4_NONRESIDUE_V1: GoldilocksFieldV1 = GoldilocksFieldV1(GOLDIL
 /// fields and never concatenated into an ambiguous free-form domain string.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TransparentStarkDigestContextV1 {
-    protocol: PrivacyProtocolIdV1,
+    protocol: PrivacyRuntimeProtocolIdV1,
     profile: &'static [u8],
     proof_scope: Option<PrivacyOuterProofScopeV1>,
 }
 impl TransparentStarkDigestContextV1 {
     /// Construct a typed context for one final protocol/profile pair.
-    pub(crate) const fn new(protocol: PrivacyProtocolIdV1, profile: &'static [u8]) -> Self {
+    pub(crate) const fn new(protocol: PrivacyRuntimeProtocolIdV1, profile: &'static [u8]) -> Self {
         Self {
             protocol,
             profile,
@@ -81,7 +83,7 @@ impl TransparentStarkDigestContextV1 {
     /// Required typed context for a dynamic X509 proof operation.
     pub(crate) const fn x509_scoped_v1(nonce: [u8; 32], family: PrivacyOuterProofFamilyV1) -> Self {
         Self {
-            protocol: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            protocol: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             profile: b"iroha-zk-x509-stark-p256-release-profile-v1",
             proof_scope: Some(PrivacyOuterProofScopeV1 { nonce, family }),
         }
@@ -2692,7 +2694,7 @@ mod tests {
     use rand_chacha::ChaCha12Rng;
     const TEST_DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 =
         TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             b"aggregate-test-profile-v1",
         );
     #[test]
@@ -4022,7 +4024,7 @@ mod tests {
         let mutations = [
             privacy_outer_digest_frame_v1(
                 TransparentStarkDigestContextV1::new(
-                    PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+                    PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
                     b"aggregate-test-profile-v1",
                 ),
                 b"trace-tree",
@@ -4034,7 +4036,7 @@ mod tests {
             ),
             privacy_outer_digest_frame_v1(
                 TransparentStarkDigestContextV1::new(
-                    PrivacyProtocolIdV1::PqMaspStarkV1,
+                    PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
                     b"different-profile-v1",
                 ),
                 b"trace-tree",

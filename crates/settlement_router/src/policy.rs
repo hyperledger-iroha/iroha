@@ -1,6 +1,5 @@
 //! Buffer sizing and guard-rail policies.
 use crate::{Numeric, XorQuantity, XorQuantityError};
-use derive_more::{Display, From};
 use norito::{
     NoritoDeserialize, NoritoSerialize,
     json::{JsonDeserialize, JsonSerialize},
@@ -53,23 +52,14 @@ pub struct BufferCapacity {
     Clone,
     Copy,
     Debug,
-    Display,
     Eq,
     PartialEq,
     NoritoSerialize,
     NoritoDeserialize,
     JsonSerialize,
     JsonDeserialize,
-    From,
+    norito::NoritoSchema,
 )]
-#[display(
-    "alert {}%, throttle {}%, xor-only {}%, halt {}%",
-    alert,
-    throttle,
-    xor_only,
-    halt
-)]
-#[derive(norito::NoritoSchema)]
 #[norito_schema(name = "settlement_router::policy::BufferPolicy")]
 pub struct BufferPolicy {
     /// Percentage threshold that triggers an alert (defaults to 75%).
@@ -84,6 +74,26 @@ pub struct BufferPolicy {
     /// Percentage threshold that halts inclusion (defaults to 2%).
     #[norito(rename = "halt_pct")]
     pub halt: u8,
+}
+impl core::fmt::Display for BufferPolicy {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(
+            formatter,
+            "alert {}%, throttle {}%, xor-only {}%, halt {}%",
+            self.alert, self.throttle, self.xor_only, self.halt,
+        )
+    }
+}
+impl From<(u8, u8, u8, u8)> for BufferPolicy {
+    #[inline]
+    fn from((alert, throttle, xor_only, halt): (u8, u8, u8, u8)) -> Self {
+        Self {
+            alert,
+            throttle,
+            xor_only,
+            halt,
+        }
+    }
 }
 impl BufferPolicy {
     /// Roadmap default (alert 75%, throttle 25%, XOR-only 10%, halt 2%).

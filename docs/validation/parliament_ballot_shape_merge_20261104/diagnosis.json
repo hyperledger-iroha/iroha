@@ -1,0 +1,629 @@
+{
+  "analyzer_changed": false,
+  "analyzer_sha256": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+  "classification": "conservative ordinary-return continuation at a callee whose retained ordinary CFG ends in a trap",
+  "complete_stack_certificate": false,
+  "driver_sha256": "0352e212b205b0856ef899dd725042c65d93bbd8f3b5cae81c06e65480beb6c3",
+  "minimal_reproduction": {
+    "function_results": [
+      {
+        "address": "0x1000",
+        "calls": [
+          {
+            "address": "0x100c",
+            "caller_depth_bytes": 16,
+            "kind": "call",
+            "target": "0x2000"
+          }
+        ],
+        "end": "0x1014",
+        "frame_errors": [
+          {
+            "address": "0x1010",
+            "caller_depth_bytes": 16,
+            "detail": "0 versus -16; loop/branch bound unproved",
+            "kind": "inconsistent_sp_merge"
+          }
+        ],
+        "gaps": [],
+        "local_frame_plus_red_zone_bytes": 144,
+        "maximum_sp_decrement_bytes": 16,
+        "name": "fixture_root",
+        "visited_instructions": 5
+      },
+      {
+        "address": "0x2000",
+        "calls": [],
+        "end": "0x2008",
+        "frame_errors": [],
+        "gaps": [
+          {
+            "address": "0x2000",
+            "caller_depth_bytes": 0,
+            "detail": "opaque_endpoint",
+            "kind": "native_edge"
+          },
+          {
+            "address": "0x2004",
+            "caller_depth_bytes": 0,
+            "detail": "udf #0",
+            "kind": "exceptional_terminal"
+          }
+        ],
+        "local_frame_plus_red_zone_bytes": 128,
+        "maximum_sp_decrement_bytes": 0,
+        "name": "fixture_terminal",
+        "visited_instructions": 2
+      }
+    ],
+    "instructions": [
+      {
+        "address": "0x1000",
+        "opcode": "cbz",
+        "operands": "w0, 0x1010"
+      },
+      {
+        "address": "0x1004",
+        "opcode": "stp",
+        "operands": "x29, x30, [sp, #-16]!"
+      },
+      {
+        "address": "0x1008",
+        "opcode": "mov",
+        "operands": "x29, sp"
+      },
+      {
+        "address": "0x100c",
+        "opcode": "bl",
+        "operands": "0x2000"
+      },
+      {
+        "address": "0x1010",
+        "opcode": "ret",
+        "operands": ""
+      },
+      {
+        "address": "0x2000",
+        "opcode": "bl",
+        "operands": "0x3000"
+      },
+      {
+        "address": "0x2004",
+        "opcode": "udf",
+        "operands": "#0"
+      }
+    ],
+    "region_result": {
+      "abi_assumptions": [
+        "ordinary ARM64 calls preserve caller SP/FP on return",
+        "128-byte Apple red zone",
+        "no hidden exception/signal/unwind edge",
+        "compiler memory accesses obey the ABI stack frame/red zone"
+      ],
+      "address": "0x1000",
+      "complete_ordinary_call_graph": false,
+      "complete_stack_bound_bytes": null,
+      "direct_reachable_functions": 2,
+      "frontier_kind_counts": {
+        "exceptional_terminal": 1,
+        "inconsistent_sp_merge": 1,
+        "native_edge": 1
+      },
+      "frontiers": [
+        {
+          "address": "0x1010",
+          "caller_depth_bytes": 16,
+          "detail": "0 versus -16; loop/branch bound unproved",
+          "function": "fixture_root",
+          "kind": "inconsistent_sp_merge"
+        },
+        {
+          "address": "0x2000",
+          "caller_depth_bytes": 0,
+          "detail": "opaque_endpoint",
+          "function": "fixture_terminal",
+          "kind": "native_edge"
+        },
+        {
+          "address": "0x2004",
+          "caller_depth_bytes": 0,
+          "detail": "udf #0",
+          "function": "fixture_terminal",
+          "kind": "exceptional_terminal"
+        }
+      ],
+      "positive_weight_recursive_components": [],
+      "resolved_region_maximum_path": [
+        "opaque function/component entry"
+      ],
+      "resolved_region_stack_bytes": 0,
+      "root": "fixture_root"
+    }
+  },
+  "modes": {
+    "accel": {
+      "all_93_shape_instructions_present_and_visited": true,
+      "callee_entry_unconditionally_reaches_trap_if_child_returns": true,
+      "callee_ordinary_return_absent_without_name_assumption": true,
+      "lc_function_start_boundaries_match": true,
+      "paths_to_same_block": {
+        "hypothetical_panic_call_return": {
+          "fp_at_join": -16,
+          "instructions": [
+            {
+              "address": "0x10001a65c",
+              "fp_before": null,
+              "instruction": "ldr x9, [x2, #0x18]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a660",
+              "fp_before": null,
+              "instruction": "ldrb w8, [x2, #0x30]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a664",
+              "fp_before": null,
+              "instruction": "cbz w1, 0x10001a694 <<iroha_zkp_vole::bavc::Shape>::new_as+0x38>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a694",
+              "fp_before": null,
+              "instruction": "cmp x9, #0x3",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a698",
+              "fp_before": null,
+              "instruction": "cset w9, ne",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a69c",
+              "fp_before": null,
+              "instruction": "ldr x10, [x2]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a6a0",
+              "fp_before": null,
+              "instruction": "cbz x10, 0x10001a7a0 <<iroha_zkp_vole::bavc::Shape>::new_as+0x144>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a7a0",
+              "fp_before": null,
+              "instruction": "stp x29, x30, [sp, #-0x10]!",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a7a4",
+              "fp_before": null,
+              "instruction": "mov x29, sp",
+              "sp_before": -16
+            },
+            {
+              "address": "0x10001a7a8",
+              "fp_before": -16,
+              "instruction": "adrp x0, 0x1000d1000 <iroha_zkp_vole::crt::generated::FAEST_EM_192F+0x30>",
+              "sp_before": -16
+            },
+            {
+              "address": "0x10001a7ac",
+              "fp_before": -16,
+              "instruction": "add x0, x0, #0x480",
+              "sp_before": -16
+            },
+            {
+              "address": "0x10001a7b0",
+              "fp_before": -16,
+              "instruction": "bl 0x1000584a8 <core::panicking::panic_const::panic_const_rem_by_zero>",
+              "sp_before": -16
+            }
+          ],
+          "join": "0x10001a7b4",
+          "sp_at_join": -16
+        },
+        "ordinary_branch": {
+          "fp_at_join": null,
+          "instructions": [
+            {
+              "address": "0x10001a65c",
+              "fp_before": null,
+              "instruction": "ldr x9, [x2, #0x18]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a660",
+              "fp_before": null,
+              "instruction": "ldrb w8, [x2, #0x30]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a664",
+              "fp_before": null,
+              "instruction": "cbz w1, 0x10001a694 <<iroha_zkp_vole::bavc::Shape>::new_as+0x38>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a668",
+              "fp_before": null,
+              "instruction": "cbz w8, 0x10001a770 <<iroha_zkp_vole::bavc::Shape>::new_as+0x114>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a66c",
+              "fp_before": null,
+              "instruction": "cmp w8, #0x1",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a670",
+              "fp_before": null,
+              "instruction": "b.ne 0x10001a78c <<iroha_zkp_vole::bavc::Shape>::new_as+0x130>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a78c",
+              "fp_before": null,
+              "instruction": "cmp x9, #0x3",
+              "sp_before": 0
+            },
+            {
+              "address": "0x10001a790",
+              "fp_before": null,
+              "instruction": "b.ne 0x10001a7b4 <<iroha_zkp_vole::bavc::Shape>::new_as+0x158>",
+              "sp_before": 0
+            }
+          ],
+          "join": "0x10001a7b4",
+          "sp_at_join": 0
+        }
+      },
+      "shape_result_unchanged": {
+        "address": "0x10001a65c",
+        "calls": [
+          {
+            "address": "0x10001a7b0",
+            "caller_depth_bytes": 16,
+            "kind": "call",
+            "target": "0x1000584a8"
+          }
+        ],
+        "end": "0x10001a7d0",
+        "frame_errors": [
+          {
+            "address": "0x10001a7b4",
+            "caller_depth_bytes": 16,
+            "detail": "0 versus -16; loop/branch bound unproved",
+            "kind": "inconsistent_sp_merge"
+          }
+        ],
+        "gaps": [],
+        "local_frame_plus_red_zone_bytes": 144,
+        "maximum_sp_decrement_bytes": 16,
+        "name": "<iroha_zkp_vole::bavc::Shape>::new_as",
+        "visited_instructions": 93
+      },
+      "shape_sp_operand_instructions": [
+        {
+          "address": "0x10001a7a0",
+          "instruction": "stp x29, x30, [sp, #-0x10]!"
+        },
+        {
+          "address": "0x10001a7a4",
+          "instruction": "mov x29, sp"
+        }
+      ],
+      "terminal_callee_result_unchanged": {
+        "address": "0x1000584a8",
+        "calls": [
+          {
+            "address": "0x1000584c0",
+            "caller_depth_bytes": 16,
+            "kind": "call",
+            "target": "0x100058350"
+          }
+        ],
+        "end": "0x1000584ec",
+        "frame_errors": [],
+        "gaps": [
+          {
+            "address": "0x1000584c4",
+            "caller_depth_bytes": 16,
+            "detail": "udf #0x0",
+            "kind": "exceptional_terminal"
+          }
+        ],
+        "local_frame_plus_red_zone_bytes": 144,
+        "maximum_sp_decrement_bytes": 16,
+        "name": "core::panicking::panic_const::panic_const_rem_by_zero",
+        "visited_instructions": 8
+      }
+    },
+    "portable": {
+      "all_93_shape_instructions_present_and_visited": true,
+      "callee_entry_unconditionally_reaches_trap_if_child_returns": true,
+      "callee_ordinary_return_absent_without_name_assumption": true,
+      "lc_function_start_boundaries_match": true,
+      "paths_to_same_block": {
+        "hypothetical_panic_call_return": {
+          "fp_at_join": -16,
+          "instructions": [
+            {
+              "address": "0x100015abc",
+              "fp_before": null,
+              "instruction": "ldr x9, [x2, #0x18]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015ac0",
+              "fp_before": null,
+              "instruction": "ldrb w8, [x2, #0x30]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015ac4",
+              "fp_before": null,
+              "instruction": "cbz w1, 0x100015af4 <<iroha_zkp_vole::bavc::Shape>::new_as+0x38>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015af4",
+              "fp_before": null,
+              "instruction": "cmp x9, #0x3",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015af8",
+              "fp_before": null,
+              "instruction": "cset w9, ne",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015afc",
+              "fp_before": null,
+              "instruction": "ldr x10, [x2]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015b00",
+              "fp_before": null,
+              "instruction": "cbz x10, 0x100015c00 <<iroha_zkp_vole::bavc::Shape>::new_as+0x144>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015c00",
+              "fp_before": null,
+              "instruction": "stp x29, x30, [sp, #-0x10]!",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015c04",
+              "fp_before": null,
+              "instruction": "mov x29, sp",
+              "sp_before": -16
+            },
+            {
+              "address": "0x100015c08",
+              "fp_before": -16,
+              "instruction": "adrp x0, 0x1000d0000 <dyld_stub_binder+0x1000d0000>",
+              "sp_before": -16
+            },
+            {
+              "address": "0x100015c0c",
+              "fp_before": -16,
+              "instruction": "add x0, x0, #0x8c8",
+              "sp_before": -16
+            },
+            {
+              "address": "0x100015c10",
+              "fp_before": -16,
+              "instruction": "bl 0x10005a228 <core::panicking::panic_const::panic_const_rem_by_zero>",
+              "sp_before": -16
+            }
+          ],
+          "join": "0x100015c14",
+          "sp_at_join": -16
+        },
+        "ordinary_branch": {
+          "fp_at_join": null,
+          "instructions": [
+            {
+              "address": "0x100015abc",
+              "fp_before": null,
+              "instruction": "ldr x9, [x2, #0x18]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015ac0",
+              "fp_before": null,
+              "instruction": "ldrb w8, [x2, #0x30]",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015ac4",
+              "fp_before": null,
+              "instruction": "cbz w1, 0x100015af4 <<iroha_zkp_vole::bavc::Shape>::new_as+0x38>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015ac8",
+              "fp_before": null,
+              "instruction": "cbz w8, 0x100015bd0 <<iroha_zkp_vole::bavc::Shape>::new_as+0x114>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015acc",
+              "fp_before": null,
+              "instruction": "cmp w8, #0x1",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015ad0",
+              "fp_before": null,
+              "instruction": "b.ne 0x100015bec <<iroha_zkp_vole::bavc::Shape>::new_as+0x130>",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015bec",
+              "fp_before": null,
+              "instruction": "cmp x9, #0x3",
+              "sp_before": 0
+            },
+            {
+              "address": "0x100015bf0",
+              "fp_before": null,
+              "instruction": "b.ne 0x100015c14 <<iroha_zkp_vole::bavc::Shape>::new_as+0x158>",
+              "sp_before": 0
+            }
+          ],
+          "join": "0x100015c14",
+          "sp_at_join": 0
+        }
+      },
+      "shape_result_unchanged": {
+        "address": "0x100015abc",
+        "calls": [
+          {
+            "address": "0x100015c10",
+            "caller_depth_bytes": 16,
+            "kind": "call",
+            "target": "0x10005a228"
+          }
+        ],
+        "end": "0x100015c30",
+        "frame_errors": [
+          {
+            "address": "0x100015c14",
+            "caller_depth_bytes": 16,
+            "detail": "0 versus -16; loop/branch bound unproved",
+            "kind": "inconsistent_sp_merge"
+          }
+        ],
+        "gaps": [],
+        "local_frame_plus_red_zone_bytes": 144,
+        "maximum_sp_decrement_bytes": 16,
+        "name": "<iroha_zkp_vole::bavc::Shape>::new_as",
+        "visited_instructions": 93
+      },
+      "shape_sp_operand_instructions": [
+        {
+          "address": "0x100015c00",
+          "instruction": "stp x29, x30, [sp, #-0x10]!"
+        },
+        {
+          "address": "0x100015c04",
+          "instruction": "mov x29, sp"
+        }
+      ],
+      "terminal_callee_result_unchanged": {
+        "address": "0x10005a228",
+        "calls": [
+          {
+            "address": "0x10005a240",
+            "caller_depth_bytes": 16,
+            "kind": "call",
+            "target": "0x10005a0d0"
+          }
+        ],
+        "end": "0x10005a26c",
+        "frame_errors": [],
+        "gaps": [
+          {
+            "address": "0x10005a244",
+            "caller_depth_bytes": 16,
+            "detail": "udf #0x0",
+            "kind": "exceptional_terminal"
+          }
+        ],
+        "local_frame_plus_red_zone_bytes": 144,
+        "maximum_sp_decrement_bytes": 16,
+        "name": "core::panicking::panic_const::panic_const_rem_by_zero",
+        "visited_instructions": 8
+      }
+    }
+  },
+  "native_worker_executed": false,
+  "next_step": "Separately review a function-local no-ordinary-return summary from exact CFG terminals; only then consider suppressing caller continuation. Preserve the callee call edge, trap/native/indirect/recursive frontiers and hidden unwind/signal limitations. Do not infer noreturn from a name, assign zero callee cost, or change the v4 result.",
+  "profile_qualified": false,
+  "rust_build_executed": false,
+  "schema": "parliament-shape-stack-merge-diagnosis-v1",
+  "v4_files_sha256_after": {
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel.json": "82d3c21a045abbf4d0d038784d07a0868f4b7f48893a7c85ed6ccbf6945bc0ee",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/disassembly.txt": "00ff8bbe858e96d109e516601372788abbc92c692eb8a503968ab290f3b6a925",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/starts.txt": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/stubs.txt": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/unwind.txt": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/capture_retained_stack_v4.py.template": "7f516ff5e896b42071ea3a73af2cbf074d1acbf926c8dabd9f8f94d4372d9acc",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/parliament_ballot_stack_audit.py.template": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/parliament_ballot_stack_audit_test.py.template": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable.json": "4964faf01959f9f69bef55cf100f39fd2102a6ee1c4c008f6b36fddcfadc0dea",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/disassembly.txt": "237de91b1490b0192b80710c5f0d6ceb4ea6dc6d6d99e6ab0d51eb854091e5a7",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/starts.txt": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/stubs.txt": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/unwind.txt": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/receipt.json": "b759a54a086ff103fea1f4095886085d2f8ec9a0dfaaddc01aaf65b85fd0370c",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/tests.txt": "86228b156e0f71a75832f1a8305bc90316ebe5fd0f5f53fe63e047619021b3b1",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/README.md": "6bee4bb7b0adba2c2348266e9e96140e44a84f391afdf9108d3e5330a461d783",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/SHA256SUMS": "1b3e6d81eaee55eb0265f0213fa4a13d16d8ceac9c4325728555c1c7c999fbf3",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel.json.gz": "063c5d2f5193a2f386237bac6e90574f57bc60db9c4987cbae6d81cbdcb68530",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/disassembly.txt.gz": "27e17385eef704988b6b04f58ac06a3247132191091ad97bb2088e74d2919e49",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/starts.txt": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/stubs.txt": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/unwind.txt": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/arm-reference-download.json": "89178fe45e909fc748d0ec455d2a3a90d22a2af7f3c81dc68fc4afe0f5597460",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/capture_retained_stack_v4.py.template": "7f516ff5e896b42071ea3a73af2cbf074d1acbf926c8dabd9f8f94d4372d9acc",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/independent-review.json": "9f18f56842f22e0ce75142f389e1758acbfc3b5ac6e0f7d8592f356d0baed0b1",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/parliament_ballot_stack_audit.py.template": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/parliament_ballot_stack_audit_test.py.template": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable.json.gz": "c00cfbc725a5bb7e1627938862e27e8ab620298f42dffd7ca00e581608186a2e",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/disassembly.txt.gz": "649f06656e760f6a6b395f2d99e3d0813bb8134dfc45d3180514f6e803cd5f08",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/starts.txt": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/stubs.txt": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/unwind.txt": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/receipt.json": "b759a54a086ff103fea1f4095886085d2f8ec9a0dfaaddc01aaf65b85fd0370c",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/summary.json": "876a298763bc50288ec33e7004056d19b333c60636982f49ab2ed5aa661a3580",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/tests.txt": "86228b156e0f71a75832f1a8305bc90316ebe5fd0f5f53fe63e047619021b3b1"
+  },
+  "v4_files_sha256_before": {
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel.json": "82d3c21a045abbf4d0d038784d07a0868f4b7f48893a7c85ed6ccbf6945bc0ee",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/disassembly.txt": "00ff8bbe858e96d109e516601372788abbc92c692eb8a503968ab290f3b6a925",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/starts.txt": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/stubs.txt": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/accel/unwind.txt": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/capture_retained_stack_v4.py.template": "7f516ff5e896b42071ea3a73af2cbf074d1acbf926c8dabd9f8f94d4372d9acc",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/parliament_ballot_stack_audit.py.template": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/parliament_ballot_stack_audit_test.py.template": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable.json": "4964faf01959f9f69bef55cf100f39fd2102a6ee1c4c008f6b36fddcfadc0dea",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/disassembly.txt": "237de91b1490b0192b80710c5f0d6ceb4ea6dc6d6d99e6ab0d51eb854091e5a7",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/starts.txt": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/stubs.txt": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/portable/unwind.txt": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/receipt.json": "b759a54a086ff103fea1f4095886085d2f8ec9a0dfaaddc01aaf65b85fd0370c",
+    "/Users/takemiyamakoto/Library/Caches/iroha-script-tests/runs/parliament-current-20261104/stack-v4/tests.txt": "86228b156e0f71a75832f1a8305bc90316ebe5fd0f5f53fe63e047619021b3b1",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/README.md": "6bee4bb7b0adba2c2348266e9e96140e44a84f391afdf9108d3e5330a461d783",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/SHA256SUMS": "1b3e6d81eaee55eb0265f0213fa4a13d16d8ceac9c4325728555c1c7c999fbf3",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel.json.gz": "063c5d2f5193a2f386237bac6e90574f57bc60db9c4987cbae6d81cbdcb68530",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/disassembly.txt.gz": "27e17385eef704988b6b04f58ac06a3247132191091ad97bb2088e74d2919e49",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/starts.txt": "06413da9a04dd8bcf3c145e4e57339fa8dcbcea00bedef13d5ae8324bcb7200f",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/stubs.txt": "877c516643830dfa4897c2d2fa82caa55b267e2ef6552fff448d07fa513e0f43",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/accel/unwind.txt": "8facbfe3d9632de38d13e69168736f2abf15b33309a77f6cc6b8a745fe1226ad",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/arm-reference-download.json": "89178fe45e909fc748d0ec455d2a3a90d22a2af7f3c81dc68fc4afe0f5597460",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/capture_retained_stack_v4.py.template": "7f516ff5e896b42071ea3a73af2cbf074d1acbf926c8dabd9f8f94d4372d9acc",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/independent-review.json": "9f18f56842f22e0ce75142f389e1758acbfc3b5ac6e0f7d8592f356d0baed0b1",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/parliament_ballot_stack_audit.py.template": "7ff2fef13b78a4bbdb91a79c263c75284143808b275161268a1c0b949007dfab",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/parliament_ballot_stack_audit_test.py.template": "76e3455493640fb03ca94e302ee8f2cf2fb5f99809c6d7d4608eaf863ca39edf",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable.json.gz": "c00cfbc725a5bb7e1627938862e27e8ab620298f42dffd7ca00e581608186a2e",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/disassembly.txt.gz": "649f06656e760f6a6b395f2d99e3d0813bb8134dfc45d3180514f6e803cd5f08",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/starts.txt": "b994943a4cbb4a08912bff95e62e961c08218bbaffc7f3c6023a4f6fec83047a",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/stubs.txt": "7872e9b28bb0ec1b4f70d07b7a1af9dee5a2fbfd8742576a97caf21c986e8b14",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/portable/unwind.txt": "27e0513793452465d572710f4cb74d7596e96a694fcefeea45774c8113860b3d",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/receipt.json": "b759a54a086ff103fea1f4095886085d2f8ec9a0dfaaddc01aaf65b85fd0370c",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/summary.json": "876a298763bc50288ec33e7004056d19b333c60636982f49ab2ed5aa661a3580",
+    "/Users/takemiyamakoto/dev/iroha/docs/validation/parliament_ballot_stack_v4_20261104/tests.txt": "86228b156e0f71a75832f1a8305bc90316ebe5fd0f5f53fe63e047619021b3b1"
+  },
+  "v4_files_unchanged": 35
+}

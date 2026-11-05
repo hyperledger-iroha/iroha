@@ -2,7 +2,10 @@
 //! been initialized lazily.
 use iroha_data_model::{
     instruction_registry_with_ids,
-    isi::{decode_instruction_from_pair, framed_instruction_payload, set_instruction_registry},
+    isi::{
+        decode_instruction_from_pair, framed_instruction_payload, set_instruction_registry,
+        wire_id_of,
+    },
     prelude::*,
 };
 
@@ -42,38 +45,33 @@ fn set_instruction_registry_overrides_existing() {
         return;
     }
 
-    // Start with registry containing only `Log`
     set_instruction_registry(instruction_registry_with_ids![Log]);
-    let log: InstructionBox = Log::new(Level::INFO, "hello".to_owned()).into();
-    let bytes = norito::to_bytes(&log).expect("serialize");
+    let log = Log::new(Level::INFO, "hello".to_owned());
+    let boxed: InstructionBox = log.clone().into();
+    let (wire_id, frame) = framed_instruction_payload(&boxed).expect("registered Log envelope");
+    let bytes = norito::to_bytes(&boxed).expect("serialize");
     let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("deserialize");
-    // Type should match when decoded via the configured registry
-    assert_eq!(log.id(), decoded.id());
-    let (wire_id, frame) = framed_instruction_payload(&log).expect("registered Log frame");
-    let wire_id = wire_id.to_owned();
+    assert_eq!(decoded.as_any().downcast_ref::<Log>(), Some(&log));
     assert_eq!(
-        decode_instruction_from_pair(&wire_id, &frame)
+        decode_instruction_from_pair(wire_id, &frame)
             .expect("registered typed decoder")
-            .id(),
-        log.id(),
+            .as_any()
+            .downcast_ref::<Log>(),
+        Some(&log),
     );
-    // Replace registry with one that doesn't include `Log`
+
     set_instruction_registry(instruction_registry_with_ids![SetParameter]);
+    assert!(wire_id_of::<Log>().is_none());
     assert!(
-        decode_instruction_from_pair(&wire_id, &frame).is_err(),
+        decode_instruction_from_pair(wire_id, &frame).is_err(),
         "the replaced registry must refuse the removed typed instruction",
     );
-    // Envelope decoding keeps unknown instructions byte-for-byte; it does not
-    // restore the removed typed decoder (live_runtime_upgrades.md section 5.2).
+    assert!(wire_id_of::<SetParameter>().is_some());
     let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("opaque envelope");
-    let opaque = decoded.as_opaque().expect("Log is no longer registered");
+    let opaque = decoded.as_opaque().expect("Log left the registry");
     assert_eq!(opaque.wire_id(), wire_id);
     assert_eq!(opaque.frame(), frame);
-    assert_eq!(
-        norito::to_bytes(&decoded).expect("re-encode envelope"),
-        bytes
-    );
-    // Restore the default registry so other tests aren't affected
+    assert_eq!(norito::to_bytes(&decoded).expect("re-encode"), bytes);
     set_instruction_registry(iroha_data_model::instruction_registry::default());
     let restored: InstructionBox = norito::decode_from_bytes(&bytes).expect("restored typed Log");
     assert_eq!(restored.id(), log.id());

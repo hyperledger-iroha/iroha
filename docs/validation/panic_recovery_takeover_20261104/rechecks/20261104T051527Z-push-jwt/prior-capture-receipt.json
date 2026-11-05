@@ -1,0 +1,56 @@
+{
+  "command": [
+    "python3",
+    "scripts/check_panic_recovery_boundaries.py"
+  ],
+  "exit_code": 0,
+  "checked_at_utc": "2026-11-04T04:08:47.372595+00:00",
+  "head": "c63d346bc8ee1313bf39b8ad672aaf95cda10d8a",
+  "source_hashes": {
+    "scripts/check_panic_recovery_boundaries.py": "26302114fc604a222c5daa5de30f704dd82884f7050c7452435875402b5f9002",
+    "scripts/tests/panic_recovery_boundaries_test.py": "18124aaa903ba4f3db987675441d83fbf95a0523898c4fc0086e361587fe30bb",
+    "scripts/panic_recovery_boundaries.inventory": "23663cda0cb0f7b89016db635f9ab63fec54545f6221cda4fbcfeed9f93477da"
+  },
+  "inventory": {
+    "sources": 1334,
+    "records": 1370,
+    "sha256": "23663cda0cb0f7b89016db635f9ab63fec54545f6221cda4fbcfeed9f93477da",
+    "counts": {
+      "catch_unwind": 109,
+      "spawn_blocking": 30,
+      "task_spawn": 485,
+      "upgrade_task": 10
+    },
+    "source_path_failures": [],
+    "bytes_stable_after_capture": true,
+    "changed": [
+      {
+        "path": "crates/iroha_torii/src/sns_lease.rs",
+        "before": "crates/iroha_torii/src/sns_lease.rs\ta0038c9b5f9b75bc6dc1adc10b72eda349842907b31d090675f8da8924c25197\tnone",
+        "after": "crates/iroha_torii/src/sns_lease.rs\t839bf8a402f0edf8711fec769d304b53bddad0d54006663e68b4f70ec643cdd9\tnone"
+      },
+      {
+        "path": "crates/iroha_torii/src/sns_lease/recent_tip_tests.rs",
+        "before": "crates/iroha_torii/src/sns_lease/recent_tip_tests.rs\t59ab18a8b4905439888af17fcb87d03a01a03aa57df3e74760f528dc4cafd576\tnone",
+        "after": "crates/iroha_torii/src/sns_lease/recent_tip_tests.rs\t7303e2fd35b21e999b09c39c64ff352364017f7beb394eb50bd1f080b2e75f02\tnone"
+      }
+    ],
+    "sns_source_hashes": {
+      "crates/iroha_core/src/sumeragi/certified_chain.rs": "89d57236776d3b143f2022439378b723c77afff126b7c23a6f27ac5dfd691479",
+      "crates/iroha_core/src/sumeragi/certified_chain/current_cut.rs": "3cb8e27beaff424cde88b51f7e4deecd9741ddcbda556ebec629617f6a20d4f6",
+      "crates/iroha_core/src/sumeragi/certified_chain/current_cut/tests.rs": "b35b7735b5962a7b1e5b539712daeee9778dcc6ccad023fd1f4b29ea6bbfb994",
+      "crates/iroha_core/src/sumeragi/certified_chain/query_projection.rs": "40852a4e088797ac844cd567a66a98532cd258e65edded1ec5c06f22586e2bdf",
+      "crates/iroha_core/src/sumeragi/certified_chain/query_reader.rs": "e6955edbbcde9f449875c2dc7997147b3afa33339b7a8d192bbdf3776db1c3b8",
+      "crates/iroha_core/src/sumeragi/certified_chain/state_certificate.rs": "9d064b7c43705e596db7d0644e23533e4b762fda031f1b9b95f5c664fc243f28",
+      "crates/iroha_core/src/state/canonical_history.rs": "4b86a6d96f14a82603183a4ff4d2c39b4364b1269d9ffdc9e4f9e350ca60fa20",
+      "crates/iroha_core/src/state/world_state_snapshot.rs": "8cb35d41fcf8db679d9b58095677c16027dd7efe4bd050989e19af16045f1227",
+      "crates/iroha_core/src/state/world_state_snapshot_tests.rs": "725d6b3cae140db5106d4cc6e23a8a9359b4311994c7ef94fef03bb6101cb4c0",
+      "crates/iroha_torii/src/sns_lease.rs": "839bf8a402f0edf8711fec769d304b53bddad0d54006663e68b4f70ec643cdd9",
+      "crates/iroha_torii/src/sns_lease/recent_tip_tests.rs": "7303e2fd35b21e999b09c39c64ff352364017f7beb394eb50bd1f080b2e75f02"
+    },
+    "sns_still_stable": true,
+    "elapsed_seconds": 58.737733125686646,
+    "boundary_review": "Reviewed exact current SNS lease and recent-tip test diffs; same admitted blocking-worker boundary, no added raw recovery/task calls or aliases. Changes bind an opaque scalar current cut and retire physical frame/graph workspaces while preserving original logical decoder charges; tests assert exact logical demand, one-byte refusal, and physical lifetime release. Captured inventory exactly matches the previously reviewed candidate, with no path closure failures. This inventory review is not a claim that SNS compilation or runtime tests have completed."
+  },
+  "scope": "Repository panic recovery source and closure guard. Does not assert SNS compilation/runtime success, whole-node qualification, release readiness, or a clean/committed candidate."
+}

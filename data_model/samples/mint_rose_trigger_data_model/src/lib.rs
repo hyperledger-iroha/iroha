@@ -10,9 +10,27 @@ use norito::{
     Clone, Debug, PartialEq, Eq, NoritoSerialize, NoritoDeserialize, norito::derive::JsonSerialize,
 )]
 pub struct MintRoseArgs {
-    /// Amount to mint
+    /// Whole rose units, encoded in JSON as the contract's canonical quantity string.
+    #[norito(json = "whole_quantity")]
     pub val: u32,
 }
+mod whole_quantity {
+    use norito::json::{self, BoundedJsonError, JsonSerialize, JsonWriteSink};
+
+    pub(super) fn serialize(value: &u32, out: &mut String) {
+        out.push('"');
+        value.json_serialize(out);
+        out.push('"');
+    }
+
+    pub(super) fn serialize_bounded(
+        value: &u32,
+        out: &mut dyn JsonWriteSink,
+    ) -> Result<(), BoundedJsonError> {
+        json::write_json_display_to(value, out)
+    }
+}
+
 impl json::JsonDeserialize for MintRoseArgs {
     fn json_deserialize(parser: &mut Parser<'_>) -> Result<Self, json::Error> {
         parser.skip_ws();
@@ -24,8 +42,17 @@ impl json::JsonDeserialize for MintRoseArgs {
             parser.expect(b':')?;
             match key.as_str() {
                 "val" => {
-                    let raw = parser.parse_u64()?;
-                    let parsed = u32::try_from(raw)
+                    // At most ten decimal digits fit in the sample's u32 amount.
+                    let mut preflight = *parser;
+                    preflight.skip_string_bounded(10)?;
+                    let text = parser.parse_string()?;
+                    if !text.bytes().all(|byte| byte.is_ascii_digit())
+                        || (text.len() > 1 && text.starts_with('0'))
+                    {
+                        return Err(json::Error::Message("noncanonical `val` quantity".into()));
+                    }
+                    let parsed = text
+                        .parse::<u32>()
                         .map_err(|_| json::Error::Message("`val` out of range".into()))?;
                     if val.replace(parsed).is_some() {
                         return Err(json::Error::Message("duplicate field `val`".into()));
@@ -60,7 +87,6 @@ impl TryFrom<&Json> for MintRoseArgs {
                 "trailing characters after MintRoseArgs JSON",
             ));
         }
-        // ensure canonical normalization (parser ensures val fits u32)
         Ok(parsed)
     }
 }
@@ -76,25 +102,40 @@ mod tests {
     }
 
     #[test]
-    fn mint_rose_args_checked_json_preserves_the_wire_value_and_byte_limit() {
-        for val in [0, 42, u32::MAX] {
+    fn mint_rose_args_support_checked_json_with_exact_bounds() {
+        for val in [0, 1, 42, u32::MAX] {
             let args = MintRoseArgs { val };
-            let expected = format!("{{\"val\":{val}}}");
-            assert_eq!(json::to_json(&args).expect("ordinary JSON"), expected);
+            let expected = format!("{{\"val\":\"{val}\"}}");
+            assert_eq!(json::to_json(&args).unwrap(), expected);
             assert_eq!(
-                json::to_json_bounded(&args, expected.len()).expect("exact byte limit"),
+                json::to_json_bounded(&args, expected.len()).unwrap(),
                 expected
             );
             assert_eq!(
                 json::to_json_bounded(&args, expected.len() - 1),
                 Err(json::BoundedJsonError::BodyTooLarge)
             );
-            let payload = Json::new(args.clone());
+            // ExecuteTrigger::with_args uses this checked constructor directly.
+            let payload = Json::try_new(&args).expect("bounded trigger arguments");
             assert_eq!(payload.as_ref(), expected);
-            assert_eq!(
-                MintRoseArgs::try_from(&payload).expect("checked roundtrip"),
-                args
-            );
+            assert_eq!(MintRoseArgs::try_from(&payload).unwrap(), args);
+        }
+    }
+
+    #[test]
+    fn mint_rose_args_reject_noncanonical_or_out_of_range_quantities() {
+        for input in [
+            r#"{"val":42}"#,
+            r#"{"val":""}"#,
+            r#"{"val":"01"}"#,
+            r#"{"val":"+1"}"#,
+            r#"{"val":"-1"}"#,
+            r#"{"val":"1.0"}"#,
+            r#"{"val":"4294967296"}"#,
+            r#"{"val":"10000000000"}"#,
+            r#"{"val":"1","val":"2"}"#,
+        ] {
+            assert!(json::from_str::<MintRoseArgs>(input).is_err(), "{input}");
         }
     }
 }

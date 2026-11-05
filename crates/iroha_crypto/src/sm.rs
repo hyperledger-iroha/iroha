@@ -12,7 +12,6 @@ use crate::{
     signature::sm,
 };
 use core::{convert::TryFrom, fmt, str::FromStr};
-use derive_more::{Deref, DerefMut};
 use hex_literal::hex;
 use iroha_schema::{IntoSchema, TypeId};
 #[cfg(feature = "json")]
@@ -1403,11 +1402,25 @@ mod sm_accel {
     }
 }
 /// Digest helper for SM3 hashes.
-#[derive(Clone, Copy, PartialEq, Eq, Deref, DerefMut, TypeId)]
+#[derive(Clone, Copy, PartialEq, Eq, TypeId)]
 #[repr(transparent)]
 #[derive(norito::NoritoSchema)]
 #[norito_schema(name = "iroha_crypto::sm::Sm3Digest")]
 pub struct Sm3Digest([u8; 32]);
+impl core::ops::Deref for Sm3Digest {
+    type Target = [u8; 32];
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl core::ops::DerefMut for Sm3Digest {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 impl Sm3Digest {
     /// Length of an SM3 digest in bytes.
     pub const LENGTH: usize = 32;

@@ -11,70 +11,70 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
         PRIVACY_EXACT12_CAPABILITY_MANIFEST_VERSION_V1
     );
     assert!(!manifest.manifest_digest.is_zero());
-    assert_eq!(manifest.protocols.len(), PrivacyProtocolIdV1::COUNT);
+    assert_eq!(manifest.protocols.len(), PrivacyRuntimeProtocolIdV1::EXACT12_COUNT);
     let generic_rows = [
         (
-            PrivacyProtocolIdV1::ZkAcePqAuthorizationV1,
+            PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1,
             "zk_ace_authorization_action_v1",
             "authorization_action",
             0,
         ),
         (
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             "anonymous_pgc_payment_action_v1",
             "payment_action",
             6,
         ),
         (
-            PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+            PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
             "verange_range_proof_v1",
             "component",
             1,
         ),
         (
-            PrivacyProtocolIdV1::IrohaZkAmsV1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkAmsV1,
             "zk_ams_admission_and_provisioning_v1",
             "admission_action",
             2,
         ),
         (
-            PrivacyProtocolIdV1::VegaExistingCredentialZkV1,
+            PrivacyRuntimeProtocolIdV1::VegaExistingCredentialZkV1,
             "vega_credential_presentation_v1",
             "presentation_action",
             2,
         ),
         (
-            PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+            PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
             "jindo_polynomial_evaluation_v1",
             "component",
             0,
         ),
         (
-            PrivacyProtocolIdV1::IrohaBootleLanternAnoncredV1,
+            PrivacyRuntimeProtocolIdV1::IrohaBootleLanternAnoncredV1,
             "bootle_lantern_credential_presentation_v1",
             "presentation_action",
             2,
         ),
         (
-            PrivacyProtocolIdV1::OrchardHalo2ActionsV1,
+            PrivacyRuntimeProtocolIdV1::OrchardHalo2ActionsV1,
             "orchard_note_action_v1",
             "note_action",
             7,
         ),
         (
-            PrivacyProtocolIdV1::MoneroFcmpPlusPlusV1,
+            PrivacyRuntimeProtocolIdV1::MoneroFcmpPlusPlusV1,
             "fcmp_membership_payment_v1",
             "payment_action",
             2,
         ),
         (
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             "ivm_private_note_action_v1",
             "note_action",
             7,
         ),
         (
-            PrivacyProtocolIdV1::PqMaspStarkV1,
+            PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
             "pq_masp_note_action_v1",
             "note_action",
             31,
@@ -93,7 +93,7 @@ fn exact12_capability_manifest_has_canonical_generic_and_x509_operation_rows() {
     let x509 = &manifest.protocols[5];
     assert_eq!(
         x509.protocol_id,
-        PrivacyProtocolIdV1::IrohaZkX509StarkP256V1
+        PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1
     );
     assert_eq!(
         x509.operation_schema,
@@ -163,7 +163,7 @@ fn exact12_capability_manifest_is_canonical_content_bound_and_committed() {
 fn revised_jindo_is_available_with_compiled_defaults_and_no_registered_policy() {
     let mut snapshot = capability_snapshot();
     let jindo_profile = profile(&envelope(statement_for(
-        PrivacyProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
+        PrivacyRuntimeProtocolIdV1::IrohaJindoPolynomialCommitmentV1,
     )));
     snapshot.protocols[6].compiled_profile =
         PrivacyCompiledProfileResultV1::Available(jindo_profile);
@@ -357,8 +357,8 @@ fn joint_security_failure_survives_canonical_capability_projection() {
 fn optional_protocol_policy_is_content_bound_but_never_availability_authority() {
     let mut snapshot = capability_snapshot();
     snapshot.protocols[5].policy = Some(PrivacyProtocolPolicyV1 {
-        protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
-        current_limits: PrivacyProtocolLimitsV1::IrohaZkX509StarkP256V1,
+        protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
+        current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaZkX509StarkP256V1,
         pending_update: None,
     });
     let manifest = snapshot
@@ -452,8 +452,8 @@ fn exact12_capability_manifest_fixture_pins_pending_updates_and_tuple_struct_jso
         current
     );
     for protocol_id in [
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-        PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+        PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
     ] {
         let policy = manifest
             .protocols

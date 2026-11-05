@@ -1,19 +1,23 @@
 //! Integration tests for domain permissions and transfers.
 use eyre::{Result, ensure, eyre};
 use integration_tests::sandbox;
-use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*, query::QueryError};
-use iroha_data_model::alias_setup::{AccountAliasRoleV1, AccountProvisionV1};
+use iroha::query::QueryError;
+use iroha::{blocking::Client, crypto::KeyPair, data_model::prelude::*};
 use iroha_data_model::{
     ValidationFail,
+    alias_setup::{AccountAliasRoleV1, AccountProvisionV1},
     query::error::{FindError, QueryExecutionFail},
 };
 use iroha_executor_data_model::permission::{
     account::{AccountAliasPermissionScope, CanManageAccountAlias, CanUnregisterAccount},
-    asset::{CanTransferAsset, CanTransferAssetWithDefinition},
-    asset_definition::CanUnregisterAssetDefinition,
+    asset::{
+        CanBurnAssetWithDefinition, CanMintAssetWithDefinition, CanTransferAsset,
+        CanTransferAssetWithDefinition,
+    },
+    asset_definition::{CanModifyAssetDefinitionMetadata, CanUnregisterAssetDefinition},
     domain::CanUnregisterDomain,
     nft::{CanRegisterNft, CanUnregisterNft},
-    trigger::{CanExecuteTrigger, CanUnregisterTrigger},
+    trigger::{CanModifyTrigger, CanUnregisterTrigger},
 };
 use iroha_model_base::domain::DomainId;
 use iroha_model_base::metadata::Metadata;
@@ -86,6 +90,31 @@ fn permission_assertions_refuse_unauthenticated_matching_text() {
     assert_permission_denied(&error, "authority cannot modify this metadata");
 }
 
+fn submit_as<I: Into<InstructionBox>>(
+    client: &Client,
+    authority: &AccountId,
+    keypair: &KeyPair,
+    instructions: impl IntoIterator<Item = I>,
+) -> Result<()> {
+    let signer = integration_tests::sync::rebind_blocking_client(client, |builder| {
+        builder.account = authority.clone();
+        builder.key_pair = keypair.clone();
+    });
+    signer.submit_all(instructions, FeePaymentIntent::authority(Vec::new(), None))?;
+    Ok(())
+}
+fn fund_signer(client: &Client, authority: AccountId) -> Result<()> {
+    let fee_definition = iroha_config::parameters::defaults::nexus::fees::fee_asset_id().parse()?;
+    client.submit(
+        Transfer::asset_quantity(
+            AssetId::new(fee_definition, ALICE_ID.clone()),
+            100u32,
+            authority,
+        ),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    Ok(())
+}
 fn checked_random_account_id() -> AccountId {
     AccountId::new(
         KeyPair::try_random()
@@ -407,7 +436,7 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         revoke,
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let unregister = Unregister::asset_definition(coin_id);
+    let unregister = Unregister::asset_definition(coin_id.clone());
     let error = test_client
         .submit(
             unregister.clone(),
@@ -415,9 +444,39 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         )
         .expect_err("domain owner must not unregister another issuer's definition");
     assert_permission_denied(&error, "authority cannot remove this resource");
-    owner.submit(
-        unregister,
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+    // Explicit issuer grants are tested only after every domain-only refusal above.
+    owner.submit_all::<InstructionBox>(
+        [
+            Grant::account_permission(
+                CanModifyAssetDefinitionMetadata {
+                    asset_definition: coin_id.clone(),
+                },
+                ALICE_ID.clone(),
+            )
+            .into(),
+            Grant::account_permission(
+                CanUnregisterAssetDefinition {
+                    asset_definition: coin_id.clone(),
+                },
+                ALICE_ID.clone(),
+            )
+            .into(),
+        ],
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    let delegated_key: Name = "delegated_metadata".parse()?;
+    test_client.submit_all::<InstructionBox>(
+        [
+            SetKeyValue::asset_definition(
+                coin_id.clone(),
+                delegated_key.clone(),
+                Json::new("granted"),
+            )
+            .into(),
+            RemoveKeyValue::asset_definition(coin_id, delegated_key).into(),
+            unregister.into(),
+        ],
+        FeePaymentIntent::authority(Vec::new(), None),
     )?;
     Ok(())
 }
@@ -458,36 +517,66 @@ fn domain_owner_asset_permissions() -> Result<()> {
             Register::asset_definition(coin).into(),
             Transfer::asset_definition(ALICE_ID.clone(), coin_id.clone(), bob_id.clone()).into(),
         ],
-        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+        FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let definition = test_client
+    let stored = test_client
         .client()
         .query_single(FindAssetDefinitionById::new(coin_id.clone()))?;
-    assert_eq!(definition.owned_by(), &bob_id);
-    // Domain ownership does not confer the issuer's mint/burn rights or the holder's transfer rights.
+    assert_eq!(stored.owned_by(), &bob_id);
+    // Domain ownership does not grant issuer mint/burn or source-account transfer rights.
     let bob_coin_id = AssetId::new(coin_id, bob_id.clone());
-    let mint = Mint::asset_quantity(20_u32, bob_coin_id.clone());
-    let error = test_client
+    let denied = test_client
         .submit(
-            mint.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Mint::asset_quantity(20u32, bob_coin_id.clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain owner must not mint another issuer's asset");
-    assert_permission_denied(&error, "Can't mint an asset without owning its definition");
-    owner.submit(
-        mint,
+        .expect_err("domain ownership must not mint another issuer's asset");
+    assert!(
+        denied.chain().any(|cause| cause.to_string().contains(
+            "Can't mint an asset without owning its definition or an exact mint permission"
+        )),
+        "unexpected mint rejection: {denied:?}"
+    );
+    submit_as(
+        &test_client,
+        &bob_id,
+        &bob_keypair,
+        [Grant::account_permission(
+            CanMintAssetWithDefinition {
+                asset_definition: bob_coin_id.definition().clone(),
+            },
+            ALICE_ID.clone(),
+        )],
+    )?;
+    test_client.submit(
+        Mint::asset_quantity(20u32, bob_coin_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let burn = Burn::asset_quantity(5_u32, bob_coin_id.clone());
-    let error = test_client
+    let denied = test_client
         .submit(
-            burn.clone(),
-            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Burn::asset_quantity(5u32, bob_coin_id.clone()),
+            FeePaymentIntent::authority(Vec::new(), None),
         )
-        .expect_err("domain owner must not burn another issuer's asset");
-    assert_permission_denied(&error, "authority cannot burn this resource");
-    owner.submit(
-        burn,
+        .expect_err("domain ownership must not burn another account's asset");
+    assert!(
+        denied.chain().any(|cause| cause
+            .to_string()
+            .contains("authority cannot burn this resource")),
+        "unexpected burn rejection: {denied:?}"
+    );
+    submit_as(
+        &test_client,
+        &bob_id,
+        &bob_keypair,
+        [Grant::account_permission(
+            CanBurnAssetWithDefinition {
+                asset_definition: bob_coin_id.definition().clone(),
+            },
+            ALICE_ID.clone(),
+        )],
+    )?;
+    test_client.submit(
+        Burn::asset_quantity(5u32, bob_coin_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
     let err = test_client
@@ -575,6 +664,7 @@ fn active_alias_domain_owner_cannot_transfer_the_aliased_accounts_assets() -> Re
         ],
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
+    fund_signer(&client, definition_owner.clone())?;
     client.submit(
         Transfer::domain(
             alias_owner.clone(),
@@ -801,6 +891,22 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         )
         .expect_err("domain owner must not unregister another account's trigger without a grant");
     assert_permission_denied(&error, "authority cannot remove this resource");
+    owner.submit(
+        Grant::account_permission(
+            CanModifyTrigger {
+                trigger: trigger_id.clone(),
+            },
+            alice_id.clone(),
+        ),
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
+    test_client.submit_all::<InstructionBox>(
+        [
+            Mint::trigger_repetitions(1_u32, trigger_id.clone()).into(),
+            Burn::trigger_repetitions(1_u32, trigger_id.clone()).into(),
+        ],
+        FeePaymentIntent::authority(Vec::new(), None),
+    )?;
     owner.submit(
         Grant::account_permission(permission, alice_id),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),

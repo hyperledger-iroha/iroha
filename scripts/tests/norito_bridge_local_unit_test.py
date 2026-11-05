@@ -93,7 +93,8 @@ def test_child_environment_keeps_scratch_inside_original_private_capture(tmp_pat
 def test_child_scratch_rejects_nonprivate_or_redirected_storage(tmp_path, change):
     root = tmp_path / 'source'; output = root / 'target/qualification/capture'
     output.mkdir(parents=True, mode=0o700); temporary = output / 'temporary'
-    if change == 'public': temporary.mkdir(mode=0o755)
+    # chmod, not only mkdir(mode=...): an inherited restrictive umask must not make it private.
+    if change == 'public': temporary.mkdir(mode=0o755); temporary.chmod(0o755)
     elif change == 'alias':
         other = output / 'other'; other.mkdir(mode=0o700)
         temporary.symlink_to(other, target_is_directory=True)
@@ -132,7 +133,7 @@ def test_wrong_stale_archive_emitter_source_tool_and_component_relationship_refu
 
 def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     policy = unit.native_policy(ROOT)
-    assert len(policy['c_jni']) == 112
+    assert len(policy['c_jni']) == 118
     assert sum(symbol.startswith('connect_norito_kagemusha_wallet_') for symbol in policy['c_jni']) == 29
     assert sum('offline_wallet_KagemushaWalletNativeV1_' in symbol for symbol in policy['c_jni']) == 17
     for method in ('beginInstallation', 'registerInstallation', 'closeInstallation', 'relocateRegistrationSource'):
@@ -142,7 +143,7 @@ def test_current_repository_owned_c_jni_and_privacy_policy_is_exact():
     for c_name, jni_name in (("begin_exchange", "beginExchange"), ("end_exchange", "endExchange")):
         assert "connect_norito_kagemusha_wallet_" + c_name + "_v1" in policy["c_jni"]
         assert "Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_" + jni_name in policy["c_jni"]
-    assert len(policy['privacy']) == 6
+    assert len(policy['privacy']) == 7
     assert 'connect_norito_kagemusha_wallet_setup_v1' in policy['required']
     assert 'Java_org_hyperledger_iroha_sdk_offline_wallet_KagemushaWalletNativeV1_setup' in policy['required']
     assert 'connect_norito_kagemusha_wallet_snapshot_v1' in policy['required']

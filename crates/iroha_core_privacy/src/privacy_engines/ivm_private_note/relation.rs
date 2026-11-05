@@ -2,8 +2,9 @@
 use super::{codec::encode_private_program_v1, wallet::validate_ivm_private_encrypted_output_v1};
 use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyCommitmentV1, PrivacyNamespaceScopeV1,
-    PrivacyNamespaceV1, PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1,
-    PrivacyProtocolIdV1, PrivacyRootV1, PrivacyValueBalanceDirectionV1, PrivacyValueBalanceV1,
+    PrivacyNullifierV1, PrivacyPoolProgramNamespaceV1, PrivacyProgramIdV1, PrivacyRootV1,
+    PrivacyRuntimeNamespaceV1, PrivacyRuntimeProtocolIdV1, PrivacyValueBalanceDirectionV1,
+    PrivacyValueBalanceV1,
 };
 use sha2::{Digest as _, Sha256};
 use std::{collections::BTreeSet, fmt};
@@ -1105,9 +1106,11 @@ fn validate_input_note_v1(
 fn is_zero(bytes: &[u8]) -> bool {
     bytes.iter().all(|byte| *byte == 0)
 }
-pub(super) fn namespace_v1(statement: &IrohaIvmPrivateNoteStarkStatementV1) -> PrivacyNamespaceV1 {
-    PrivacyNamespaceV1::new(
-        PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+pub(super) fn namespace_v1(
+    statement: &IrohaIvmPrivateNoteStarkStatementV1,
+) -> PrivacyRuntimeNamespaceV1 {
+    PrivacyRuntimeNamespaceV1::new(
+        PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         PrivacyNamespaceScopeV1::PoolProgram(PrivacyPoolProgramNamespaceV1 {
             pool_id: statement.pool_id,
             program_id: statement.program_id,
@@ -1119,7 +1122,8 @@ pub(super) fn accumulator_leaf_invocation_v1(
     input: u8,
     commitment: PrivacyCommitmentV1,
 ) -> Result<Sha256InvocationV1, IvmPrivateNoteRelationErrorV1> {
-    let encoded_namespace = norito::to_bytes(&namespace_v1(statement))
+    let encoded_namespace = namespace_v1(statement)
+        .canonical_wire_bytes_v1()
         .map_err(|_| IvmPrivateNoteRelationErrorV1::Encoding)?;
     let capacity = ACCUMULATOR_LEAF_DOMAIN_V1
         .len()

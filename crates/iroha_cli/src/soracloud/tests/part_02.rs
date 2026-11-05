@@ -424,9 +424,9 @@ fn agent_apartment_status_fixture(
         apartment_name: apartment_name.parse().expect("canonical apartment name"),
         manifest_hash: Hash::new(format!("{apartment_name}:manifest").as_bytes()),
         status: SoraAgentRuntimeStatusV1::Running,
-        lease_started_sequence: 1,
-        lease_expires_sequence: 1_000,
-        lease_remaining_ticks: 1_000_u64.saturating_sub(last_active_sequence),
+        lease_started_height: 1,
+        lease_expires_height: 1_000,
+        lease_remaining_blocks: 990,
         restart_count: 0,
         state_quota_bytes: 4_096,
         tool_capability_count: 1,
@@ -492,8 +492,8 @@ fn autonomy_status_fixture() -> AgentAutonomyStatusResponseV1 {
         apartment_name: "ops_agent".parse().expect("canonical apartment name"),
         sequence: 10,
         status: SoraAgentRuntimeStatusV1::Running,
-        lease_expires_sequence: 100,
-        lease_remaining_ticks: 90,
+        lease_expires_height: 100,
+        lease_remaining_blocks: 90,
         manifest_hash: Hash::new(b"agent autonomy manifest"),
         revoked_policy_capability_count: 0,
         budget_ceiling_units: 100,
@@ -895,6 +895,85 @@ fn mailbox_status_v1_is_closed_and_ack_requires_exact_removal() {
         .expect_err("missing mailbox message field must fail");
 }
 #[test]
+fn agent_lease_status_uses_block_heights_independently_of_action_sequence() {
+    let mut status = autonomy_status_fixture();
+    status.sequence = 200;
+    status.lease_expires_height = 100;
+    status.lease_remaining_blocks = 37;
+    status
+        .validate()
+        .expect("action count may exceed an unexpired block lease");
+    status.sequence = 10;
+    status.status = SoraAgentRuntimeStatusV1::LeaseExpired;
+    status.lease_remaining_blocks = 0;
+    status
+        .validate()
+        .expect("block lease may expire before many actions occur");
+    status.status = SoraAgentRuntimeStatusV1::Running;
+    let _ = status
+        .validate()
+        .expect_err("running lease must retain blocks");
+    status.lease_remaining_blocks = 100;
+    let _ = status
+        .validate()
+        .expect_err("remaining blocks cannot exceed the height interval");
+    status.lease_remaining_blocks = 37;
+    let canonical = json::to_value(&status).expect("autonomy status JSON");
+    assert_eq!(
+        canonical
+            .get("lease_expires_height")
+            .and_then(json::Value::as_u64),
+        Some(100)
+    );
+    assert_eq!(
+        canonical
+            .get("lease_remaining_blocks")
+            .and_then(json::Value::as_u64),
+        Some(37)
+    );
+    for (current, retired) in [
+        ("lease_expires_height", "lease_expires_sequence"),
+        ("lease_remaining_blocks", "lease_remaining_ticks"),
+    ] {
+        let mut wrong = canonical.clone();
+        let object = wrong.as_object_mut().expect("autonomy status object");
+        let value = object.remove(current).expect("canonical lease field");
+        object.insert(retired.to_owned(), value);
+        json::from_value::<AgentAutonomyStatusResponseV1>(wrong)
+            .expect_err("retired lease status field");
+    }
+    let mut apartment = agent_apartment_status_fixture("ops_agent", 200);
+    apartment
+        .validate()
+        .expect("action sequence does not determine lease height");
+    apartment.lease_remaining_blocks = 1_000;
+    let _ = apartment
+        .validate()
+        .expect_err("remaining blocks exceed original lease interval");
+    apartment.lease_remaining_blocks = 0;
+    let _ = apartment
+        .validate()
+        .expect_err("running apartment needs an unexpired lease");
+    apartment.status = SoraAgentRuntimeStatusV1::LeaseExpired;
+    apartment
+        .validate()
+        .expect("expired apartment has no remaining blocks");
+    let canonical = json::to_value(&apartment).expect("apartment JSON");
+    for (current, retired) in [
+        ("lease_started_height", "lease_started_sequence"),
+        ("lease_expires_height", "lease_expires_sequence"),
+        ("lease_remaining_blocks", "lease_remaining_ticks"),
+    ] {
+        let mut wrong = canonical.clone();
+        let object = wrong.as_object_mut().expect("apartment object");
+        let value = object.remove(current).expect("canonical lease field");
+        object.insert(retired.to_owned(), value);
+        json::from_value::<AgentApartmentStatusEntryV1>(wrong)
+            .expect_err("retired apartment lease field");
+    }
+}
+
+#[test]
 fn autonomy_status_v1_rejects_unknown_fields_and_duplicate_run_ids() {
     let canonical_status = autonomy_status_fixture();
     let canonical =
@@ -983,6 +1062,51 @@ fn app_infra_status_v1_is_closed_and_rejects_duplicate_apps() {
     let error = decode_app_infra_status(&duplicate).expect_err("duplicate app must fail");
     assert!(error.to_string().contains("duplicate app"), "{error}");
 }
+#[test]
+fn exact_torii_json_success_accepts_native_utf8_and_rejects_ambiguous_headers() {
+    let body = br#"{"schema_version":1}"#;
+    for media_type in ["application/json", "application/json; charset=utf-8"] {
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        let content_type = single_torii_content_type(&headers).expect("one content type");
+        assert_eq!(
+            decode_exact_torii_json_success(
+                reqwest::StatusCode::OK,
+                content_type.as_ref(),
+                body,
+                "native response",
+            )
+            .expect("Torii JSON representation"),
+            norito::json!({"schema_version": 1}),
+        );
+        headers.append(header::CONTENT_TYPE, HeaderValue::from_static(media_type));
+        assert!(single_torii_content_type(&headers).is_err());
+    }
+    assert!(
+        single_torii_content_type(&reqwest::header::HeaderMap::new())
+            .expect("absent header")
+            .is_none()
+    );
+    for media_type in [
+        "application/json; charset=utf-16",
+        "application/json; charset=utf-8; charset=utf-8",
+        "application/json, application/json",
+        "application/json; boundary=other",
+        "text/json",
+    ] {
+        assert!(
+            decode_exact_torii_json_success(
+                reqwest::StatusCode::OK,
+                Some(&HeaderValue::from_static(media_type)),
+                body,
+                "ambiguous response",
+            )
+            .is_err(),
+            "accepted {media_type}"
+        );
+    }
+}
+
 #[test]
 fn exact_torii_json_success_rejects_alternate_status_content_type_and_body() {
     let json_content_type = HeaderValue::from_static("application/json");

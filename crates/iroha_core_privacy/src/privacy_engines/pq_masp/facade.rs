@@ -21,7 +21,7 @@ use crate::privacy_engines::{
 use iroha_data_model::privacy::{
     PqMaspStarkStatementV1, PrivacyCommitmentV1, PrivacyConsensusLimitsV1,
     PrivacyEncryptedOutputV1, PrivacyNativeConsensusBindingV1,
-    PrivacyNativeConsensusBindingValidationErrorV1, PrivacyStatementV1,
+    PrivacyNativeConsensusBindingValidationErrorV1, PrivacyRuntimeStatementV1,
 };
 use rand::{TryCryptoRng, rngs::SysRng};
 use soranet_pq::HedgedRngSeed;
@@ -115,7 +115,7 @@ fn map_verifier_error_v1(error: ProofManagedNoteStarkErrorV1) -> PqMaspProofErro
 fn statement_digest_v1(
     statement: &PqMaspStarkStatementV1,
 ) -> Result<iroha_data_model::privacy::PrivacyStatementDigestV1, PqMaspProofErrorV1> {
-    PrivacyStatementV1::PqMaspStarkV1(statement.clone())
+    PrivacyRuntimeStatementV1::PqMaspStarkV1(statement.clone())
         .digest()
         .map_err(|_| PqMaspProofErrorV1::StatementEncoding)
 }

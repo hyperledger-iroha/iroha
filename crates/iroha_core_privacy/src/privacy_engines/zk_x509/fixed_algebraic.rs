@@ -2916,6 +2916,15 @@ mod tests {
             ),
             Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant)
         );
+        let mut extra_fields = right.clone();
+        extra_fields.fields.push(F::ZERO);
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(
+                composite_digest,
+                &[left.clone(), extra_fields],
+            ),
+            Err(ZkX509FixedAlgebraicErrorV1::InternalInvariant)
+        );
         let mut noncanonical_fields = right.clone();
         noncanonical_fields.fields[0] = F(GOLDILOCKS_MODULUS_V1);
         assert_eq!(
@@ -2925,7 +2934,7 @@ mod tests {
             ),
             Err(ZkX509FixedAlgebraicErrorV1::NonCanonicalField)
         );
-        let over_profile_width = [
+        let mut profile_width_parts = [
             ZkX509FixedAlgebraicOpeningsV1 {
                 schedule_digest: PrivacyOuterDigestV1::from_bytes([3; 48]),
                 query_indices: vec![0],
@@ -2935,12 +2944,25 @@ mod tests {
             ZkX509FixedAlgebraicOpeningsV1 {
                 schedule_digest: PrivacyOuterDigestV1::from_bytes([4; 48]),
                 query_indices: vec![0],
-                width: 237,
-                fields: vec![F::ZERO; 237],
+                width: ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1 - 300,
+                fields: vec![F::ZERO; usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1) - 300],
             },
         ];
+        let at_profile_width =
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &profile_width_parts)
+                .expect("exact profile width");
         assert_eq!(
-            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &over_profile_width,),
+            at_profile_width.width_v1(),
+            ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1
+        );
+        assert_eq!(
+            at_profile_width.row_v1(0).expect("complete boundary row"),
+            vec![F::ZERO; usize::from(ZK_X509_FIXED_ALGEBRAIC_MAX_WIDTH_V1)],
+        );
+        profile_width_parts[1].width += 1;
+        profile_width_parts[1].fields.push(F::ZERO);
+        assert_eq!(
+            ZkX509FixedAlgebraicOpeningsV1::concatenate_v1(composite_digest, &profile_width_parts),
             Err(ZkX509FixedAlgebraicErrorV1::InvalidWidth)
         );
         let maximum_width_part = ZkX509FixedAlgebraicOpeningsV1 {

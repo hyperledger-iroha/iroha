@@ -1,7 +1,7 @@
 //! Pipeline transaction and block event surface coverage.
 use eyre::{Result, WrapErr, eyre};
 use futures_util::StreamExt;
-use integration_tests::{sandbox, sync::spawn_blocking};
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha::data_model::{
     ValidationFail,
     events::pipeline::{TransactionEventFilter, TransactionStatus},
@@ -31,27 +31,15 @@ async fn test_with_instruction_and_status(
     // Given
     let client = network.client();
     // When
-    let transaction = {
-        let account = client.account_client();
-        let mut payload =
-            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                exec,
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))?;
-        let quote = account
-            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-            .await?;
-        eyre::ensure!(
-            payload
-                .fee_payment
-                .has_same_payer_and_gas_bound(&quote.intent),
-            "fee quote changed the pipeline transaction payer or gas bound"
-        );
-        payload.fee_payment = quote.intent;
-        account.sign_transaction(payload)
-    }
-    .expect("build integration-test transaction");
+    let transaction = super::quoted_transaction(
+        &client,
+        iroha::client::AccountTransactionDraft::new(
+            exec,
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ),
+    )
+    .await?;
     let hash = transaction.hash();
     let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
@@ -63,7 +51,7 @@ async fn test_with_instruction_and_status(
     )
     .await
     .wrap_err_with(|| format!("{context}: timed out opening pipeline event stream"))??;
-    spawn_blocking(move || client.submit_transaction(&transaction)).await??;
+    run_on_dedicated_thread(move || client.submit_transaction(&transaction)).await??;
     // Then
     timeout(event_timeout, async {
         let mut saw_queued = false;
@@ -102,27 +90,15 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     // When: submit a simple transaction to ensure a new non-genesis block is committed
     let kura_domain: DomainId = DomainId::try_new("kura-test", "universal")?;
     let register = domain_setup_instruction(&kura_domain, client.client().account())?;
-    let tx = {
-        let account = client.account_client();
-        let mut payload =
-            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                [register],
-                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                Metadata::default(),
-            ))?;
-        let quote = account
-            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-            .await?;
-        eyre::ensure!(
-            payload
-                .fee_payment
-                .has_same_payer_and_gas_bound(&quote.intent),
-            "fee quote changed the pipeline transaction payer or gas bound"
-        );
-        payload.fee_payment = quote.intent;
-        account.sign_transaction(payload)
-    }
-    .expect("build integration-test transaction");
+    let tx = super::quoted_transaction(
+        &client,
+        iroha::client::AccountTransactionDraft::new(
+            [register],
+            iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+            Metadata::default(),
+        ),
+    )
+    .await?;
     let hash = tx.hash();
     let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
@@ -136,7 +112,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     .wrap_err(
         "applied_block_must_be_available_in_kura: timed out opening pipeline event stream",
     )??;
-    spawn_blocking(move || client.submit_transaction(&tx)).await??;
+    run_on_dedicated_thread(move || client.submit_transaction(&tx)).await??;
     // Wait for the transaction pipeline to advance to Approved (committed)
     timeout(event_timeout, async {
         let mut saw_queued = false;

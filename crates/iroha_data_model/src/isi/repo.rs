@@ -326,10 +326,17 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
         );
         let mut offset = 4usize;
         let value = match tag {
-            0 => Self::Initiate(Box::new(super::decode_aos_slice_field::<RepoIsi>(
-                super::read_aos_field(bytes, &mut offset, flags)?,
-                flags,
-            )?)),
+            0 => {
+                let value = super::decode_aos_slice_field::<RepoIsi>(
+                    super::read_aos_field(bytes, &mut offset, flags)?,
+                    flags,
+                )?;
+                Self::Initiate(if norito::core::prepaid_validation_active() {
+                    norito::core::try_box_for_decode(value)?
+                } else {
+                    Box::new(value)
+                })
+            }
             1 => Self::Reverse(super::decode_aos_slice_field::<ReverseRepoIsi>(
                 super::read_aos_field(bytes, &mut offset, flags)?,
                 flags,
@@ -339,9 +346,14 @@ impl<'a> norito::core::DecodeFromSlice<'a> for RepoInstructionBox {
                 flags,
             )?),
             _ => {
-                return Err(norito::core::Error::Message(format!(
-                    "invalid RepoInstructionBox tag {tag}"
-                )));
+                return Err(norito::core::prepaid_validation_error(
+                    "invalid RepoInstructionBox tag",
+                    || {
+                        norito::core::Error::Message(format!(
+                            "invalid RepoInstructionBox tag {tag}"
+                        ))
+                    },
+                ));
             }
         };
         if offset != bytes.len() {

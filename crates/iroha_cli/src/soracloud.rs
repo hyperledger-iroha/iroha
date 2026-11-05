@@ -5306,9 +5306,9 @@ define_live_mutation_args! {
         /// Path to an `AgentApartmentManifestV1` JSON document.
         #[arg(long, value_name = "PATH", default_value = DEFAULT_AGENT_APARTMENT_MANIFEST)]
         manifest: PathBuf,
-        /// Lease length, measured in deterministic control-plane sequence ticks.
-        #[arg(long, value_name = "TICKS", default_value_t = 120)]
-        lease_ticks: u64,
+        /// Lease length, measured in committed blocks.
+        #[arg(long, value_name = "BLOCKS", default_value_t = 120)]
+        lease_blocks: u64,
         /// Initial autonomy execution budget units.
         #[arg(long, value_name = "UNITS", default_value_t = AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS)]
         autonomy_budget_units: u64,
@@ -5316,8 +5316,8 @@ define_live_mutation_args! {
 }
 impl AgentDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.lease_ticks == 0 {
-            return Err(eyre!("--lease-ticks must be greater than zero"));
+        if self.lease_blocks == 0 {
+            return Err(eyre!("--lease-blocks must be greater than zero"));
         }
         if self.autonomy_budget_units == 0 {
             return Err(eyre!("--autonomy-budget-units must be greater than zero"));
@@ -5328,7 +5328,7 @@ impl AgentDeployArgs {
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_deploy_request(
             manifest,
-            self.lease_ticks,
+            self.lease_blocks,
             self.autonomy_budget_units,
             authority,
             key_pair,
@@ -5351,20 +5351,20 @@ define_live_mutation_args! {
         /// Apartment name to renew.
         #[arg(long, value_name = "NAME")]
         apartment_name: String,
-        /// Lease extension ticks.
-        #[arg(long, value_name = "TICKS", default_value_t = 120)]
-        lease_ticks: u64,
+        /// Lease extension, measured in committed blocks.
+        #[arg(long, value_name = "BLOCKS", default_value_t = 120)]
+        lease_blocks: u64,
     }
 }
 impl AgentLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        if self.lease_ticks == 0 {
-            return Err(eyre!("--lease-ticks must be greater than zero"));
+        if self.lease_blocks == 0 {
+            return Err(eyre!("--lease-blocks must be greater than zero"));
         }
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_agent_lease_renew_request(
             &self.apartment_name,
-            self.lease_ticks,
+            self.lease_blocks,
             authority,
             key_pair,
         )?;
@@ -11648,9 +11648,9 @@ struct AgentApartmentStatusEntryV1 {
     apartment_name: Name,
     manifest_hash: Hash,
     status: SoraAgentRuntimeStatusV1,
-    lease_started_sequence: u64,
-    lease_expires_sequence: u64,
-    lease_remaining_ticks: u64,
+    lease_started_height: u64,
+    lease_expires_height: u64,
+    lease_remaining_blocks: u64,
     restart_count: u32,
     state_quota_bytes: u64,
     tool_capability_count: u32,
@@ -11775,8 +11775,8 @@ struct AgentAutonomyStatusResponseV1 {
     apartment_name: Name,
     sequence: u64,
     status: SoraAgentRuntimeStatusV1,
-    lease_expires_sequence: u64,
-    lease_remaining_ticks: u64,
+    lease_expires_height: u64,
+    lease_remaining_blocks: u64,
     manifest_hash: Hash,
     revoked_policy_capability_count: u32,
     budget_ceiling_units: u64,
@@ -12230,11 +12230,19 @@ impl UploadedModelStatusResponseV1 {
 
 impl AgentApartmentStatusEntryV1 {
     fn validate(&self) -> Result<()> {
-        if self.lease_started_sequence == 0
-            || self.lease_expires_sequence <= self.lease_started_sequence
+        if self.lease_started_height == 0
+            || self.lease_expires_height <= self.lease_started_height
+            || self.lease_remaining_blocks
+                > self
+                    .lease_expires_height
+                    .saturating_sub(self.lease_started_height)
+            || match self.status {
+                SoraAgentRuntimeStatusV1::Running => self.lease_remaining_blocks == 0,
+                SoraAgentRuntimeStatusV1::LeaseExpired => self.lease_remaining_blocks != 0,
+            }
         {
             return Err(eyre!(
-                "agent apartment `{}` has an invalid lease sequence interval",
+                "agent apartment `{}` has an invalid lease block interval",
                 self.apartment_name
             ));
         }
@@ -12460,16 +12468,19 @@ impl AgentAutonomyRunStatusRecordV1 {
 impl AgentAutonomyStatusResponseV1 {
     fn validate(&self) -> Result<()> {
         let lease_state_matches = match self.status {
-            SoraAgentRuntimeStatusV1::Running => self.lease_expires_sequence > self.sequence,
-            SoraAgentRuntimeStatusV1::LeaseExpired => self.lease_expires_sequence <= self.sequence,
+            SoraAgentRuntimeStatusV1::Running => self.lease_remaining_blocks > 0,
+            SoraAgentRuntimeStatusV1::LeaseExpired => self.lease_remaining_blocks == 0,
         };
+        // The control-plane sequence counts actions, while leases count blocks.
+        // This response does not carry the current block height, so never infer
+        // it from the unrelated action sequence.
         if self.sequence == 0
             || !lease_state_matches
-            || self.lease_remaining_ticks
-                != self.lease_expires_sequence.saturating_sub(self.sequence)
+            || self.lease_expires_height == 0
+            || self.lease_remaining_blocks >= self.lease_expires_height
         {
             return Err(eyre!(
-                "agent autonomy status for `{}` has invalid sequence or lease metadata",
+                "agent autonomy status for `{}` has invalid sequence or block lease metadata",
                 self.apartment_name
             ));
         }
@@ -13792,7 +13803,7 @@ struct RolloutAdvancePayload {
 #[norito(deny_unknown_fields)]
 struct AgentDeployPayload {
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
 }
 #[derive(
@@ -13806,7 +13817,7 @@ struct AgentDeployPayload {
 #[norito(deny_unknown_fields)]
 struct AgentLeaseRenewPayload {
     apartment_name: String,
-    lease_ticks: u64,
+    lease_blocks: u64,
 }
 #[derive(
     Clone,
@@ -17905,14 +17916,14 @@ fn signed_rollout_request(
 }
 fn signed_agent_deploy_request(
     manifest: AgentApartmentManifestV1,
-    lease_ticks: u64,
+    lease_blocks: u64,
     autonomy_budget_units: u64,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentDeployRequest> {
     let payload = AgentDeployPayload {
         manifest,
-        lease_ticks,
+        lease_blocks,
         autonomy_budget_units,
     };
     let encoded = encode_agent_deploy_signature_payload(&payload)
@@ -17924,17 +17935,17 @@ fn signed_agent_deploy_request(
 }
 fn signed_agent_lease_renew_request(
     apartment_name: &str,
-    lease_ticks: u64,
+    lease_blocks: u64,
     _authority: &AccountId,
     key_pair: &KeyPair,
 ) -> Result<SignedAgentLeaseRenewRequest> {
     let apartment_name = parse_exact_name_arg("--apartment-name", apartment_name)?;
-    if lease_ticks == 0 {
-        return Err(eyre!("--lease-ticks must be greater than zero"));
+    if lease_blocks == 0 {
+        return Err(eyre!("--lease-blocks must be greater than zero"));
     }
     let payload = AgentLeaseRenewPayload {
         apartment_name,
-        lease_ticks,
+        lease_blocks,
     };
     let encoded = encode_agent_lease_renew_signature_payload(&payload)
         .wrap_err("failed to encode agent lease renew payload for signing")?;
@@ -18714,7 +18725,7 @@ fn encode_rollout_signature_payload(payload: &RolloutAdvancePayload) -> Result<V
 fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result<Vec<u8>> {
     encode_agent_deploy_provenance_payload(
         payload.manifest.clone(),
-        payload.lease_ticks,
+        payload.lease_blocks,
         payload.autonomy_budget_units,
     )
     .wrap_err("failed to encode agent deploy signature payload tuple")
@@ -18722,7 +18733,7 @@ fn encode_agent_deploy_signature_payload(payload: &AgentDeployPayload) -> Result
 fn encode_agent_lease_renew_signature_payload(payload: &AgentLeaseRenewPayload) -> Result<Vec<u8>> {
     encode_agent_lease_renew_provenance_payload(
         payload.apartment_name.as_str(),
-        payload.lease_ticks,
+        payload.lease_blocks,
     )
     .wrap_err("failed to encode agent lease renew signature payload tuple")
 }
@@ -19700,6 +19711,15 @@ fn submit_soracloud_draft_transaction(
         .map(Into::into)
         .wrap_err("failed to submit Soracloud mutation transaction")
 }
+fn single_torii_content_type(headers: &reqwest::header::HeaderMap) -> Result<Option<HeaderValue>> {
+    let mut values = headers.get_all(header::CONTENT_TYPE).iter();
+    let value = values.next();
+    if values.next().is_some() {
+        return Err(eyre!("Torii response has multiple Content-Type headers"));
+    }
+    Ok(value.cloned())
+}
+
 fn decode_exact_torii_json_success(
     status: reqwest::StatusCode,
     content_type: Option<&HeaderValue>,
@@ -19715,9 +19735,15 @@ fn decode_exact_torii_json_success(
     let content_type = content_type.ok_or_else(|| {
         eyre!("{response_context} 200 OK response is missing Content-Type: application/json")
     })?;
-    if content_type.as_bytes() != b"application/json" {
+    // Norito's Torii JSON responder declares UTF-8 explicitly. Accept its exact
+    // representation as well as the unparameterized JSON media type; other
+    // charsets, duplicate parameters and comma-joined values remain invalid.
+    if !matches!(
+        content_type.as_bytes(),
+        b"application/json" | b"application/json; charset=utf-8"
+    ) {
         return Err(eyre!(
-            "{response_context} 200 OK response has Content-Type `{}`; expected exactly `application/json`",
+            "{response_context} 200 OK response has Content-Type `{}`; expected `application/json` with at most its canonical UTF-8 charset",
             String::from_utf8_lossy(content_type.as_bytes())
         ));
     }
@@ -19784,7 +19810,7 @@ where
         .send()
         .wrap_err_with(|| format!("failed to call `{}`", endpoint.as_str()))?;
     let status = response.status();
-    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+    let content_type = single_torii_content_type(response.headers())?;
     let body = response
         .bytes()
         .wrap_err("failed to read Torii mutation response body")?;
@@ -20153,7 +20179,7 @@ fn send_torii_soracloud_authenticated_get(
         .send()
         .wrap_err_with(|| format!("failed to fetch `{}`", endpoint.as_str()))?;
     let status = response.status();
-    let content_type = response.headers().get(header::CONTENT_TYPE).cloned();
+    let content_type = single_torii_content_type(response.headers())?;
     let body = response
         .bytes()
         .wrap_err_with(|| format!("failed to read {response_context} response body"))?

@@ -20,6 +20,13 @@ pub(super) struct CallbackTicket {
     ordinal: u64,
 }
 
+impl CallbackTicket {
+    /// Actual pre-body callback ordinal, independent of projected step positions.
+    pub(super) fn index(&self) -> Option<u32> {
+        u32::try_from(self.ordinal).ok()
+    }
+}
+
 struct CallbackSlot {
     id: TriggerId,
     step: Option<ExecutionStep>,

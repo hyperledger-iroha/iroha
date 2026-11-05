@@ -15,9 +15,11 @@ use iroha_data_model::{
 };
 use std::{collections::BTreeSet, num::NonZeroU64};
 
+/// Torii's ordinary-query geometry: fixed 1 KiB name-ID source rows and its
+/// default 500-item page.
 fn limits() -> OrdinaryQueryExecutionLimits {
-    let items = 2;
-    let source = 16_384;
+    let items = u64::from(iroha_config::parameters::defaults::torii::APP_API_MAX_FETCH_SIZE);
+    let source = crate::smartcontracts::isi::query::ORDINARY_NAME_ID_SOURCE_BYTES;
     let response = 32_768;
     let archive = 4_096;
     let decode = norito::DecodeLimits::new(4096, 16_384, 8192, 131_072, 32);

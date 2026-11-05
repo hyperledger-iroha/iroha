@@ -2,9 +2,10 @@
 //!
 //! Protocol availability is resolved from the native implementation and optional committed
 //! limits in `privacy_state`; governance does not activate or qualify proof relations.
+#[cfg(test)]
+use iroha_data_model::isi::privacy::SubmitPrivacyProofV1;
 use iroha_data_model::{
     ValidationFail,
-    isi::privacy::SubmitPrivacyProofV1,
     privacy::{
         PrivacyConsensusLimitsV1, PrivacyConsensusLimitsValidationError,
         PrivacyTransactionIntentDigestV1,
@@ -18,10 +19,19 @@ const PRIVACY_SIGNED_SUBMISSION_HASH_DOMAIN_V1: &[u8] = b"iroha.privacy.signed-s
 /// Unlike the transaction-intent digest, this internal one-shot fingerprint includes the final
 /// statement digests and proof bytes. It prevents a child contract, trigger, or VM overlay from
 /// substituting another submission after admission has validated the signed direct instruction.
-pub(crate) fn privacy_signed_submission_hash_v1(
-    submission: &SubmitPrivacyProofV1,
+pub(crate) fn privacy_signed_submission_hash_v1<T: norito::NoritoSerialize>(
+    submission: &T,
 ) -> Result<iroha_crypto::Hash, norito::Error> {
-    let encoded = norito::encode_canonical(submission)?;
+    privacy_signed_submission_bytes_hash_v1(&norito::encode_canonical(submission)?)
+}
+pub(crate) fn privacy_signed_submission_ref_hash_v1(
+    submission: iroha_data_model::transaction::PrivacySubmissionRefV1<'_>,
+) -> Result<iroha_crypto::Hash, norito::Error> {
+    privacy_signed_submission_bytes_hash_v1(&submission.canonical_bytes()?)
+}
+fn privacy_signed_submission_bytes_hash_v1(
+    encoded: &[u8],
+) -> Result<iroha_crypto::Hash, norito::Error> {
     let encoded_len = u64::try_from(encoded.len())
         .expect("Norito output length always fits u64 on supported targets");
     let mut preimage = Vec::with_capacity(
@@ -53,7 +63,12 @@ pub(crate) fn signed_privacy_transaction_intent_binding_v1(
     else {
         return Ok(None);
     };
-    let submission_hash = privacy_signed_submission_hash_v1(submission).map_err(|error| {
+    let encoded = submission.canonical_bytes().map_err(|error| {
+        ValidationFail::InternalError(format!(
+            "failed to encode original privacy operation: {error}"
+        ))
+    })?;
+    let submission_hash = privacy_signed_submission_bytes_hash_v1(&encoded).map_err(|error| {
         ValidationFail::InternalError(format!(
             "failed to encode the signed privacy submission: {error}"
         ))
@@ -292,13 +307,17 @@ pub enum PrivacyBudgetError {
 mod tests {
     use super::*;
     use crate::privacy_profiles::{CompiledPrivacyProfileErrorV1, compiled_privacy_profile_v1};
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     #[test]
     fn signed_submission_hash_ignores_ambient_layout_flags_and_binds_proof_bytes() {
         for sample in iroha_data_model::privacy::privacy_action_role_samples_v1()
             .expect("all canonical privacy roles")
         {
-            let mut submission = SubmitPrivacyProofV1::new(sample.envelope);
+            let mut submission = SubmitPrivacyProofV1::new(
+                (sample.envelope)
+                    .try_into()
+                    .expect("frozen Exact12 test input"),
+            );
             let expected = privacy_signed_submission_hash_v1(&submission).expect("canonical hash");
             let alternate_flags =
                 norito::core::default_encode_flags() ^ norito::core::header_flags::COMPACT_LEN;
@@ -318,10 +337,10 @@ mod tests {
     #[test]
     fn incomplete_native_security_argument_still_refuses_admission() {
         assert_eq!(
-            compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaZkX509StarkP256V1),
+            compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1),
             Err(
                 CompiledPrivacyProfileErrorV1::JointSecurityReductionIncomplete {
-                    protocol_id: PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+                    protocol_id: PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
                 }
             )
         );

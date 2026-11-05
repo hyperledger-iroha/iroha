@@ -298,7 +298,7 @@ async fn run_monitor_headless(
     if endpoints.is_empty() {
         return Err(eyre!("no endpoints configured"));
     }
-    let mut fetcher = PeerFetcher::new(endpoints.clone(), refresh);
+    let mut fetcher = PeerFetcher::new(endpoints.clone(), refresh)?;
     let mut app = AppState::new(endpoints, refresh, ascii_config, show_gas_trend);
     let mut ticker = time::interval(refresh);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
@@ -392,7 +392,7 @@ async fn run_monitor_loop(
     if endpoints.is_empty() {
         return Err(eyre!("no endpoints configured"));
     }
-    let mut fetcher = PeerFetcher::new(endpoints.clone(), refresh);
+    let mut fetcher = PeerFetcher::new(endpoints.clone(), refresh)?;
     let mut app = AppState::new(endpoints, refresh, ascii_config, show_gas_trend);
     let mut ticker = time::interval(refresh);
     ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);

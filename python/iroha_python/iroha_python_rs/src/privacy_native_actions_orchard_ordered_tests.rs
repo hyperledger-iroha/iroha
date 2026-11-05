@@ -97,8 +97,9 @@ mod orchard_ordered {
             .privacy_transaction_intent_binding_if_present_v1()
             .unwrap()
             .unwrap();
+    let submission_envelope = submission.runtime_envelope();
         let changed =
-            orchard_ordered_payload(context, calls, Some(submission.envelope.clone())).unwrap();
+            orchard_ordered_payload(context, calls, Some(submission_envelope.clone())).unwrap();
         let signed = TransactionBuilder::from_payload(changed)
             .unwrap()
             .try_sign(&signing_key())

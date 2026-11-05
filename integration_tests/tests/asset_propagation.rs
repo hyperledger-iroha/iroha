@@ -16,12 +16,11 @@ use std::time::Duration;
 // This test is also covered at the UI level in the iroha_cli tests
 // in test_mint_asset.py
 fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
-    // Force Norito to use fixed-length sequences in genesis to avoid relying on packed
-    // offsets, which are currently unstable in debug builds.
     init_instruction_registry();
-    let domain_id: DomainId = DomainId::try_new("asset-propagation", "universal")?;
+    // Use a distinct domain and asset rather than re-registering the network's bootstrap XOR.
+    let domain_id: DomainId = DomainId::try_new("propagation", "universal")?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
-    let (account_id, _account_keypair) = gen_account_in(domain_id.name());
+    let (account_id, _account_keypair) = gen_account_in("propagation");
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id =
         AssetDefinitionId::derive_from_components(domain_id.clone(), "xor".parse()?);

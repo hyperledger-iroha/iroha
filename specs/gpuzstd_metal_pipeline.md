@@ -18,9 +18,9 @@ differs.
 
 - Match finding and sequence generation run on GPU.
 - Frame assembly and entropy coding (Huffman/FSE) currently run on the host
-  using the in-crate encoder; GPU Huffman/FSE kernels are parity-tested but not
+  using the shared `gpuzstd_codec` encoder; GPU Huffman/FSE kernels are parity-tested but not
   yet wired into the full frame path.
-- Decode uses the in-crate frame decoder with a CPU zstd fallback for unsupported frames;
+- Decode uses the shared frame decoder with a CPU zstd fallback for unsupported frames;
   full GPU block decode remains in progress.
 
 ## Encoding pipeline (high level)
@@ -100,6 +100,10 @@ differs.
 - CPU golden vectors for the bitstream writer/reader.
 - Corpus parity tests comparing GPU and CPU outputs.
 - Fuzz coverage for malformed frames and boundary conditions.
+- Portable codec tests live in `gpuzstd_codec`; Metal retains its public Rust
+  codec modules and sequence type through re-exports from that owner. The
+  [co-built plugin regression](../crates/gpuzstd_cuda/README.md) checks that
+  enabling both backend packages preserves separate C exports and device code.
 
 ## Benchmarking
 

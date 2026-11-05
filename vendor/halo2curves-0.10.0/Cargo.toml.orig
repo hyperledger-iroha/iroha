@@ -48,7 +48,6 @@ hex = { version = "0.4", optional = true, default-features = false, features = [
 sha2 = { version = "0.10.8", default-features = false }
 digest = { version = "0.10.7", default-features = false }
 
-plonky2_maybe_rayon = { version = "1.0.0", default-features = false }
 rayon = { version = "1.8", default-features = false, optional = true }
 
 libm = { version = "0.2.11", default-features = false }
@@ -63,7 +62,7 @@ bits = ["ff/bits"]
 bn256-table = []
 derive_serde = ["serde/derive", "serde_arrays", "hex"]
 print-trace = ["ark-std/print-trace"]
-std = ["rayon", "halo2derive/std", "plonky2_maybe_rayon/parallel"]
+std = ["rayon", "halo2derive/std"]
 
 
 [profile.bench]

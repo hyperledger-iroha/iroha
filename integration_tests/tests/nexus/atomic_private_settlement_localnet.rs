@@ -76,9 +76,9 @@ use iroha::{
             IvmPrivateNoteLimitsV1, PRIVACY_IVM_PRIVATE_ENCRYPTED_OUTPUT_BYTES_V1,
             PrivacyCapabilityRowV1, PrivacyCommitmentV1, PrivacyCompiledProfileResultV1,
             PrivacyEncryptedOutputV1, PrivacyEncryptionKeyV1, PrivacyNullifierV1, PrivacyPoolIdV1,
-            PrivacyProtocolIdV1, PrivacyProtocolLimitsV1, PrivacyProtocolPolicyV1,
-            PrivacyRecipientIdV1, PrivacyRootV1, PrivateSettlementPolicyUpdateV1,
-            PrivateSettlementPolicyV1,
+            PrivacyProtocolPolicyV1, PrivacyRecipientIdV1, PrivacyRootV1,
+            PrivacyRuntimeProtocolIdV1, PrivacyRuntimeProtocolLimitsV1,
+            PrivateSettlementPolicyUpdateV1, PrivateSettlementPolicyV1,
         },
         sumeragi_lanes::{SumeragiFixedLane, SumeragiLaneMember, SumeragiLanePolicy},
         transaction::{
@@ -398,6 +398,14 @@ fn stake_asset_definition_id() -> AssetDefinitionId {
     nexus_fee_asset_definition_id()
 }
 
+fn genesis_staking_policy() -> iroha_data_model::block::consensus::PublicLaneStakingPolicy {
+    iroha_genesis::default_staking_policy(
+        stake_asset_definition_id(),
+        ALICE_ID.clone(),
+        ALICE_ID.clone(),
+    )
+}
+
 fn settlement_domain_id() -> DomainId {
     DomainId::try_new("settlement", "universal").expect("settlement domain")
 }
@@ -647,6 +655,7 @@ fn localnet_builder(shape: TopologyShape) -> NetworkBuilder {
                     genesis_post_topology(shape, &process_topology, &committee_validator_entries),
                     topology,
                     topology_entries,
+                    genesis_staking_policy(),
                 )
             },
         )
@@ -1150,7 +1159,7 @@ fn validate_genesis_private_note_readiness(
     row: &PrivacyCapabilityRowV1,
     committed_height: u64,
 ) -> Result<u64> {
-    let protocol = PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+    let protocol = PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
     let compiled = compiled_privacy_profile_v1(protocol)?;
     ensure!(
         row.protocol_id == protocol,
@@ -1172,7 +1181,7 @@ fn validate_genesis_private_note_readiness(
     limits
         .validate_with_ceiling(&compiled.protocol_limits)
         .wrap_err("committed private-note limits exceed the native implementation")?;
-    let PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) = limits else {
+    let PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) = limits else {
         return Err(eyre!("committed limits select another protocol"));
     };
     ensure!(
@@ -1194,7 +1203,7 @@ fn require_genesis_private_note_profile(client: &Client) -> Result<u64> {
     let row = capability
         .protocols
         .iter()
-        .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+        .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
         .ok_or_else(|| eyre!("IVM private-note capability row is absent"))?;
     let height = validate_genesis_private_note_readiness(
         &PrivacyCapabilityRowV1 {
@@ -4946,7 +4955,8 @@ fn genesis_ivm_private_note_defaults_require_no_protocol_policy() {
 #[test]
 fn genesis_private_note_readiness_accepts_defaults_and_optional_ordinary_policy() {
     let compiled =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+            .unwrap();
     let mut row = PrivacyCapabilityRowV1 {
         protocol_id: compiled.protocol_id,
         compiled_profile: PrivacyCompiledProfileResultV1::Available(compiled.into()),
@@ -4982,14 +4992,15 @@ fn genesis_private_note_readiness_rejects_substituted_profiles_and_insufficient_
         PrivacyCompiledProfileUnavailableReasonV1, PrivacyProtocolLimitsUpdateV1,
     };
     let compiled =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1).unwrap();
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1)
+            .unwrap();
     let row = PrivacyCapabilityRowV1 {
         protocol_id: compiled.protocol_id,
         compiled_profile: PrivacyCompiledProfileResultV1::Available(compiled.into()),
         policy: None,
     };
     let mut wrong_protocol = row;
-    wrong_protocol.protocol_id = PrivacyProtocolIdV1::ZkAcePqAuthorizationV1;
+    wrong_protocol.protocol_id = PrivacyRuntimeProtocolIdV1::ZkAcePqAuthorizationV1;
     assert!(
         validate_genesis_private_note_readiness(&wrong_protocol, 3)
             .unwrap_err()
@@ -4997,7 +5008,7 @@ fn genesis_private_note_readiness_rejects_substituted_profiles_and_insufficient_
             .contains("another protocol")
     );
     let other =
-        compiled_privacy_profile_v1(PrivacyProtocolIdV1::VeRangeTransparentRangeV1).unwrap();
+        compiled_privacy_profile_v1(PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1).unwrap();
     for profile in [
         PrivacyCompiledProfileResultV1::Available(other.into()),
         PrivacyCompiledProfileResultV1::Unavailable(
@@ -5017,7 +5028,7 @@ fn genesis_private_note_readiness_rejects_substituted_profiles_and_insufficient_
         let mut insufficient = row;
         insufficient.policy = Some(PrivacyProtocolPolicyV1 {
             protocol_id: compiled.protocol_id,
-            current_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+            current_limits: PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
                 IvmPrivateNoteLimitsV1 {
                     max_input_count: inputs,
                     max_output_count: outputs,
@@ -5034,7 +5045,7 @@ fn genesis_private_note_readiness_rejects_substituted_profiles_and_insufficient_
     }
     let mut malformed = row;
     malformed.policy = Some(PrivacyProtocolPolicyV1 {
-        protocol_id: PrivacyProtocolIdV1::VeRangeTransparentRangeV1,
+        protocol_id: PrivacyRuntimeProtocolIdV1::VeRangeTransparentRangeV1,
         current_limits: compiled.protocol_limits,
         pending_update: None,
     });
@@ -5050,7 +5061,7 @@ fn genesis_private_note_readiness_rejects_substituted_profiles_and_insufficient_
         pending_update: Some(PrivacyProtocolLimitsUpdateV1 {
             scheduled_at_height: 1,
             effective_at_height: 2,
-            next_limits: PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+            next_limits: PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
                 IvmPrivateNoteLimitsV1 {
                     max_input_count: 1,
                     max_output_count: 2,

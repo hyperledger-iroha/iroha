@@ -14,3 +14,6 @@ pub mod topology;
 
 #[cfg(test)]
 mod manual_decode_tests;
+
+#[cfg(test)]
+mod formatting_tests;

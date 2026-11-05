@@ -4,8 +4,6 @@ use integration_tests::sandbox;
 use iroha::data_model::prelude::*;
 use iroha_model_base::domain::DomainId;
 use iroha_test_network::NetworkBuilder;
-use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
-use std::time::{SystemTime, UNIX_EPOCH};
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<()> {
@@ -93,56 +91,19 @@ async fn post_transactions_query_filters_by_authority_and_timestamp() -> Result<
         ),
     ])
     .expect("serialize request envelope");
-    // POST to the endpoint
-    let url = client
-        .client()
-        .endpoint()
-        .join(&format!("/v1/accounts/{alice_id_str}/transactions/query"))
-        .unwrap();
-    let http = integration_tests::http::client();
-    let body = norito::json::to_vec(&env)?;
-    let timestamp_ms = u64::try_from(SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis())?;
-    let nonce = "transaction-filter-authority-timestamp";
-    let message = iroha_torii::canonical_network_request_signature_message(
-        &network.network_id(),
-        &iroha_torii::Method::POST,
-        &url.path().parse::<iroha_torii::Uri>()?,
-        &body,
-        timestamp_ms,
-        nonce,
-    )?;
-    let signature = iroha_crypto::Signature::try_new(ALICE_KEYPAIR.private_key(), &message)?;
-    let resp = http
-        .post(url)
-        .header("Content-Type", "application/json")
-        .header("Accept", "application/json")
-        .header(iroha_torii::HEADER_ACCOUNT, ALICE_ID.to_canonical_hex()?)
-        .header(
-            iroha_torii::HEADER_SIGNATURE,
-            iroha_torii::signature_header_value(&signature)?,
+    // The account facade signs the same native JSON collection envelope and
+    // preserves its filter tree while authenticating the exact URL and body.
+    let query: iroha::collections::ListQuery = norito::json::from_value(env)?;
+    let page = client
+        .account_client()
+        .list_page(
+            &iroha::collections::Collection::AccountTransactions(
+                iroha_test_samples::ALICE_ID.clone(),
+            ),
+            &query,
         )
-        .header(iroha_torii::HEADER_TIMESTAMP_MS, timestamp_ms.to_string())
-        .header(iroha_torii::HEADER_NONCE, nonce)
-        .body(body)
-        .send()
         .await?;
-    let status = resp.status();
-    let txt = resp.text().await?;
-    assert!(
-        status.is_success(),
-        "signed transaction query failed with {status}: {txt}"
-    );
-    let body: norito::json::Value = norito::json::from_str(&txt)?;
-    let items = match &body {
-        norito::json::Value::Object(m) => m
-            .get("items")
-            .and_then(|v| match v {
-                norito::json::Value::Array(a) => Some(a.clone()),
-                _ => None,
-            })
-            .unwrap_or_default(),
-        _ => Vec::new(),
-    };
+    let items = page.items;
     assert!(!items.is_empty(), "expected some transactions for Alice");
     for it in items {
         let auth: String = match it {

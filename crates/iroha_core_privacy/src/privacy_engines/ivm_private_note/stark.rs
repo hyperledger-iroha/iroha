@@ -49,7 +49,8 @@ use crate::privacy_engines::{
 };
 use iroha_data_model::privacy::{
     IrohaIvmPrivateNoteStarkStatementV1, PrivacyConsensusLimitsV1,
-    PrivacyNativeConsensusBindingDigestV1, PrivacyNativeConsensusBindingV1, PrivacyProtocolIdV1,
+    PrivacyNativeConsensusBindingDigestV1, PrivacyNativeConsensusBindingV1,
+    PrivacyRuntimeProtocolIdV1,
 };
 use rand::TryRng;
 const TYPE_SHA_ROUND: usize = 0;
@@ -122,7 +123,7 @@ const PRIVATE_NOTE_PARAMETERS_V1: aggregate::AggregateStarkParametersV1 =
 pub const PRIVATE_NOTE_DOMAINS_V1: aggregate::AggregateStarkDomainsV1 =
     aggregate::AggregateStarkDomainsV1 {
         digest_context: TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
             b"ivm-private-note-stark-profile-v1",
         ),
         base_leaf: b"ivm-private-note-stark-base-leaf-v1",

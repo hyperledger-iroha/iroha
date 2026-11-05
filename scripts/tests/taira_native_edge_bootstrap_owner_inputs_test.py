@@ -31,14 +31,15 @@ pytestmark = pytest.mark.skipif(sys.platform != "darwin",
 
 def _actual_bootstrap():
     source = RUST_PATH.read_text()
-    match = re.search(r'const BOOTSTRAP: &str = r"(.*?)";', source, re.DOTALL)
+    # Parse Rust's raw-string grammar, so dropping needless `#`s is not drift.
+    match = re.search(r'const BOOTSTRAP: &str = r(#*)"(.*?)"\1;', source, re.DOTALL)
     assert match is not None
     sources = source.split("const SOURCES:", 1)[1].split("const BOOTSTRAP:", 1)[0]
     paths = [RUST_PATH.parent / path for path in re.findall(r'include_bytes!\("([^\"]+)"\)', sources)]
     assert [path.name for path in paths] == ["taira_native_nginx_check.py", "taira_native_nginx_apply.py",
         "taira_native_validator_forwarding.py", "taira_native_edge_completion.py"]
-    assert "elif action == 'validate-owner-inputs':" in match[1]
-    return match[1].encode(), [path.resolve() for path in paths]
+    assert "elif action == 'validate-owner-inputs':" in match[2]
+    return match[2].encode(), [path.resolve() for path in paths]
 
 
 def _write_public(path, body):

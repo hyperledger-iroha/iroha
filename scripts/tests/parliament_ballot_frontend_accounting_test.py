@@ -288,7 +288,7 @@ def test_bound_inputs_and_charge_modes_are_validated():
 
 
 def test_source_drift_and_missing_inputs_fail_closed(monkeypatch, tmp_path):
-    assert len(MODULE.source_inventory(ROOT)["files"]) == 81
+    assert len(MODULE.source_inventory(ROOT)["files"]) == 91
     with pytest.raises(ValueError, match="missing"):
         MODULE.source_inventory(tmp_path)
     monkeypatch.setattr(MODULE, "REVIEWED_SOURCE_SHA256", "0" * 64)
@@ -301,6 +301,8 @@ def test_receipt_keeps_incomplete_status_and_explicit_rejection_scope(tmp_path):
     assert MODULE.main(["--output", str(output), "--require-complete"]) == 1
     result = json.loads(output.read_text())
     assert len(result["cases"]) == 16
+    retained = json.loads((ROOT / "docs/validation/parliament_ballot_b6/frontend_accounting.json").read_text())
+    assert result["cases"] == retained["cases"]
     assert not result["complete_work_certificate"]
     assert not result["process_memory_certificate"]
     assert not result["profile_qualified"]

@@ -846,13 +846,13 @@ fn statement(start: u64, end: u64) -> IrohaZkX509StarkP256StatementV1 {
 #[test]
 fn statement_and_crl_record_expose_the_canonical_interval_views() {
     use iroha_data_model::privacy::{
-        PrivacyConsensusLimitsV1, PrivacyStatementV1, PrivacyStatementValidationError,
+        PrivacyConsensusLimitsV1, PrivacyRuntimeStatementV1, PrivacyStatementValidationError,
     };
     let limits = PrivacyConsensusLimitsV1::taira_default();
     let admitted = statement(T, T + 300);
     assert_eq!(admitted.presentation_window(), window(T, T + 300));
     assert_eq!(admitted.presentation_window().validate(), Ok(()));
-    PrivacyStatementV1::IrohaZkX509StarkP256V1(admitted)
+    PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(admitted)
         .validate(&limits)
         .expect("the exact presentation-window ceiling is admitted");
     // Statement validation is the canonical window shape, with its own error
@@ -861,7 +861,7 @@ fn statement_and_crl_record_expose_the_canonical_interval_views() {
         let rejected = statement(start, end);
         assert!(rejected.presentation_window().validate().is_err());
         assert_eq!(
-            PrivacyStatementV1::IrohaZkX509StarkP256V1(rejected).validate(&limits),
+            PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(rejected).validate(&limits),
             Err(
                 PrivacyStatementValidationError::InvalidX509PresentationWindow {
                     start,

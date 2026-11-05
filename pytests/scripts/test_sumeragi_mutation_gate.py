@@ -4084,9 +4084,9 @@ def test_retained_cell_revision_mutations_bind_actual_core_pair_and_exact_contro
         assert "revision.retained_read_matches_source(source)" in implementation
         assert "revision: Option<mv::cell::FrozenDetachedRead<MusubiResolverIndexRevisionV1>>" in implementation
     else:
-        cell = implementation.split(
-            "impl<V: mv::CellValue, C: Send + Sync + 'static> CellField<'_, V, C> {", 1
-        )[1]
+        cell_impl = "CellField<'_, V, C> {"
+        assert implementation.count(cell_impl) == 1
+        cell = implementation.split(cell_impl, 1)[1]
         assert "original.matches_read(source)" in cell
         assert "original.try_into_detached()" in cell
         assert "self.phase = Some(Phase::Reading(original))" in cell
@@ -11515,6 +11515,15 @@ def test_incoming_read_mutation_kill_requires_exact_completed_native_cause(monke
     assert result["verdict"] == verdict, result
 
 
+def execution_attempt() -> str:
+    """The one attempt `run_execution_with_finisher` runs inside its State-pool credit scope."""
+    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
+    wrapper = named_rust_function(executor, "run_execution_with_finisher")
+    assert wrapper.count("self.run_attempt_with_finisher(") == 1
+    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
+    return named_rust_function(executor, "run_attempt_with_finisher")
+
+
 def test_incoming_execution_uses_one_scoped_merge_algorithm_and_explicit_native_cleanup():
     lanes = ROOT / "crates/iroha_core/src/sumeragi/lanes"
     merge = (lanes / "merge.rs").read_text()
@@ -11534,11 +11543,7 @@ def test_incoming_execution_uses_one_scoped_merge_algorithm_and_explicit_native_
     fields = re.findall(r"pub\(super\) (\w+): ([^,]+),", coordinates)
     assert fields == [("instance", "Hash32"), ("height", "u64"), ("view", "u64"),
                       ("block_hash", "Hash32"), ("scope", "lanes::ProposalReadScope")]
-    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
-    wrapper = named_rust_function(executor, "run_execution_with_finisher")
-    assert wrapper.count("self.run_attempt_with_finisher(") == 1
-    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
-    execution = named_rust_function(executor, "run_attempt_with_finisher")
+    execution = execution_attempt()
     assert execution.index("if attempt.source != *block") < execution.index("self.retain_incoming_lane_reads(")
     assert execution.index("block.source().config() != &configured") < execution.index("self.retain_incoming_lane_reads(")
     assert execution.index("proposal_matches_header(") < execution.index("self.retain_incoming_lane_reads(")
@@ -12257,11 +12262,7 @@ def test_semantic_parent_qc_custody_controls_have_unique_sources_and_exact_cause
     for name in ("verify_parent_service_at", "authenticate"):
         body = named_rust_function(source, name)
         assert "decode_canonical" not in body
-    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
-    wrapper = named_rust_function(executor, "run_execution_with_finisher")
-    assert wrapper.count("self.run_attempt_with_finisher(") == 1
-    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
-    worker = named_rust_function(executor, "run_attempt_with_finisher")
+    worker = execution_attempt()
     assert worker.index("prepare_proposal_qc") < worker.index("validate_sumeragi_block")
 
 
@@ -12321,11 +12322,7 @@ def test_parent_service_signer_rules_bind_original_custody_and_exact_native_caus
         body = named_rust_function(relation, name)
         assert "verify_parent_service_relation" in body
         assert "decode_canonical" not in body
-    executor = (ROOT / "crates/iroha_core/src/sumeragi/executor.rs").read_text()
-    wrapper = named_rust_function(executor, "run_execution_with_finisher")
-    assert wrapper.count("self.run_attempt_with_finisher(") == 1
-    assert "self.run_attempt_with_finisher(block,block_hash,certified,finish)" in re.sub(r"\s+", "", wrapper)
-    worker = named_rust_function(executor, "run_attempt_with_finisher")
+    worker = execution_attempt()
     assert worker.index("prepare_proposal_qc") < worker.index("validate_sumeragi_block")
 
 

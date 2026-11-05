@@ -289,8 +289,8 @@ pub(crate) fn tonal_button(text: &str, fg: Color32, bg: Color32) -> egui::Button
 }
 
 /// Copy `value` to the clipboard and confirm with a toast.
-pub(crate) fn copy_to_clipboard(context: &egui::Context, value: &str, what: &str) {
-    context.copy_text(value.to_owned());
+pub(crate) fn copy_to_clipboard(context: &egui::Context, value: impl Into<String>, what: &str) {
+    context.copy_text(value.into());
     notify(context, format!("Copied {what}"));
 }
 
@@ -688,6 +688,44 @@ pub(crate) fn elapsed(duration: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_takes_owned_text_without_copying_its_buffer() {
+        let context = egui::Context::default();
+        let text = "00010f107f80feff".to_owned();
+        let pointer = text.as_ptr();
+        copy_to_clipboard(&context, text, "Norito hex");
+        let commands = context.output_mut(|output| std::mem::take(&mut output.commands));
+        let [egui::OutputCommand::CopyText(copied)] = commands.as_slice() else {
+            panic!("expected one text clipboard command");
+        };
+        assert_eq!(copied, "00010f107f80feff");
+        assert_eq!(copied.as_ptr(), pointer);
+        assert_eq!(
+            current_toast(&context).as_deref(),
+            Some("Copied Norito hex")
+        );
+    }
+
+    #[test]
+    fn clipboard_copies_borrowed_text_and_preserves_empty_and_unicode_values() {
+        let context = egui::Context::default();
+        for text in ["", "μ🔥\nquote\"\\"] {
+            copy_to_clipboard(&context, text, "JSON");
+            let owned = text.to_owned();
+            copy_to_clipboard(&context, &owned, "receipt");
+            let commands = context.output_mut(|output| std::mem::take(&mut output.commands));
+            assert_eq!(
+                commands,
+                [
+                    egui::OutputCommand::CopyText(text.to_owned()),
+                    egui::OutputCommand::CopyText(text.to_owned()),
+                ]
+            );
+            assert_eq!(owned, text);
+            assert_eq!(current_toast(&context).as_deref(), Some("Copied receipt"));
+        }
+    }
 
     #[test]
     fn every_icon_glyph_exists_in_the_bundled_fonts() {

@@ -113,6 +113,7 @@ fn file_backed_genesis_keeps_fresh_preexecution_validation() {
                     Vec::new(),
                     topology,
                     pops,
+                    config::default_test_network_staking_policy(),
                 );
                 *retained.lock().expect("raw custom genesis") = Some(raw.clone());
                 raw

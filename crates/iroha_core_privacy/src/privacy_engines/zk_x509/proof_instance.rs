@@ -65,7 +65,7 @@ mod tests {
         HealthCheckedTryCryptoRngV1, TryCryptoProverRandomnessErrorV1,
     };
     use crate::privacy_engines::transparent_stark::PrivacyOuterDigestV1;
-    use iroha_data_model::privacy::PrivacyProtocolIdV1;
+    use iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1;
     use rand::{TryCryptoRng, TryRng};
     use std::{cell::RefCell, rc::Rc};
 
@@ -274,7 +274,7 @@ mod tests {
             }
         }
         let unscoped = TransparentStarkDigestContextV1::new(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             b"iroha-zk-x509-stark-p256-release-profile-v1",
         );
         assert_eq!(

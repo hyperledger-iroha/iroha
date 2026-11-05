@@ -115,6 +115,123 @@ def test_new_scalar_opcodes_reject_unknown_forms_and_stack_pointer_operands(inst
     assert MODULE.call_region({0x1000: result}, 0x1000)["complete_stack_bound_bytes"] is None
 
 
+@pytest.mark.parametrize("instruction", [
+    "ldursb w8, [x29, #-0xa8]", "ldursb x30, [sp, #255]", "ldursb wzr, [sp]",
+    "ldursb xzr, [x0, #-256]", "orn w13, w13, w11", "orn xzr, x29, x30",
+    "orn w0, wzr, w29, lsl #31", "orn x0, x1, x2, lsr #63",
+    "orn x0, x1, x2, asr #0", "orn w0, w1, w2, ror #0x1f",
+    "umaxv.16b b0, v0", "umaxv.8b b31, v31", "umaxv.4h h0, v1",
+    "umaxv.8h h29, v29", "umaxv.4s s31, v0", "mvni.8h v4, #0xf",
+    "mvni.4h v31, #255, lsl #8", "mvni.2s v29, #0, lsl #24",
+    "mvni.4s v0, #255, msl #8", "mvni.4s v31, #0xff, msl #16",
+    "rax1.2d v14, v13, v10", "rax1.2d v29, v30, v31",
+])
+def test_current_image_opcodes_preserve_integer_sp_and_unwritten_fp(instruction):
+    # Reserve below the known FP before the actual signed-byte load. SIMD
+    # register 29 is a different register bank and must not clobber integer FP.
+    result = function(["sub sp, sp, #64", "mov x29, sp", "sub sp, sp, #64", instruction,
+                       "sub sp, sp, #32", "mov sp, x29", "add sp, sp, #64", "ret"])
+    assert result["maximum_sp_decrement_bytes"] == 160
+    assert result["visited_instructions"] == 8
+    assert not result["frame_errors"] and not result["gaps"]
+
+
+@pytest.mark.parametrize("instruction", [
+    "ldursb x29, [sp]", "ldursb w29, [x29, #-8]",
+    "orn x29, x0, x1", "orn w29, w0, w1",
+])
+def test_current_scalar_fp_writes_refuse_a_stale_fp_stack_restore(instruction):
+    result = function(["sub sp, sp, #16", "mov x29, sp", instruction, "mov sp, x29", "ret"])
+    assert result["frame_errors"][0]["kind"] == "unsupported_stack_effect"
+    assert result["frame_errors"][0]["address"] == "0x100c"
+    assert result["frame_errors"][0]["detail"] == "mov sp, x29: unsupported SP write"
+    assert MODULE.call_region({0x1000: result}, 0x1000)["complete_stack_bound_bytes"] is None
+
+
+@pytest.mark.parametrize("instruction", [
+    "ldursb sp, [x0]", "ldursb w31, [x0]", "ldursb w0, [w1]",
+    "ldursb w0, [x31]", "ldursb w0, [xzr]", "ldursb w0, [x1, #256]",
+    "ldursb w0, [x1, #-257]", "ldursb w0, [x1, x2]",
+    "ldursb w0, [sp, #-16]!", "ldursb w0, [sp], #16",
+    "ldursb w0, [x29], #16", "ldursb w0, [sp, #-129]",
+    "ldursb.future w0, [x1]", "orn sp, x0, x1", "orn x0, sp, x1",
+    "orn x0, x1, w2", "orn x31, x0, x1", "orn w0, w1, w2, lsl #32",
+    "orn x0, x1, x2, ror #64", "orn x0, x1, x2, lsr #-1",
+    "orn x0, x1, x2, future #1", "orn.16b v0, v1, v2",
+    "umaxv b0, v0", "umaxv.2s s0, v1", "umaxv.2d d0, v1",
+    "umaxv.16b h0, v1", "umaxv.16b w0, v1", "umaxv.16b b32, v0",
+    "umaxv.16b b0, v32", "umaxv.16b b0, sp", "umaxv.future b0, v0",
+    "mvni v0, #15", "mvni.16b v0, #15", "mvni.2d v0, #15",
+    "mvni.8h sp, #15", "mvni.8h x29, #15", "mvni.8h v32, #15",
+    "mvni.8h v0, #256", "mvni.8h v0, #-1", "mvni.8h v0, #15, lsl #16",
+    "mvni.4s v0, #15, lsl #32", "mvni.8h v0, #15, msl #8",
+    "mvni.4s v0, #15, msl #0", "mvni.4s v0, #15, msl #24",
+    "mvni.4s v0, #15, lsr #8", "mvni.future v0, #15",
+    "rax1 v0, v1, v2", "rax1.4s v0, v1, v2", "rax1.2d x29, v1, v2",
+    "rax1.2d v0, sp, v2", "rax1.2d v0, v1, v32", "rax1.2d v0, v1, v2, #1",
+])
+def test_current_image_opcodes_reject_unreviewed_operand_forms(instruction):
+    result = function([instruction, "ret"])
+    assert result["frame_errors"][0]["kind"] == "unsupported_stack_effect"
+    assert MODULE.call_region({0x1000: result}, 0x1000)["complete_stack_bound_bytes"] is None
+
+
+@pytest.mark.parametrize("instruction", [
+    "bcax.16b v17, v30, v20, v21", "bcax.16b v29, v0, v31, v29",
+    "bit.16b v0, v5, v21", "bit.8b v29, v30, v31",
+    "umov.h w2, v0[0]", "umov.h wzr, v31[7]",
+    "umov.b w30, v29[15]", "umov.b wzr, v31[0]",
+    "umov.s w0, v29[3]", "umov.s wzr, v31[0]",
+    "umov.d x30, v29[1]", "umov.d xzr, v31[0]",
+])
+def test_remaining_image_opcodes_preserve_sp_and_unwritten_integer_fp(instruction):
+    result = function(["sub sp, sp, #16", "mov x29, sp", instruction,
+                       "sub sp, sp, #32", "mov sp, x29", "add sp, sp, #16", "ret"])
+    assert result["maximum_sp_decrement_bytes"] == 48
+    assert result["visited_instructions"] == 7
+    assert not result["frame_errors"] and not result["gaps"]
+
+
+@pytest.mark.parametrize("instruction", [
+    "umov.b w29, v0[15]", "umov.h w29, v29[7]",
+    "umov.s w29, v1[3]", "umov.d x29, v31[1]",
+])
+def test_umov_integer_fp_destination_prevents_stale_fp_stack_restore(instruction):
+    result = function(["sub sp, sp, #16", "mov x29, sp", instruction, "mov sp, x29", "ret"])
+    assert result["frame_errors"] == [{
+        "address": "0x100c", "kind": "unsupported_stack_effect",
+        "detail": "mov sp, x29: unsupported SP write", "caller_depth_bytes": 16,
+    }]
+    assert MODULE.call_region({0x1000: result}, 0x1000)["complete_stack_bound_bytes"] is None
+
+
+@pytest.mark.parametrize("instruction", [
+    "bcax v0, v1, v2, v3", "bcax.8b v0, v1, v2, v3",
+    "bcax.2d v0, v1, v2, v3", "bcax.future v0, v1, v2, v3",
+    "bcax.16b v0, v1, v2", "bcax.16b v0, v1, v2, v3, v4",
+    "bcax.16b sp, v1, v2, v3", "bcax.16b x29, v1, v2, v3",
+    "bcax.16b v0, v1, v2, sp", "bcax.16b v0, v1, v2, v32",
+    "bcax.16b v0, v1, v2, [sp], #16",
+    "bit v0, v1, v2", "bit.4s v0, v1, v2", "bit.future v0, v1, v2",
+    "bit.16b sp, v1, v2", "bit.8b x29, v1, v2", "bit.16b v0, sp, v2",
+    "bit.16b v0, v32, v2", "bit.8b v0, v1", "bit.16b v0, v1, v2, v3",
+    "bit.16b v0, v1, [x29], #16",
+    "umov w0, v0[0]", "umov.future w0, v0[0]", "umov.8h w0, v0[0]",
+    "umov.h sp, v0[0]", "umov.h wsp, v0[0]", "umov.d sp, v0[0]",
+    "umov.h x0, v0[0]", "umov.d w0, v0[0]", "umov.h w31, v0[0]",
+    "umov.d x31, v0[0]", "umov.h w0, v32[0]", "umov.h w0, x29[0]",
+    "umov.h w0, sp[0]", "umov.h w0, [sp], #16", "umov.h w0, [x29], #16",
+    "umov.b w0, v0[16]", "umov.h w0, v0[8]", "umov.s w0, v0[4]",
+    "umov.d x0, v0[2]", "umov.h w0, v0[-1]", "umov.h w0, v0[0x1]",
+    "umov.h w0, v0[x1]", "umov.h w0, v0", "umov.h w0, v0[0]!",
+    "umov.h w0, v0[0], #1",
+])
+def test_remaining_image_opcodes_reject_unreviewed_forms(instruction):
+    result = function([instruction, "ret"])
+    assert result["frame_errors"][0]["kind"] == "unsupported_stack_effect"
+    assert MODULE.call_region({0x1000: result}, 0x1000)["complete_stack_bound_bytes"] is None
+
+
 def test_fp_restore_and_unknown_fp_fail_closed():
     valid = function(["stp x29, x30, [sp, #-0x10]!", "mov x29, sp",
                       "sub sp, sp, #0x40", "mov sp, x29", "ldp x29, x30, [sp], #0x10", "ret"])
@@ -277,3 +394,326 @@ def test_integer_parser_accepts_only_constant_immediates():
     for value in ["x0", "#16, lsl x0", "#1, lsl #16"]:
         with pytest.raises(ValueError):
             MODULE.immediate(value)
+
+
+def test_capture_decodes_zero_blocks_and_keeps_native_and_trap_frontiers(tmp_path, monkeypatch):
+    binary, tool = tmp_path / "worker", tmp_path / "llvm-objdump"
+    binary.write_bytes(b"retained executable identity")
+    tool.write_bytes(b"retained tool identity")
+    text = """fixture: file format mach-o arm64
+Disassembly of section __TEXT,__text:
+0000000000001000 <root>:
+1000: bl 0x9000
+1004: udf #0
+0000000000001008 <next>:
+1008: ret
+"""
+    starts = "0000000000001000 root\n0000000000001008 next\n"
+    stubs = "Indirect symbols for (__TEXT,__stubs) 1 entries\n0x0000000000009000 0 __exit\n"
+    commands = []
+
+    def check_output(command, **kwargs):
+        return str(tool) if command == ["xcrun", "--find", "llvm-objdump"] else "fixture LLVM"
+
+    def run(command, **kwargs):
+        commands.append(command)
+        if "--disassemble" in command:
+            # This fixture mirrors LLVM's default elision, not a fabricated
+            # return. The capture option must expose the actual trap word.
+            value = text if "--disassemble-zeroes" in command else text.replace("1004: udf #0", "\t...")
+        elif "--function-starts=both" in command:
+            value = starts
+        elif "--indirect-symbols" in command:
+            value = stubs
+        else:
+            value = "fixture unwind metadata"
+        return MODULE.subprocess.CompletedProcess(command, 0, value, "")
+
+    monkeypatch.setattr(MODULE.subprocess, "check_output", check_output)
+    monkeypatch.setattr(MODULE.subprocess, "run", run)
+    raw, identity = MODULE.capture(binary, tmp_path / "raw")
+    assert "--disassemble-zeroes" in commands[0]
+    assert raw["disassembly"] == text
+    assert identity["binary_sha256"] == MODULE.digest(binary)
+    assert identity["binary_tool_and_analyzer_unchanged_during_capture"] is True
+    assert identity["commands"][0]["sha256"] == MODULE.digest(tmp_path / "raw/disassembly.txt")
+    result = MODULE.audit(raw["disassembly"], raw["starts"], raw["stubs"], ["root"])["roots"][0]
+    assert result["frontier_kind_counts"] == {"exceptional_terminal": 1, "native_edge": 1}
+    assert result["complete_stack_bound_bytes"] is None
+    omitted = MODULE.audit(text.replace("1004: udf #0", "\t..."), starts, stubs, ["root"])["roots"][0]
+    assert omitted["frontier_kind_counts"] == {"missing_instruction": 1, "native_edge": 1}
+    assert omitted["complete_stack_bound_bytes"] is None
+
+
+def terminal_fixture(callee, *, name="neutral_terminal", missing=(), identity=None):
+    """Use real conditional/call/trap encodings with a separate following function."""
+    root = ["cbz w0, 0x1010", "stp x29, x30, [sp, #-16]!", "mov x29, sp",
+            "bl 0x1014", "ret"]
+    next_start = 0x1014 + 4 * len(callee)
+    lines = ["fixture: file format mach-o arm64", "Disassembly of section __TEXT,__text:"]
+    starts = []
+    for address, label, body in [(0x1000, "root", root), (0x1014, name, callee),
+                                 (next_start, "following", ["ret"])]:
+        starts.append(f"{address:016x} {label}")
+        lines.append(f"{address:016x} <{label}>:")
+        lines.extend(f"{address + 4 * index:x}: {instruction}" for index, instruction in enumerate(body)
+                     if address + 4 * index not in missing)
+    text, starts_text = "\n".join(lines) + "\n", "\n".join(starts) + "\n"
+    stubs = "Indirect symbols for (__TEXT,__stubs) 1 entries\n0x0000000000003000 0 opaque_endpoint\n"
+    return MODULE.audit(text, starts_text, stubs, ["root"], image_identity=identity), (text, starts_text, stubs)
+
+
+@pytest.mark.parametrize("terminal", ["udf #0", "udf #65535", "brk #0x0", "brk #0xffff"])
+def test_terminal_fact_omits_only_caller_continuation_and_preserves_obligations(terminal):
+    result, _ = terminal_fixture(["bl 0x3000", terminal, "udf #0"])
+    root = result["functions"][0]
+    fact = result["terminal_callee_facts"][0]
+    assert root["calls"] == [{"address": "0x100c", "target": "0x1014", "kind": "call", "caller_depth_bytes": 16}]
+    assert root["maximum_sp_decrement_bytes"] == 16 and not root["frame_errors"]
+    assert root["ordinary_continuations_omitted"] == [{
+        "address": "0x100c", "target": "0x1014", "caller_depth_bytes": 16,
+        "ordinary_successor": "0x1010", "fact_sha256": fact["fact_sha256"],
+    }]
+    assert fact["address"] == "0x1014" and fact["end"] == "0x1020"
+    assert fact["instruction_count"] == 3 and fact["image_binding_sha256"] == result["image_binding_sha256"]
+    region = result["roots"][0]
+    assert region["direct_reachable_functions"] == 2
+    assert region["frontier_kind_counts"] == {"exceptional_terminal": 1, "inconsistent_sp_merge": 1, "native_edge": 1}
+    assert region["complete_stack_bound_bytes"] is None
+    assert "no hidden exception/signal/unwind edge" in region["abi_assumptions"]
+    assert not result["profile_qualified"] and not result["complete_workspace_certificate"]
+
+
+@pytest.mark.parametrize("callee", [
+    ["ret"], ["udf #0", "ret"], ["udf #0", "nop"],
+    ["b.eq 0x1018", "udf #0"], ["b 0x1018", "udf #0"],
+    ["br x0", "udf #0"], ["blr x0", "udf #0"], ["hlt #0"],
+    ["bl 0xdead", "udf #0"], ["bl x0", "udf #0"],
+    ["bl 0x3000 trailing", "udf #0"], ["bl 0x3000"],
+    ["future x0, x1", "udf #0"], ["nop.future", "udf #0"],
+    ["bit.16b v0, v1, v2", "udf #0"],
+    ["sub sp, sp, x0", "udf #0"], ["mov sp, x29", "udf #0"],
+    ["sub sp, sp, #8", "udf #0"], ["add sp, sp, #16", "udf #0"],
+    ["ldursb w0, [sp, #-129]", "udf #0"],
+    ["udf #-1"], ["brk #-1"], ["udf #65536"], ["brk #0x10000"],
+    ["udf x0"], ["brk #0, lsl #12"], ["udf.future #0"],
+])
+def test_terminal_fact_refuses_every_unproved_control_stack_or_terminal_form(callee):
+    result, _ = terminal_fixture(callee, name="panic_name_is_not_a_proof")
+    assert not result["terminal_callee_facts"]
+    assert not result["functions"][0]["ordinary_continuations_omitted"]
+    assert result["functions"][0]["frame_errors"][0]["kind"] == "inconsistent_sp_merge"
+    assert result["roots"][0]["complete_stack_bound_bytes"] is None
+
+
+def test_terminal_fact_requires_complete_interval_and_known_following_boundary():
+    result, _ = terminal_fixture(["nop", "udf #0"], missing={0x1014})
+    assert not result["terminal_callee_facts"]
+    instructions = {0x1000: ("udf", "#0")}
+    assert MODULE.terminal_callee_fact(0x1000, 0x1004, instructions, {0x1000: "last"}, {}, "a" * 64) is None
+    starts = {0x1000: "first", 0x1004: "next"}
+    assert MODULE.terminal_callee_fact(0x1000, 0x1008, instructions, starts, {}, "a" * 64) is None
+    assert MODULE.terminal_callee_fact(0x1000, 0x1004, instructions, starts, {}, None) is None
+    instructions[0x1002] = ("udf", "#0")
+    assert MODULE.terminal_callee_fact(0x1000, 0x1004, instructions, starts, {}, "a" * 64) is None
+
+
+def test_terminal_fact_does_not_infer_transitive_nonreturn_or_erase_recursion():
+    result, _ = terminal_fixture(["stp x29, x30, [sp, #-16]!", "bl 0x1014", "udf #0"])
+    root = result["roots"][0]
+    assert len(root["positive_weight_recursive_components"]) == 1
+    assert root["frontier_kind_counts"] == {"exceptional_terminal": 1, "inconsistent_sp_merge": 1}
+    assert root["complete_stack_bound_bytes"] is None
+    # The terminal callee retains its full conservative analysis, including
+    # the trap after the recursive call; only its external caller is refined.
+    assert result["terminal_callee_facts"][0]["direct_calls"][0]["caller_depth_bytes"] == 16
+    assert not result["functions"][1]["ordinary_continuations_omitted"]
+
+
+def test_terminal_facts_do_not_propagate_through_a_returning_wrapper():
+    text = """fixture: file format mach-o arm64
+Disassembly of section __TEXT,__text:
+0000000000001000 <root>:
+1000: cbz w0, 0x1010
+1004: stp x29, x30, [sp, #-16]!
+1008: mov x29, sp
+100c: bl 0x1014
+1010: ret
+0000000000001014 <wrapper>:
+1014: bl 0x101c
+1018: ret
+000000000000101c <terminal>:
+101c: udf #0
+0000000000001020 <following>:
+1020: ret
+"""
+    starts = "0000000000001000 root\n0000000000001014 wrapper\n000000000000101c terminal\n0000000000001020 following\n"
+    result = MODULE.audit(text, starts, "", ["root"])
+    assert [fact["address"] for fact in result["terminal_callee_facts"]] == ["0x101c"]
+    assert not result["functions"][0]["ordinary_continuations_omitted"]
+    assert result["functions"][0]["frame_errors"][0]["kind"] == "inconsistent_sp_merge"
+    assert result["roots"][0]["complete_stack_bound_bytes"] is None
+
+
+def test_terminal_facts_bind_full_image_metadata_binary_tool_and_interval():
+    baseline, raw = terminal_fixture(["bl 0x3000", "udf #0"])
+    text, starts, stubs = raw
+    identity = {
+        "binary_sha256": "a" * 64, "objdump_sha256": "b" * 64,
+        "script_sha256": MODULE.digest(SCRIPT),
+        "binary_tool_and_analyzer_unchanged_during_capture": True,
+        "commands": [{"sha256": MODULE.hashlib.sha256(value.encode()).hexdigest()} for value in raw],
+    }
+    bound = MODULE.audit(*raw, ["root"], image_identity=identity)
+    assert bound["image_binding"]["binary_sha256"] == identity["binary_sha256"]
+    assert bound["image_binding"]["objdump_sha256"] == identity["objdump_sha256"]
+    assert bound["terminal_callee_facts"][0]["fact_sha256"] != baseline["terminal_callee_facts"][0]["fact_sha256"]
+    changed = MODULE.audit(text + "\n", starts, stubs, ["root"])
+    assert changed["image_binding_sha256"] != baseline["image_binding_sha256"]
+    assert changed["terminal_callee_facts"][0]["interval_sha256"] == baseline["terminal_callee_facts"][0]["interval_sha256"]
+    assert changed["terminal_callee_facts"][0]["fact_sha256"] != baseline["terminal_callee_facts"][0]["fact_sha256"]
+    with pytest.raises(ValueError, match="does not bind"):
+        MODULE.audit(text + "\n", starts, stubs, ["root"], image_identity=identity)
+    for field in ("binary_sha256", "objdump_sha256", "script_sha256"):
+        with pytest.raises(ValueError, match="identity"):
+            MODULE.audit(*raw, ["root"], image_identity={**identity, field: "not-a-digest"})
+    changed_binary = MODULE.audit(*raw, ["root"], image_identity={**identity, "binary_sha256": "c" * 64})
+    assert changed_binary["image_binding_sha256"] != bound["image_binding_sha256"]
+
+
+def test_caller_rejects_stale_image_or_modified_interval_fact():
+    result, raw = terminal_fixture(["bl 0x3000", "udf #0"])
+    instructions, names = MODULE.parse_disassembly(raw[0])
+    starts, stubs = MODULE.parse_starts(raw[1]), MODULE.parse_stubs(raw[2])
+    fact = result["terminal_callee_facts"][0]
+    for binding, current in [("different-image", instructions),
+                             (result["image_binding_sha256"], {**instructions, 0x1018: ("ret", "")})]:
+        fn = MODULE.analyze_function(0x1000, 0x1014, current, starts, stubs, names[0x1000],
+                                     {0x1014: fact}, binding)
+        assert any(error["kind"] == "invalid_terminal_callee_fact" for error in fn["frame_errors"])
+        assert not fn["ordinary_continuations_omitted"]
+        assert fn["calls"][0]["caller_depth_bytes"] == 16
+
+
+def test_omitted_continuation_retains_native_unwind_and_trap_obligations():
+    text = """fixture: file format mach-o arm64
+Disassembly of section __TEXT,__text:
+0000000000001000 <root>:
+1000: cbz w0, 0x1014
+1004: stp x29, x30, [sp, #-16]!
+1008: bl 0x1018
+100c: bl 0x3000
+1010: udf #0
+1014: ret
+0000000000001018 <terminal>:
+1018: udf #0
+000000000000101c <following>:
+101c: ret
+"""
+    starts = "0000000000001000 root\n0000000000001018 terminal\n000000000000101c following\n"
+    stubs = "Indirect symbols for (__TEXT,__stubs) 1 entries\n0x0000000000003000 0 __Unwind_Resume\n"
+    result = MODULE.audit(text, starts, stubs, ["root"])
+    fn = result["functions"][0]
+    assert not fn["gaps"] and not fn["frame_errors"]
+    deferred = fn["deferred_continuation_frontiers"]
+    assert [(row["address"], row["kind"], row["caller_depth_bytes"]) for row in deferred] == [
+        ("0x100c", "native_edge", 16), ("0x1010", "exceptional_terminal", 16),
+    ]
+    assert deferred[0]["detail"] == "__Unwind_Resume"
+    fact = result["terminal_callee_facts"][0]
+    assert all(row["refinement_fact_sha256s"] == [fact["fact_sha256"]] for row in deferred)
+    assert all(row["omitted_call_addresses"] == ["0x1008"] for row in deferred)
+    assert fn["conservative_analysis_before_refinement"]["gaps"][0]["detail"] == "__Unwind_Resume"
+    assert result["roots"][0]["frontier_kind_counts"] == {"exceptional_terminal": 2, "native_edge": 1}
+    assert result["roots"][0]["complete_stack_bound_bytes"] is None
+
+
+def test_deferred_frontier_itself_refuses_a_complete_bound():
+    fn = function(["ret"])
+    fn["deferred_continuation_frontiers"] = [{
+        "address": "0x1004", "kind": "native_edge", "detail": "opaque_native",
+        "caller_depth_bytes": 0, "refinement_fact_sha256s": ["a" * 64],
+        "omitted_call_addresses": ["0x1000"],
+    }]
+    result = MODULE.call_region({0x1000: fn}, 0x1000)
+    assert result["frontier_kind_counts"] == {"native_edge": 1}
+    assert not result["complete_ordinary_call_graph"] and result["complete_stack_bound_bytes"] is None
+
+
+def test_deferred_call_preserves_downstream_positive_weight_recursion():
+    text = """fixture: file format mach-o arm64
+Disassembly of section __TEXT,__text:
+0000000000001000 <root>:
+1000: cbz w0, 0x1010
+1004: bl 0x1014
+1008: bl 0x1018
+100c: ret
+1010: ret
+0000000000001014 <terminal>:
+1014: udf #0
+0000000000001018 <recursive>:
+1018: stp x29, x30, [sp, #-16]!
+101c: bl 0x1018
+1020: add sp, sp, #16
+1024: ret
+0000000000001028 <following>:
+1028: ret
+"""
+    starts = "0000000000001000 root\n0000000000001014 terminal\n0000000000001018 recursive\n0000000000001028 following\n"
+    result = MODULE.audit(text, starts, "", ["root"])
+    fn = result["functions"][0]
+    assert [row["target"] for row in fn["calls"]] == ["0x1014"]
+    assert [row["target"] for row in fn["deferred_continuation_calls"]] == ["0x1018"]
+    assert fn["deferred_continuation_calls"][0]["caller_depth_bytes"] == 0
+    assert fn["deferred_continuation_calls"][0]["omitted_call_addresses"] == ["0x1004"]
+    region = result["roots"][0]
+    assert region["direct_reachable_functions"] == 3
+    assert region["positive_weight_recursive_components"] == [[{"address": "0x1018", "name": "recursive"}]]
+    assert region["complete_stack_bound_bytes"] is None
+
+
+def test_boundary_fallthrough_after_omitted_call_remains_a_deferred_obligation():
+    text = """fixture: file format mach-o arm64
+Disassembly of section __TEXT,__text:
+0000000000001000 <root>:
+1000: cbz w0, 0x1008
+1004: ret
+1008: bl 0x100c
+000000000000100c <terminal>:
+100c: brk #0
+0000000000001010 <following>:
+1010: ret
+"""
+    starts = "0000000000001000 root\n000000000000100c terminal\n0000000000001010 following\n"
+    result = MODULE.audit(text, starts, "", ["root"])
+    assert result["functions"][0]["deferred_continuation_frontiers"][0]["kind"] == "function_fallthrough"
+    assert result["roots"][0]["frontier_kind_counts"] == {"exceptional_terminal": 1, "function_fallthrough": 1}
+    assert result["roots"][0]["complete_stack_bound_bytes"] is None
+
+
+def test_stack_growing_loop_after_omitted_call_stays_an_active_merge_refusal():
+    text = """fixture: file format mach-o arm64
+Disassembly of section __TEXT,__text:
+0000000000001000 <root>:
+1000: bl 0x100c
+1004: sub sp, sp, #16
+1008: b 0x1004
+000000000000100c <terminal>:
+100c: udf #0
+0000000000001010 <following>:
+1010: ret
+"""
+    starts = "0000000000001000 root\n000000000000100c terminal\n0000000000001010 following\n"
+    result = MODULE.audit(text, starts, "", ["root"])
+    fn = result["functions"][0]
+    assert not fn["frame_errors"] and fn["ordinary_maximum_sp_decrement_bytes"] == 0
+    assert fn["maximum_sp_decrement_bytes"] == 16
+    deferred = fn["deferred_continuation_frontiers"]
+    assert len(deferred) == 1 and deferred[0]["kind"] == "inconsistent_sp_merge"
+    assert deferred[0]["address"] == "0x1004" and deferred[0]["caller_depth_bytes"] == 16
+    assert deferred[0]["omitted_call_addresses"] == ["0x1000"]
+    assert fn["ordinary_sp_merge_explanations"][0]["status"] == "retained as an active deferred obligation"
+    assert result["whole_image_ordinary_frame_error_count"] == 0
+    assert result["whole_image_frame_error_count"] == 1
+    assert result["roots"][0]["frontier_kind_counts"] == {"exceptional_terminal": 1, "inconsistent_sp_merge": 1}
+    assert result["roots"][0]["complete_stack_bound_bytes"] is None

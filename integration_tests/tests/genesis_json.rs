@@ -50,6 +50,42 @@ fn complete_test_genesis_builder_for_topology(
 fn complete_test_genesis_builder(builder: GenesisBuilder) -> GenesisBuilder {
     complete_test_genesis_builder_for_topology(builder, deterministic_test_genesis_topology())
 }
+fn test_genesis_for_network_topology(
+    raw_genesis: RawGenesisTransaction,
+    topology: Vec<GenesisTopologyEntry>,
+) -> RawGenesisTransaction {
+    complete_test_genesis_builder_for_topology(
+        raw_genesis
+            .clear_topology()
+            .into_builder()
+            .next_transaction(),
+        topology,
+    )
+    .build_raw()
+    .expect("rebuild integration-test genesis for the exact network topology")
+}
+#[test]
+fn network_genesis_replaces_the_fixture_topology() {
+    init_instruction_registry();
+    let raw_genesis = fallback_raw_genesis_from_json();
+    let mut topology = deterministic_test_genesis_topology();
+    topology.reverse();
+    let expected_peers = topology
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    let rebound = test_genesis_for_network_topology(raw_genesis, topology);
+    rebound
+        .validate_genesis_topology()
+        .expect("one exact four-validator committee");
+    let actual_peers = rebound
+        .transactions()
+        .iter()
+        .flat_map(|transaction| transaction.topology())
+        .map(|entry| entry.peer.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(actual_peers, expected_peers);
+}
 
 fn load_raw_genesis_transaction() -> RawGenesisTransaction {
     eprintln!(
@@ -147,8 +183,7 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
     let raw_genesis = load_raw_genesis_transaction();
     let builder = NetworkBuilder::new().with_min_peers(4).with_genesis_block(
         move |_topology, topology_entries| {
-            rebind_genesis_topology(raw_genesis.clone(), topology_entries)
-                .expect("rebuild integration-test genesis for the exact network topology")
+            test_genesis_for_network_topology(raw_genesis.clone(), topology_entries)
                 .build_and_sign(&SAMPLE_GENESIS_ACCOUNT_KEYPAIR)
                 .expect("build canonical resultless custom genesis proposal")
         },
@@ -173,6 +208,23 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
             timeout(sync_timeout, peer.once_block(1))
                 .await
                 .map_err(|_| eyre!("timed out waiting for genesis block 1"))?;
+        }
+        let asset_id = AssetId::new(
+            AssetDefinitionId::derive_from_components(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
+            ALICE_ID.clone(),
+        );
+        for peer in network.peers() {
+            let asset = peer
+                .client()
+                .account_client()
+                .query_single(FindAssetById::new(asset_id.clone()))
+                .await
+                .expect("asset not found");
+            assert_eq!(asset.id(), &asset_id);
+            assert_eq!(asset.value(), &Quantity::from(13_u32));
         }
         Ok(())
     });

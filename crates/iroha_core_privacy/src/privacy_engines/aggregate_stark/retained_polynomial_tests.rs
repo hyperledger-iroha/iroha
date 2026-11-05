@@ -2,7 +2,7 @@ use super::*;
 use rand::SeedableRng as _;
 use rand_chacha::ChaCha12Rng;
 const DIGEST_CONTEXT_V1: TransparentStarkDigestContextV1 = TransparentStarkDigestContextV1::new(
-    PrivacyProtocolIdV1::PqMaspStarkV1,
+    PrivacyRuntimeProtocolIdV1::PqMaspStarkV1,
     b"retained-polynomial-test-v1",
 );
 #[test]

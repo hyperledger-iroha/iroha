@@ -8,7 +8,7 @@ use crate::privacy_native_actions::{
     PRIVACY_NATIVE_ACTION_MAX_SIGNED_TRANSACTION_BYTES_V1, PRIVACY_ZK_X509_MAX_PROOF_BYTES_V1,
 };
 use crate::{
-    PrivacyStatementV1, PyNetworkId, SignedTransactionEnvelope, TransactionBuilder,
+    PrivacyRuntimeStatementV1, PyNetworkId, SignedTransactionEnvelope, TransactionBuilder,
     ensure_ed25519_account, parse_private_key, signed_transaction_envelope_from_model_v1,
 };
 use iroha_core_privacy::privacy_engines::validate_zk_x509_credential_proof_container_v1;
@@ -16,7 +16,10 @@ use iroha_crypto::{PrivateKey, PublicKey};
 use iroha_data_model::{
     NetworkId,
     isi::{InstructionBox, privacy::SubmitPrivacyZkX509CertificateV1},
-    privacy::{IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyProtocolIdV1},
+    privacy::{
+        IrohaZkX509StarkP256StatementV1, PrivacyConsensusLimitsV1, PrivacyRuntimeProtocolIdV1,
+        PrivacyStatementV1,
+    },
     transaction::{
         Executable, SignedTransaction, TransactionBuilder as ModelBuilder, TransactionPayload,
         signed_attachments::*,
@@ -36,6 +39,16 @@ fn decode_request(bytes: &[u8]) -> PyResult<SubmitPrivacyZkX509CertificateV1> {
         return Err(invalid("request archive exceeds its canonical bound"));
     }
     norito::decode_canonical(bytes).map_err(invalid)
+}
+
+/// Frozen Exact12 public statement bytes shared by preparation and inspection.
+pub(crate) fn materialized_statement_wire(
+    statement: &IrohaZkX509StarkP256StatementV1,
+) -> PyResult<Vec<u8>> {
+    norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
+        statement.clone(),
+    ))
+    .map_err(invalid)
 }
 
 fn require_key(payload: &TransactionPayload, key: &PrivateKey) -> PyResult<()> {
@@ -205,7 +218,7 @@ pub(crate) struct PyPrivacyX509PreparedTransactionV1 {
 impl PyPrivacyX509PreparedTransactionV1 {
     pub(crate) fn prepare(builder: &TransactionBuilder, archive: &[u8]) -> PyResult<Self> {
         builder.require_empty_privacy_action_builder_v1(
-            PrivacyProtocolIdV1::IrohaZkX509StarkP256V1,
+            PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1,
             "ZK-X509",
         )?;
         let admission = builder
@@ -221,9 +234,9 @@ impl PyPrivacyX509PreparedTransactionV1 {
             .into_payload()
             .map_err(invalid)?;
         let plan = DirectPlan::prepare(payload, request, &limits)?;
-        admission.require_governed_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
-            plan.materialized.clone(),
-        ))?;
+        admission.require_governed_statement(
+            &PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(plan.materialized.clone()),
+        )?;
         Ok(Self {
             plan,
             admission,
@@ -253,10 +266,7 @@ impl PyPrivacyX509PreparedTransactionV1 {
     fn materialized_statement_norito<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
         Ok(PyBytes::new(
             py,
-            &norito::encode_canonical(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
-                self.plan.materialized.clone(),
-            ))
-            .map_err(invalid)?,
+            &materialized_statement_wire(&self.plan.materialized)?,
         ))
     }
     /// Sign the original payload with exactly one completed raw proof occurrence.
@@ -269,10 +279,9 @@ impl PyPrivacyX509PreparedTransactionV1 {
         let key = parse_private_key(private_key)?;
         require_key(&self.plan.payload, &key)?;
         let (profile, protocol_limits, limits) = self.admission.x509_policy(self.network_id)?;
-        self.admission
-            .require_governed_statement(&PrivacyStatementV1::IrohaZkX509StarkP256V1(
-                self.plan.materialized.clone(),
-            ))?;
+        self.admission.require_governed_statement(
+            &PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(self.plan.materialized.clone()),
+        )?;
         self.plan
             .request
             .validate_materialized_against_profile_v1(
@@ -399,7 +408,7 @@ mod tests {
         let row = current
             .rows
             .into_iter()
-            .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+            .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
             .expect("one X509 row");
         let payload = ModelBuilder::decode_payload(&row.unsigned_transaction_payload_norito)
             .expect("model payload")
@@ -581,7 +590,7 @@ mod tests {
         let plan = plan();
         let network_id = plan.materialized.context.network_id;
         let admission = PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
-            PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+            PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
             network_id,
         );
         let owner = PyPrivacyX509PreparedTransactionV1 {
@@ -652,7 +661,7 @@ mod tests {
             .inner;
         builder.privacy_capability_manifest = Some(
             PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
                 foreign,
             ),
         );
@@ -663,7 +672,7 @@ mod tests {
         assert!(error.to_string().contains("network"), "{error}");
         builder.privacy_capability_manifest = Some(
             PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
                 network_id,
             ),
         );
@@ -692,7 +701,7 @@ mod tests {
             let retained_plan = plan();
             let network_id = retained_plan.materialized.context.network_id;
             let admission = PyPrivacyExact12CapabilityManifestV1::test_fetched_binding_for_protocol(
-                PrivacyProtocolIdV1::AnonymousPgcKOutOfNV1,
+                PrivacyRuntimeProtocolIdV1::AnonymousPgcKOutOfNV1,
                 network_id,
             );
             let owner = Py::new(
@@ -720,11 +729,12 @@ mod tests {
                 tagged,
                 PrivacyStatementV1::IrohaZkX509StarkP256V1(plan().materialized)
             );
+            assert!(norito::decode_canonical::<PrivacyRuntimeStatementV1>(&first).is_err());
             let model_row = iroha_data_model::privacy::privacy_exact12_fixture_bundle_v1()
                 .unwrap()
                 .rows
                 .into_iter()
-                .find(|row| row.protocol_id == PrivacyProtocolIdV1::IrohaZkX509StarkP256V1)
+                .find(|row| row.protocol_id == PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1)
                 .unwrap();
             assert_eq!(first, model_row.statement_norito);
             let mut changed = first.clone();

@@ -812,15 +812,26 @@ impl<'a> FrameWindows<'a> {
         if HashOf::from_untyped_unchecked(self.hash(&[], element)?) != leaf {
             return Err(invalid("matched execution output is not canonical"));
         }
-        let ExecutionOutputV1::Network(row) = output else {
-            return Err(invalid("matched Network input has no Network output"));
-        };
-        if u64::from(row.input_index) != index {
-            return Err(invalid("matched Network output names another input"));
-        }
-        results.push(row.result.0.map(drop));
+        results.push(matched_network_result(output, index)?);
         Ok(leaf)
     }
+}
+
+// Decode/hashing above authenticates the complete row, including its trace.
+// Consume the joined result without cloning its separately admitted graph.
+fn matched_network_result(
+    output: ExecutionOutputV1,
+    index: u64,
+) -> Result<Result<(), TransactionRejectionReason>, ReadError> {
+    let row = match output {
+        ExecutionOutputV1::Network(row) => row,
+        ExecutionOutputV1::NetworkWithLifecycle(row) => row.execution,
+        _ => return Err(invalid("matched Network input has no Network output")),
+    };
+    if u64::from(row.input_index) != index {
+        return Err(invalid("matched Network output names another input"));
+    }
+    Ok(row.result.0.map(drop))
 }
 
 fn missing(height: u64, expected: HashOf<BlockHeader>) -> ReadError {

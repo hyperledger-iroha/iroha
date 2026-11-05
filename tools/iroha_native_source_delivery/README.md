@@ -7,7 +7,8 @@ or compile the node runtime to perform file custody. It uses `iroha_fs` for all
 native custody and Norito JSON for bounded requests over inherited standard I/O.
 
 Build from the same pinned source with
-`cargo build --locked -p iroha_native_source_delivery --features dev-tools`. Pass the absolute executable
+`cargo build --locked -p iroha_native_source_delivery --features dev-tools`; the
+executable is an explicit `dev-tools` target, not a default workspace binary. Pass the absolute executable
 path to the Python `promote` command as `--native-helper`. Windows requires this
 argument. The backup must be an absent direct child of an existing retained parent,
 or an empty directory already satisfying exact private custody. Existing access

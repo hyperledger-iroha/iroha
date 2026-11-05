@@ -810,9 +810,11 @@ def test_native_filesystem_owner_selects_real_custody_consumers() -> None:
         "iroha_fs", "iroha_contract_deploy", "iroha_deploy",
         "iroha_kagami", "iroha_storage_client",
     } <= set(result.impacted_packages)
-    # Configuration and Windows telemetry now use filesystem custody. The
-    # conservative closure also follows iroha_derive's dev-only configuration
-    # dependency into its consumers; keep every selected foundation owner.
+    # Configuration and Windows telemetry custody depend on iroha_fs, and the closure
+    # follows iroha_derive's dev-only iroha_config_base edge into the derive users.
+    # TODO: stop reverse propagation at dev-only edges (the dependant's own tests are
+    # impacted, its library dependants are not); this selection then narrows to
+    # iroha_config_base, iroha_derive, iroha_fs, iroha_operation_journal and iroha_telemetry.
     assert result.lane_packages["foundation"] == (
         "build-support", "iroha_config_base", "iroha_crypto", "iroha_derive", "iroha_fhe",
         "iroha_fs", "iroha_i18n", "iroha_macro", "iroha_measurement", "iroha_model_base",
@@ -1713,6 +1715,31 @@ def test_empty_binary_union_requires_an_explicit_qualified_owner(tmp_path: Path)
         rust_ci.load_lane_manifest(path)
 
 
+def test_publication_cli_artifact_retains_required_feature_owners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Network publication runs the actual orchestrator CLI with all binary features."""
+
+    calls = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> None:
+        calls.append(command)
+        target = Path(command[command.index("--target-dir") + 1]) / "release"
+        target.mkdir(parents=True)
+        (target / "sorafs_cli").write_bytes(b"publication CLI")
+
+    monkeypatch.setattr(rust_ci, "_run", fake_run)
+    output = tmp_path / "artifacts"
+    rust_ci.build_binaries(("sorafs_cli",), output, root=tmp_path)
+    assert calls == [[
+        "cargo", "build", "--locked", "--release", "--target-dir",
+        str(tmp_path / "target/ci-binaries/sorafs-cli"),
+        "-p", "sorafs_orchestrator", "--bin", "sorafs_cli", "--features",
+        "sorafs_orchestrator/cli-orchestrator,sorafs_orchestrator/moderation-grpc",
+    ]]
+    assert (output / "sorafs_cli").read_bytes() == b"publication CLI"
+
+
 def test_route_control_artifact_build_and_staging_preserve_shipping_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1908,14 +1935,31 @@ def test_torii_test_commands_keep_explicit_integration_fixtures(workspace: bool)
     )
     assert "--features" not in build
     assert set(test[test.index("--features") + 1].split(",")) == {
-        "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry", "iroha_torii/test-fixtures",
+        "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry", "iroha_core/dev-tools", "iroha_torii/test-fixtures",
     }
     assert ("--workspace" in test) is workspace
     assert "mutation-testing" not in " ".join(test)
     for other in rust_ci.commands_for_checks(("iroha_core",), ("test", "doctest"), workspace=workspace):
         assert set(other[other.index("--features") + 1].split(",")) == {
-            "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry",
+            "iroha_core/iroha-core-tests", "iroha_core/expensive-telemetry", "iroha_core/dev-tools",
         }
+
+
+@pytest.mark.parametrize("workspace", (False, True))
+def test_gated_executable_owners_test_their_dev_tools_targets(workspace: bool) -> None:
+    """Test routes compile `dev-tools` executables whose unit tests live in the binary."""
+
+    build, test = rust_ci.commands_for_checks(
+        ("iroha_native_source_delivery", "iroha_release_bundle", "iroha_torii"),
+        ("build", "test"), workspace=workspace,
+    )
+    assert "--features" not in build
+    assert test[test.index("--features") + 1] == (
+        "iroha_torii/test-fixtures,iroha_release_bundle/dev-tools,"
+        "iroha_native_source_delivery/dev-tools"
+    )
+    only, = rust_ci.commands_for_checks(("iroha_release_bundle",), ("test",), workspace=workspace)
+    assert only[only.index("--features") + 1] == "iroha_release_bundle/dev-tools"
 
 
 @pytest.mark.parametrize("inventory", ({}, {"iroha_data_model": ("mutation-testing",)},
@@ -2131,6 +2175,7 @@ def test_default_base_prefers_the_configured_branch_then_falls_back(tmp_path: Pa
 
 INTEGRATION_TARGETS = {
     "consensus_and_da", "core_api", "events_and_triggers", "network_functional",
+    "lifecycle_trace_activation",
     "nexus_and_streaming", "queries_and_proofs", "sccp_lanes", "sumeragi",
     "sumeragi_lanes", "sumeragi_npos_committee_transition", "torii_load_profile",
 }

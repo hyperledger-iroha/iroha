@@ -48,7 +48,6 @@ iroha_config = { workspace = true }
 hex = { workspace = true, optional = false }
 base64 = { workspace = true }
 
-derive_more = { workspace = true, features = ["deref"] }
 eyre = { workspace = true }
 
 [dev-dependencies]

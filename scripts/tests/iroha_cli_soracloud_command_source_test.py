@@ -15,7 +15,7 @@ PREIMAGE_SHA256 = "aa1a2f2e6113915b33107d68d255f66194bd3813f853bd031125fe4459a57
 
 HELPER_START = "struct SoracloudCli<'a>"
 HELPER_END = "async fn wait_for_soracloud_json_command"
-HELPER_HASH = "834a379d73e93b4efbe1d75c5899cf26e6064608a0cdd502b46f8fb9316577a9"
+HELPER_HASH = "fb04d7521419f56ecdd70a298d21b1dc55a72db545d6cc089087136cae495b64"
 
 # Hash, bounded-success calls, bounded raw calls, shared success assertions, live network.
 FUNCTION_CONTRACTS = {'soracloud_status_uses_live_torii_control_plane': ('4e4817290b210fcf8e7290a556a04959ee05a0c357413208c659b4e36f8d351d',
@@ -99,7 +99,7 @@ REQUIRED_HELPER_TOKENS = (
     "config: &'a ProgramConfig",
     'command.current_dir(self.cwd).arg("soracloud");',
     "command.envs(self.config.envs());",
-    "Ok(command.bounded_output().await?)",
+    "Ok(tokio_output_with_timeout(command, process_timeout()).await?)",
     "failure_context: &'static str",
     "output.status.success()",
     '"{context} failed with status {} and stderr: {}"',
@@ -126,6 +126,12 @@ FORBIDDEN_HELPER_TOKENS = (
     "callback:",
     "custom_body:",
     "escape_hatch",
+)
+
+# The raw Tokio command and its removed timeout extension bypass the resolved CLI program.
+RETIRED_HELPER_TOKENS = (
+    "tokio::process::Command",
+    "command.bounded_output()",
 )
 
 
@@ -255,6 +261,9 @@ def validate_source(source: str) -> None:
     for token in FORBIDDEN_HELPER_TOKENS:
         if token in helper:
             raise GuardError(f"typed helper gained callback escape hatch {token!r}")
+    for token in RETIRED_HELPER_TOKENS:
+        if token in helper:
+            raise GuardError(f"typed helper reintroduced retired command path {token!r}")
 
     protected_functions = []
     for name, (expected_hash, success_count, raw_count, assertion_count, live) in (

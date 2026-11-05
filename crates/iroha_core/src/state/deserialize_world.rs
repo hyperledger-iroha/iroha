@@ -7962,7 +7962,9 @@ fn validate_game_partition_persistence_cut(
             return Err(invalid("game partition world retention bound"));
         }
         if *world_id != partition.world_id {
-            return Err(invalid("key differs from the authenticated world identifier"));
+            return Err(invalid(
+                "key differs from the authenticated world identifier",
+            ));
         }
         partition.validate().map_err(|reason| invalid(&reason))?;
     }
@@ -9359,6 +9361,23 @@ fn parse_world(
     ivm_seed: &IvmSeed<'_, World>,
 ) -> Result<World, StateRestoreError> {
     let mut world = decode_world_fields(execution_budget, map, ivm_seed)?;
+    crate::runtime::ironwood::admission::world(&mut world).map_err(|error| match error {
+        crate::execution_attempt::ExecutionAttemptError::Rejected(message) => {
+            StateRestoreError::Serialization(json::Error::InvalidField {
+                field: "world.instruction_payloads".into(),
+                message,
+            })
+        }
+        crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+            StateRestoreError::ExecutionDeferred(original)
+        }
+    })?;
+    crate::runtime::validate_privacy_world_storage_v1(&mut world).map_err(|message| {
+        json::Error::InvalidField {
+            field: "world.privacy_state".to_owned(),
+            message,
+        }
+    })?;
     crate::smartcontracts::isi::multisig::validate_persisted_proposals(&world.view(), None)
         .map_err(|error| match error {
             crate::execution_attempt::ExecutionAttemptError::Rejected(error) => {
@@ -13454,6 +13473,41 @@ mod crypto_policy_history_tests;
 mod privacy_root_refusal_tests {
     use super::privacy_state_json_error;
     use crate::privacy_state::{PrivacyPgcAccountStateRootErrorV1, PrivacyStateValidationErrorV1};
+
+    #[test]
+    fn ironwood_optional_policy_cannot_restore_under_the_baseline_selection() {
+        use super::*;
+        use iroha_data_model::privacy::{PrivacyRuntimeProtocolIdV1, PrivacyProtocolPolicyV1};
+        let mut world = World::default();
+        let protocol = PrivacyRuntimeProtocolIdV1::IronwoodHalo2ActionsV1;
+        world.privacy_protocol_policies.insert(
+            iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol),
+            PrivacyProtocolPolicyV1::canonical_default_v1(protocol),
+        );
+        let encoded = json::to_json(&world).expect("encode candidate World");
+        let pool = iroha_allocation::AllocationBudget::new(
+            iroha_config::parameters::defaults::pipeline::IVM_EXECUTION_MAX_BYTES,
+        );
+        let ivm = IVM::new(0);
+        let seed = IvmSeed {
+            ivm: &ivm,
+            _marker: PhantomData,
+        };
+        let error = match parse_world(
+            &pool,
+            SnapshotJsonMap::parse(&encoded, "world").unwrap(),
+            &seed,
+        ) {
+            Ok(_) => panic!("Ironwood policy must not enter the baseline World"),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Ironwood before its governed storage-schema transition"),
+            "unexpected restore error: {error}"
+        );
+    }
 
     #[test]
     fn privacy_restore_json_preserves_original_scope_and_invalid_field() {

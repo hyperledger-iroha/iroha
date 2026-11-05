@@ -6356,6 +6356,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "taira_update.py",
                 "taira_update_guest.py",
                 "taira_validator_unit.py",
+                "update_taira_privacy_rollout_pins.py",
             },
         )
         self.assertEqual(
@@ -6383,6 +6384,7 @@ class TairaDevnetTests(unittest.TestCase):
                 "taira_signer_observation_test.py",
                 "taira_update_test.py",
                 "taira_validator_unit_test.py",
+                "update_taira_privacy_rollout_pins_test.py",
             },
         )
         config_root = REPO_ROOT / "configs" / "soranexus" / "taira"
@@ -6404,7 +6406,10 @@ class TairaDevnetTests(unittest.TestCase):
                 / "taira_kaigi_localnet.rs"
             ).exists()
         )
-        self.assertEqual(names(REPO_ROOT / ".github" / "workflows"), set())
+        # Read-only PR pin checks, not orchestration.
+        self.assertEqual(
+            names(REPO_ROOT / ".github" / "workflows"), {"pr_taira_rollout_pins.yml"}
+        )
         self.assertEqual(names(REPO_ROOT / "ci"), set())
         self.assertEqual(
             names(REPO_ROOT / "crates" / "iroha_cli" / "bins" / "src" / "bin"),

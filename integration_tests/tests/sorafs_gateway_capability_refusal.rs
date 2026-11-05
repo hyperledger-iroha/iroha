@@ -8,7 +8,7 @@ fn capability_refusal_scenarios_match_expected_ids() {
     assert_eq!(
         scenarios.len(),
         6,
-        "capability refusal fixture must contain the six current scenarios"
+        "capability refusal fixture must contain the six current gateway scenarios"
     );
     let mut ids: HashSet<String> = HashSet::new();
     for scenario in scenarios {
@@ -68,7 +68,7 @@ fn capability_refusal_scenarios_match_expected_ids() {
             .into_iter()
             .map(str::to_owned)
             .collect(),
-        "capability refusal fixture IDs must match the current protocol matrix"
+        "the canonical capability matrix must not omit or substitute a refusal"
     );
 }
 #[test]

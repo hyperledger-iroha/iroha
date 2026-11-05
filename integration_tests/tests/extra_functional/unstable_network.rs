@@ -1,13 +1,18 @@
 //! Adversarial relay and partition scenarios for unstable networks.
-use eyre::{Result, ensure, eyre};
+use eyre::{Result, eyre};
 use futures_util::{StreamExt, stream::FuturesUnordered};
-use integration_tests::{sandbox, sync::spawn_blocking};
+use integration_tests::{sandbox, sync::run_on_dedicated_thread};
 use iroha_config::parameters::defaults;
 use iroha_config_base::toml::WriteExt;
 use iroha_core::sumeragi::network_topology::Topology;
 use iroha_crypto::Hash;
 use iroha_data_model::prelude::*;
-use iroha_data_model::{Level, asset::AssetDefinition, isi::Register, parameter::BlockParameter};
+use iroha_data_model::{
+    Level,
+    asset::AssetDefinition,
+    isi::Register,
+    parameter::{BlockParameter, SumeragiParameter},
+};
 use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
 use iroha_model_base::chain::ChainId;
 use iroha_model_base::domain::DomainId;
@@ -768,7 +773,7 @@ async fn network_starts_with_relay() -> Result<()> {
     {
         return Ok(());
     }
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client.submit(
             Log::new(Level::INFO, "relay started".to_owned()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -809,26 +814,32 @@ async fn network_doesnt_start_without_relay_being_started() -> Result<()> {
         return Ok(());
     }
     let client = network.client();
-    // The relay deliberately prevents finality here. Wait only for authenticated
-    // Torii acceptance, then let the unchanged block assertions own progress.
+    // Admission must complete while finality is deliberately unavailable.
+    // The unchanged bounded block wait below checks the partition itself.
     let account = client.account_client();
     let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-        vec![Log::new(Level::INFO, "relay stalled".to_owned())],
-        FeePaymentIntent::authority(Vec::new(), None),
+        [InstructionBox::from(Log::new(
+            Level::INFO,
+            "relay stalled".to_owned(),
+        ))],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     ))?;
     let quote = account
         .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;
-    ensure!(
+    eyre::ensure!(
         payload
             .fee_payment
             .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected payer, sponsor revision, or gas bound"
+        "relay fixture quote changed payer or gas bound"
     );
     payload.fee_payment = quote.intent;
     let transaction = account.sign_transaction(payload)?;
-    account.submit_transaction(&transaction).await?;
+    assert_eq!(
+        account.submit_transaction(&transaction).await?,
+        transaction.hash()
+    );
     let Err(_) = timeout(
         Duration::from_secs(3),
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -876,7 +887,7 @@ async fn suspending_works() -> Result<()> {
         return Ok(());
     }
     let client = network.client();
-    spawn_blocking(move || {
+    run_on_dedicated_thread(move || {
         client.submit(
             Log::new(Level::INFO, "suspend tick".to_owned()),
             iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
@@ -951,26 +962,32 @@ async fn block_after_genesis_is_synced() -> Result<()> {
         relay.suspend(&peer.id()).activate();
     }
     let client = network.client();
-    // The relay deliberately prevents finality here. Wait only for authenticated
-    // Torii acceptance, then let the unchanged block assertions own progress.
+    // Admission must complete while finality is deliberately unavailable.
+    // The unchanged bounded block wait below checks the partition itself.
     let account = client.account_client();
     let mut payload = account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-        vec![Log::new(Level::INFO, "tick".to_owned())],
-        FeePaymentIntent::authority(Vec::new(), None),
+        [InstructionBox::from(Log::new(
+            Level::INFO,
+            "tick".to_owned(),
+        ))],
+        iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
         Metadata::default(),
     ))?;
     let quote = account
         .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
         .await?;
-    ensure!(
+    eyre::ensure!(
         payload
             .fee_payment
             .has_same_payer_and_gas_bound(&quote.intent),
-        "fee quote changed the selected payer, sponsor revision, or gas bound"
+        "relay fixture quote changed payer or gas bound"
     );
     payload.fee_payment = quote.intent;
     let transaction = account.sign_transaction(payload)?;
-    account.submit_transaction(&transaction).await?;
+    assert_eq!(
+        account.submit_transaction(&transaction).await?,
+        transaction.hash()
+    );
     let Err(_) = timeout(
         pipeline_window,
         once_blocks_sync(network.peers().iter(), BlockHeight::predicate_non_empty(2)),
@@ -1386,26 +1403,26 @@ impl UnstableNetwork {
                 .expect("valid metadata key"),
             target_height,
         );
-        let tx = Arc::new({
-            let account = builder_client.account_client();
-            let mut payload =
-                account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
-                    vec![mint_asset],
-                    iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
-                    tx_metadata,
-                ))?;
-            let quote = account
-                .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
-                .await?;
-            ensure!(
-                payload
-                    .fee_payment
-                    .has_same_payer_and_gas_bound(&quote.intent),
-                "fee quote changed the selected payer, sponsor revision, or gas bound"
-            );
-            payload.fee_payment = quote.intent;
-            account.sign_transaction(payload)?
-        });
+        let account = builder_client.account_client();
+        let mut payload =
+            account.prepare_transaction(iroha::client::AccountTransactionDraft::new(
+                vec![mint_asset],
+                iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
+                tx_metadata,
+            ))?;
+        // Quote before introducing the partition. Every submission and recovery
+        // retry still broadcasts the same signed transaction for this round.
+        let quote = account
+            .quote_fees(iroha::client::FeeQuoteRequest::AccountSignature { payload: &payload })
+            .await?;
+        eyre::ensure!(
+            payload
+                .fee_payment
+                .has_same_payer_and_gas_bound(&quote.intent),
+            "unstable-network fee quote changed payer or gas bound"
+        );
+        payload.fee_payment = quote.intent;
+        let tx = Arc::new(account.sign_transaction(payload)?);
         let partition_submit_window = relay_pause
             .min(
                 network
@@ -1604,7 +1621,7 @@ impl UnstableNetwork {
                 let client = peer.client();
                 let asset_id =
                     AssetId::new(ctx.asset_definition_id.clone(), ctx.account_id.clone());
-                let asset = match spawn_blocking(move || {
+                let asset = match run_on_dedicated_thread(move || {
                     client.client().query_single(FindAssetById::new(asset_id))
                 })
                 .await
@@ -1742,7 +1759,7 @@ impl UnstableNetwork {
                 }
                 let client = peer.client();
                 let asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
-                let asset = match spawn_blocking(move || {
+                let asset = match run_on_dedicated_thread(move || {
                     client.client().query_single(FindAssetById::new(asset_id))
                 })
                 .await

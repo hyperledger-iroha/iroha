@@ -1,5 +1,4 @@
 //! Various attachments for [`error_stack::Report::attach`] API.
-use derive_more::Display;
 use error_stack::{Report, fmt::ColorMode};
 use std::{
     any::TypeId,
@@ -51,10 +50,14 @@ where
 }
 use crate::{ParameterId, ParameterOrigin};
 /// Attach a file path
-#[derive(Display, Debug)]
-#[display("file path: {}", path.display())]
+#[derive(Debug)]
 pub struct FilePath {
     path: PathBuf,
+}
+impl Display for FilePath {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "file path: {}", self.path.display())
+    }
 }
 impl FilePath {
     /// Construct a [`FilePath`] attachment describing the offending path.
@@ -64,13 +67,17 @@ impl FilePath {
     }
 }
 /// Attach an actual value
-#[derive(Display, Debug)]
-#[display("actual value: {value}")]
+#[derive(Debug)]
 pub struct ActualValue<T>
 where
     T: Display + Debug,
 {
     value: T,
+}
+impl<T: Display + Debug> Display for ActualValue<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "actual value: {}", self.value)
+    }
 }
 impl<T> ActualValue<T>
 where
@@ -83,13 +90,17 @@ where
     }
 }
 /// Attach an expectation
-#[derive(Display, Debug)]
-#[display("expected: {message}")]
+#[derive(Debug)]
 pub struct Expected<T>
 where
     T: Display + Debug,
 {
     message: T,
+}
+impl<T: Display + Debug> Display for Expected<T> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "expected: {}", self.message)
+    }
 }
 impl<T> Expected<T>
 where
@@ -102,12 +113,22 @@ where
     }
 }
 /// Attach one edge in a configuration-extension chain.
-#[derive(Display, Debug)]
-#[display("extending ({depth}): `{}` -> `{}`", from.display(), to.display())]
+#[derive(Debug)]
 pub struct ExtendsChain {
     from: PathBuf,
     to: PathBuf,
     depth: u8,
+}
+impl Display for ExtendsChain {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "extending ({}): `{}` -> `{}`",
+            self.depth,
+            self.from.display(),
+            self.to.display()
+        )
+    }
 }
 impl ExtendsChain {
     /// Describe the inheritance chain between configuration files.
@@ -117,10 +138,14 @@ impl ExtendsChain {
     }
 }
 /// Attach a missing parameter identifier.
-#[derive(Display, Debug)]
-#[display("missing parameter: `{id}`")]
+#[derive(Debug)]
 pub struct MissingParameter {
     id: ParameterId,
+}
+impl Display for MissingParameter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "missing parameter: `{}`", self.id)
+    }
 }
 impl MissingParameter {
     /// Construct a [`MissingParameter`] attachment.
@@ -130,10 +155,14 @@ impl MissingParameter {
     }
 }
 /// Attach an unknown parameter identifier.
-#[derive(Display, Debug)]
-#[display("unknown parameter: `{id}`")]
+#[derive(Debug)]
 pub struct UnknownParameter {
     id: ParameterId,
+}
+impl Display for UnknownParameter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown parameter: `{}`", self.id)
+    }
 }
 impl UnknownParameter {
     /// Construct an [`UnknownParameter`] attachment.
@@ -284,6 +313,104 @@ mod tests {
     static COLOR_MODE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
     use crate::ParameterId;
     use toml::Value;
+
+    fn assert_attachment_display(attachment: &dyn Display, expected: &str) {
+        use std::fmt::Write as _;
+
+        assert_eq!(format!("{attachment}"), expected);
+        assert_eq!(format!("{attachment:>120.3}"), expected);
+        assert_eq!(format!("{attachment:🦀^120.3}"), expected);
+        assert_eq!(format!("{attachment:+#0120.3}"), expected);
+
+        struct FailingWriter;
+        impl std::fmt::Write for FailingWriter {
+            fn write_str(&mut self, _: &str) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+        assert_eq!(write!(FailingWriter, "{attachment}"), Err(std::fmt::Error));
+    }
+
+    #[test]
+    fn attachment_display_preserves_message_bytes_and_outer_flags() {
+        let path = FilePath::new(PathBuf::from("config/μ\n.toml"));
+        let actual = ActualValue::new("value μ\n\"\\");
+        let expected = Expected::new("nonempty μ\n");
+        let chain = ExtendsChain::new("base μ.toml".into(), "../next\n.toml".into(), u8::MAX);
+        let missing = MissingParameter::new(["network", "μ"].into());
+        let unknown = UnknownParameter::new(["unknown", ""].into());
+        let cases: [(&dyn Display, &str); 6] = [
+            (&path, "file path: config/μ\n.toml"),
+            (&actual, "actual value: value μ\n\"\\"),
+            (&expected, "expected: nonempty μ\n"),
+            (&chain, "extending (255): `base μ.toml` -> `../next\n.toml`"),
+            (&missing, "missing parameter: `network.μ`"),
+            (&unknown, "unknown parameter: `unknown.`"),
+        ];
+        for (attachment, expected) in cases {
+            assert_attachment_display(attachment, expected);
+        }
+    }
+
+    #[test]
+    fn generic_attachment_display_accepts_borrowed_local_redacted_values() {
+        #[derive(Debug)]
+        struct Redacted<'a> {
+            _secret: &'a str,
+            _local: std::rc::Rc<()>,
+        }
+        impl Display for Redacted<'_> {
+            fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+                f.pad("[REDACTED]")
+            }
+        }
+
+        let secret = String::from("attachment-secret-fixture");
+        // Display requires neither 'static nor Send/Sync, even though the
+        // public constructors require them to register global report hooks.
+        let value = Redacted {
+            _secret: &secret,
+            _local: std::rc::Rc::new(()),
+        };
+        assert_attachment_display(&ActualValue { value: &value }, "actual value: [REDACTED]");
+        assert_attachment_display(&Expected { message: &value }, "expected: [REDACTED]");
+    }
+
+    #[test]
+    fn generic_attachment_display_propagates_value_formatter_failure() {
+        use std::fmt::Write as _;
+
+        #[derive(Debug)]
+        struct FailingValue;
+        impl Display for FailingValue {
+            fn fmt(&self, _: &mut Formatter<'_>) -> std::fmt::Result {
+                Err(std::fmt::Error)
+            }
+        }
+
+        let mut output = String::new();
+        let actual = ActualValue::new(FailingValue);
+        assert_eq!(write!(output, "{actual}"), Err(std::fmt::Error));
+        assert_eq!(output, "actual value: ");
+        output.clear();
+        let expected = Expected::new(FailingValue);
+        assert_eq!(write!(output, "{expected}"), Err(std::fmt::Error));
+        assert_eq!(output, "expected: ");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attachment_display_keeps_lossy_non_utf8_paths() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+
+        let path = PathBuf::from(OsString::from_vec(b"config/\xff.toml".to_vec()));
+        assert_attachment_display(&FilePath::new(path.clone()), "file path: config/�.toml");
+        assert_attachment_display(
+            &ExtendsChain::new(path, "next.toml".into(), 0),
+            "extending (0): `config/�.toml` -> `next.toml`",
+        );
+    }
+
     fn reset_color_mode(mode: ColorMode) {
         Report::set_color_mode(mode);
     }

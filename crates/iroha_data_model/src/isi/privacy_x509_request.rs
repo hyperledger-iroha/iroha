@@ -3,8 +3,9 @@
 use super::*;
 use crate::privacy::{
     IrohaZkX509StarkP256StatementV1, PrivacyCompiledProfileSnapshotV1, PrivacyProofBytesV1,
-    PrivacyProofEnvelopeValidationError, PrivacyProtocolLimitsV1, PrivacyStatementDigestV1,
-    PrivacyStatementV1, PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
+    PrivacyProofEnvelopeValidationError, PrivacyRuntimeProtocolIdV1,
+    PrivacyRuntimeProtocolLimitsV1, PrivacyRuntimeStatementV1, PrivacyStatementDigestV1,
+    PrivacyStatementValidationError, PrivacyTransactionIntentDigestV1,
     validate_privacy_profile_identity_v1,
 };
 use crate::transaction::signed_attachments::{
@@ -77,7 +78,7 @@ impl SubmitPrivacyZkX509CertificateV1 {
         let field = |bytes: usize| norito::core::len_prefix_len_with_flags(bytes, flags) + bytes;
         let reference_payload = 2 * field(core::mem::size_of::<u32>());
         let statement_framing =
-            crate::isi::framed_instruction_payload_len_for::<PrivacyStatementV1>(0)
+            crate::isi::framed_instruction_payload_len_for::<PrivacyRuntimeStatementV1>(0)
                 .expect("fixed statement framing fits usize");
         let payload = crate::privacy::TAIRA_PRIVACY_MAX_STATEMENT_AND_ENCRYPTED_OUTPUT_BYTES_PER_TRANSACTION_V1 as usize
             - statement_framing - core::mem::size_of::<u32>() + field(reference_payload);
@@ -206,7 +207,7 @@ impl SubmitPrivacyZkX509CertificateV1 {
         statement.context.transaction_intent_digest = PrivacyTransactionIntentDigestV1::new(
             *action.statement_digest_for_v1(intent)?.as_bytes(),
         );
-        PrivacyStatementV1::IrohaZkX509StarkP256V1(statement.clone()).validate(limits)?;
+        PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(statement.clone()).validate(limits)?;
         Ok(statement)
     }
 
@@ -225,10 +226,10 @@ impl SubmitPrivacyZkX509CertificateV1 {
         materialized: &IrohaZkX509StarkP256StatementV1,
         raw_proof: &[u8],
         profile: &PrivacyCompiledProfileSnapshotV1,
-        protocol_limits: &PrivacyProtocolLimitsV1,
+        protocol_limits: &PrivacyRuntimeProtocolLimitsV1,
         limits: &PrivacyConsensusLimitsV1,
     ) -> Result<(PrivacyStatementDigestV1, u64), PrivacyZkX509RequestErrorV1> {
-        let protocol = PrivacyProtocolIdV1::IrohaZkX509StarkP256V1;
+        let protocol = PrivacyRuntimeProtocolIdV1::IrohaZkX509StarkP256V1;
         validate_privacy_profile_identity_v1(
             profile,
             protocol,
@@ -244,7 +245,7 @@ impl SubmitPrivacyZkX509CertificateV1 {
         {
             return Err(PrivacyZkX509RequestErrorV1::MaterializedStatementMismatch);
         }
-        let statement = PrivacyStatementV1::IrohaZkX509StarkP256V1(materialized.clone());
+        let statement = PrivacyRuntimeStatementV1::IrohaZkX509StarkP256V1(materialized.clone());
         protocol_limits
             .validate_with_ceiling(&profile.protocol_limits)
             .map_err(PrivacyProofEnvelopeValidationError::ProfileProtocolLimits)?;

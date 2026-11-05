@@ -106,14 +106,13 @@ pub enum Collection {
     Rwas,
     /// Balances held by one account: `/v1/accounts/{account_id}/assets`.
     AccountAssets(AccountId),
+    /// Stored role definitions: `/v1/roles`; requires `CanReadAllLedgerData`.
+    Roles,
+    /// Exact assignments: `/v1/accounts/{account_id}/roles`; requires the account's
+    /// signature, `CanReadAccountData`, or `CanReadAllLedgerData`.
+    AccountRoles(AccountId),
     /// Effective permissions of one account: `/v1/accounts/{account_id}/permissions`.
     AccountPermissions(AccountId),
-    /// Complete roles in the current root: `/v1/roles` (query only).
-    /// Requires canonical account authentication and `CanReadAllLedgerData`.
-    Roles,
-    /// Exact role assignments: `/v1/accounts/{account_id}/roles` (query only).
-    /// Requires canonical account authentication and `CanReadAllLedgerData`.
-    AccountRoles(AccountId),
     /// Accounts holding one asset definition: `/v1/assets/{definition_id}/holders`.
     AssetHolders(AssetDefinitionId),
     /// Committed transactions, newest first: `/v1/transactions` (query only).
@@ -403,10 +402,6 @@ impl Collection {
         Ok(match self {
             Self::Domains => vec!["v1".into(), "domains".into()],
             Self::Accounts => vec!["v1".into(), "accounts".into()],
-            Self::Roles => vec!["v1".into(), "roles".into()],
-            Self::AccountRoles(id) => {
-                vec!["v1".into(), "accounts".into(), account(id)?, "roles".into()]
-            }
             Self::AssetDefinitions => vec!["v1".into(), "assets".into(), "definitions".into()],
             Self::Nfts => vec!["v1".into(), "nfts".into()],
             Self::Rwas => vec!["v1".into(), "rwas".into()],
@@ -424,6 +419,10 @@ impl Collection {
                 Cow::Owned(definition.to_string()),
                 "holders".into(),
             ],
+            Self::Roles => vec!["v1".into(), "roles".into()],
+            Self::AccountRoles(id) => {
+                vec!["v1".into(), "accounts".into(), account(id)?, "roles".into()]
+            }
             Self::AccountPermissions(id) => vec![
                 "v1".into(),
                 "accounts".into(),
@@ -835,6 +834,18 @@ mod tests {
                 "explorer_instructions_latest",
                 "/v1/explorer/instructions/latest",
                 "/v1/explorer/instructions/latest".to_owned(),
+            ),
+            (
+                Collection::Roles,
+                "roles",
+                "/v1/roles",
+                "/v1/roles".to_owned(),
+            ),
+            (
+                Collection::AccountRoles(account.clone()),
+                "account_roles",
+                "/v1/accounts/{account_id}/roles",
+                format!("/v1/accounts/{literal}/roles"),
             ),
             (
                 Collection::AccountPermissions(account.clone()),

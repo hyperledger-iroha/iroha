@@ -335,6 +335,7 @@ mod canonical_history;
 mod committed_execution_read;
 mod contract_event_journal;
 pub(crate) mod native_execution_tip;
+mod trigger_lifecycle;
 pub mod upgrade_checkpoint;
 #[cfg(test)]
 mod world_view_admission_parameters_tests;
@@ -350,6 +351,7 @@ mod da_hydration;
 mod exec_witness_capture;
 mod kagemusha_load_entrypoint;
 pub(crate) mod parliament_candidate_testing;
+pub(crate) mod parliament_registration;
 mod privacy_transaction_intent;
 mod sccp_forgery_entrypoint;
 pub(crate) mod sccp_pause_entrypoint;
@@ -384,6 +386,7 @@ pub use fastpq_source_inventory::FastpqSourceInventoryV1;
 mod lane_authority;
 mod native_execution_projection;
 mod native_lane_state;
+mod native_lifecycle_state;
 mod native_pristine_control;
 mod original_execution_recorder;
 pub use native_execution_projection::NativeExecutionProjectionV1;
@@ -13922,9 +13925,10 @@ impl<'state> StateBlock<'state> {
         &mut self,
     ) -> Result<(), crate::execution_attempt::ExecutionAttemptError<String>> {
         use crate::pipeline_gas_policy::{ParameterIngressAttemptError, ParameterIngressError};
-        use iroha_data_model::privacy::{PrivacyProtocolIdV1, PrivacyProtocolPolicyKeyV1};
+        use iroha_data_model::privacy::{PrivacyProtocolPolicyKeyV1, PrivacyRuntimeProtocolIdV1};
         let incoming_height = self._curr_block.height().get();
-        let key = PrivacyProtocolPolicyKeyV1::new(PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
+        let key =
+            PrivacyProtocolPolicyKeyV1::new(PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1);
         let mut private = crate::private_settlement::policy::read(
             self.world.parameters.get(),
             self.world.privacy_protocol_policies.get(&key),
@@ -14529,6 +14533,8 @@ pub struct StateTransaction<'block, 'state> {
     /// One-use native instruction frame from the exact original candidate-testing selection.
     direct_parliament_candidate_testing:
         Option<parliament_candidate_testing::DirectCandidateTesting>,
+    /// One-use original anonymous credential instruction; absent in nested execution.
+    direct_parliament_registration: Option<parliament_registration::DirectRegistrationCapture>,
     /// Canonical hash of the current signed transaction, when executing a transaction.
     pub current_tx_hash: Option<HashOf<SignedTransaction>>,
     /// One-shot binding to the exact standalone ballot in the signed payload.
@@ -25033,7 +25039,8 @@ impl WorldTransaction<'_, '_> {
     pub fn apply(mut self: Box<Self>) {
         // A locally incomplete World journal must remain disposable even when a
         // caller invokes its raw apply facade instead of StateTransaction::apply.
-        if self.execution_deferral.borrow().is_refused() {
+        if self.execution_deferral.borrow().is_refused() || !self.triggers.lifecycle_allows_apply()
+        {
             return;
         }
         // Keep exhaustive field coverage without moving the complete journal
@@ -26374,6 +26381,7 @@ impl From<&iroha_data_model::parameter::system::SumeragiParameters> for Sumeragi
     }
 }
 include!("state/runtime_configuration.rs");
+include!("state/lifecycle_configuration.rs");
 mod authorization_read;
 pub use authorization_read::{AuthorizationDataSpaceCatalog, AuthorizationRead};
 mod canonical_runtime;
@@ -27972,6 +27980,16 @@ impl State {
         #[cfg(not(all(test, sumeragi_core_mutation = "HC385")))]
         world_acquisition::validate_world_original_pools(&world, &execution_budget)
             .map_err(StateStorageAdmissionError::World)?;
+        crate::runtime::validate_privacy_world_storage_v1(&mut world)
+            .map_err(MergeLedgerCommitError::ExecutionStatePublication)?;
+        crate::runtime::ironwood::admission::world(&mut world).map_err(|error| match error {
+            crate::execution_attempt::ExecutionAttemptError::Rejected(reason) => {
+                MergeLedgerCommitError::ExecutionStatePublication(reason)
+            }
+            crate::execution_attempt::ExecutionAttemptError::Deferred(original) => {
+                MergeLedgerCommitError::ExecutionDeferred(original)
+            }
+        })?;
         crate::sumeragi::lanes::custody::admit_world_state(&mut world, &execution_budget)
             .map_err(MergeLedgerCommitError::NativeLaneCustodyAdmission)?;
         crate::sumeragi::amx::admit_world_state(&mut world, &execution_budget)
@@ -36420,7 +36438,7 @@ pub trait StateReadOnly: WorldStateSnapshot {
     /// or mismatched committed policy.
     fn admitted_privacy_protocol_v1(
         &self,
-        protocol_id: iroha_data_model::privacy::PrivacyProtocolIdV1,
+        protocol_id: iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1,
     ) -> core::result::Result<
         crate::privacy_state::AdmittedPrivacyProtocolV1,
         crate::privacy_state::PrivacyAdmissionErrorV1,
@@ -39025,6 +39043,7 @@ impl<'state> StateBlock<'state> {
         self.verify_sumeragi_lane_state_seal()?;
         if let Some(witness) = &self.exec_witness {
             self.verify_sumeragi_lane_state_witness(witness.wire())?;
+            self.verify_lifecycle_runtime_witness(witness.wire())?;
             if !witness.fastpq_batches.is_empty() {
                 return Err("ordinary captured witness contains prebuilt FASTPQ batches".into());
             }
@@ -39478,6 +39497,7 @@ impl<'state> StateBlock<'state> {
             current_network_entrypoint_hash: None,
             genesis_execution_scope: None,
             direct_parliament_candidate_testing: None,
+            direct_parliament_registration: None,
             current_tx_hash: None,
             governance_ballot_entrypoint_binding: None,
             kagemusha_load_entrypoint_binding: None,
@@ -42084,7 +42104,7 @@ impl StateTransaction<'_, '_> {
         PrivateSettlementGlobalStateErrorV1,
     > {
         let key = iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
         );
         crate::private_settlement::policy::read(
             self.world.parameters.get(),
@@ -42104,7 +42124,7 @@ impl StateTransaction<'_, '_> {
         &self,
     ) -> core::result::Result<(), PrivateSettlementGlobalStateErrorV1> {
         let protocol_id =
-            iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         let admitted = crate::privacy_state::resolve_admitted_privacy_protocol_v1(
             &self.world.privacy_protocol_policies,
             protocol_id,
@@ -42113,8 +42133,9 @@ impl StateTransaction<'_, '_> {
         .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
         crate::privacy_engines::atomic_private_settlement::validate_atomic_private_settlement_profile_v1()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
-        let iroha_data_model::privacy::PrivacyProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(limits) =
-            admitted.protocol_limits()
+        let iroha_data_model::privacy::PrivacyRuntimeProtocolLimitsV1::IrohaIvmPrivateNoteStarkV1(
+            limits,
+        ) = admitted.protocol_limits()
         else {
             return Err(PrivateSettlementGlobalStateErrorV1::Capability);
         };
@@ -42138,7 +42159,8 @@ impl StateTransaction<'_, '_> {
             .validate()
             .map_err(|_| PrivateSettlementGlobalStateErrorV1::Capability)?;
         self.private_settlement_policy_v1()?;
-        let protocol = iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
+        let protocol =
+            iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1;
         if let Some(policy) = self.world.privacy_protocol_policies.get(
             &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(protocol),
         ) {
@@ -42260,11 +42282,12 @@ impl StateTransaction<'_, '_> {
             return Err(PrivateSettlementGlobalStateErrorV1::Network);
         }
         let policy = self.private_settlement_policy_v1()?;
-        let protocol = self.world.privacy_protocol_policies.get(
-            &iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
-                iroha_data_model::privacy::PrivacyProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
-            ),
-        );
+        let protocol =
+            self.world
+                .privacy_protocol_policies
+                .get(&iroha_data_model::privacy::PrivacyProtocolPolicyKeyV1::new(
+                iroha_data_model::privacy::PrivacyRuntimeProtocolIdV1::IrohaIvmPrivateNoteStarkV1,
+            ));
         let admission_deadline =
             iroha_data_model::privacy::private_settlement_admission_deadline_v1(&policy, protocol);
         policy
@@ -43352,6 +43375,17 @@ impl StateTransaction<'_, '_> {
     /// still follow the World rollback journal and poison the nonexportable
     /// diagnostic candidate; they grant no ordinary execution owner.
     pub(crate) fn apply_consensus_effects(self) {
+        use crate::smartcontracts::isi::triggers::set::lifecycle_journal::LifecycleJournalFailure;
+
+        if self.local_storage_refusal.is_none()
+            && !self.world.execution_deferral.borrow().is_refused()
+            && matches!(
+                self.world.triggers.lifecycle_failure(),
+                Some(LifecycleJournalFailure::OutputLimit(_))
+            )
+        {
+            return;
+        }
         if self.local_storage_refusal.is_some() {
             *self.block_execution_output_plan =
                 Some(output_capacity::ExecutionOutputPlanState::Poisoned);
@@ -43365,7 +43399,8 @@ impl StateTransaction<'_, '_> {
                     | output_capacity::ExecutionOutputPlanState::Finalized(_)
                     | output_capacity::ExecutionOutputPlanState::Poisoned
             )
-        ) || !self.callback_journal.allows_apply()
+        ) || !self.world.triggers.lifecycle_allows_apply()
+            || !self.callback_journal.allows_apply()
             || !self.contract_event_journal.allows_apply()
             || !self.execution_effects_allow_apply()
             || self.world.execution_deferral.borrow().is_refused()
@@ -43403,8 +43438,18 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Validate the final transaction boundary while rollback owners remain armed.
-    /// A refusal poisons the enclosing carrier before any State field is applied.
+    /// Local refusal poisons the carrier; deterministic lifecycle exhaustion
+    /// only rejects this disposable root. Neither path applies a State field.
     fn prepare_apply(&mut self) -> Result<(), &'static str> {
+        use crate::smartcontracts::isi::triggers::set::lifecycle_journal::LifecycleJournalFailure;
+
+        if let Some(LifecycleJournalFailure::OutputLimit(reason)) =
+            self.world.triggers.lifecycle_failure()
+            && self.local_storage_refusal.is_none()
+            && !self.world.execution_deferral.borrow().is_refused()
+        {
+            return Err(reason);
+        }
         // Stage native fee deductions queued after the last principal occurrence so
         // the source-quota and execution-effect checks below cover them.
         let fee_transcripts = self.flush_retail_fee_transfer_transcripts();
@@ -43422,6 +43467,8 @@ impl StateTransaction<'_, '_> {
             )
         ) {
             Some("transaction cannot apply in the current execution-output phase")
+        } else if !self.world.triggers.lifecycle_allows_apply() {
+            Some("transaction trigger lifecycle journal does not authorize application")
         } else if !self.callback_journal.allows_apply() {
             Some("transaction callback journal does not authorize application")
         } else if !self.contract_event_journal.allows_apply() {
@@ -43444,7 +43491,8 @@ impl StateTransaction<'_, '_> {
     }
 
     /// Apply the transaction's changes when its execution owners authorize application.
-    /// A refused application poisons the enclosing carrier and drops this overlay.
+    /// A local refusal poisons the carrier; a deterministic lifecycle limit only
+    /// drops this disposable root. Neither refusal applies the overlay.
     pub fn apply(mut self) {
         if self.prepare_apply().is_ok() {
             self.apply_prepared();
@@ -43690,8 +43738,16 @@ impl StateTransaction<'_, '_> {
     }
     /// Consume one finite trigger repetition and revoke every capability tied to
     /// the trigger id when that consumption removes the trigger.
-    fn decrease_trigger_repeats_and_cleanup(&mut self, id: &TriggerId) -> bool {
-        let removed = self.world.triggers.decrease_repeats([id].into_iter());
+    fn decrease_trigger_repeats_and_cleanup(
+        &mut self,
+        id: &TriggerId,
+        callback_index: Option<u32>,
+    ) -> bool {
+        let removed = self.with_trigger_lifecycle_policy(
+            callback_index,
+            iroha_data_model::block::execution_output::TriggerLifecyclePolicyV1::ConsumeRepeat,
+            |tx| tx.world.triggers.decrease_repeats([id].into_iter()),
+        );
         if !removed.is_empty() {
             let removed_ids = removed.iter().cloned().collect();
             crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions_for_ids(
@@ -43776,6 +43832,7 @@ impl StateTransaction<'_, '_> {
             0,
             None,
         )?;
+        let lifecycle_callback = self.world.triggers.lifecycle_last_callback();
         // Immediately process any data triggers emitted by the executed step so that
         // trigger-chained effects are applied within the same transaction.
         // This complements the outer transaction-level DFS and is harmless if redundant.
@@ -43787,7 +43844,7 @@ impl StateTransaction<'_, '_> {
         // Decrease only the incarnation that was invoked. Its body or a chained
         // callback may have replaced the same ID with a fresh trigger.
         if self.world.triggers.registration_generation(id) == action_generation {
-            self.decrease_trigger_repeats_and_cleanup(id);
+            self.decrease_trigger_repeats_and_cleanup(id, lifecycle_callback);
         }
         Ok(step)
     }
@@ -43848,7 +43905,10 @@ impl StateTransaction<'_, '_> {
         // The body may replace its own id. Do not debit the freshly registered
         // incarnation for an invocation of the prior action.
         if self.world.triggers.registration_generation(trg_id) == action_generation {
-            self.decrease_trigger_repeats_and_cleanup(trg_id);
+            self.decrease_trigger_repeats_and_cleanup(
+                trg_id,
+                self.world.triggers.lifecycle_last_callback(),
+            );
         }
         let chained =
             self.execute_data_triggers_dfs_from(action.authority(), step_index.saturating_add(1))?;
@@ -43999,7 +44059,10 @@ impl StateTransaction<'_, '_> {
             let same_incarnation =
                 self.world.triggers.registration_generation(&trg_id) == matched_generation;
             if same_incarnation {
-                self.decrease_trigger_repeats_and_cleanup(&trg_id);
+                self.decrease_trigger_repeats_and_cleanup(
+                    &trg_id,
+                    self.world.triggers.lifecycle_last_callback(),
+                );
             }
             let step = DataTriggerStep {
                 id: trg_id,
@@ -44528,27 +44591,48 @@ impl StateTransaction<'_, '_> {
                     error.map_rejection(ValidationFail::InternalError),
                 )
             })?;
-        let max_depth = u16::from(self.world.parameters.smart_contract().execution_depth());
-        let result = if self.active_trigger_execution_depth >= max_depth {
-            Err(TriggerExecutionFail::MaxDepthExceeded.into())
-        } else {
-            self.active_trigger_execution_depth += 1;
-            let result = self.execute_trigger_within_depth_budget(
-                id,
-                authority,
-                executable,
-                event,
-                step_index,
-                nft_seq_base_override,
-            );
-            self.active_trigger_execution_depth -= 1;
-            result
-        };
+        let lifecycle_checkpoint = self.world.triggers.lifecycle_checkpoint();
+        let lifecycle_index = ticket.index().unwrap_or_else(|| {
+            self.world
+                .triggers
+                .limit_lifecycle("lifecycle callback ordinal exceeds u32");
+            u32::MAX
+        });
+        let result = self.with_trigger_lifecycle_origin(
+            iroha_data_model::block::execution_output::TriggerLifecycleOriginV1::Derived {
+                callback_index: Some(lifecycle_index),
+            },
+            |tx| {
+                tx.world.triggers.lifecycle_invoke(id, lifecycle_index);
+                let max_depth = u16::from(tx.world.parameters.smart_contract().execution_depth());
+                let result = if tx.active_trigger_execution_depth >= max_depth {
+                    Err(TriggerExecutionFail::MaxDepthExceeded.into())
+                } else {
+                    tx.active_trigger_execution_depth += 1;
+                    let result = tx.execute_trigger_within_depth_budget(
+                        id,
+                        authority,
+                        executable,
+                        event,
+                        step_index,
+                        nft_seq_base_override,
+                    );
+                    tx.active_trigger_execution_depth -= 1;
+                    result
+                };
+                result
+            },
+        );
         // Wrap the whole body, including all early errors and successful NoOp
         // returns. Inner completion order never supplies invocation ordinals.
         let completion = self
             .callback_journal
             .finish(ticket, self.tx_call_hash, &result);
+        self.world.triggers.lifecycle_finish_callback(
+            lifecycle_checkpoint,
+            lifecycle_index,
+            result.is_ok() && completion.is_ok(),
+        );
         if result.is_ok() {
             completion.map_err(ValidationFail::InternalError)?;
         }

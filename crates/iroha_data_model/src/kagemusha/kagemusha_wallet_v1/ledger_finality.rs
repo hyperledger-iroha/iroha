@@ -10,7 +10,6 @@ use super::{
     require_version_v1,
 };
 use crate::{
-    block::execution_output::ExecutionOutputV1,
     parameter::ExecutionOutputPolicyV1,
     sumeragi_finality::{
         CertifiedTransactionInclusionV1, FinalityError, FinalityReadError,
@@ -122,7 +121,7 @@ impl KagemushaWalletLedgerFinalityV1 {
         {
             return Err(invalid_v1("ledger_finality.inclusion.path"));
         }
-        if !matches!(self.inclusion.output, ExecutionOutputV1::Network(_)) {
+        if self.inclusion.output.network().is_none() {
             return Err(invalid_v1("ledger_finality.inclusion.output"));
         }
         self.certificate

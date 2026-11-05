@@ -592,14 +592,14 @@ mod tests {
             fixed: vec![SumeragiFixedLane {
                 lane: LaneId::new(2),
                 dataspace: DataSpaceId::new(0),
-                committee: vec![member(1), member(2)],
+                committee: pool(&[0; 32], 4).unwrap(),
             }],
             routes: Vec::new(),
             autoscale: Some(SumeragiLaneAutoscale {
                 min_lane: LaneId::new(16),
                 max_lane_exclusive: LaneId::new(18),
                 dataspace: DataSpaceId::new(0),
-                committee_size: 2,
+                committee_size: 4,
                 per_lane_target_tps: 10,
                 window: 4,
                 scale_out_permille: 800,
@@ -625,11 +625,11 @@ mod tests {
         reason = "The fixture implements the optional committee-selection callback contract."
     )]
     fn pool(_incarnation: &[u8; 32], size: u32) -> Option<Vec<SumeragiLaneMember>> {
-        Some(
-            (1..=u8::try_from(size).unwrap())
-                .map(|seed| member(seed + 10))
-                .collect(),
-        )
+        let mut committee = (1..=u8::try_from(size).unwrap())
+            .map(|seed| member(seed + 10))
+            .collect::<Vec<_>>();
+        committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+        Some(committee)
     }
 
     #[test]
@@ -674,6 +674,8 @@ mod tests {
         let mut state = SumeragiLaneState::default();
         let policy = policy();
         reconcile(&mut state, Some(&policy), &network(), 1, usize::MAX, pool);
+        crate::state::validate_sumeragi_lane_state(network(), 1, &state)
+            .expect("authored policy materializes canonical native lane state");
         let record = state.lane(LaneId::new(2)).expect("fixed lane");
         assert_eq!(record.active_from, 3);
         assert_eq!(record.anchor_freshness, 4);
@@ -708,7 +710,7 @@ mod tests {
         };
         reconcile(&mut state, Some(&policy), &network(), 20, usize::MAX, pool);
         let opened = state.lane(LaneId::new(16)).expect("scaled out");
-        assert_eq!(opened.committee.len(), 2);
+        assert_eq!(opened.committee.len(), 4);
         assert_eq!(state.last_transition, 20);
         // Within the cooldown nothing changes, even under load.
         reconcile(&mut state, Some(&policy), &network(), 22, usize::MAX, pool);
@@ -793,6 +795,27 @@ mod tests {
                     .contains("exceeds the protocol bound"),
                 "lane policy must reject an unbounded committed clock allowance"
             );
+        }
+    }
+
+    #[test]
+    fn policy_validation_rejects_noncanonical_valid_pop_committees() {
+        let valid = policy();
+        assert_eq!(validate_policy(&valid), Ok(()));
+        for mutation in 0..3 {
+            let mut invalid = valid.clone();
+            match mutation {
+                0 => invalid.fixed[0].committee.swap(0, 1),
+                1 => {
+                    invalid.fixed[0].committee.pop();
+                }
+                2 => invalid.autoscale.as_mut().unwrap().committee_size = 5,
+                _ => unreachable!(),
+            }
+            for member in &invalid.fixed[0].committee {
+                iroha_crypto::bls_normal_pop_verify(member.peer.public_key(), &member.pop).unwrap();
+            }
+            assert!(validate_policy(&invalid).is_err());
         }
     }
 

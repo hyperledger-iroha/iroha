@@ -121,11 +121,15 @@ mod query_reader;
 pub(crate) use query_reader::{
     QueryCertifiedChain, native_finality_authority_bytes, native_finality_source_control_bytes,
 };
+mod current_cut;
 mod query_projection;
 pub(crate) use amx_initialization::AmxChainInitialization;
+pub use current_cut::{CurrentCertifiedCut, CurrentCutSourceLimits, read_current_certified_cut};
 pub(crate) use native_acquisition::NativeCarrierAcquisition;
 pub(crate) use prefix_checkpoints::{FinalityPrefixCheckpoints, PrefixCheckpoint};
-use query_projection::{CertificateSource, CheckedFrameRef, ParentProjection, PrefixRef};
+use query_projection::{
+    CertificateSource, CheckedFrameRef, ParentProjection, PrefixRef, ProjectedCertificateSource,
+};
 mod terminal_selection;
 pub(crate) use artifacts::PrefixArtifacts;
 pub(super) use artifacts::{PrefixArtifactsError, PrefixArtifactsRead};
@@ -2040,9 +2044,16 @@ fn verify_availability_source(
         norito::decode_canonical(certificate.availability())
     })
     .map_err(|error| verification_codec_error(height, error))?;
-    if let CertificateSource::Projected { payload, .. } = source {
-        let payload = payload
+    if let CertificateSource::Projected(source) = source {
+        let payload = source
+            .payload
             .ok_or_else(|| malformed("projected source omits its original payload".into()))?;
+        if source.admit_payload {
+            // The current-cut projection retains the original State reader's
+            // logical payload admission at the same verifier position. Exact
+            // physical bytes were already captured before the body retired.
+            admit_scratch(header.payload_len as usize).map_err(VerificationReadError::Deferred)?;
+        }
         return iroha_data_model::sumeragi_finality::verify_payload_availability_with_admission(
             header.instance,
             config,

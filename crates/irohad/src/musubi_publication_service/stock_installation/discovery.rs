@@ -182,7 +182,7 @@ impl Discovery {
                                 &self.chain,
                                 self.network,
                                 provider,
-                                State::native_world_schema_hash_v1()
+                                State::select_native_world_schema_v1(proof.world.schema_hash)
                                     .map_err(|_| "native schema unavailable".to_owned())?,
                                 current.block(),
                                 observed,

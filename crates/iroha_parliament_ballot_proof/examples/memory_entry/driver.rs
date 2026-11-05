@@ -89,7 +89,7 @@ mod application {
             fatal_fd: -1,
         };
         let mut seen = 0u8;
-        for pair in args[4..].chunks_exact(2) {
+        for pair in args[4..].as_chunks::<2>().0 {
             let value = pair[1]
                 .to_str()
                 .and_then(|s| s.parse::<u64>().ok())

@@ -1,5 +1,6 @@
 [package]
 name = "iroha_release_bundle"
+autobins = false
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -13,6 +14,8 @@ workspace = true
 
 [features]
 default = []
+# The publisher command is an explicit release tool, never a default workspace
+# binary; the library stays ungated for iroha_test_network.
 dev-tools = []
 tokio = ["dep:tokio"]
 

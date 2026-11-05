@@ -8,12 +8,12 @@ use futures_util::{
 };
 use integration_tests::sandbox;
 use iroha::{
-    crypto::{Algorithm, HashOf, KeyPair},
+    crypto::{Algorithm, KeyPair},
     data_model::{
         Level,
         account::{Account, AccountId, OpaqueAccountId},
         asset::{AssetDefinition, AssetDefinitionId, AssetId},
-        block::{Header, consensus::SumeragiDiagnosticsStatus},
+        block::consensus::SumeragiDiagnosticsStatus,
         domain::Domain,
         events::time::{ExecutionTime, TimeEventFilter},
         identifier::{
@@ -67,6 +67,8 @@ use toml::{Table, Value as TomlValue};
 mod idle_chain;
 #[path = "../../crates/iroha_test_network/tests/support/multiroute.rs"]
 mod multiroute;
+#[path = "sumeragi_localnet_smoke/status_retry.rs"]
+mod status_retry;
 use multiroute::{ROUTE_VALIDATOR_FEE_SEED_AMOUNT, route_fee_asset_definition_id};
 static LOCALNET_SMOKE_GUARD: OnceLock<Mutex<()>> = OnceLock::new();
 const SMOKE_PIPELINE_TIME: Duration = Duration::from_secs(2);
@@ -3080,7 +3082,7 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         };
         ensure!(
             network.client().client().transaction_ttl() == Some(SOAK_CLIENT_TTL),
-            "the explicit two-hour fixture TTL must retain its millisecond unit"
+            "permissioned probe must retain its authored two-hour transaction TTL"
         );
         wait_for_status_responses(&network, Duration::from_secs(30)).await?;
         let baseline_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
@@ -3093,16 +3095,16 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
         for peer in network.peers() {
             let message = format!("localnet warmup block {}", peer.mnemonic());
             let client = peer.client();
-            integration_tests::sync::spawn_blocking(move || {
+            read_on_dedicated_thread(move || {
                 client.submit::<InstructionBox>(
                     Log::new(Level::INFO, message).into(),
                     iroha::data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                 )
             })
-            .await?
-            .wrap_err_with(|| {
-                format!("failed to submit warmup log instruction to {}", peer.mnemonic())
-            })?;
+                .await
+                .wrap_err_with(|| {
+                    format!("failed to submit warmup log instruction to {}", peer.mnemonic())
+                })?;
         }
         wait_for_converged_height(&network, warmup_height, Duration::from_secs(45)).await?;
         let warmup_statuses = collect_statuses(&network, STATUS_POLL_TIMEOUT).await?;
@@ -3135,17 +3137,20 @@ async fn permissioned_localnet_reaches_100_blocks() -> Result<()> {
             let mut metadata = Metadata::default();
             metadata.insert(sequence_key.clone(), idx.saturating_add(1));
             let client = peer.client();
-            integration_tests::sync::spawn_blocking(move || {
+            read_on_dedicated_thread(move || {
                 client.submit_with_metadata::<InstructionBox>(
                     Log::new(Level::INFO, message).into(),
                     iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
                     metadata,
                 )
             })
-            .await?
-            .wrap_err_with(|| {
-                format!("failed to submit log instruction {idx} to {}", peer.mnemonic())
-            })?;
+                .await
+                .wrap_err_with(|| {
+                    format!(
+                        "failed to submit log instruction {idx} to {}",
+                        peer.mnemonic()
+                    )
+                })?;
             next_height = next_height.saturating_add(1);
             let remaining = timeout.saturating_sub(start.elapsed());
             let block_timeout = if remaining < per_block_timeout {
@@ -4510,9 +4515,7 @@ async fn collect_statuses(
     status_timeout: Duration,
 ) -> Result<Vec<iroha_torii_shared::status::Status>> {
     try_join_all(network.peers().iter().map(|peer| async move {
-        tokio::time::timeout(status_timeout, integration_tests::sync::status_until(
-            peer.client().client(), Instant::now() + status_timeout,
-        ))
+        tokio::time::timeout(status_timeout, status_retry::read(|| peer.status()))
             .await
             .map_or_else(
                 |_| {

@@ -37,7 +37,7 @@ macro_rules! trigger_acquisition {
                 // Validate every original slot before the first inert field move.
                 // A refusal leaves all custody here for aggregate release.
                 assert!(self.is_initialized(), "complete original trigger acquisition");
-                SetBlock { publication: AggregatePublication::Executing, fields: Some(SetBlockFields {
+                SetBlock { lifecycle_work: std::cell::Cell::new(super::lifecycle_journal::LifecycleWorkBudget::block()), publication: AggregatePublication::Executing, fields: Some(SetBlockFields {
                     $($field: BlockField::new(self.$field.as_mut().expect("original trigger slot").take_block()),)+
                 }) }
             }

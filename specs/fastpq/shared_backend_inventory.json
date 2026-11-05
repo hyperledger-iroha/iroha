@@ -200,6 +200,10 @@
           "role": "source"
         },
         {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
+        },
+        {
           "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
           "role": "test"
         },
@@ -632,18 +636,6 @@
           "role": "source"
         },
         {
-          "path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
-          "role": "source"
-        },
-        {
-          "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
-          "role": "test"
-        },
-        {
-          "path": "crates/iroha_core_privacy/src/execution_proofs/staged_race_air.rs",
-          "role": "source"
-        },
-        {
           "tree": "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/",
           "files": [
             "crates/iroha_core_privacy/src/execution_proofs/ivm_step_air/branch.rs",
@@ -683,6 +675,47 @@
       ]
     },
     {
+      "id": "iroha-execution-stark",
+      "class": "duplicate",
+      "family": "fastpq-style-stark",
+      "summary": "Bounded-integer execution STARK (crates/iroha_execution_stark, specs/execution_stark_v1.md): a circuit builder for bounded-integer state machines, Goldilocks/Fp4 DEEP-ALI with LogUp range checks against a verifier-summed 16-bit table, BLAKE2b-384 Merkle commitments and transcript (48-byte digests, 512-bit chaining state), arity-8 FRI with grinding and no masking (public replays). RaceV1 proves on it since 2026-11-03.",
+      "components": {
+        "field": "own Goldilocks base and quartic extension X^4 - 7 (src/field.rs)",
+        "air": "bounded-integer circuit builder compiled to row identities with a split quotient (src/circuit.rs, src/air.rs)",
+        "commitment": "BLAKE2b-384 Merkle trees with batch openings (src/hash.rs, src/merkle.rs)",
+        "fri": "arity-8 FRI with a committed DEEP layer and grinding (src/fri.rs)",
+        "transcript": "BLAKE2b-384 Fiat-Shamir transcript (src/hash.rs, src/transcript.rs)"
+      },
+      "owner_paths": [
+        "crates/iroha_execution_stark/"
+      ],
+      "detect": [
+        {
+          "needles": [
+            "iroha_execution_stark"
+          ],
+          "exclude": [
+            "crates/iroha_execution_stark/"
+          ]
+        }
+      ],
+      "importers": [
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/error.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/proof.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/execution_proofs/proof_tests.rs",
+          "role": "test"
+        }
+      ],
+      "note": "Added at the user's request as a generic prover for SORA Nexus games; whether B.3 consolidates it onto fastpq-q77 is open."
+    },
+    {
       "id": "privacy-substrate",
       "class": "duplicate",
       "family": "fastpq-style-stark",
@@ -696,9 +729,9 @@
       },
       "owner_paths": [
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark.rs",
-        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_dif_test_kernel.rs",
-        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_goldilocks_avx2.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+        "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_dif_test_kernel.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_fft_grain_tests.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_prefix_fft_tests.rs",
         "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_product_difference.rs",
@@ -760,6 +793,14 @@
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/pq_masp/stark.rs",
           "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_avx2_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_persistent_avx2_tests.rs",
+          "role": "test"
         },
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/zk_ace_stark.rs",
@@ -1048,6 +1089,14 @@
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/mod.rs",
           "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_avx2_tests.rs",
+          "role": "test"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/privacy_outer_hash_persistent_avx2_tests.rs",
+          "role": "test"
         },
         {
           "path": "crates/iroha_core_privacy/src/privacy_profiles.rs",
@@ -1491,7 +1540,7 @@
       "id": "race-v1",
       "plan_role": "RaceV1",
       "engines": [
-        "privacy-execution-fork"
+        "iroha-execution-stark"
       ],
       "entry_points": [
         {
@@ -1507,8 +1556,8 @@
           "symbol": "pub fn verify_execution_proof_v1"
         },
         {
-          "path": "crates/iroha_core_privacy/src/execution_proofs/staged_race_air.rs",
-          "symbol": "transparent_stark"
+          "path": "crates/iroha_execution_stark/src/games/race_v1.rs",
+          "symbol": "pub fn circuit"
         },
         {
           "path": "crates/iroha_core_privacy/src/execution_proofs/race_air.rs",
@@ -1519,7 +1568,7 @@
           "symbol": "fn lateral_velocity"
         }
       ],
-      "migration": "B.3 replaces the fork adapter with a FASTPQ adapter (commitment hash and transcript from the shared backend, Digest384 only for retained native identities).",
+      "migration": "Moved off the execution fork to iroha-execution-stark on 2026-11-03 (bounded-integer RaceV1 circuit, BLAKE2b-384 commitments and transcript). race_air.rs and environment_air.rs remain only for the browser kernel export. Whether B.3 later moves it onto the shared FASTPQ backend is open.",
       "facade": {
         "detect": [
           {
@@ -2745,7 +2794,8 @@
     },
     {
       "path": "crates/fastpq_prover/src/gadgets/rns_chain_air/integer.rs",
-      "engine": "fastpq-q77"
+      "engine": "fastpq-q77",
+      "note": "test-only independent integer-oracle modulus"
     },
     {
       "path": "crates/fastpq_prover/src/proof.rs",
@@ -2780,6 +2830,10 @@
       "path": "crates/iroha_crypto/src/fhe_bfv.rs",
       "engine": "soracloud-bfv-native-stark",
       "note": "spelled u64::MAX - u32::MAX as u64 + 1 over two lines"
+    },
+    {
+      "path": "crates/iroha_execution_stark/src/field.rs",
+      "engine": "iroha-execution-stark"
     },
     {
       "path": "crates/ivm/src/field.rs",
@@ -3162,6 +3216,10 @@
           "role": "test"
         },
         {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
+          "role": "source"
+        },
+        {
           "path": "crates/iroha_core_privacy/tests/fastpq_phase_tree_measurement.rs",
           "role": "test"
         },
@@ -3540,6 +3598,10 @@
       "importers": [
         {
           "path": "crates/iroha_core_privacy/src/privacy_engines/aggregate_stark/initial_evaluated_column.rs",
+          "role": "source"
+        },
+        {
+          "path": "crates/iroha_core_privacy/src/privacy_engines/transparent_stark_avx2_test_kernel.rs",
           "role": "source"
         },
         {
@@ -4538,12 +4600,6 @@
     },
     {
       "manifest": "scripts/fastpq/Cargo.toml",
-      "depends_on": [
-        "fastpq_isi"
-      ]
-    },
-    {
-      "manifest": "xtask/Cargo.toml",
       "depends_on": [
         "fastpq_isi"
       ]

@@ -64,6 +64,18 @@ const BASELINE_LABEL: &[u8] = b"iroha:runtime:baseline:v1\0";
 const ADDITION_LABEL: &[u8] = b"iroha:runtime:addition:v1\0";
 /// Native module of the baseline bundle.
 pub(crate) const BASELINE_MODULE: &str = "iroha.baseline";
+/// Successor native bundle: complete trigger lifecycle capture and V2 output.
+pub(crate) const LIFECYCLE_MODULE: &str = iroha_data_model::runtime::TRIGGER_LIFECYCLE_MODULE;
+/// The one native code identity used by standalone and composed lifecycle bundles.
+/// The enclosing descriptor commits its exact services and dependencies, so an Ironwood
+/// composition has a distinct implementation identity without inventing a second module.
+pub(crate) fn lifecycle_implementation_code() -> ImplementationCodeV1 {
+    ImplementationCodeV1::Native {
+        module: LIFECYCLE_MODULE.into(),
+        reference_closure: iroha_crypto::Hash::new(LIFECYCLE_MODULE.as_bytes()).into(),
+    }
+}
+
 /// Commitment scheme of the baseline commitment profile.
 pub(crate) const BASELINE_COMMITMENT_SCHEME: &str = "iroha.world.lthash16.v1";
 /// Metering class of every baseline interface: the engine's native gas schedule.
@@ -90,6 +102,10 @@ pub struct ReleaseCatalog {
     pub baseline: RootSelectionV1,
     /// Identity of [`Self::baseline`].
     pub baseline_id: SelectionId,
+    /// Successor selection with complete native lifecycle output; never founded implicitly.
+    pub lifecycle: RootSelectionV1,
+    /// Identity of the successor selection, installed only by governed change sets.
+    pub lifecycle_id: SelectionId,
     /// The storage definition each compiled canonical World field implements, by registry
     /// identity.
     pub world_storage: BTreeMap<&'static str, DefinitionId>,
@@ -97,6 +113,8 @@ pub struct ReleaseCatalog {
     pub additions: Vec<AdditionDefinitions>,
     /// How each cell an addition adds is installed, by storage definition.
     cell_installers: BTreeMap<DefinitionId, CellInstaller>,
+    /// Additive Ironwood definitions and the governed successor.
+    pub ironwood: Option<super::ironwood::IronwoodCatalog>,
 }
 
 /// The definitions one addition after the baseline publishes ([`additions`]).
@@ -129,6 +147,20 @@ impl AdditionDefinitions {
     }
 }
 
+/// Whether a wire ID belongs to the immutable foundation roster.
+pub(crate) fn is_baseline_instruction(wire_id: &str) -> bool {
+    use iroha_data_model::isi::privacy::{
+        BootstrapPrivacyIronwoodPoolV1, SchedulePrivacyIronwoodLimitsUpdateV1,
+        SubmitPrivacyIronwoodProofV1,
+    };
+    !matches!(
+        wire_id,
+        BootstrapPrivacyIronwoodPoolV1::WIRE_ID
+            | SubmitPrivacyIronwoodProofV1::WIRE_ID
+            | SchedulePrivacyIronwoodLimitsUpdateV1::WIRE_ID
+    )
+}
+
 /// A catalog that cannot be built: a build defect the catalog tests catch.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum CatalogError {
@@ -140,6 +172,9 @@ pub enum CatalogError {
         /// What is wrong.
         reason: String,
     },
+    /// The selected services have no matching executable semantics in this release.
+    #[error("runtime services profile {0} is unsupported")]
+    UnsupportedServices(DefinitionId),
     /// A canonical World field still has an unresolved schema.
     #[error("canonical World field {0} has no resolved schema")]
     UnresolvedSchema(&'static str),
@@ -351,7 +386,7 @@ impl Claimed {
 }
 
 impl ReleaseCatalog {
-    fn publish(
+    pub(super) fn publish(
         &mut self,
         descriptor: DefinitionDescriptorV1,
     ) -> Result<DefinitionId, CatalogError> {
@@ -387,9 +422,21 @@ impl ReleaseCatalog {
                 completion_closures: Vec::new(),
             },
             baseline_id: SelectionId([0; 32]),
+            lifecycle: RootSelectionV1 {
+                kernel: DefinitionId([0; 32]),
+                commitment_profile: DefinitionId([0; 32]),
+                services_profile: DefinitionId([0; 32]),
+                installed_storage: Vec::new(),
+                active: Vec::new(),
+                bindings: Vec::new(),
+                restrictions: Vec::new(),
+                completion_closures: Vec::new(),
+            },
+            lifecycle_id: SelectionId([0; 32]),
             world_storage: BTreeMap::new(),
             additions: Vec::new(),
             cell_installers: BTreeMap::new(),
+            ironwood: None,
         };
 
         let kernel = catalog.publish(DefinitionDescriptorV1::Kernel(KernelDescriptorV1 {
@@ -480,7 +527,9 @@ impl ReleaseCatalog {
         let mut payloads = BTreeMap::new();
         for instruction in iroha_data_model::isi::registry::built_in_instruction_schemas() {
             payloads.insert(instruction.wire_id, (instruction.payload)());
-            if claimed.instructions.contains(instruction.wire_id) {
+            if claimed.instructions.contains(instruction.wire_id)
+                || !is_baseline_instruction(instruction.wire_id)
+            {
                 continue;
             }
             let interface =
@@ -577,6 +626,11 @@ impl ReleaseCatalog {
             interfaces_so_far.extend(published.interfaces.iter().map(|(id, def)| (*id, *def)));
             catalog.additions.push(published);
         }
+        catalog.ironwood = Some(super::ironwood::build_catalog(&mut catalog)?);
+        let baseline = catalog.baseline.clone();
+        catalog.lifecycle = catalog.lifecycle_successor(&baseline)?;
+        catalog.lifecycle_id = catalog.lifecycle.id()?;
+        catalog.compile_lifecycle_compositions()?;
         Ok(catalog)
     }
 
@@ -826,6 +880,135 @@ impl ReleaseCatalog {
         Ok(change_set)
     }
 
+    /// Compile only the explicitly supported Ironwood plus lifecycle composition.
+    /// Baseline lifecycle is built separately. Published native descriptors never
+    /// advertise additional executable combinations merely by appearing in a catalog.
+    pub(crate) fn compile_lifecycle_compositions(&mut self) -> Result<(), CatalogError> {
+        if let Some(ironwood) = &self.ironwood {
+            let current = ironwood.selection.clone();
+            self.lifecycle_successor(&current)?;
+        }
+        Ok(())
+    }
+
+    /// Derive lifecycle capture from the currently committed selection.
+    ///
+    /// Installed storage, interfaces, events, host profiles, restrictions and all
+    /// existing service entries are retained. Other native owner cutovers (such
+    /// as Ironwood) must already be supported by this release catalog. This
+    /// publishes descriptors in this in-memory builder only, never in State.
+    /// # Errors
+    /// An unsupported predecessor, invalid service profile or closure.
+    pub fn lifecycle_successor(
+        &mut self,
+        current: &RootSelectionV1,
+    ) -> Result<RootSelectionV1, CatalogError> {
+        current.check_closure(&self.definitions)?;
+        if let Some(id) = self.unsupported(current) {
+            return Err(CatalogError::UnsupportedServices(id));
+        }
+        let Some(DefinitionDescriptorV1::ServicesProfile(mut services)) =
+            self.definitions.get(&current.services_profile).cloned()
+        else {
+            return Err(CatalogError::UnsupportedServices(current.services_profile));
+        };
+        if services
+            .services
+            .iter()
+            .any(|service| service.name == "trigger_lifecycle")
+        {
+            return Err(CatalogError::UnsupportedServices(current.services_profile));
+        }
+        services.services.push(ServiceEntryV1 {
+            name: "trigger_lifecycle".into(),
+            reference_closure: iroha_crypto::Hash::new(
+                iroha_data_model::runtime::TRIGGER_LIFECYCLE_SERVICE_CLOSURE,
+            )
+            .into(),
+        });
+        services.services.sort_by(|a, b| a.name.cmp(&b.name));
+        let services = self.publish(DefinitionDescriptorV1::ServicesProfile(services))?;
+        let mut successor = current.clone();
+        successor.services_profile = services;
+        let mut replacements = BTreeMap::new();
+        for binding in &current.bindings {
+            if replacements.contains_key(&binding.implementation) {
+                continue;
+            }
+            let Some(DefinitionDescriptorV1::Implementation(mut implementation)) =
+                self.definitions.get(&binding.implementation).cloned()
+            else {
+                return Err(CatalogError::UnsupportedServices(binding.implementation));
+            };
+            if !matches!(implementation.code, ImplementationCodeV1::Native { .. }) {
+                return Err(CatalogError::UnsupportedServices(binding.implementation));
+            }
+            // Additions keep their dispatch module, including any rebound handlers.
+            // Lifecycle changes their services dependency, not their instruction code.
+            let module = match &implementation.code {
+                ImplementationCodeV1::Native { module, .. } => module.as_str(),
+                _ => unreachable!("native code checked above"),
+            };
+            if module == BASELINE_MODULE || module == "iroha.ironwood.v1" {
+                implementation.code = lifecycle_implementation_code();
+            }
+            implementation.services_profile = services;
+            let id = self.publish(DefinitionDescriptorV1::Implementation(implementation))?;
+            replacements.insert(binding.implementation, id);
+        }
+        for active in &mut successor.active {
+            if let Some(replacement) = replacements.get(active) {
+                *active = *replacement;
+            }
+        }
+        successor.active = sorted(successor.active);
+        // ChangeSet::Deactivate consumes restrictions on the retired bundle;
+        // restrictions on retained interfaces/owners remain unchanged.
+        successor
+            .restrictions
+            .retain(|entry| !replacements.contains_key(&entry.definition));
+        for binding in &mut successor.bindings {
+            binding.implementation = replacements[&binding.implementation];
+        }
+        successor.check_closure(&self.definitions)?;
+        Ok(successor)
+    }
+
+    /// Select one service's semantics from an exact compiled services profile.
+    ///
+    /// Dispatch and node-side support checks must share this predicate when a service is
+    /// composed with independently governed extensions. A supported profile without the
+    /// service returns false; a matching name with a different closure is never treated as
+    /// absence. This consults only the immutable compiled catalog, not untrusted published
+    /// descriptors. Ordinary selection closure/support validation remains required separately.
+    /// The lookup costs O(log definitions + log services), without scanning storage owners.
+    ///
+    /// # Errors
+    /// The complete profile is not compiled, is not a services descriptor, or selects a
+    /// different reference closure for the requested service.
+    pub fn service_enabled(
+        &self,
+        profile: DefinitionId,
+        service: &str,
+        reference_closure: [u8; 32],
+    ) -> Result<bool, CatalogError> {
+        let Some(DefinitionDescriptorV1::ServicesProfile(descriptor)) =
+            self.definitions.get(&profile)
+        else {
+            return Err(CatalogError::UnsupportedServices(profile));
+        };
+        match descriptor
+            .services
+            .binary_search_by(|entry| entry.name.as_str().cmp(service))
+        {
+            Err(_) => Ok(false),
+            Ok(index) if descriptor.services[index].reference_closure == reference_closure => {
+                Ok(true)
+            }
+            Ok(_) => Err(CatalogError::UnsupportedServices(profile)),
+        }
+    }
+
     /// The first definition `selection` relies on that this release cannot execute, if any.
     ///
     /// Definitions are content-addressed, so a release executes a definition exactly when its
@@ -846,4 +1029,4 @@ impl ReleaseCatalog {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

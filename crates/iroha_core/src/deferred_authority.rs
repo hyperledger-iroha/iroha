@@ -106,9 +106,13 @@ pub fn reject_opaque_instruction_authority<'a>(
         return Ok(());
     }
     let mut visited = std::collections::BTreeSet::new();
-    reject_opaque_committee_operations_with(instructions, &mut visited, 0, &mut |approve| {
-        live_proposal_instructions_for_approval(state_transaction, approve)
-    })
+    reject_opaque_committee_operations_with(
+        instructions,
+        &mut visited,
+        0,
+        &mut |approve| live_proposal_instructions_for_approval(state_transaction, approve),
+        state_transaction.world.runtime_selection.get(),
+    )
     .map_err(|error| {
         error.map_rejection(|error| {
             ValidationFail::NotPermitted(format!(
@@ -187,17 +191,24 @@ fn is_sccp_outbound_record(instruction: &InstructionBox) -> bool {
 /// multisig approval needs ledger state to resolve; the execution-time check
 /// ([`reject_opaque_instruction_authority`]) covers it. Graphs deeper than the traversal bound
 /// return `false` here and are refused by that check.
-pub fn trigger_executable_derives_sccp_outbound_record(executable: &Executable) -> bool {
-    executable_derives_sccp_outbound_record(executable, 0)
+pub fn trigger_executable_derives_sccp_outbound_record(
+    executable: &Executable,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+) -> bool {
+    executable_derives_sccp_outbound_record(executable, 0, selection)
 }
 
-fn executable_derives_sccp_outbound_record(executable: &Executable, depth: usize) -> bool {
+fn executable_derives_sccp_outbound_record(
+    executable: &Executable,
+    depth: usize,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
+) -> bool {
     match executable {
         Executable::Instructions(instructions) => {
-            instructions_derive_sccp_outbound_record(instructions.iter(), depth)
+            instructions_derive_sccp_outbound_record(instructions.iter(), depth, selection)
         }
         Executable::IvmProved(proved) => {
-            instructions_derive_sccp_outbound_record(proved.overlay.iter(), depth)
+            instructions_derive_sccp_outbound_record(proved.overlay.iter(), depth, selection)
         }
         Executable::Batch(items) => instructions_derive_sccp_outbound_record(
             items.iter().filter_map(|item| match item {
@@ -205,6 +216,7 @@ fn executable_derives_sccp_outbound_record(executable: &Executable, depth: usize
                 ExecutableBatchItem::ContractCall(_) => None,
             }),
             depth,
+            selection,
         ),
         // Contract and raw IVM outputs are checked when the host's effects are consumed.
         Executable::ContractCall(_) | Executable::Ivm(_) => false,
@@ -214,6 +226,7 @@ fn executable_derives_sccp_outbound_record(executable: &Executable, depth: usize
 fn instructions_derive_sccp_outbound_record<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     depth: usize,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> bool {
     if depth > MAX_OPAQUE_DEFERRED_PROPOSAL_DEPTH {
         return false;
@@ -223,8 +236,12 @@ fn instructions_derive_sccp_outbound_record<'a>(
             return true;
         }
         if let Ok(MultisigInstructionBox::Propose(proposal)) =
-            MultisigInstructionBox::try_from(instruction)
-            && instructions_derive_sccp_outbound_record(proposal.instructions.iter(), depth + 1)
+            crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)
+            && instructions_derive_sccp_outbound_record(
+                proposal.instructions.iter(),
+                depth + 1,
+                selection,
+            )
         {
             return true;
         }
@@ -234,6 +251,7 @@ fn instructions_derive_sccp_outbound_record<'a>(
                 if executable_derives_sccp_outbound_record(
                     register.object.action().executable(),
                     depth + 1,
+                    selection,
                 )
         )
     })
@@ -244,6 +262,7 @@ fn reject_opaque_committee_operations_with<'a, F>(
     visited: &mut std::collections::BTreeSet<String>,
     depth: usize,
     resolve: &mut F,
+    selection: &iroha_data_model::runtime::definition::RootSelectionV1,
 ) -> Result<(), Attempt<OpaqueDeferredAuthorityError>>
 where
     F: FnMut(
@@ -255,13 +274,15 @@ where
     }
     for (index, instruction) in instructions.into_iter().enumerate() {
         reject_opaque_committee_operation(instruction, index)?;
-        let multisig = match MultisigInstructionBox::try_from(instruction) {
-            Ok(multisig) => Some(multisig),
-            Err(error) => match multisig_instruction_decode_attempt(error, |_| ()) {
-                Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason)),
-                Attempt::Rejected(()) => None,
-            },
-        };
+        let multisig =
+            match crate::runtime::ironwood::admission::multisig_instruction(instruction, selection)
+            {
+                Ok(multisig) => Some(multisig),
+                Err(error) => match multisig_instruction_decode_attempt(error, |_| ()) {
+                    Attempt::Deferred(reason) => return Err(Attempt::Deferred(reason)),
+                    Attempt::Rejected(()) => None,
+                },
+            };
         if let Some(multisig) = multisig {
             match multisig {
                 MultisigInstructionBox::Propose(proposal) => {
@@ -270,6 +291,7 @@ where
                         visited,
                         depth + 1,
                         resolve,
+                        selection,
                     )?;
                 }
                 MultisigInstructionBox::Approve(approval) => {
@@ -293,6 +315,7 @@ where
                             visited,
                             depth + 1,
                             resolve,
+                            selection,
                         )?;
                     }
                 }
@@ -313,6 +336,7 @@ where
                     visited,
                     depth + 1,
                     resolve,
+                    selection,
                 )?;
             }
             Executable::IvmProved(proved) => {
@@ -321,6 +345,7 @@ where
                     visited,
                     depth + 1,
                     resolve,
+                    selection,
                 )?;
             }
             Executable::Batch(items) => {
@@ -331,6 +356,7 @@ where
                             visited,
                             depth + 1,
                             resolve,
+                            selection,
                         )?;
                     }
                 }
@@ -420,6 +446,7 @@ mod tests {
             &mut std::collections::BTreeSet::new(),
             0,
             &mut |_| Ok(proposal.map(|body| (iroha_test_samples::ALICE_ID.clone(), body.to_vec()))),
+            &crate::runtime::release_catalog().unwrap().baseline,
         )
     }
 
@@ -528,8 +555,12 @@ mod tests {
     #[test]
     fn trigger_registration_scan_finds_nested_sccp_outbound_records() {
         use iroha_data_model::transaction::{IvmBytecode, IvmProved};
-        let derives =
-            |executable: Executable| trigger_executable_derives_sccp_outbound_record(&executable);
+        let derives = |executable: Executable| {
+            trigger_executable_derives_sccp_outbound_record(
+                &executable,
+                &crate::runtime::release_catalog().unwrap().baseline,
+            )
+        };
         assert!(derives(Executable::Instructions(
             vec![sccp_record()].into()
         )));

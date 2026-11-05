@@ -10,7 +10,6 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use ed25519_dalek::{Signer, SigningKey};
 use http::header::CACHE_CONTROL;
 use http_body_util::BodyExt;
-use humantime::format_rfc3339;
 use iroha_config::{
     base::util::Bytes,
     parameters::actual::{self as actual_cfg, SorafsAdmission},
@@ -92,11 +91,47 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 use tempfile::{TempDir, tempdir};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt as _;
 const ISSUED_AT: u64 = 1_700_000_000;
 const TTL_SECS: u64 = 3_600;
 const STATUS_TIMESTAMP_KEY: &str = "sorafs_status_timestamp_unix";
 const GOVERNANCE_REFS_KEY: &str = "sorafs_governance_refs";
+
+/// Render a whole-second fixture timestamp with the canonical UTC `Z` suffix.
+fn fixture_timestamp(seconds: u64) -> String {
+    let seconds = i64::try_from(seconds).expect("fixture timestamp must fit signed Unix seconds");
+    OffsetDateTime::from_unix_timestamp(seconds)
+        .expect("fixture timestamp must be a supported date")
+        .format(&Rfc3339)
+        .expect("fixture timestamp must fit the RFC3339 year range")
+}
+
+#[test]
+fn fixture_timestamp_preserves_whole_second_utc_spelling() {
+    for (seconds, expected) in [
+        (0, "1970-01-01T00:00:00Z"),
+        (1, "1970-01-01T00:00:01Z"),
+        (86_399, "1970-01-01T23:59:59Z"),
+        (86_400, "1970-01-02T00:00:00Z"),
+        (951_782_400, "2000-02-29T00:00:00Z"),
+        (1_709_164_800, "2024-02-29T00:00:00Z"),
+        (2_147_483_647, "2038-01-19T03:14:07Z"),
+        (2_147_483_648, "2038-01-19T03:14:08Z"),
+        (4_107_542_400, "2100-03-01T00:00:00Z"),
+        (253_402_300_799, "9999-12-31T23:59:59Z"),
+    ] {
+        assert_eq!(fixture_timestamp(seconds), expected);
+    }
+}
+
+#[test]
+fn fixture_timestamp_rejects_out_of_range_seconds() {
+    for seconds in [253_402_300_800, u64::MAX] {
+        assert!(std::panic::catch_unwind(|| fixture_timestamp(seconds)).is_err());
+    }
+}
+
 trait ProviderAdvertCacheTestExt {
     fn ingest(
         &mut self,
@@ -3851,11 +3886,7 @@ async fn sorafs_pin_manifest_returns_finalized_record_and_fresh_alias_projection
     );
     assert_eq!(
         cache.get("ttl_expires_at").and_then(json::Value::as_str),
-        Some(
-            format_rfc3339(UNIX_EPOCH + Duration::from_secs(expires_at))
-                .to_string()
-                .as_str()
-        )
+        Some(fixture_timestamp(expires_at).as_str())
     );
     assert!(cache.get("serve_until").is_some_and(json::Value::is_null));
     let lineage = alias.get("lineage").expect("alias lineage");
@@ -4247,8 +4278,7 @@ async fn sorafs_alias_listing_reports_successor_refusal() {
             .and_then(json::Value::as_bool),
         Some(true)
     );
-    let expected_successor_iso =
-        format_rfc3339(UNIX_EPOCH + Duration::from_secs(successor_timestamp)).to_string();
+    let expected_successor_iso = fixture_timestamp(successor_timestamp);
     assert_eq!(
         successor_eval
             .get("approved_at")
@@ -4326,8 +4356,7 @@ async fn sorafs_alias_listing_reports_governance_revocation() {
         Some(true),
         "governance_eval={governance_eval:?}"
     );
-    let expected_effective =
-        format_rfc3339(UNIX_EPOCH + Duration::from_secs(effective_at)).to_string();
+    let expected_effective = fixture_timestamp(effective_at);
     assert_eq!(
         governance_eval
             .get("effective_at")
