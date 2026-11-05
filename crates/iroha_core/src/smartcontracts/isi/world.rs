@@ -33342,6 +33342,91 @@ seiyaku GovernanceLifecycle { permission CanEnactGovernance;
             instruction.expect_execute(&ALICE_ID, &mut retry, "fresh local attempt admits the same schedule");
             assert!(!retry.is_execution_deferred());
         });
+        world_test!(set_parameter_rejects_noncanonical_lane_committees_without_mutation {
+            use iroha_data_model::sumeragi_lanes::{
+                SumeragiFixedLane, SumeragiLaneAutoscale, SumeragiLaneMember,
+                SumeragiLanePolicy,
+            };
+            use iroha_model_base::peer::PeerId;
+
+            blank_state_transaction!(state, block, state_block, stx);
+            let mut committee = (1..=7)
+                .map(|seed| {
+                    let key = KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal);
+                    SumeragiLaneMember {
+                        peer: PeerId::new(key.public_key().clone()),
+                        pop: iroha_crypto::bls_normal_pop_prove(key.private_key()).unwrap(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+            let mut valid = SumeragiLanePolicy::for_chain(
+                stx.world.parameters.get().sumeragi.clone(),
+                iroha_sumeragi::availability::recommended_data_availability_layout(),
+            );
+            valid.fixed.push(SumeragiFixedLane {
+                lane: LaneId::new(2),
+                dataspace: DataSpaceId::UNIVERSAL,
+                committee: committee[..4].to_vec(),
+            });
+            valid.autoscale = Some(SumeragiLaneAutoscale {
+                min_lane: LaneId::new(16),
+                max_lane_exclusive: LaneId::new(32),
+                dataspace: DataSpaceId::UNIVERSAL,
+                committee_size: 4,
+                per_lane_target_tps: 500,
+                window: 32,
+                scale_out_permille: 750,
+                scale_in_permille: 300,
+                cooldown: 64,
+            });
+            SetParameter::new(Parameter::Custom(valid.clone().into_custom_parameter()))
+                .expect_execute(&ALICE_ID, &mut stx, "canonical four-member policy installs");
+            let retained_parameters = stx.world.parameters.get().clone();
+            let retained_lanes = norito::encode_canonical(stx.world.sumeragi_lanes()).unwrap();
+            let retained_internal_events = stx.world.internal_event_buf.clone();
+            let retained_external_events = stx.world.external_event_buf.clone();
+            for mutation in 0..6 {
+                let mut invalid = valid.clone();
+                // A silently accepted input would replace an independently changed field.
+                invalid.stall_window += 1;
+                match mutation {
+                    0 => invalid.fixed[0].committee.swap(0, 1),
+                    1 => invalid.fixed[0].committee.reverse(),
+                    2 => invalid.fixed[0].committee = committee[..3].to_vec(),
+                    3 => invalid.fixed[0].committee = committee[..5].to_vec(),
+                    4 => invalid.autoscale.as_mut().unwrap().committee_size = 3,
+                    5 => invalid.autoscale.as_mut().unwrap().committee_size = 5,
+                    _ => unreachable!(),
+                }
+                // Ordering/geometry is the only invalid property: every supplied PoP is real.
+                for member in &invalid.fixed[0].committee {
+                    iroha_crypto::bls_normal_pop_verify(member.peer.public_key(), &member.pop)
+                        .unwrap();
+                }
+                let error = SetParameter::new(Parameter::Custom(invalid.into_custom_parameter()))
+                    .expect_execute_err(&ALICE_ID, &mut stx, "invalid pinned committee must reject");
+                let InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message),
+                ) = &error else {
+                    panic!("expected a typed lane-policy parameter rejection, got {error:?}");
+                };
+                assert!(message.contains("invalid Sumeragi lane policy"), "{message}");
+                assert!(message.contains("3f + 1"), "{message}");
+                assert_eq!(*stx.world.parameters.get(), retained_parameters);
+                assert_eq!(norito::encode_canonical(stx.world.sumeragi_lanes()).unwrap(), retained_lanes);
+                assert_eq!(stx.world.internal_event_buf, retained_internal_events);
+                assert_eq!(stx.world.external_event_buf, retained_external_events);
+                assert!(!stx.is_execution_deferred());
+            }
+            // Rejected attempts neither poison the transaction nor prevent a valid successor.
+            valid.fixed[0].committee = committee;
+            valid.autoscale.as_mut().unwrap().committee_size = 7;
+            let successor = valid.into_custom_parameter();
+            SetParameter::new(Parameter::Custom(successor.clone()))
+                .expect_execute(&ALICE_ID, &mut stx, "canonical seven-member successor installs");
+            assert_eq!(stx.world.parameters.get().custom().get(&successor.id), Some(&successor));
+        });
         world_test!(set_parameter_rejects_heap_limits_outside_the_abi_window {
             assert_eq!(
                 iroha_data_model::parameter::system::IVM_HEAP_MAX_BYTES,

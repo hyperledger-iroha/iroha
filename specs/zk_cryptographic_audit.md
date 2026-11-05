@@ -1099,7 +1099,7 @@ and the exact 2,131,222-byte wire.
 Its parameter asset checksum is
 `84c5055b47cc7289835e0a5f31d4563849244ffddbf51f5d67b1db95222ce3e6`
 (SHA3-256). The complete profile artifact checksum is
-`b3eecf3d57826fbc6fa0dc6811631771629771ee1f30e79757d93009f9e1eb4d`
+`91673f73d54656735f5d875d0e031d2a01c237b21612346365c3367cb1c33fc2`
 (SHA-256). These checksums identify artifacts; they are not STARK hashes or
 independent audit endorsements.
 

@@ -1,7 +1,10 @@
 //! Data-trigger execution and rollback scenarios.
 use eyre::Result;
 use integration_tests::{sandbox, sync::run_on_dedicated_thread};
-use iroha::{blocking, data_model::prelude::*};
+use iroha::{
+    blocking,
+    data_model::{prelude::*, query::error::FindError},
+};
 use iroha_executor_data_model::permission::account::{
     AccountAliasPermissionScope, CanManageAccountAlias,
 };
@@ -341,7 +344,9 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         let ordering_witness: Name = "data_trigger_ordering_witness".parse()?;
         let create_witness_id: TriggerId = "10_create_ordering_witness".parse()?;
         let consume_then_fail_id: TriggerId = "20_consume_then_fail".parse()?;
-        let wonderland = DomainId::try_new("wonderland", "universal")?;
+        let missing_after_witness: Name = "data_trigger_missing_after_witness".parse()?;
+        assert!(account.metadata().get(&ordering_witness).is_none());
+        assert!(account.metadata().get(&missing_after_witness).is_none());
         let create_witness = Register::trigger(Trigger::new(
             create_witness_id.clone(),
             Action::new(
@@ -364,7 +369,12 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
                         ALICE_ID.clone(),
                         ordering_witness.clone(),
                     )),
-                    InstructionBox::from(Register::domain(Domain::new(wonderland.clone()))),
+                    // This permitted operation fails only after consuming the
+                    // different witness created by the first ordered trigger.
+                    InstructionBox::from(RemoveKeyValue::account(
+                        ALICE_ID.clone(),
+                        missing_after_witness.clone(),
+                    )),
                 ],
                 Repeats::Exactly(1),
                 ALICE_ID.clone(),
@@ -402,8 +412,8 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         .await?
         .expect_err("the second canonically ordered data trigger must reject the transaction");
         assert!(
-            format!("{error:?}").contains(&wonderland.to_string()),
-            "the rejection must come from the duplicate-domain instruction after the first trigger created and the second consumed its witness: {error:?}"
+            is_missing_metadata_key_rejection(&error, &missing_after_witness),
+            "the rejection must identify the second missing key after the first trigger created and the second consumed its distinct witness: {error:?}"
         );
 
         let rose_after = run_on_dedicated_thread({
@@ -434,6 +444,40 @@ async fn four_peer_scoped_one_shot_data_triggers_roll_back_atomically() -> Resul
         Ok(())
     })
     .await
+}
+
+fn is_missing_metadata_key_rejection(error: &eyre::Report, expected: &Name) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<FindError>(),
+            Some(FindError::MetadataKey(key)) if key == expected
+        )
+    })
+}
+
+#[test]
+fn trigger_rollback_rejection_requires_the_distinct_second_metadata_key() -> Result<()> {
+    let witness: Name = "ordering_witness".parse()?;
+    let missing: Name = "missing_after_witness".parse()?;
+    assert!(is_missing_metadata_key_rejection(
+        &eyre::Report::new(FindError::MetadataKey(missing.clone())).wrap_err("trigger failed"),
+        &missing,
+    ));
+    assert!(!is_missing_metadata_key_rejection(
+        &eyre::Report::new(FindError::MetadataKey(witness)),
+        &missing,
+    ));
+    assert!(!is_missing_metadata_key_rejection(
+        &eyre::eyre!("missing metadata key {missing}"),
+        &missing,
+    ));
+    assert!(!is_missing_metadata_key_rejection(
+        &eyre::Report::new(ValidationFail::NotPermitted(format!(
+            "unknown key {missing}"
+        ))),
+        &missing,
+    ));
+    Ok(())
 }
 
 /// # Scenario

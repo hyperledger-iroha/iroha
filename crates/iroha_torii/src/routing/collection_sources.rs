@@ -10,9 +10,9 @@ use super::*;
 mod account_history_multisig_tests;
 
 mod account_aliases;
-mod roles;
 #[cfg(test)]
 mod account_aliases_tests;
+mod roles;
 use account_aliases::AccountAliasJoin;
 
 use crate::collections::{self, CollectionError, CollectionSpec, Limits, RowPage, specs};
@@ -876,7 +876,9 @@ fn execute_prepared_collection_local(
             );
         }
         CollectionTarget::Roles | CollectionTarget::AccountRoles(_) => {
-            return roles::execute(state, target, query, telemetry, visibility, prepared, limits);
+            return roles::execute(
+                state, target, query, telemetry, visibility, prepared, limits,
+            );
         }
         CollectionTarget::AccountPermissions(account_literal) => {
             let (account, _) = parse_account_path_segment_with_state(

@@ -188,7 +188,31 @@ fn rpc_mock_normalizes_accepted_socket_mode_without_changing_io_deadlines() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let _client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (stream, _) = listener.accept().unwrap();
+    // A completed local connect does not make nonblocking accept immediately
+    // ready on every host. Keep the mock's original ten-second polling bound
+    // and retry only its exact readiness refusal.
+    let until = Instant::now() + Duration::from_secs(10);
+    let (stream, _) = loop {
+        assert!(
+            Instant::now() < until,
+            "local RPC accept readiness timed out"
+        );
+        match listener.accept() {
+            Ok(connection) => {
+                assert!(
+                    Instant::now() < until,
+                    "local RPC accept readiness arrived after its deadline"
+                );
+                break connection;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                std::thread::sleep(
+                    Duration::from_millis(2).min(until.saturating_duration_since(Instant::now())),
+                );
+            }
+            Err(error) => panic!("local RPC listener: {error}"),
+        }
+    };
     // Force the inherited mode on every Unix host, including hosts whose
     // accept implementation creates a blocking socket by default.
     stream.set_nonblocking(true).unwrap();

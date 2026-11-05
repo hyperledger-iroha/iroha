@@ -2,7 +2,7 @@
 mod full_trigger_rows {
     //! Complete Trigger source budgets and authenticated stored-cursor ownership.
     use super::*;
-    use iroha_data_model::ValidationFail;
+    use iroha_data_model::{HasMetadata as _, ValidationFail};
     fn trigger_rows_fixture(
         oversized: bool,
     ) -> (
@@ -65,6 +65,23 @@ mod full_trigger_rows {
         }
         transaction.apply();
         block.commit_world_overlay_for_testing().unwrap();
+        // Registration stores the block's height and creation time on the action.
+        // Include both exact engine-owned fields in the complete-row byte oracle.
+        let expected = expected
+            .into_iter()
+            .map(|trigger| {
+                let mut metadata = trigger.action().metadata().clone();
+                metadata.insert(
+                    "__registered_block_height".parse().unwrap(),
+                    Json::from(1u64),
+                );
+                metadata.insert("__registered_at_ms".parse().unwrap(), Json::from(0u64));
+                Trigger::new(
+                    trigger.id().clone(),
+                    trigger.action().clone().with_metadata(metadata),
+                )
+            })
+            .collect();
         (app, authority, expected)
     }
     fn trigger_rows_query(fetch_size: u64) -> iroha_data_model::query::QueryRequest {

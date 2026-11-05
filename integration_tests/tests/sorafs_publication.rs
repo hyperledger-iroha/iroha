@@ -63,7 +63,7 @@ use sorafs_manifest::{
 use std::{
     borrow::Cow,
     fs,
-    io::Write as _,
+    io::{Read as _, Write as _},
     os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _},
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
@@ -764,11 +764,12 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
         "corrupt payload must remain unavailable after restart, got {}",
         unavailable.status()
     );
-    let unavailable_body = wire::bytes(unavailable, 65536).await?;
+    let unavailable_body = String::from_utf8(wire::bytes(unavailable, 65536).await?)?;
     ensure!(
-        String::from_utf8(unavailable_body)?
-            .contains("manifest payload is quarantined pending verified repair"),
-        "an unrelated restart or finality error cannot establish payload quarantine"
+        unavailable_body.contains("manifest payload is quarantined pending verified repair"),
+        "an unrelated restart or finality error cannot establish payload quarantine; response body ({} bytes, at most 4096-byte UTF8 prefix): {:?}",
+        unavailable_body.len(),
+        &unavailable_body[..unavailable_body.floor_char_boundary(4096)],
     );
     // An unaffected replica remains available before any repair task can be claimed.
     check_payload(published, 1).await?;
@@ -873,6 +874,50 @@ pub async fn qualify_storage_lifecycle(published: &PublishedNetwork) -> Result<(
     Ok(())
 }
 
+// Read only the child-owned stdout/stderr log, before the private runtime
+// directory is removed. Never copy the adjacent client config or checkpoint.
+fn bounded_cli_failure_log(log: &std::path::Path) -> String {
+    let read = || -> std::io::Result<(u64, Vec<u8>)> {
+        let file = fs::File::open(log)?;
+        let total = file.metadata()?.len();
+        let mut bytes = Vec::new();
+        file.take(4096).read_to_end(&mut bytes)?;
+        Ok((total, bytes))
+    };
+    match read() {
+        Ok((total, bytes)) => format!(
+            "CLI log {total} bytes, first {} bytes: {}",
+            bytes.len(),
+            bytes.escape_ascii()
+        ),
+        Err(error) => format!("CLI log unavailable: {:?}", error.kind()),
+    }
+}
+
+#[test]
+fn cli_failure_log_is_bounded_escaped_and_survives_runtime_cleanup() {
+    let directory = tempfile::tempdir().unwrap();
+    let log = directory.path().join("cli.log");
+    let mut bytes = b"pin registration rejected\n\xff\x1b".to_vec();
+    bytes.resize(4096, b'x');
+    bytes.extend_from_slice(b"unread trailing content");
+    fs::write(&log, &bytes).unwrap();
+    let diagnostic = bounded_cli_failure_log(&log);
+    assert!(diagnostic.starts_with(&format!(
+        "CLI log {} bytes, first 4096 bytes: ",
+        bytes.len()
+    )));
+    assert!(diagnostic.contains(r"pin registration rejected\n\xff\x1b"));
+    assert!(!diagnostic.contains("unread trailing content"));
+    assert!(!diagnostic.contains('\n'));
+    directory.close().unwrap();
+    assert!(diagnostic.contains("pin registration rejected"));
+    assert_eq!(
+        bounded_cli_failure_log(&log),
+        "CLI log unavailable: NotFound"
+    );
+}
+
 async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
     let root = published.runtime_directory.path().join("cli");
     fs::create_dir(&root)?;
@@ -962,13 +1007,16 @@ async fn qualify_cli_deploy(published: &PublishedNetwork) -> Result<()> {
                 .kill()
                 .await
                 .wrap_err("terminate and reap timed-out publication CLI")?;
-            return Err(error).wrap_err("same-source publication CLI exceeded its deadline");
+            return Err(error).wrap_err(format!(
+                "same-source publication CLI exceeded its deadline; {}",
+                bounded_cli_failure_log(&log)
+            ));
         }
     };
     ensure!(
         status.success(),
-        "same-source sorafs_cli deploy failed; runtime log: {}",
-        log.display()
+        "same-source sorafs_cli deploy failed ({status}); {}",
+        bounded_cli_failure_log(&log)
     );
     ensure!(
         fs::metadata(&receipt)?.len() <= 1024 * 1024,

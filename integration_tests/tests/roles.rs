@@ -2,7 +2,7 @@
 use crate::permissions::{account_permissions, account_role_ids, stored_role};
 use executor_custom_data_model::permissions::CanControlDomainLives;
 use eyre::Result;
-use integration_tests::{metrics::MetricsReader, sandbox};
+use integration_tests::sandbox;
 use iroha::{
     blocking::Client,
     data_model::{prelude::*, transaction::error::TransactionRejectionReason},
@@ -18,28 +18,6 @@ use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 fn start_network(context: &'static str) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(NetworkBuilder::new(), context).unwrap()
-}
-fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
-    let http = integration_tests::http::client();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut prepared_seen: f64 = 0.0;
-    let mut merged_seen: f64 = 0.0;
-    let mut fallback_seen: f64 = 0.0;
-    while Instant::now() < deadline {
-        let snapshot = rt.block_on(async {
-            let response = http.get(metrics_url.clone()).send().await?;
-            response.error_for_status()?.text().await
-        })?;
-        let metrics = MetricsReader::new(&snapshot);
-        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
-        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
-        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
-        if merged_seen > 0.0 || fallback_seen > 0.0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok((prepared_seen, merged_seen, fallback_seen))
 }
 fn err_chain_contains(err: &eyre::Report, needle: &str) -> bool {
     err.chain().any(|cause| cause.to_string().contains(needle))
@@ -403,7 +381,7 @@ fn grant_revoke_role_permissions() -> Result<()> {
     Ok(())
 }
 #[test]
-fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+fn role_permission_revoke_then_grant_last_wins_canonical_output() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_default_block_cadence()
@@ -415,13 +393,12 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         });
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
-        stringify!(role_permission_revoke_then_grant_last_wins_detached),
+        stringify!(role_permission_revoke_then_grant_last_wins_canonical_output),
     )?
     else {
         return Ok(());
     };
     let test_client = network.client();
-    let metrics_url = test_client.client().endpoint().join("/metrics")?;
     let alice_id = ALICE_ID.clone();
     let role_id: RoleId = "PERM_LAST_WINS".parse()?;
     test_client.submit(
@@ -436,30 +413,38 @@ fn role_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         Grant::role_permission(perm.clone(), role_id.clone()),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let revoke_role_permission = Revoke::role_permission(perm.clone(), role_id.clone());
-    let grant_role_permission = Grant::role_permission(perm.clone(), role_id.clone());
-    test_client.submit_all::<InstructionBox>(
-        [revoke_role_permission.into(), grant_role_permission.into()],
+    let expected_permissions = stored_role(&test_client, &role_id)?
+        .expect("seeded role must exist")
+        .permissions()
+        .cloned()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(expected_permissions.contains(&perm));
+    crate::permissions::canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
+    let instructions: Vec<InstructionBox> = vec![
+        Revoke::role_permission(perm.clone(), role_id.clone()).into(),
+        Grant::role_permission(perm.clone(), role_id.clone()).into(),
+    ];
+    let submitted = test_client.submit_all(
+        instructions.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let role = stored_role(&test_client, &role_id)?.expect("role should exist");
-    assert!(
-        role.permissions().any(|permission| permission == &perm),
-        "last grant should keep permission on role"
-    );
-    assert!(
-        prepared_seen > 0.0,
-        "expected detached pipeline to prepare overlays"
-    );
-    assert!(
-        merged_seen > 0.0,
-        "expected detached merge to register in metrics"
-    );
-    assert_eq!(
-        fallback_seen, 0.0,
-        "detached fallback should not register for permission ops"
-    );
+    crate::permissions::canonical_permission_execution::assert_canonical_output(
+        &network,
+        submitted,
+        &alice_id,
+        &instructions,
+    )?;
+    for peer in network.validators() {
+        let role = stored_role(&peer.client(), &role_id)?.expect("role should exist");
+        assert_eq!(
+            role.permissions()
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_permissions,
+            "last grant must retain the exact role permissions on every voter"
+        );
+    }
+    crate::permissions::canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
     Ok(())
 }
 #[path = "support/invalid_genesis.rs"]

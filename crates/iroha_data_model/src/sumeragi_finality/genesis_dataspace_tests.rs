@@ -662,9 +662,12 @@ fn declaration_rejects_missing_duplicate_or_mismatched_lane_policy_and_catalog_m
         Err(GenesisDataspaceError::LanePolicy(_))
     ));
     let mut foreign = taira_fixture_lane_policy(&committee_keys());
-    foreign.fixed[2].committee =
-        taira_fixture_lane_policy(&[KeyPair::from_seed(vec![9; 32], Algorithm::BlsNormal)]).fixed
-            [2]
+    foreign.fixed[2].committee = taira_fixture_lane_policy(
+        &(9..=12)
+            .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+            .collect::<Vec<_>>(),
+    )
+    .fixed[2]
         .committee
         .clone();
     assert!(matches!(
@@ -770,11 +773,14 @@ fn certified_cut_rechecks_the_governed_lane_policy() {
         |policy| policy.fixed[2].dataspace = fixture_dataspace_id("dpn"),
         |policy| policy.fixed[3].dataspace = fixture_dataspace_id("bpng"),
         |policy| {
-            policy.fixed[2].committee =
-                taira_fixture_lane_policy(&[KeyPair::from_seed(vec![9; 32], Algorithm::BlsNormal)])
-                    .fixed[2]
-                    .committee
-                    .clone();
+            policy.fixed[2].committee = taira_fixture_lane_policy(
+                &(9..=12)
+                    .map(|seed| KeyPair::from_seed(vec![seed; 32], Algorithm::BlsNormal))
+                    .collect::<Vec<_>>(),
+            )
+            .fixed[2]
+                .committee
+                .clone();
         },
     ];
     for mutate in mutations {

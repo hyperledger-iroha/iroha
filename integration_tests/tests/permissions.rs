@@ -1,6 +1,6 @@
 //! Integration tests ensuring executor-enforced permission policies.
 use eyre::Result;
-use integration_tests::{metrics::MetricsReader, sandbox, sync::sync_after_submission};
+use integration_tests::{sandbox, sync::sync_after_submission};
 use iroha::{
     blocking::Client,
     collections::{Collection, ListQuery, Page, field},
@@ -30,28 +30,9 @@ fn start_network_with_builder(
 ) -> Option<(sandbox::SerializedNetwork, Runtime)> {
     sandbox::start_network_blocking_or_skip(builder, context).unwrap()
 }
-fn poll_detached_metrics(rt: &Runtime, metrics_url: &reqwest::Url) -> Result<(f64, f64, f64)> {
-    let http = integration_tests::http::client();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    let mut prepared_seen: f64 = 0.0;
-    let mut merged_seen: f64 = 0.0;
-    let mut fallback_seen: f64 = 0.0;
-    while Instant::now() < deadline {
-        let snapshot = rt.block_on(async {
-            let response = http.get(metrics_url.clone()).send().await?;
-            response.error_for_status()?.text().await
-        })?;
-        let metrics = MetricsReader::new(&snapshot);
-        prepared_seen = prepared_seen.max(metrics.get("pipeline_detached_prepared"));
-        merged_seen = merged_seen.max(metrics.get("pipeline_detached_merged"));
-        fallback_seen = fallback_seen.max(metrics.get("pipeline_detached_fallback"));
-        if merged_seen > 0.0 || fallback_seen > 0.0 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    Ok((prepared_seen, merged_seen, fallback_seen))
-}
+#[path = "support/canonical_permission_execution.rs"]
+pub(super) mod canonical_permission_execution;
+
 /// Decode one complete bounded fixture snapshot; truncated or oversized reads fail closed.
 fn complete_permission_rows<T: norito::json::JsonDeserialize>(
     page: Page<norito::json::Value>,
@@ -378,7 +359,7 @@ fn permissions_disallow_asset_transfer() {
     assert_eq!(alice_assets, alice_start_assets);
 }
 #[test]
-fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
+fn account_permission_revoke_then_grant_last_wins_canonical_output() -> Result<()> {
     let builder = NetworkBuilder::new()
         .with_peers(4)
         .with_default_block_cadence()
@@ -390,13 +371,12 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         });
     let Some((network, rt)) = sandbox::start_network_blocking_or_skip(
         builder,
-        stringify!(account_permission_revoke_then_grant_last_wins_detached),
+        stringify!(account_permission_revoke_then_grant_last_wins_canonical_output),
     )?
     else {
         return Ok(());
     };
     let client = network.client();
-    let metrics_url = client.client().endpoint().join("/metrics")?;
     let mut status = client.status().get()?;
     let mut last_non_empty_height = status.blocks_non_empty;
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
@@ -420,7 +400,7 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         &rt,
         &client,
         last_non_empty_height,
-        "register detached permission target account",
+        "register canonical permission target account",
     )?;
     last_non_empty_height = status.blocks_non_empty;
     let perm: Permission = CanModifyAccountMetadata {
@@ -438,32 +418,37 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
         &rt,
         &client,
         last_non_empty_height,
-        "seed detached account permission",
+        "seed canonical account permission",
     )?;
-    let revoke = Revoke::account_permission(perm.clone(), ALICE_ID.clone());
-    let grant = Grant::account_permission(perm.clone(), ALICE_ID.clone());
-    mouse_client.submit_all::<InstructionBox>(
-        [revoke.into(), grant.into()],
+    let expected_permissions = account_permissions(&client, &ALICE_ID)?
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert!(expected_permissions.contains(&perm));
+    canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
+    let instructions: Vec<InstructionBox> = vec![
+        Revoke::account_permission(perm.clone(), ALICE_ID.clone()).into(),
+        Grant::account_permission(perm.clone(), ALICE_ID.clone()).into(),
+    ];
+    let submitted = mouse_client.submit_all(
+        instructions.clone(),
         iroha_data_model::transaction::FeePaymentIntent::authority(Vec::new(), None),
     )?;
-    let (prepared_seen, merged_seen, fallback_seen) = poll_detached_metrics(&rt, &metrics_url)?;
-    let permissions = account_permissions(&client, &ALICE_ID)?;
-    assert!(
-        permissions.iter().any(|permission| permission == &perm),
-        "last grant should keep permission on account"
-    );
-    assert!(
-        prepared_seen > 0.0,
-        "expected detached pipeline to prepare overlays"
-    );
-    assert!(
-        merged_seen > 0.0,
-        "expected detached merge to register in metrics"
-    );
-    assert_eq!(
-        fallback_seen, 0.0,
-        "detached fallback should not register for permission ops"
-    );
+    canonical_permission_execution::assert_canonical_output(
+        &network,
+        submitted,
+        &mouse_id,
+        &instructions,
+    )?;
+    for peer in network.validators() {
+        assert_eq!(
+            account_permissions(&peer.client(), &ALICE_ID)?
+                .into_iter()
+                .collect::<std::collections::BTreeSet<_>>(),
+            expected_permissions,
+            "last grant must retain the exact account permissions on every voter"
+        );
+    }
+    canonical_permission_execution::assert_no_detached_activity(&network, &rt)?;
     Ok(())
 }
 #[test]

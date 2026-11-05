@@ -50,16 +50,20 @@ fn custom_npos_genesis_builder(include_private_input: bool) -> NetworkBuilder {
                 fixed: vec![SumeragiFixedLane {
                     lane: LaneId::new(1),
                     dataspace: DataSpaceId::new(1),
-                    committee: topology_entries
-                        .iter()
-                        .map(|entry| SumeragiLaneMember {
-                            peer: entry.peer.clone(),
-                            pop: entry
-                                .pop_bytes()
-                                .expect("well-formed lane PoP")
-                                .expect("lane member PoP"),
-                        })
-                        .collect(),
+                    committee: {
+                        let mut committee = topology_entries
+                            .iter()
+                            .map(|entry| SumeragiLaneMember {
+                                peer: entry.peer.clone(),
+                                pop: entry
+                                    .pop_bytes()
+                                    .expect("well-formed lane PoP")
+                                    .expect("lane member PoP"),
+                            })
+                            .collect::<Vec<_>>();
+                        committee.sort_by(|left, right| left.peer.cmp(&right.peer));
+                        committee
+                    },
                 }],
                 routes: Vec::new(),
                 autoscale: None,

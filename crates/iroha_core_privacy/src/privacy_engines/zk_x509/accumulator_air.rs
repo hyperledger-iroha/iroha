@@ -248,11 +248,6 @@ impl ZkX509CaAccumulatorTraceV1 {
                 .iter()
                 .all(ZkX509ShaCallWitnessV1::private_is_zeroized_v1)
     }
-    /// Fixed native row count, including 8,088 canonical inactive rows.
-    #[cfg(test)]
-    pub(crate) const fn rows(&self) -> usize {
-        self.rows.len()
-    }
     /// Materialize one base row.
     pub(crate) fn base_row(
         &self,
@@ -731,7 +726,12 @@ mod tests {
         let (statement, witness) = fixture();
         let trace = build_ca_accumulator_trace_v1(statement, &witness).expect("trace");
         trace.validate().expect("valid");
-        assert_eq!(trace.rows(), 4_096);
+        assert_eq!(trace.rows.len(), 104);
+        assert_eq!(ZK_X509_CA_ACCUMULATOR_TRACE_ROWS_V1, 4_096);
+        assert_eq!(
+            trace.base_row(4_096),
+            Err(ZkX509AccumulatorAirErrorV1::Topology)
+        );
         assert_eq!(trace.hash_witnesses.len(), 13);
         assert_eq!(trace.hash_witnesses[0].role, ZkX509ShaCallRoleV1::CaLeaf);
         assert_eq!(trace.hash_witnesses[0].message.len(), 156);

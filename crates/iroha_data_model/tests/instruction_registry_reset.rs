@@ -1,6 +1,10 @@
 //! Test that the global instruction registry can be overridden after it has
 //! been initialized lazily.
-use iroha_data_model::{instruction_registry_with_ids, isi::set_instruction_registry, prelude::*};
+use iroha_data_model::{
+    instruction_registry_with_ids,
+    isi::{framed_instruction_payload, set_instruction_registry, wire_id_of},
+    prelude::*,
+};
 
 const REGISTRY_RESET_CHILD: &str = "IROHA_DATA_MODEL_REGISTRY_RESET_CHILD";
 
@@ -38,17 +42,21 @@ fn set_instruction_registry_overrides_existing() {
         return;
     }
 
-    // Start with registry containing only `Log`
     set_instruction_registry(instruction_registry_with_ids![Log]);
-    let log: InstructionBox = Log::new(Level::INFO, "hello".to_owned()).into();
-    let bytes = norito::to_bytes(&log).expect("serialize");
+    let log = Log::new(Level::INFO, "hello".to_owned());
+    let boxed: InstructionBox = log.clone().into();
+    let (wire_id, frame) = framed_instruction_payload(&boxed).expect("registered Log envelope");
+    let bytes = norito::to_bytes(&boxed).expect("serialize");
     let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("deserialize");
-    // Type should match when decoded via the configured registry
-    assert_eq!(log.id(), decoded.id());
-    // Replace registry with one that doesn't include `Log`
+    assert_eq!(decoded.as_any().downcast_ref::<Log>(), Some(&log));
+
     set_instruction_registry(instruction_registry_with_ids![SetParameter]);
-    let result = norito::decode_from_bytes::<InstructionBox>(&bytes);
-    assert!(result.is_err(), "registry should have been replaced");
-    // Restore the default registry so other tests aren't affected
+    assert!(wire_id_of::<Log>().is_none());
+    assert!(wire_id_of::<SetParameter>().is_some());
+    let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("opaque envelope");
+    let opaque = decoded.as_opaque().expect("Log left the registry");
+    assert_eq!(opaque.wire_id(), wire_id);
+    assert_eq!(opaque.frame(), frame);
+    assert_eq!(norito::to_bytes(&decoded).expect("re-encode"), bytes);
     set_instruction_registry(iroha_data_model::instruction_registry::default());
 }

@@ -6,6 +6,7 @@
 
 mod anchor_prefix;
 mod anchor_prefix_tests;
+mod native_read;
 
 use std::{
     num::NonZeroU64,
@@ -218,16 +219,20 @@ fn four_validators_publish_native_sccp_finality_and_refuse_unqualified_launch() 
                 "the captured 1,000-unit stakes at one basis point each round to zero"
             );
             ensure!(!capabilities.parliament_binding_ballot_available);
-            let holds = client
-                .sccp()
-                .forgery_hold(iroha_sccp::api::SccpForgeryHoldQuery::default())?;
+            let holds = native_read::read(&client, "sccp.forgery_hold.read", |bounded| {
+                bounded
+                    .sccp()
+                    .forgery_hold(iroha_sccp::api::SccpForgeryHoldQuery::default())
+            })?;
             ensure!(holds.revisions.is_empty() && holds.next.is_none());
             let pause = client.sccp().fast_pause()?;
             ensure!(pause.panel.is_none() && pause.seats.is_none() && !pause.eligibility_available);
             ensure!(
                 pause.rounds.is_empty() && pause.active.is_empty() && pause.suspended.is_empty()
             );
-            let anchor = client.sccp().anchor_witness(NonZeroU64::new(1).unwrap())?;
+            let anchor = native_read::read(&client, "sccp.evidence.anchor", |bounded| {
+                bounded.sccp().anchor_witness(NonZeroU64::new(1).unwrap())
+            })?;
             ensure!(anchor.height == 1 && anchor.chunk == 0 && anchor.witness.is_none());
             let generation = client.sccp().committee(1)?;
             ensure!(generation.committee_root == root && generation.keys == keys);
@@ -886,9 +891,11 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
         // adversarial evidence submitted through the ordinary native ingress;
         // no consensus process, state record or protocol clock is changed.
         let client = network.peers()[0].client();
-        let anchor = client
-            .sccp()
-            .anchor_witness(NonZeroU64::new(normal_height).unwrap())?;
+        let anchor = native_read::read(&client, "sccp.evidence.anchor", |bounded| {
+            bounded
+                .sccp()
+                .anchor_witness(NonZeroU64::new(normal_height).unwrap())
+        })?;
         ensure!(anchor.height == normal_height && anchor.chunk == 0 && anchor.witness.is_some());
         let witness = anchor
             .witness
@@ -903,10 +910,11 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
         ensure!(witness.core_hash == authentic.qc.block_hash && witness.result == authentic.result);
         for peer in network.peers() {
             ensure!(
-                peer.client()
-                    .sccp()
-                    .anchor_witness(NonZeroU64::new(normal_height).unwrap())?
-                    == anchor
+                native_read::read(&peer.client(), "sccp.evidence.anchor", |bounded| {
+                    bounded
+                        .sccp()
+                        .anchor_witness(NonZeroU64::new(normal_height).unwrap())
+                })? == anchor
             );
         }
         let stake_before = client
@@ -983,9 +991,11 @@ fn four_validators_rotate_after_real_idle_heartbeat_and_apply_prior_generation_f
             let peer_client = peer.client();
             get_status_with_retry_at_least(&peer_client, evidence_height)?;
             ensure!(peer_client.sccp().evidence(&evidence_id)? == pending);
-            let holds = peer_client
-                .sccp()
-                .forgery_hold(iroha_sccp::api::SccpForgeryHoldQuery::default())?;
+            let holds = native_read::read(&peer_client, "sccp.forgery_hold.read", |bounded| {
+                bounded
+                    .sccp()
+                    .forgery_hold(iroha_sccp::api::SccpForgeryHoldQuery::default())
+            })?;
             ensure!(
                 holds.revisions.is_empty() && holds.next.is_none(),
                 "no routes were installed"
