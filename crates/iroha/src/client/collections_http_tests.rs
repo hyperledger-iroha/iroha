@@ -191,18 +191,28 @@ async fn role_collections_sign_the_exact_path_and_projection() {
     ]);
     let account = client.account_client().expect("role reader account");
     let target = AccountId::new(client.key_pair.public_key().clone());
+    let literal = AccountAddress::from_account_id(&target)
+        .and_then(|address| address.to_i105_for_discriminant(client.account_chain_discriminant))
+        .unwrap();
     let query = ListQuery::new().select(["id"]).limit(2);
-    for collection in [Collection::Roles, Collection::AccountRoles(target)] {
+    for (collection, segments) in [
+        (Collection::Roles, vec!["v1", "roles", "query"]),
+        (
+            Collection::AccountRoles(target),
+            vec!["v1", "accounts", literal.as_str(), "roles", "query"],
+        ),
+    ] {
         let result = account.list_page(&collection, &query).await.unwrap();
         assert_eq!(ids(&result.items), ["auditor"]);
         let requests = requests.lock().unwrap();
         let request = requests.last().unwrap();
-        assert_eq!(
-            request.url.path(),
-            collection
-                .query_path(client.account_chain_discriminant)
-                .unwrap()
-        );
+        let mut expected = client.torii_url.clone();
+        expected
+            .path_segments_mut()
+            .unwrap()
+            .pop_if_empty()
+            .extend(segments);
+        assert_eq!(request.url, expected);
         assert_eq!(body(request), query.to_json_value());
         super::tests::assert_canonical_account_signed_request(
             &client,
